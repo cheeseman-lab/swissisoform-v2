@@ -1,0 +1,1 @@
+"""Paired comparison utilities."""
