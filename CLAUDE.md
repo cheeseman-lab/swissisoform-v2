@@ -4,13 +4,15 @@
 
 **SwissIsoform v2** — Modular pipeline for annotating alternative protein isoforms from translation initiation sequencing (TI-seq). Consolidates code from three repos (`swissisoform`, `tiap`, `coTISja`) into a unified 13-module architecture with rich domain objects.
 
-## Design Spec
+## Documentation
 
-The full design is at `docs/superpowers/specs/2026-04-14-swissisoform-v2-orchestration-design.md` in the original repo (`/lab/barcheese01/mdiberna/swissisoform/`). It covers:
-- Domain model (Gene, TIS, Isoform hierarchy)
-- Module interface contracts with pre-defined OUTPUT_COLUMNS
-- Two-tier test architecture
-- Wave-based execution strategy
+| Document | Path | Purpose |
+|----------|------|---------|
+| **Design spec** | `docs/superpowers/specs/2026-04-14-swissisoform-v2-orchestration-design.md` | Domain model, module contracts, wave execution strategy |
+| Scientific overview | `docs/tis_projects_overview.md` | Biology, 2-paper structure, evidence scoring framework |
+| Technical spec | `docs/tis_technical_spec.md` | Module specs 0-12, code provenance, implementation phases |
+| Gap analysis | `docs/swissisoform_review.md` | Missing modules, scoring expansion, tool recommendations |
+| V1 execution plan | `docs/execution_plan_v1.md` | Original sequential Claude Code execution plan (reference) |
 
 ## Source Repos (Read-Only Reference)
 
