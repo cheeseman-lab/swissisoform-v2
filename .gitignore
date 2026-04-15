@@ -13,3 +13,4 @@ build/
 .DS_Store
 .pytest_cache/
 .ruff_cache/
+data/reference/
