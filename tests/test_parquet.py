@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from swissisoform.io.parquet import dataframe_to_tis, genes_to_dataframe, tis_to_dataframe
 from swissisoform.models import (
