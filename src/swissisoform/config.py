@@ -84,12 +84,20 @@ class ClinicalConfig:
     Attributes:
         gnomad_api_url: gnomAD GraphQL API endpoint.
         clinvar_email: Email for NCBI E-utilities authentication.
+        clinvar_api_key: API key for NCBI E-utilities (optional, increases rate limit).
         cosmic_db: Path to local COSMIC database file.
+        fetch_timeout: Timeout in seconds for HTTP requests to external APIs.
+        max_retries: Maximum number of retry attempts for failed requests.
+        retry_delay: Base delay in seconds between retries (exponential backoff).
     """
 
     gnomad_api_url: str = "https://gnomad.broadinstitute.org/api"
     clinvar_email: str = ""
+    clinvar_api_key: str = ""
     cosmic_db: Path | None = None
+    fetch_timeout: int = 30
+    max_retries: int = 3
+    retry_delay: float = 1.0
 
 
 @dataclass

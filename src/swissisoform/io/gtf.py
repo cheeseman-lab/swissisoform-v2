@@ -91,3 +91,77 @@ def load_transcript_annotations(
 
     logger.info("Loaded %d %s annotations", len(annotations), feature_type)
     return annotations[output_columns].reset_index(drop=True)
+
+
+def load_cds_features(gtf_path: str) -> pd.DataFrame:
+    """Load CDS features from a GTF file.
+
+    Parses CDS and start_codon features for building genomic-to-coding
+    position maps used by the variant consequence validator.
+
+    Args:
+        gtf_path: Path to a GENCODE-format GTF file.
+
+    Returns:
+        DataFrame with columns: chromosome, start, end, strand, gene_id,
+        transcript_id, feature_type.
+    """
+    output_columns = [
+        "chromosome", "start", "end", "strand", "gene_id", "transcript_id", "feature_type",
+    ]
+    features_list: list[dict] = []
+
+    logger.info("Loading CDS features from %s", gtf_path)
+
+    with open(gtf_path) as handle:
+        for line in handle:
+            if line.startswith("#"):
+                continue
+
+            fields = line.strip().split("\t")
+            if len(fields) != 9:
+                continue
+
+            feat_type = fields[2]
+            if feat_type not in ("CDS", "start_codon"):
+                continue
+
+            attrs = fields[8]
+
+            # Extract gene_id and transcript_id from attributes
+            gene_id_match = _extract_attr(attrs, "gene_id")
+            transcript_id_match = _extract_attr(attrs, "transcript_id")
+
+            features_list.append({
+                "chromosome": fields[0],
+                "start": int(fields[3]),
+                "end": int(fields[4]),
+                "strand": fields[6],
+                "gene_id": gene_id_match,
+                "transcript_id": transcript_id_match,
+                "feature_type": feat_type,
+            })
+
+    if not features_list:
+        logger.warning("No CDS/start_codon features found in %s", gtf_path)
+        return pd.DataFrame(columns=output_columns)
+
+    df = pd.DataFrame(features_list)
+    logger.info("Loaded %d CDS/start_codon features", len(df))
+    return df[output_columns].reset_index(drop=True)
+
+
+def _extract_attr(attributes: str, key: str) -> str:
+    """Extract a quoted attribute value from a GTF attributes string.
+
+    Args:
+        attributes: The 9th column of a GTF line.
+        key: Attribute name (e.g. ``"gene_id"``).
+
+    Returns:
+        The extracted value, or empty string if not found.
+    """
+    import re
+
+    match = re.search(rf'{key} "([^"]*)"', attributes)
+    return match.group(1) if match else ""
