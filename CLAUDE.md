@@ -20,20 +20,36 @@
 | Module 1 | `modules/core_identity.py` | ORF classification, protein lengths, in-frame check, truncation warning |
 | Module 2 | `modules/initiation_context.py` | Kozak Hamming distance (full/major/partial), GC content |
 
-### What's Next (Wave 2)
+### What's Done (Wave 2)
 
-8 modules to port in parallel, each in its own subagent session:
+All module protocols implemented. Symmetric canonical/isoform architecture in place.
 
-| Module | Source | Complexity | Source Path |
-|--------|--------|------------|-------------|
-| `biophysics.py` | TIAP | Low | `/lab/barcheese01/mdiberna/tiap/src/tiap/modules/biophysical.py` |
-| `motifs.py` | TIAP | Low | `/lab/barcheese01/mdiberna/tiap/src/tiap/modules/motifs.py` |
-| `conservation.py` | TIAP | Medium | `/lab/barcheese01/mdiberna/tiap/src/tiap/modules/conservation.py` |
-| `crossval.py` | TIAP | Medium | `/lab/barcheese01/mdiberna/tiap/src/tiap/modules/crossval.py` |
-| `gene_ref.py` | TIAP | Low | `/lab/barcheese01/mdiberna/tiap/src/tiap/modules/gene_ref.py` |
-| `localization.py` | TIAP | Low | `/lab/barcheese01/mdiberna/tiap/src/tiap/modules/localization.py` |
-| `clinical.py` | swissisoform | **High** | `/lab/barcheese01/mdiberna/swissisoform/src/swissisoform/mutations.py` |
-| `scoring.py` | TIAP | Medium | `/lab/barcheese01/mdiberna/tiap/src/tiap/modules/scoring.py` |
+| Module | Protocol | Interface | Status |
+|--------|----------|-----------|--------|
+| `biophysics.py` | ProteinModule | `annotate(protein) -> dict` (scalar) | Done |
+| `motifs.py` | ProteinModule | `annotate(protein) -> dict` (positional hits) | Done |
+| `localization.py` | ProteinModule | `annotate_by_key(key) -> dict` (lookup) | Done |
+| `core_identity.py` | SiteModule | `annotate_site(site) -> dict` | Done |
+| `initiation_context.py` | SiteModule | `annotate_site(site) -> dict` | Done |
+| `generef.py` | Gene-level | unchanged (outside comparison pipeline) | Done |
+
+### Roadmap
+
+| Step | What | Status |
+|------|------|--------|
+| 1. **Wiring layer** | `pipeline.py` — Gene-level orchestration, runs ProteinModules on canonical + isoform | Next |
+| 2. **Harder modules** | `massspec.py` (PepQuery2), `conservation.py` (BLAST/PhyloP), `clinical.py` (gnomAD/ClinVar) | Pending |
+| 3. **Real test layer** | Small representative set from actual Ribo-TISH data | Pending |
+| 4. **Comparator extension** | Positional subset to diff region + scalar deltas | Pending |
+| 5. **CLI** | `__main__.py` entry point | Pending |
+| 6. **End-to-end test** | Full pipeline on real data | Pending |
+
+### Deferred (unclear value or needs redesign)
+
+| Module | Source | Complexity | Reason |
+|--------|--------|------------|--------|
+| `scoring.py` | TIAP | Medium | Needs full redesign around comparison outputs, not a port |
+| `crossval.py` | TIAP | Medium | Gene-level dataset matching; unclear if spec adds meaningful evidence |
 
 ## Documentation
 
@@ -71,12 +87,44 @@ uv pip install -e ".[dev]"
 
 ## Architecture
 
-- **Input:** Raw Ribo-TISH `predict_all.txt` TSV (21 columns per cell line)
-- **Pipeline:** Read → Filter → Normalize → Merge → Annotate (13 modules) → Score → Serialize
+- **Input:** Raw Ribo-TISH `predict_all.txt` TSV (21 columns per cell line, includes `AASeq`)
+- **Pipeline:** Read → Filter → Merge → Annotate (canonical + isoform) → Compare → Serialize
 - **Domain objects** in `models.py`: `TranslationInitiationSite`, `Gene`, `VariantAnnotation`
 - **Module protocol** in `modules/base.py`: `MODULE_NAME`, `OUTPUT_COLUMNS`, `SCOPE`, `.run(tis_sites) -> tis_sites`
 - **Paired comparison** in `compare/paired.py`: shared canonical-vs-isoform delta logic
 - **Serialization** in `io/parquet.py`: round-trip TIS ↔ DataFrame ↔ Parquet
+
+### Annotation → Comparison Design
+
+Per-protein modules run **symmetrically on both canonical and isoform proteins**. A final comparator layer diffs the results.
+
+```
+Path 1: Annotate → Compare (per-protein modules)
+  canonical_protein → [biophysics, motifs, localization, clinical, conservation] → canonical annotations
+  isoform_protein   → [biophysics, motifs, localization, clinical, conservation] → isoform annotations
+                                                                                       │
+                                                                        comparator ◄───┘
+                                                                        ├─ scalar deltas (Δ_pI, location_changed)
+                                                                        └─ positional subset (hits in diff region)
+
+Path 2: Gene-level context (no comparison, not diffed)
+  gene_name → generef → attached as reference context
+```
+
+### Annotation Types
+
+Modules produce two kinds of output:
+
+- **Scalar** — whole-protein aggregate, no position (pI, GRAVY, localization prediction). Compared via delta.
+- **Positional** — per-coordinate hits with `pos`/`end` fields (motif matches, variants, conservation per-residue). Compared via subset to differential region coordinates.
+
+**Rule:** everything that CAN be stored per-coordinate SHOULD be. Scalars are only for inherently whole-protein properties. Counts and densities derived from positional hits are computed by the comparator from the filtered hit list, not stored in the module output.
+
+### Differential Region Coordinates
+
+- **Extensions:** `isoform[0 : delta_aa]`
+- **Truncations:** `canonical[0 : abs(delta_aa)]` (the lost region)
+- **uORFs/altORFs:** entire isoform (no shared region)
 
 ## Module Contract
 
@@ -86,6 +134,8 @@ Every module must:
 3. Write ONLY to `site.annotations[MODULE_NAME]` — never mutate other fields
 4. Never drop sites (`len(output) == len(input)`)
 5. Use `None` for values that can't be computed
+6. Positional annotations: store as list of dicts with `pos` (and optionally `end`) keys
+7. Scalar annotations: store as plain values (float, str, bool)
 
 ## Tests
 

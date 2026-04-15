@@ -13,6 +13,7 @@ import pandas as pd
 
 from swissisoform.models import (
     CellLineExpression,
+    DifferentialRegion,
     Gene,
     ORFType,
     TranslationInitiationSite,
@@ -34,7 +35,6 @@ _PROTEIN_COLS = [
     "canonical_protein",
     "isoform_protein",
     "differential_sequence",
-    "shared_sequence",
     "kozak_context",
 ]
 
@@ -67,8 +67,7 @@ def tis_to_dataframe(sites: list[TranslationInitiationSite]) -> pd.DataFrame:
             "orf_type": site.orf_type.value,
             "canonical_protein": site.canonical_protein,
             "isoform_protein": site.isoform_protein,
-            "differential_sequence": site.differential_sequence,
-            "shared_sequence": site.shared_sequence,
+            "differential_sequence": site.diff_region.sequence if site.diff_region else "",
             "kozak_context": site.kozak_context,
         }
 
@@ -80,7 +79,7 @@ def tis_to_dataframe(sites: list[TranslationInitiationSite]) -> pd.DataFrame:
             row[f"expr_{cell_line}_initiation_efficiency"] = expr.initiation_efficiency
 
         # Annotations -> prefixed columns
-        for module_name, annot_dict in site.annotations.items():
+        for module_name, annot_dict in site.isoform_annotations.items():
             for key, value in annot_dict.items():
                 row[f"{module_name}_{key}"] = value
 
@@ -164,11 +163,12 @@ def dataframe_to_tis(df: pd.DataFrame) -> list[TranslationInitiationSite]:
             orf_type=orf_lookup[row["orf_type"]],
             canonical_protein=row.get("canonical_protein", ""),
             isoform_protein=row.get("isoform_protein", ""),
-            differential_sequence=row.get("differential_sequence", ""),
-            shared_sequence=row.get("shared_sequence", ""),
+            diff_region=DifferentialRegion(
+                sequence=row.get("differential_sequence", ""),
+            ),
             kozak_context=row.get("kozak_context"),
             expression=expression,
-            annotations=annotations,
+            isoform_annotations=annotations,
         )
         sites.append(site)
 

@@ -7,6 +7,7 @@ import pandas as pd
 from swissisoform.io.parquet import dataframe_to_tis, genes_to_dataframe, tis_to_dataframe
 from swissisoform.models import (
     CellLineExpression,
+    DifferentialRegion,
     Gene,
     ORFType,
     TranslationInitiationSite,
@@ -26,8 +27,7 @@ def _make_tis() -> TranslationInitiationSite:
         orf_type=ORFType.ANNOTATED,
         canonical_protein="MVLSPADKTNVKAAWGKVGAHAGEYGAEALERM",
         isoform_protein="MVLSPADKTNVK",
-        differential_sequence="AAWGKVGAHAGEYGAEALERM",
-        shared_sequence="MVLSPADKTNVK",
+        diff_region=DifferentialRegion(sequence="AAWGKVGAHAGEYGAEALERM"),
         kozak_context="GCCACCATGG",
         expression={
             "HeLa": CellLineExpression(
@@ -43,7 +43,7 @@ def _make_tis() -> TranslationInitiationSite:
                 initiation_efficiency=None,
             ),
         },
-        annotations={
+        isoform_annotations={
             "testmod": {"score": 0.95, "label": "high"},
             "biophysics": {"disorder_fraction": 0.3},
         },
@@ -129,10 +129,10 @@ class TestRoundTrip:
         original = _make_tis()
         df = tis_to_dataframe([original])
         restored = dataframe_to_tis(df)[0]
-        assert "testmod" in restored.annotations
-        assert restored.annotations["testmod"]["score"] == 0.95
-        assert restored.annotations["testmod"]["label"] == "high"
-        assert restored.annotations["biophysics"]["disorder_fraction"] == 0.3
+        assert "testmod" in restored.isoform_annotations
+        assert restored.isoform_annotations["testmod"]["score"] == 0.95
+        assert restored.isoform_annotations["testmod"]["label"] == "high"
+        assert restored.isoform_annotations["biophysics"]["disorder_fraction"] == 0.3
 
     def test_none_initiation_efficiency_round_trip(self) -> None:
         original = _make_tis()

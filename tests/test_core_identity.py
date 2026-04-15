@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from swissisoform.config import PipelineConfig, ScoringConfig
-from swissisoform.models import ORFType, TranslationInitiationSite
+from swissisoform.models import DifferentialRegion, ORFType, TranslationInitiationSite
 from swissisoform.modules.core_identity import CoreIdentityModule
 
 
@@ -26,7 +26,7 @@ class TestCoreIdentityModule:
             for col in module.OUTPUT_COLUMNS
         ]
         for site in result:
-            ann = site.annotations[module.MODULE_NAME]
+            ann = site.isoform_annotations[module.MODULE_NAME]
             for key in expected_keys:
                 assert key in ann, f"Missing key '{key}' for site {site.tis_id}"
 
@@ -35,7 +35,7 @@ class TestCoreIdentityModule:
         module = CoreIdentityModule(config)
         result = module.run(synthetic_tis)
         # First site is Annotated
-        ann = result[0].annotations["core_identity"]
+        ann = result[0].isoform_annotations["core_identity"]
         assert ann["orf_type"] == "Annotated"
         assert ann["differential_length_aa"] == 0
         assert ann["in_frame"] is True
@@ -46,7 +46,7 @@ class TestCoreIdentityModule:
         module = CoreIdentityModule(config)
         result = module.run(synthetic_tis)
         # Second site is Extension with "MRGSHHHHHGS" differential
-        ann = result[1].annotations["core_identity"]
+        ann = result[1].isoform_annotations["core_identity"]
         assert ann["orf_type"] == "Extended"
         assert ann["differential_length_aa"] == 11
         assert ann["in_frame"] is True
@@ -57,7 +57,7 @@ class TestCoreIdentityModule:
         module = CoreIdentityModule(config)
         result = module.run(synthetic_tis)
         # Site index 4 is Truncated +strand, differential "EEPQSDPSV" = 9 aa
-        ann = result[4].annotations["core_identity"]
+        ann = result[4].isoform_annotations["core_identity"]
         assert ann["orf_type"] == "Truncated"
         assert ann["in_frame"] is True
         assert ann["large_truncation_warning"] is False
@@ -75,27 +75,26 @@ class TestCoreIdentityModule:
             orf_type=ORFType.TRUNCATED,
             canonical_protein="M" + "A" * 300 + "*",
             isoform_protein="M" + "A" * 50 + "*",
-            differential_sequence="A" * 250,
-            shared_sequence="M" + "A" * 50 + "*",
+            diff_region=DifferentialRegion(sequence="A" * 250),
         )
         config_with_scoring = PipelineConfig(scoring=ScoringConfig(truncation_max_aa=200))
         module = CoreIdentityModule(config_with_scoring)
         result = module.run([site])
-        ann = result[0].annotations["core_identity"]
+        ann = result[0].isoform_annotations["core_identity"]
         assert ann["large_truncation_warning"] is True
 
     def test_variant_ids_unique(self, synthetic_tis, config):
         """All variant_id values must be unique."""
         module = CoreIdentityModule(config)
         result = module.run(synthetic_tis)
-        ids = [s.annotations["core_identity"]["variant_id"] for s in result]
+        ids = [s.isoform_annotations["core_identity"]["variant_id"] for s in result]
         assert len(ids) == len(set(ids))
 
     def test_annotated_empty_differential(self, synthetic_tis, config):
         """Annotated site with empty differential should not crash."""
         module = CoreIdentityModule(config)
         result = module.run(synthetic_tis)
-        ann = result[0].annotations["core_identity"]
+        ann = result[0].isoform_annotations["core_identity"]
         assert ann["differential_length_aa"] == 0
 
     def test_uorf_not_in_frame(self, synthetic_tis, config):
@@ -103,7 +102,7 @@ class TestCoreIdentityModule:
         module = CoreIdentityModule(config)
         result = module.run(synthetic_tis)
         # Site index 6 is uORF
-        ann = result[6].annotations["core_identity"]
+        ann = result[6].isoform_annotations["core_identity"]
         assert ann["orf_type"] == "uORF"
         assert ann["in_frame"] is False
 
@@ -112,7 +111,7 @@ class TestCoreIdentityModule:
         module = CoreIdentityModule(config)
         result = module.run(synthetic_tis)
         # First site canonical is "MEEPQSDPSVEPPLSQETFSDLWKLLPENNVLSPLPS*" = 37 residues
-        ann = result[0].annotations["core_identity"]
+        ann = result[0].isoform_annotations["core_identity"]
         assert ann["canonical_protein_length"] == 37
 
     def test_uoorf_in_frame(self, synthetic_tis, config):
@@ -120,7 +119,7 @@ class TestCoreIdentityModule:
         module = CoreIdentityModule(config)
         result = module.run(synthetic_tis)
         # Site index 7 is uoORF
-        ann = result[7].annotations["core_identity"]
+        ann = result[7].isoform_annotations["core_identity"]
         assert ann["in_frame"] is True
 
     def test_module_scope(self, config):
@@ -139,3 +138,37 @@ class TestCoreIdentityModule:
         config = PipelineConfig(scoring=ScoringConfig(truncation_max_aa=100))
         module = CoreIdentityModule(config)
         assert module.truncation_max_aa == 100
+
+    def test_annotate_site_returns_dict(self, synthetic_tis, config):
+        """annotate_site returns a dict with all expected keys."""
+        module = CoreIdentityModule(config)
+        result = module.annotate_site(synthetic_tis[0])
+        expected_keys = {
+            "variant_id",
+            "orf_type",
+            "canonical_protein_length",
+            "isoform_protein_length",
+            "differential_length_aa",
+            "in_frame",
+            "large_truncation_warning",
+        }
+        assert isinstance(result, dict)
+        assert set(result.keys()) == expected_keys
+
+    def test_annotate_site_extension(self, synthetic_tis, config):
+        """annotate_site on extension site returns correct values."""
+        module = CoreIdentityModule(config)
+        ann = module.annotate_site(synthetic_tis[1])
+        assert ann["orf_type"] == "Extended"
+        assert ann["differential_length_aa"] == 11
+        assert ann["in_frame"] is True
+        assert ann["isoform_protein_length"] > ann["canonical_protein_length"]
+
+    def test_annotate_site_does_not_mutate(self, synthetic_tis, config):
+        """annotate_site must not write to site.isoform_annotations."""
+        module = CoreIdentityModule(config)
+        site = synthetic_tis[0]
+        # Ensure isoform_annotations is empty before calling annotate_site
+        assert module.MODULE_NAME not in site.isoform_annotations
+        module.annotate_site(site)
+        assert module.MODULE_NAME not in site.isoform_annotations

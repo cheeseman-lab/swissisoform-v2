@@ -16,6 +16,7 @@ from swissisoform.config import (
 )
 from swissisoform.models import (
     CellLineExpression,
+    DifferentialRegion,
     Gene,
     ORFType,
     TranslationInitiationSite,
@@ -120,10 +121,10 @@ class TestTranslationInitiationSite:
         assert site.expression == {}
         assert site.canonical_protein == ""
         assert site.isoform_protein == ""
-        assert site.differential_sequence == ""
-        assert site.shared_sequence == ""
+        assert site.diff_region is None
         assert site.kozak_context is None
-        assert site.annotations == {}
+        assert site.isoform_annotations == {}
+        assert site.comparison == {}
 
     def test_annotations_dict_isolation(self):
         """Each site gets its own annotations dict."""
@@ -137,8 +138,8 @@ class TestTranslationInitiationSite:
             chrom="chr1", position=2, strand="+",
             start_codon="ATG", orf_type=ORFType.UORF,
         )
-        site_a.annotations["mod1"] = {"score": 1.0}
-        assert "mod1" not in site_b.annotations
+        site_a.isoform_annotations["mod1"] = {"score": 1.0}
+        assert "mod1" not in site_b.isoform_annotations
 
     def test_statistical_fields(self):
         site = TranslationInitiationSite(
@@ -165,6 +166,7 @@ class TestGene:
         )
         assert gene.gene_name == "TP53"
         assert gene.tis_sites == []
+        assert gene.canonical_annotations == {}
         assert gene.gene_annotations == {}
 
 
@@ -181,10 +183,10 @@ class TestVariantAnnotation:
             position=150,
             ref="A",
             alt="G",
-            in_differential_region=True,
+            protein_pos=50,
         )
         assert va.source == "gnomAD"
-        assert va.in_differential_region is True
+        assert va.protein_pos == 50
         assert va.metadata == {}
 
 
@@ -202,7 +204,7 @@ def _make_site(tis_id: str = "site1") -> TranslationInitiationSite:
 class TestValidateModuleOutput:
     def test_valid_output(self):
         site = _make_site()
-        site.annotations["biophysics"] = {"molecular_weight": 50.0, "pi": 6.5}
+        site.isoform_annotations["biophysics"] = {"molecular_weight": 50.0, "pi": 6.5}
         validate_module_output(
             input_sites=[_make_site()],
             output_sites=[site],
@@ -232,7 +234,7 @@ class TestValidateModuleOutput:
 
     def test_missing_column(self):
         site = _make_site()
-        site.annotations["biophysics"] = {"molecular_weight": 50.0}
+        site.isoform_annotations["biophysics"] = {"molecular_weight": 50.0}
         with pytest.raises(ValueError, match="missing.*column"):
             validate_module_output(
                 input_sites=[_make_site()],

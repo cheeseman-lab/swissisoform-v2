@@ -1,10 +1,13 @@
 """Module 1: Core Identity — ORF classification, lengths, and in-frame check.
 
-Computes derived identity/classification annotations from pre-populated
-canonical_protein, isoform_protein, differential_sequence, and orf_type fields.
+Implements the ``SiteModule`` protocol: per-site annotation logic lives in
+``annotate_site`` and ``run`` is a thin loop that writes results into
+``site.isoform_annotations``.
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 from swissisoform.config import PipelineConfig
 from swissisoform.models import ORFType, TranslationInitiationSite
@@ -45,10 +48,11 @@ def _is_in_frame(site: TranslationInitiationSite) -> bool:
 
 
 class CoreIdentityModule:
-    """Module 1: Core Identity annotations.
+    """Module 1: Core Identity annotations (``SiteModule`` protocol).
 
     Computes variant IDs, ORF type labels, protein lengths, in-frame status,
-    and large truncation warnings for each TIS site.
+    and large truncation warnings for each TIS site.  Per-site logic lives in
+    ``annotate_site``; ``run`` is a thin loop that stores the results.
 
     Attributes:
         MODULE_NAME: Unique module identifier.
@@ -80,36 +84,52 @@ class CoreIdentityModule:
         if config.scoring is not None:
             self.truncation_max_aa = config.scoring.truncation_max_aa
 
+    def annotate_site(self, site: TranslationInitiationSite) -> dict[str, Any]:
+        """Compute core identity annotations for a single TIS site.
+
+        This is the ``SiteModule`` protocol method.  It returns the annotation
+        dict without mutating *site* — the caller (``run``) is responsible for
+        storing the result into ``site.isoform_annotations``.
+
+        Args:
+            site: A TIS site with proteins and orf_type already set.
+
+        Returns:
+            Dict with keys: variant_id, orf_type, canonical_protein_length,
+            isoform_protein_length, differential_length_aa, in_frame,
+            large_truncation_warning.
+        """
+        diff_len = _protein_length(site.diff_region.sequence if site.diff_region else "")
+        in_frame = _is_in_frame(site)
+        large_trunc = (
+            site.orf_type == ORFType.TRUNCATED and diff_len > self.truncation_max_aa
+        )
+
+        return {
+            "variant_id": f"{site.gene_name}_{site.tis_id}",
+            "orf_type": site.orf_type.value,
+            "canonical_protein_length": _protein_length(site.canonical_protein),
+            "isoform_protein_length": _protein_length(site.isoform_protein),
+            "differential_length_aa": diff_len,
+            "in_frame": in_frame,
+            "large_truncation_warning": large_trunc,
+        }
+
     def run(
         self, tis_sites: list[TranslationInitiationSite]
     ) -> list[TranslationInitiationSite]:
         """Compute core identity annotations for each TIS site.
 
-        For each site, writes to site.annotations["core_identity"] with keys:
-        variant_id, orf_type, canonical_protein_length, isoform_protein_length,
-        differential_length_aa, in_frame, large_truncation_warning.
+        Thin wrapper implementing the ``SiteModule`` protocol: iterates over
+        sites, calls ``annotate_site``, and stores the result.
 
         Args:
             tis_sites: Input TIS sites with proteins and orf_type already set.
 
         Returns:
-            The same sites with annotations["core_identity"] populated.
+            The same sites with isoform_annotations["core_identity"] populated.
         """
         for site in tis_sites:
-            diff_len = _protein_length(site.differential_sequence)
-            in_frame = _is_in_frame(site)
-            large_trunc = (
-                site.orf_type == ORFType.TRUNCATED and diff_len > self.truncation_max_aa
-            )
-
-            site.annotations[self.MODULE_NAME] = {
-                "variant_id": f"{site.gene_name}_{site.tis_id}",
-                "orf_type": site.orf_type.value,
-                "canonical_protein_length": _protein_length(site.canonical_protein),
-                "isoform_protein_length": _protein_length(site.isoform_protein),
-                "differential_length_aa": diff_len,
-                "in_frame": in_frame,
-                "large_truncation_warning": large_trunc,
-            }
+            site.isoform_annotations[self.MODULE_NAME] = self.annotate_site(site)
 
         return tis_sites

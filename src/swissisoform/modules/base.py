@@ -1,47 +1,112 @@
-"""Module protocol and validation for SwissIsoform v2 pipeline.
+"""Module protocols and validation for SwissIsoform v2 pipeline.
 
-Every annotation module must conform to ModuleProtocol and pass
-validate_module_output after execution.
+Two module types:
+- ProteinModule: takes a protein sequence, returns annotation dict.
+  Used for biophysics, motifs, localization, clinical, conservation.
+  The wiring layer runs these on both canonical and isoform proteins.
+
+- SiteModule: takes a TIS site, returns annotation dict.
+  Used for core_identity, initiation_context — modules that need
+  TIS-level metadata (orf_type, kozak_context, etc.).
 """
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from swissisoform.config import PipelineConfig
 from swissisoform.models import TranslationInitiationSite
 
 
 @runtime_checkable
-class ModuleProtocol(Protocol):
-    """Protocol that all annotation modules must implement.
+class ProteinModule(Protocol):
+    """Protocol for modules that annotate a protein sequence.
+
+    These modules are sequence-in, annotations-out. The wiring layer
+    decides whether to pass canonical or isoform protein and where
+    to store the result.
 
     Attributes:
-        MODULE_NAME: Unique identifier for this module (used as annotations key).
-        OUTPUT_COLUMNS: Column names this module produces (prefixed with MODULE_NAME_).
-        SCOPE: Either 'site' (per-TIS) or 'gene' (per-gene).
+        MODULE_NAME: Unique identifier (used as annotations key).
+        OUTPUT_COLUMNS: Column names produced (prefixed with MODULE_NAME_).
+        SCOPE: ``"C"`` for per-candidate or ``"G"`` for per-gene.
     """
 
     MODULE_NAME: str
     OUTPUT_COLUMNS: list[str]
     SCOPE: str
 
-    def __init__(self, config: PipelineConfig) -> None:
-        """Initialize the module with pipeline configuration."""
-        ...
+    def __init__(self, config: PipelineConfig) -> None: ...
 
-    def run(
-        self, tis_sites: list[TranslationInitiationSite]
-    ) -> list[TranslationInitiationSite]:
-        """Run the module on a list of TIS sites.
+    def annotate(self, protein: str) -> dict[str, Any]:
+        """Annotate a single protein sequence.
 
         Args:
-            tis_sites: Input sites to annotate.
+            protein: Amino acid sequence (may include trailing '*').
 
         Returns:
-            The same sites with annotations[MODULE_NAME] populated.
+            Annotation dict with unprefixed keys. Values are either
+            scalars (float, int, str, bool, None) or positional hit
+            lists (list of dicts with 'pos' and optionally 'end' keys).
         """
         ...
+
+
+@runtime_checkable
+class SiteModule(Protocol):
+    """Protocol for modules that annotate a TIS site using its metadata.
+
+    These modules need TIS-level fields (orf_type, kozak_context, etc.)
+    beyond just the protein sequence.
+
+    Attributes:
+        MODULE_NAME: Unique identifier (used as annotations key).
+        OUTPUT_COLUMNS: Column names produced (prefixed with MODULE_NAME_).
+        SCOPE: ``"C"`` for per-candidate.
+    """
+
+    MODULE_NAME: str
+    OUTPUT_COLUMNS: list[str]
+    SCOPE: str
+
+    def __init__(self, config: PipelineConfig) -> None: ...
+
+    def annotate_site(self, site: TranslationInitiationSite) -> dict[str, Any]:
+        """Annotate a single TIS site.
+
+        Args:
+            site: A TranslationInitiationSite with identity and metadata populated.
+
+        Returns:
+            Annotation dict with unprefixed keys.
+        """
+        ...
+
+
+def validate_protein_annotations(
+    annotations: dict[str, Any],
+    module_name: str,
+    output_columns: list[str],
+) -> None:
+    """Validate that a ProteinModule's output has all expected keys.
+
+    Args:
+        annotations: The dict returned by annotate().
+        module_name: The MODULE_NAME of the module.
+        output_columns: The OUTPUT_COLUMNS (prefixed with module_name_).
+
+    Raises:
+        ValueError: If any expected key is missing.
+    """
+    prefix = f"{module_name}_"
+    expected_keys = [
+        col[len(prefix):] if col.startswith(prefix) else col for col in output_columns
+    ]
+    for key in expected_keys:
+        if key not in annotations:
+            raise ValueError(
+                f"Module '{module_name}' missing key '{key}' in annotations"
+            )
 
 
 def validate_module_output(
@@ -54,7 +119,7 @@ def validate_module_output(
 
     Checks:
     1. No sites were dropped (len(output) == len(input)).
-    2. Every output site has annotations[module_name].
+    2. Every output site has isoform_annotations[module_name].
     3. Every expected column key is present in the annotation dict.
 
     Args:
@@ -72,20 +137,19 @@ def validate_module_output(
             f"input={len(input_sites)}, output={len(output_sites)}"
         )
 
-    # Strip module_name_ prefix from output_columns to get annotation dict keys
     prefix = f"{module_name}_"
     expected_keys = [
         col[len(prefix):] if col.startswith(prefix) else col for col in output_columns
     ]
 
     for i, site in enumerate(output_sites):
-        if module_name not in site.annotations:
+        if module_name not in site.isoform_annotations:
             raise ValueError(
                 f"Module '{module_name}' site {i} ({site.tis_id}) "
                 f"missing annotations['{module_name}']"
             )
 
-        annotation = site.annotations[module_name]
+        annotation = site.isoform_annotations[module_name]
         for key in expected_keys:
             if key not in annotation:
                 raise ValueError(

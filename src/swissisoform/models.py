@@ -1,7 +1,7 @@
 """Domain model for SwissIsoform v2 pipeline.
 
-Defines the core data structures: ORFType enum, TranslationInitiationSite,
-Gene, CellLineExpression, and VariantAnnotation.
+Defines the core data structures: ORFType enum, DifferentialRegion,
+TranslationInitiationSite, Gene, CellLineExpression, and VariantAnnotation.
 """
 
 from __future__ import annotations
@@ -75,11 +75,35 @@ class CellLineExpression:
 
 
 @dataclass
+class DifferentialRegion:
+    """Coordinates of the isoform-unique region in both protein spaces.
+
+    For extensions: isoform_start=0, isoform_end=delta_aa (the N-terminal prefix).
+    For truncations: canonical_start=0, canonical_end=abs(delta_aa) (the lost region).
+    For uORFs/altORFs: isoform_start=0, isoform_end=len(isoform_protein).
+
+    Attributes:
+        isoform_start: Start position in isoform protein coords (0-indexed), or None.
+        isoform_end: End position in isoform protein coords (exclusive), or None.
+        canonical_start: Start position in canonical protein coords (0-indexed), or None.
+        canonical_end: End position in canonical protein coords (exclusive), or None.
+        sequence: The actual differential amino acid sequence.
+    """
+
+    isoform_start: int | None = None
+    isoform_end: int | None = None
+    canonical_start: int | None = None
+    canonical_end: int | None = None
+    sequence: str = ""
+
+
+@dataclass
 class TranslationInitiationSite:
     """The atomic unit of the SwissIsoform pipeline.
 
     Each TIS represents a single translation initiation event detected by
-    Ribo-TISH. Modules enrich this object by writing to annotations[MODULE_NAME].
+    Ribo-TISH. Per-protein annotation modules write to isoform_annotations,
+    and the comparison layer writes to comparison.
 
     Attributes:
         tis_id: Unique identifier (typically chrom:pos:strand:codon).
@@ -97,12 +121,12 @@ class TranslationInitiationSite:
         ribo_pvalue: Ribosome frame test p-value.
         fisher_qvalue: Combined Fisher's method q-value.
         expression: Per-cell-line expression data.
-        canonical_protein: Full canonical protein sequence.
-        isoform_protein: Predicted isoform protein sequence.
-        differential_sequence: Sequence unique to the isoform.
-        shared_sequence: Sequence shared with canonical.
+        canonical_protein: Full canonical protein sequence (populated from Gene).
+        isoform_protein: Predicted isoform protein sequence (from Ribo-TISH AASeq).
+        diff_region: Coordinates and sequence of the isoform-unique region.
         kozak_context: Kozak sequence context around start codon.
-        annotations: Module outputs keyed by MODULE_NAME.
+        isoform_annotations: Per-isoform module outputs keyed by MODULE_NAME.
+        comparison: Comparison results keyed by MODULE_NAME.
     """
 
     # Identity
@@ -131,19 +155,27 @@ class TranslationInitiationSite:
     # Proteins
     canonical_protein: str = ""
     isoform_protein: str = ""
-    differential_sequence: str = ""
-    shared_sequence: str = ""
+
+    # Differential region
+    diff_region: DifferentialRegion | None = None
 
     # Context
     kozak_context: str | None = None
 
-    # Annotations — modules write here
-    annotations: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Isoform-level annotations — per-protein modules write here
+    isoform_annotations: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    # Comparison results — comparator writes here
+    comparison: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
 class Gene:
     """A gene with its canonical transcript and associated TIS sites.
+
+    Canonical annotations are computed once per gene and shared across all
+    TIS sites. Gene-level reference annotations (generef) live in
+    gene_annotations and are not diffed against isoform annotations.
 
     Attributes:
         gene_name: HGNC gene symbol.
@@ -151,7 +183,8 @@ class Gene:
         canonical_transcript_id: Ensembl ID of the canonical transcript.
         canonical_protein: Full canonical protein sequence.
         tis_sites: All TIS sites belonging to this gene.
-        gene_annotations: Gene-level annotation outputs.
+        canonical_annotations: Per-protein module outputs for the canonical protein.
+        gene_annotations: Gene-level reference annotations (generef, etc.).
     """
 
     gene_name: str
@@ -159,12 +192,13 @@ class Gene:
     canonical_transcript_id: str
     canonical_protein: str
     tis_sites: list[TranslationInitiationSite] = field(default_factory=list)
+    canonical_annotations: dict[str, dict[str, Any]] = field(default_factory=dict)
     gene_annotations: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class VariantAnnotation:
-    """A genetic variant overlapping a TIS differential region.
+    """A genetic variant overlapping a TIS region.
 
     Attributes:
         tis_id: ID of the associated TranslationInitiationSite.
@@ -174,7 +208,7 @@ class VariantAnnotation:
         position: Genomic position of the variant.
         ref: Reference allele.
         alt: Alternate allele.
-        in_differential_region: Whether the variant falls in the isoform-unique region.
+        protein_pos: Position in the protein sequence (0-indexed).
         metadata: Additional source-specific fields.
     """
 
@@ -185,5 +219,5 @@ class VariantAnnotation:
     position: int
     ref: str
     alt: str
-    in_differential_region: bool
+    protein_pos: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)

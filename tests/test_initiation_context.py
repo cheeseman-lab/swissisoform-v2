@@ -65,7 +65,7 @@ class TestInitiationContextModule:
         mod = InitiationContextModule(config)
         result = mod.run(synthetic_tis)
         for site in result:
-            ann = site.annotations[mod.MODULE_NAME]
+            ann = site.isoform_annotations[mod.MODULE_NAME]
             prefix = f"{mod.MODULE_NAME}_"
             for col in mod.OUTPUT_COLUMNS:
                 key = col[len(prefix):] if col.startswith(prefix) else col
@@ -80,7 +80,7 @@ class TestInitiationContextModule:
         mod = InitiationContextModule(config)
         result = mod.run(synthetic_tis)
         for site in result:
-            ann = site.annotations["initiation_context"]
+            ann = site.isoform_annotations["initiation_context"]
             assert ann["kozak_context"] == site.kozak_context
 
     def test_perfect_kozak_hamming_zero(self, config):
@@ -90,7 +90,7 @@ class TestInitiationContextModule:
         site = copy.deepcopy(SYNTHETIC_TIS[0])
         site.kozak_context = "gccgccAccATGG"  # A matches R in consensus
         result = InitiationContextModule(config).run([site])
-        ann = result[0].annotations["initiation_context"]
+        ann = result[0].isoform_annotations["initiation_context"]
         assert ann["kozak_hamming_full"] == 0
         assert ann["kozak_hamming_major"] == 0
         assert ann["kozak_hamming_partial"] == 0
@@ -103,7 +103,7 @@ class TestInitiationContextModule:
         # Position 6 is the R position; change it to T (not in {A,G})
         site.kozak_context = "gccgccTccATGG"
         result = InitiationContextModule(config).run([site])
-        ann = result[0].annotations["initiation_context"]
+        ann = result[0].isoform_annotations["initiation_context"]
         assert ann["kozak_hamming_major"] == 1
 
     def test_none_kozak_context(self, config):
@@ -113,7 +113,7 @@ class TestInitiationContextModule:
         site = copy.deepcopy(SYNTHETIC_TIS[0])
         site.kozak_context = None
         result = InitiationContextModule(config).run([site])
-        ann = result[0].annotations["initiation_context"]
+        ann = result[0].isoform_annotations["initiation_context"]
         assert ann["kozak_hamming_full"] is None
         assert ann["kozak_hamming_major"] is None
         assert ann["kozak_hamming_partial"] is None
@@ -125,7 +125,7 @@ class TestInitiationContextModule:
         site = copy.deepcopy(SYNTHETIC_TIS[0])
         site.kozak_context = "ATGCCC"  # too short
         result = InitiationContextModule(config).run([site])
-        ann = result[0].annotations["initiation_context"]
+        ann = result[0].isoform_annotations["initiation_context"]
         assert ann["kozak_hamming_full"] is None
         assert ann["kozak_hamming_major"] is None
         assert ann["kozak_hamming_partial"] is None
@@ -135,7 +135,7 @@ class TestInitiationContextModule:
         from tests.conftest import SYNTHETIC_TIS
 
         site = copy.deepcopy(SYNTHETIC_TIS[0])  # Annotated type
-        assert site.differential_sequence == ""
+        assert site.diff_region.sequence == ""
         result = InitiationContextModule(config).run([site])
         assert len(result) == 1
 
@@ -146,5 +146,52 @@ class TestInitiationContextModule:
         site = copy.deepcopy(SYNTHETIC_TIS[0])
         site.kozak_context = "GGGCCCAAATTT"
         result = InitiationContextModule(config).run([site])
-        ann = result[0].annotations["initiation_context"]
+        ann = result[0].isoform_annotations["initiation_context"]
         assert ann["utr5_gc_content"] == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# annotate_site() tests (SiteModule protocol)
+# ---------------------------------------------------------------------------
+
+
+class TestAnnotateSite:
+    """Tests for the annotate_site() method."""
+
+    def test_annotate_site_returns_dict(self, config):
+        """annotate_site returns a dict with all expected keys."""
+        from tests.conftest import SYNTHETIC_TIS
+
+        mod = InitiationContextModule(config)
+        site = copy.deepcopy(SYNTHETIC_TIS[0])
+        result = mod.annotate_site(site)
+        assert isinstance(result, dict)
+        prefix = f"{mod.MODULE_NAME}_"
+        for col in mod.OUTPUT_COLUMNS:
+            key = col[len(prefix):] if col.startswith(prefix) else col
+            assert key in result, f"Missing key {key}"
+
+    def test_annotate_site_kozak(self, config):
+        """annotate_site computes kozak values for the first synthetic site."""
+        from tests.conftest import SYNTHETIC_TIS
+
+        mod = InitiationContextModule(config)
+        site = copy.deepcopy(SYNTHETIC_TIS[0])
+        # First synthetic site has kozak_context="GCCGCCATGGCGA"
+        result = mod.annotate_site(site)
+        assert result["kozak_context"] == "GCCGCCATGGCGA"
+        # Kozak values should be computed (not None)
+        assert result["kozak_hamming_major"] is not None
+        assert result["kozak_hamming_partial"] is not None
+        assert result["kozak_hamming_full"] is not None
+
+    def test_annotate_site_does_not_mutate(self, config):
+        """annotate_site does not write to site.isoform_annotations."""
+        from tests.conftest import SYNTHETIC_TIS
+
+        mod = InitiationContextModule(config)
+        site = copy.deepcopy(SYNTHETIC_TIS[0])
+        # Ensure no prior annotations
+        site.isoform_annotations.clear()
+        mod.annotate_site(site)
+        assert mod.MODULE_NAME not in site.isoform_annotations

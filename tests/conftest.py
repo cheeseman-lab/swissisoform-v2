@@ -11,7 +11,13 @@ import copy
 import pytest
 
 from swissisoform.config import PipelineConfig
-from swissisoform.models import CellLineExpression, ORFType, TranslationInitiationSite
+from swissisoform.models import (
+    CellLineExpression,
+    DifferentialRegion,
+    Gene,
+    ORFType,
+    TranslationInitiationSite,
+)
 
 # Canonical proteins
 CANONICAL_POS = "MEEPQSDPSVEPPLSQETFSDLWKLLPENNVLSPLPS*"
@@ -57,8 +63,7 @@ SYNTHETIC_TIS: list[TranslationInitiationSite] = [
         expression=_make_expression(),
         canonical_protein=CANONICAL_POS,
         isoform_protein=CANONICAL_POS,
-        differential_sequence="",
-        shared_sequence=CANONICAL_POS,
+        diff_region=DifferentialRegion(sequence=""),
         kozak_context="GCCGCCATGGCGA",
     ),
     # 2. Extension +strand AUG
@@ -79,8 +84,10 @@ SYNTHETIC_TIS: list[TranslationInitiationSite] = [
         expression=_make_expression(),
         canonical_protein=CANONICAL_POS,
         isoform_protein="MRGSHHHHHGS" + CANONICAL_POS,
-        differential_sequence="MRGSHHHHHGS",
-        shared_sequence=CANONICAL_POS,
+        diff_region=DifferentialRegion(
+            isoform_start=0, isoform_end=11,
+            sequence="MRGSHHHHHGS",
+        ),
         kozak_context="TCCACCATGAGGA",
     ),
     # 3. Extension +strand CTG (non-AUG)
@@ -101,8 +108,10 @@ SYNTHETIC_TIS: list[TranslationInitiationSite] = [
         expression=_make_expression(),
         canonical_protein=CANONICAL_POS,
         isoform_protein="LRRPPAGA" + CANONICAL_POS,
-        differential_sequence="LRRPPAGA",
-        shared_sequence=CANONICAL_POS,
+        diff_region=DifferentialRegion(
+            isoform_start=0, isoform_end=8,
+            sequence="LRRPPAGA",
+        ),
         kozak_context="AGCGTCCTGACTG",
     ),
     # 4. Extension -strand AUG
@@ -123,8 +132,10 @@ SYNTHETIC_TIS: list[TranslationInitiationSite] = [
         expression=_make_expression(),
         canonical_protein=CANONICAL_NEG,
         isoform_protein="MAGTKLM" + CANONICAL_NEG,
-        differential_sequence="MAGTKLM",
-        shared_sequence=CANONICAL_NEG,
+        diff_region=DifferentialRegion(
+            isoform_start=0, isoform_end=7,
+            sequence="MAGTKLM",
+        ),
         kozak_context="GCCACCATGGCTG",
     ),
     # 5. Truncation +strand
@@ -145,8 +156,10 @@ SYNTHETIC_TIS: list[TranslationInitiationSite] = [
         expression=_make_expression(),
         canonical_protein=CANONICAL_POS,
         isoform_protein=CANONICAL_POS[9:],
-        differential_sequence="EEPQSDPSV",
-        shared_sequence=CANONICAL_POS[9:],
+        diff_region=DifferentialRegion(
+            canonical_start=0, canonical_end=9,
+            sequence="EEPQSDPSV",
+        ),
         kozak_context="ACCGCCATGGTCA",
     ),
     # 6. Truncation -strand
@@ -167,8 +180,10 @@ SYNTHETIC_TIS: list[TranslationInitiationSite] = [
         expression=_make_expression(),
         canonical_protein=CANONICAL_NEG,
         isoform_protein=CANONICAL_NEG[6:],
-        differential_sequence="DLSALR",
-        shared_sequence=CANONICAL_NEG[6:],
+        diff_region=DifferentialRegion(
+            canonical_start=0, canonical_end=6,
+            sequence="DLSALR",
+        ),
         kozak_context="TGCACCATGCAGT",
     ),
     # 7. uORF (entirely unique product)
@@ -189,8 +204,10 @@ SYNTHETIC_TIS: list[TranslationInitiationSite] = [
         expression=_make_expression(),
         canonical_protein=CANONICAL_MULTI,
         isoform_protein="MPKLQRST*",
-        differential_sequence="MPKLQRST*",
-        shared_sequence="",
+        diff_region=DifferentialRegion(
+            isoform_start=0, isoform_end=9,
+            sequence="MPKLQRST*",
+        ),
         kozak_context="CCCGCCATGCCCA",
     ),
     # 8. uoORF (overlapping CDS)
@@ -211,8 +228,10 @@ SYNTHETIC_TIS: list[TranslationInitiationSite] = [
         expression=_make_expression(),
         canonical_protein=CANONICAL_MULTI,
         isoform_protein="MFLGRT" + CANONICAL_MULTI,
-        differential_sequence="MFLGRT",
-        shared_sequence=CANONICAL_MULTI,
+        diff_region=DifferentialRegion(
+            isoform_start=0, isoform_end=6,
+            sequence="MFLGRT",
+        ),
         kozak_context="GCTGCCATGTTCG",
     ),
 ]
@@ -228,3 +247,33 @@ def synthetic_tis() -> list[TranslationInitiationSite]:
 def config() -> PipelineConfig:
     """Return a default PipelineConfig."""
     return PipelineConfig()
+
+
+@pytest.fixture()
+def synthetic_genes() -> list[Gene]:
+    """Return 3 synthetic Gene objects grouping the 8 TIS sites."""
+    sites = copy.deepcopy(SYNTHETIC_TIS)
+    genes = [
+        Gene(
+            gene_name="TESTGENE_POS",
+            gene_id="ENSG_POS",
+            canonical_transcript_id="ENST_POS_001",
+            canonical_protein=CANONICAL_POS,
+            tis_sites=[s for s in sites if s.gene_name == "TESTGENE_POS"],
+        ),
+        Gene(
+            gene_name="TESTGENE_NEG",
+            gene_id="ENSG_NEG",
+            canonical_transcript_id="ENST_NEG_001",
+            canonical_protein=CANONICAL_NEG,
+            tis_sites=[s for s in sites if s.gene_name == "TESTGENE_NEG"],
+        ),
+        Gene(
+            gene_name="TESTGENE_MULTI",
+            gene_id="ENSG_MULTI",
+            canonical_transcript_id="ENST_MULTI_001",
+            canonical_protein=CANONICAL_MULTI,
+            tis_sites=[s for s in sites if s.gene_name == "TESTGENE_MULTI"],
+        ),
+    ]
+    return genes

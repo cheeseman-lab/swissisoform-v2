@@ -3,9 +3,14 @@
 Computes Kozak sequence context features for each TIS using the kozak_context
 field (a 13-nt string around the start codon). Ported from coTISja
 analysis_pipeline_helpers.py.
+
+Implements the ``SiteModule`` protocol: per-site annotation logic lives in
+``annotate_site()`` and ``run()`` is a thin loop wrapper.
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 from swissisoform.config import PipelineConfig
 from swissisoform.models import TranslationInitiationSite
@@ -84,6 +89,9 @@ def hamming_distance_ambiguous(
 class InitiationContextModule:
     """Annotates each TIS with Kozak context features.
 
+    Implements the ``SiteModule`` protocol: ``annotate_site()`` computes
+    annotations for a single TIS, and ``run()`` loops over all sites.
+
     Attributes:
         MODULE_NAME: ``"initiation_context"``
         OUTPUT_COLUMNS: Nine prefixed column names.
@@ -139,34 +147,52 @@ class InitiationContextModule:
         )
 
     # ------------------------------------------------------------------
-    # Public API
+    # Public API (SiteModule protocol)
     # ------------------------------------------------------------------
+
+    def annotate_site(self, site: TranslationInitiationSite) -> dict[str, Any]:
+        """Compute initiation-context annotations for a single TIS.
+
+        This is the core per-site logic required by the ``SiteModule`` protocol.
+        It returns the annotation dict but does **not** write to
+        ``site.isoform_annotations``.
+
+        Args:
+            site: A single translation initiation site.
+
+        Returns:
+            Dict of annotation key-value pairs for this site.
+        """
+        major, partial, full = self._kozak_hamming(site.kozak_context)
+        gc = self._gc_content(site.kozak_context) if site.kozak_context else None
+
+        return {
+            "kozak_context": site.kozak_context,
+            "kozak_hamming_major": major,
+            "kozak_hamming_partial": partial,
+            "kozak_hamming_full": full,
+            "utr5_gc_content": gc,
+            "upstream_aug_count": None,
+            "upstream_non_aug_count": None,
+            "gc_window_50bp": None,
+            "gc_window_250bp": None,
+        }
 
     def run(
         self, tis_sites: list[TranslationInitiationSite]
     ) -> list[TranslationInitiationSite]:
-        """Annotate each TIS with Kozak context features.
+        """Annotate all TIS sites with Kozak context features.
+
+        Thin wrapper that calls ``annotate_site()`` for each site and stores
+        the result in ``site.isoform_annotations[MODULE_NAME]``.
 
         Args:
             tis_sites: Input sites to annotate.
 
         Returns:
-            The same sites with ``annotations["initiation_context"]`` populated.
+            The same sites with ``isoform_annotations["initiation_context"]``
+            populated.
         """
         for site in tis_sites:
-            major, partial, full = self._kozak_hamming(site.kozak_context)
-            gc = self._gc_content(site.kozak_context) if site.kozak_context else None
-
-            site.annotations[self.MODULE_NAME] = {
-                "kozak_context": site.kozak_context,
-                "kozak_hamming_major": major,
-                "kozak_hamming_partial": partial,
-                "kozak_hamming_full": full,
-                "utr5_gc_content": gc,
-                "upstream_aug_count": None,
-                "upstream_non_aug_count": None,
-                "gc_window_50bp": None,
-                "gc_window_250bp": None,
-            }
-
+            site.isoform_annotations[self.MODULE_NAME] = self.annotate_site(site)
         return tis_sites
