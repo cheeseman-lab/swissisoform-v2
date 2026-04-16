@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -281,6 +282,52 @@ class TestVariantFetcher:
         assert hits[0]["protein_pos"] is None
         assert hits[0]["genomic_pos"] == 10000
         assert hits[0]["consequence"] == "5_prime_UTR_variant"
+
+
+    def test_fetch_cosmic_from_parquet(self, tmp_path: Any) -> None:
+        """COSMIC fetcher reads from local parquet and returns hits."""
+        import pandas as pd
+
+        # Create a minimal COSMIC-like parquet file
+        cosmic_df = pd.DataFrame(
+            {
+                "GENE_SYMBOL": ["TP53", "TP53", "BRCA1"],
+                "GENOME_START": [7675088, 7674220, 1000000],
+                "CHROMOSOME": ["17", "17", "17"],
+                "GENOMIC_WT_ALLELE": ["C", "G", "A"],
+                "GENOMIC_MUT_ALLELE": ["T", "A", "G"],
+                "HGVSP": ["p.Pro72Arg", "p.Arg248Gln", "p.Met1Ile"],
+                "MUTATION_DESCRIPTION": ["Substitution - Missense"] * 3,
+                "GENOMIC_MUTATION_ID": ["COSV1", "COSV2", "COSV3"],
+                "GENOME_SCREEN_SAMPLE_COUNT": [100, 50, 10],
+                "MUTATION_SOMATIC_STATUS": ["Confirmed somatic"] * 3,
+                "MUTATION_AA": ["p.P72R", "p.R248Q", "p.M1I"],
+                "MUTATION_CDS": ["c.215C>T", "c.743G>A", "c.3G>A"],
+            }
+        )
+        parquet_path = tmp_path / "cosmic_variants_combined.parquet"
+        cosmic_df.to_parquet(str(parquet_path))
+
+        fetcher = VariantFetcher(cosmic_db=str(parquet_path))
+        hits = fetcher.fetch_gene("TP53", sources=["cosmic"])
+
+        assert len(hits) == 2  # only TP53, not BRCA1
+        assert all(h["source"] == "COSMIC" for h in hits)
+        assert hits[0]["protein_pos"] == 71  # p.Pro72Arg → 0-indexed 71
+        assert hits[0]["genomic_pos"] == 7675088
+        assert hits[0]["metadata"]["cosmic_sample_count"] == 100
+
+    def test_fetch_cosmic_no_db(self) -> None:
+        """COSMIC with no db path returns empty list."""
+        fetcher = VariantFetcher(cosmic_db=None)
+        hits = fetcher.fetch_gene("TP53", sources=["cosmic"])
+        assert hits == []
+
+    def test_fetch_cosmic_missing_file(self, tmp_path: Any) -> None:
+        """COSMIC with nonexistent path returns empty list."""
+        fetcher = VariantFetcher(cosmic_db=str(tmp_path / "nonexistent.parquet"))
+        hits = fetcher.fetch_gene("TP53", sources=["cosmic"])
+        assert hits == []
 
 
 # ---------------------------------------------------------------------------

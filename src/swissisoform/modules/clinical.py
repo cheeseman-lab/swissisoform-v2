@@ -149,13 +149,14 @@ class ClinicalModule:
     ) -> list[dict[str, Any]]:
         """Fetch variants from external databases for a gene.
 
-        This is the inline compute path -- fetches from gnomAD/ClinVar directly.
+        This is the inline compute path -- fetches from gnomAD/ClinVar/COSMIC.
         For batch processing of many genes, use ``VariantFetcher`` directly and
         pass results via *variant_cache*.
 
         Args:
             gene_name: Gene symbol (e.g. ``"TP53"``).
-            sources: List of sources to query. Default: ``["gnomad", "clinvar"]``.
+            sources: List of sources to query.
+                Default: ``["gnomad", "clinvar", "cosmic"]``.
             transcript_id: Optional GENCODE transcript ID. When provided along
                 with a ``ConsequenceValidator``, fetched variants are validated
                 via codon-level translation analysis.
@@ -172,6 +173,9 @@ class ClinicalModule:
             else "https://gnomad.broadinstitute.org/api",
             clinvar_email=clinical_cfg.clinvar_email if clinical_cfg else "",
             clinvar_api_key=clinical_cfg.clinvar_api_key if clinical_cfg else "",
+            cosmic_db=str(clinical_cfg.cosmic_db)
+            if clinical_cfg and clinical_cfg.cosmic_db
+            else None,
             timeout=clinical_cfg.fetch_timeout if clinical_cfg else 30,
             max_retries=clinical_cfg.max_retries if clinical_cfg else 3,
             retry_delay=clinical_cfg.retry_delay if clinical_cfg else 1.0,

@@ -1,4 +1,4 @@
-"""Fetch and standardize clinical variants from gnomAD and ClinVar.
+"""Fetch and standardize clinical variants from gnomAD, ClinVar, and COSMIC.
 
 Synchronous wrappers using the ``requests`` library. No async dependencies.
 
@@ -52,13 +52,17 @@ query VariantsInGene($geneSymbol: String!, $referenceGenome: ReferenceGenomeId!)
 
 
 class VariantFetcher:
-    """Fetch and standardize variants from gnomAD and ClinVar.
+    """Fetch and standardize variants from gnomAD, ClinVar, and COSMIC.
 
     Usage::
 
-        fetcher = VariantFetcher(gnomad_url="https://gnomad.broadinstitute.org/api")
+        fetcher = VariantFetcher()
         variants = fetcher.fetch_gene("TP53")
         # Returns list of variant dicts in the clinical module's hit format
+
+        # With COSMIC (local parquet):
+        fetcher = VariantFetcher(cosmic_db="/path/to/cosmic_variants_combined.parquet")
+        variants = fetcher.fetch_gene("TP53", sources=["gnomad", "clinvar", "cosmic"])
     """
 
     def __init__(
@@ -66,6 +70,7 @@ class VariantFetcher:
         gnomad_url: str = "https://gnomad.broadinstitute.org/api",
         clinvar_email: str = "",
         clinvar_api_key: str = "",
+        cosmic_db: str | None = None,
         timeout: int = 30,
         max_retries: int = 3,
         retry_delay: float = 1.0,
@@ -73,6 +78,7 @@ class VariantFetcher:
         self.gnomad_url = gnomad_url
         self.clinvar_email = clinvar_email
         self.clinvar_api_key = clinvar_api_key
+        self.cosmic_db = cosmic_db
         self.timeout = timeout
         self.max_retries = max_retries
         self.retry_delay = retry_delay
@@ -94,13 +100,15 @@ class VariantFetcher:
             List of variant dicts in the clinical module's standard hit format.
         """
         if sources is None:
-            sources = ["gnomad", "clinvar"]
+            sources = ["gnomad", "clinvar", "cosmic"]
         all_variants: list[dict[str, Any]] = []
         for source in sources:
             if source == "gnomad":
                 all_variants.extend(self._fetch_gnomad(gene_name))
             elif source == "clinvar":
                 all_variants.extend(self._fetch_clinvar(gene_name))
+            elif source == "cosmic":
+                all_variants.extend(self._fetch_cosmic(gene_name))
         return all_variants
 
     # ------------------------------------------------------------------
@@ -266,6 +274,89 @@ class VariantFetcher:
                 ),
             },
         }
+
+    # ------------------------------------------------------------------
+    # COSMIC
+    # ------------------------------------------------------------------
+
+    def _fetch_cosmic(self, gene_name: str) -> list[dict[str, Any]]:
+        """Fetch variants from a local COSMIC parquet database.
+
+        Uses PyArrow filter pushdown for efficient per-gene queries without
+        loading the entire file into memory.
+        """
+        if not self.cosmic_db:
+            logger.info("No COSMIC database path configured — skipping COSMIC")
+            return []
+
+        import os
+
+        if not os.path.exists(self.cosmic_db):
+            logger.warning("COSMIC database not found at %s", self.cosmic_db)
+            return []
+
+        try:
+            import pyarrow.dataset as ds
+
+            dataset = ds.dataset(self.cosmic_db, format="parquet")
+            table = dataset.to_table(
+                filter=(ds.field("GENE_SYMBOL") == gene_name)
+                | (ds.field("GENE_SYMBOL") == gene_name.upper())
+            )
+            cosmic_df = table.to_pandas()
+        except Exception as exc:
+            logger.error("Failed to query COSMIC for %s: %s", gene_name, exc)
+            return []
+
+        if cosmic_df.empty:
+            return []
+
+        hits: list[dict[str, Any]] = []
+        seen: set[tuple[str, int, str, str]] = set()
+
+        for _, row in cosmic_df.iterrows():
+            genomic_pos = row.get("GENOME_START")
+            if genomic_pos is None or (hasattr(genomic_pos, "__class__") and str(genomic_pos) == "nan"):
+                continue
+            genomic_pos = int(genomic_pos)
+
+            chrom = str(row.get("CHROMOSOME", ""))
+            ref = str(row.get("GENOMIC_WT_ALLELE", "") or "")
+            alt = str(row.get("GENOMIC_MUT_ALLELE", "") or "")
+
+            # Deduplicate by genomic identity
+            dedup_key = (chrom, genomic_pos, ref, alt)
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+
+            hgvsp = str(row.get("HGVSP", "") or "") or None
+            protein_pos = parse_hgvsp_position(hgvsp)
+
+            hits.append(
+                {
+                    "source": "COSMIC",
+                    "variant_id": str(row.get("GENOMIC_MUTATION_ID", "")),
+                    "chrom": f"chr{chrom}" if chrom and not chrom.startswith("chr") else chrom,
+                    "genomic_pos": genomic_pos,
+                    "ref": ref,
+                    "alt": alt,
+                    "consequence": str(row.get("MUTATION_DESCRIPTION", "") or ""),
+                    "protein_pos": protein_pos,
+                    "hgvsp": hgvsp,
+                    "allele_frequency": None,
+                    "clinical_significance": None,
+                    "metadata": {
+                        "cosmic_sample_count": int(row.get("GENOME_SCREEN_SAMPLE_COUNT", 0) or 0),
+                        "somatic_status": str(row.get("MUTATION_SOMATIC_STATUS", "") or ""),
+                        "mutation_aa": str(row.get("MUTATION_AA", "") or ""),
+                        "mutation_cds": str(row.get("MUTATION_CDS", "") or ""),
+                    },
+                }
+            )
+
+        logger.info("COSMIC: %d variants for %s", len(hits), gene_name)
+        return hits
 
     # ------------------------------------------------------------------
     # HTTP helpers with retry
