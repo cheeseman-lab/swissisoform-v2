@@ -22,8 +22,7 @@ class TestCoreIdentityModule:
         result = module.run(synthetic_tis)
         prefix = f"{module.MODULE_NAME}_"
         expected_keys = [
-            col[len(prefix):] if col.startswith(prefix) else col
-            for col in module.OUTPUT_COLUMNS
+            col[len(prefix) :] if col.startswith(prefix) else col for col in module.OUTPUT_COLUMNS
         ]
         for site in result:
             ann = site.isoform_annotations[module.MODULE_NAME]

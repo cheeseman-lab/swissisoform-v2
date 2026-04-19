@@ -20,14 +20,33 @@ protein.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import Any
 
+import pandas as pd
 import requests
 
 from swissisoform.modules.clinical import parse_hgvsp_position
 
 logger = logging.getLogger(__name__)
+
+
+def _nz(val: Any) -> Any:
+    """Normalize pandas nan / empty-string / None → None."""
+    if val is None:
+        return None
+    if isinstance(val, float) and pd.isna(val):
+        return None
+    if isinstance(val, str) and val == "":
+        return None
+    return val
+
+
+def _str_or_empty(val: Any) -> str:
+    """Like ``_nz`` but returns ``""`` instead of ``None``."""
+    return "" if _nz(val) is None else str(val)
+
 
 GNOMAD_QUERY = """
 query VariantsInGene($geneSymbol: String!, $referenceGenome: ReferenceGenomeId!) {
@@ -96,15 +115,17 @@ class VariantFetcher:
         Args:
             gnomad_url: gnomAD GraphQL endpoint (used only when
                 *gnomad_db* is None).
-            clinvar_email, clinvar_api_key: NCBI E-utilities auth (used
-                only when *clinvar_db* is None).
+            clinvar_email: NCBI E-utilities email (used only when *clinvar_db* is None).
+            clinvar_api_key: NCBI E-utilities API key (used only when *clinvar_db* is None).
             cosmic_db: Path to the standardized COSMIC parquet built by
                 ``scripts/setup_databases.py cosmic``.
             gnomad_db: Path to the gene-indexed gnomAD parquet built by
                 ``scripts/setup_databases.py gnomad``.
             clinvar_db: Path to the ClinVar variant_summary parquet
                 built by ``scripts/setup_databases.py clinvar``.
-            timeout, max_retries, retry_delay: HTTP retry knobs.
+            timeout: HTTP timeout in seconds.
+            max_retries: Max HTTP retry attempts.
+            retry_delay: Base delay between retries in seconds.
         """
         self.gnomad_url = gnomad_url
         self.clinvar_email = clinvar_email
@@ -120,9 +141,7 @@ class VariantFetcher:
     # Public API
     # ------------------------------------------------------------------
 
-    def fetch_gene(
-        self, gene_name: str, sources: list[str] | None = None
-    ) -> list[dict[str, Any]]:
+    def fetch_gene(self, gene_name: str, sources: list[str] | None = None) -> list[dict[str, Any]]:
         """Fetch variants from specified sources for a gene.
 
         Args:
@@ -160,8 +179,6 @@ class VariantFetcher:
 
     def _fetch_gnomad_local(self, gene_name: str) -> list[dict[str, Any]]:
         """Read gnomAD variants for *gene_name* from the bulk parquet."""
-        import os
-
         if not os.path.exists(self.gnomad_db):
             logger.warning("gnomAD parquet not found at %s — returning empty", self.gnomad_db)
             return []
@@ -177,25 +194,34 @@ class VariantFetcher:
 
         hits: list[dict[str, Any]] = []
         for _, v in df.iterrows():
-            hgvsp = v.get("hgvsp") or None
-            hits.append({
-                "source": "gnomAD",
-                "variant_id": str(v["variant_id"]),
-                "chrom": f"chr{v['chrom']}" if not str(v["chrom"]).startswith("chr") else str(v["chrom"]),
-                "genomic_pos": int(v["pos"]),
-                "ref": str(v["ref"]),
-                "alt": str(v["alt"]),
-                "consequence": str(v["consequence"]),
-                "protein_pos": None,  # ConsequenceValidator is authoritative
-                "hgvsp": hgvsp,
-                "allele_frequency": float(v["allele_frequency"]) if v["allele_frequency"] is not None else None,
-                "clinical_significance": None,
-                "metadata": {
-                    "hgvsc": v.get("hgvsc") or None,
-                    "hgvsp_canonical_hint": parse_hgvsp_position(hgvsp),
-                    "protein_position_vep": v.get("protein_position") or None,
-                },
-            })
+            hgvsp = _nz(v.get("hgvsp"))
+            hgvsc = _nz(v.get("hgvsc"))
+            hits.append(
+                {
+                    "source": "gnomAD",
+                    "variant_id": str(v["variant_id"]),
+                    "chrom": f"chr{v['chrom']}"
+                    if not str(v["chrom"]).startswith("chr")
+                    else str(v["chrom"]),
+                    "genomic_pos": int(v["pos"]),
+                    "ref": str(v["ref"]),
+                    "alt": str(v["alt"]),
+                    "consequence": str(v["consequence"]),
+                    "protein_pos": None,  # ConsequenceValidator is authoritative
+                    "hgvsp": hgvsp,
+                    "allele_frequency": (
+                        float(v["allele_frequency"])
+                        if _nz(v["allele_frequency"]) is not None
+                        else None
+                    ),
+                    "clinical_significance": None,
+                    "metadata": {
+                        "hgvsc": hgvsc,
+                        "hgvsp_canonical_hint": parse_hgvsp_position(hgvsp),
+                        "protein_position_vep": _nz(v.get("protein_position")),
+                    },
+                }
+            )
         return hits
 
     def _fetch_gnomad_api(self, gene_name: str) -> list[dict[str, Any]]:
@@ -272,8 +298,6 @@ class VariantFetcher:
 
     def _fetch_clinvar_local(self, gene_name: str) -> list[dict[str, Any]]:
         """Read ClinVar variants for *gene_name* from the bulk parquet."""
-        import os
-
         if not os.path.exists(self.clinvar_db):
             logger.warning("ClinVar parquet not found at %s — returning empty", self.clinvar_db)
             return []
@@ -282,53 +306,65 @@ class VariantFetcher:
 
             dataset = ds.dataset(self.clinvar_db, format="parquet")
             table = dataset.to_table(
-                filter=(ds.field("GeneSymbol") == gene_name)
-                & (ds.field("Assembly") == "GRCh38")
+                filter=(ds.field("GeneSymbol") == gene_name) & (ds.field("Assembly") == "GRCh38")
             )
             df = table.to_pandas()
         except Exception as exc:
             logger.error("ClinVar parquet query for %s failed: %s", gene_name, exc)
             return []
 
-        import pandas as pd
-
-        def _str_or_empty(val: Any) -> str:
-            if val is None or (isinstance(val, float) and pd.isna(val)):
-                return ""
-            return str(val)
-
         hits: list[dict[str, Any]] = []
         for _, r in df.iterrows():
             title = _str_or_empty(r.get("Name"))
             hgvsp = _extract_protein_from_title(title) if title else None
-            ref = _str_or_empty(r.get("ReferenceAllele"))
-            alt = _str_or_empty(r.get("AlternateAllele"))
-            if not ref or not alt:
-                parsed_ref, parsed_alt = _extract_ref_alt_from_title(title) if title else ("", "")
-                ref = ref or parsed_ref
-                alt = alt or parsed_alt
+            # Prefer VCF-format alleles: guaranteed genomic +strand orientation.
+            # `ReferenceAllele`/`AlternateAllele` (non-VCF) are usually empty in
+            # modern ClinVar dumps, and the HGVSc title parse returns
+            # transcript-direction bases — wrong for minus-strand genes. The
+            # VCF columns are the correct genomic-direction source.
+            ref_vcf = _str_or_empty(r.get("ReferenceAlleleVCF"))
+            alt_vcf = _str_or_empty(r.get("AlternateAlleleVCF"))
+            pos_vcf = r.get("PositionVCF")
+            if ref_vcf and alt_vcf and pos_vcf:
+                ref = ref_vcf
+                alt = alt_vcf
+                genomic_pos = int(pos_vcf)
+            else:
+                ref = _str_or_empty(r.get("ReferenceAllele"))
+                alt = _str_or_empty(r.get("AlternateAllele"))
+                if not ref or not alt:
+                    parsed_ref, parsed_alt = (
+                        _extract_ref_alt_from_title(title) if title else ("", "")
+                    )
+                    ref = ref or parsed_ref
+                    alt = alt or parsed_alt
+                genomic_pos = int(r["Start"]) if r.get("Start") else 0
             chrom_raw = _str_or_empty(r.get("Chromosome"))
-            chrom = f"chr{chrom_raw}" if chrom_raw and not chrom_raw.startswith("chr") else chrom_raw
+            chrom = (
+                f"chr{chrom_raw}" if chrom_raw and not chrom_raw.startswith("chr") else chrom_raw
+            )
             clin_sig = _str_or_empty(r.get("ClinicalSignificance")) or None
 
-            hits.append({
-                "source": "ClinVar",
-                "variant_id": f"ClinVar:{r.get('VariationID', '')}",
-                "chrom": chrom,
-                "genomic_pos": int(r["Start"]) if r.get("Start") else 0,
-                "ref": ref,
-                "alt": alt,
-                "consequence": str(r.get("Type") or ""),
-                "protein_pos": None,  # ConsequenceValidator is authoritative
-                "hgvsp": hgvsp,
-                "allele_frequency": None,
-                "clinical_significance": clin_sig,
-                "metadata": {
-                    "title": title,
-                    "rs_id": r.get("RS# (dbSNP)") or None,
-                    "hgvsp_canonical_hint": parse_hgvsp_position(hgvsp),
-                },
-            })
+            hits.append(
+                {
+                    "source": "ClinVar",
+                    "variant_id": f"ClinVar:{r.get('VariationID', '')}",
+                    "chrom": chrom,
+                    "genomic_pos": genomic_pos,
+                    "ref": ref,
+                    "alt": alt,
+                    "consequence": str(r.get("Type") or ""),
+                    "protein_pos": None,  # ConsequenceValidator is authoritative
+                    "hgvsp": hgvsp,
+                    "allele_frequency": None,
+                    "clinical_significance": clin_sig,
+                    "metadata": {
+                        "title": title,
+                        "rs_id": r.get("RS# (dbSNP)") or None,
+                        "hgvsp_canonical_hint": parse_hgvsp_position(hgvsp),
+                    },
+                }
+            )
         return hits
 
     def _fetch_clinvar_api(self, gene_name: str) -> list[dict[str, Any]]:
@@ -476,7 +512,9 @@ class VariantFetcher:
 
         for _, row in cosmic_df.iterrows():
             genomic_pos = row.get("GENOME_START")
-            if genomic_pos is None or (hasattr(genomic_pos, "__class__") and str(genomic_pos) == "nan"):
+            if genomic_pos is None or (
+                hasattr(genomic_pos, "__class__") and str(genomic_pos) == "nan"
+            ):
                 continue
             genomic_pos = int(genomic_pos)
 
@@ -525,9 +563,7 @@ class VariantFetcher:
     # HTTP helpers with retry
     # ------------------------------------------------------------------
 
-    def _post_with_retry(
-        self, url: str, json_payload: dict[str, Any]
-    ) -> dict[str, Any] | None:
+    def _post_with_retry(self, url: str, json_payload: dict[str, Any]) -> dict[str, Any] | None:
         """POST with retry and exponential backoff."""
         for attempt in range(self.max_retries):
             try:
@@ -553,9 +589,7 @@ class VariantFetcher:
                     )
         return None
 
-    def _get_with_retry(
-        self, url: str, params: dict[str, Any]
-    ) -> dict[str, Any] | None:
+    def _get_with_retry(self, url: str, params: dict[str, Any]) -> dict[str, Any] | None:
         """GET with retry and exponential backoff."""
         for attempt in range(self.max_retries):
             try:

@@ -68,8 +68,7 @@ def _build_summary(hits: list[dict[str, Any]]) -> dict[str, Any]:
     pathogenic_count = sum(
         1
         for h in hits
-        if h.get("clinical_significance")
-        and "pathogenic" in h["clinical_significance"].lower()
+        if h.get("clinical_significance") and "pathogenic" in h["clinical_significance"].lower()
     )
     return {
         "total_variants": len(hits),
@@ -138,10 +137,12 @@ class ClinicalModule:
     # Keep public aliases for backward compatibility
     @property
     def config(self) -> PipelineConfig:
+        """Pipeline configuration (read-only alias)."""
         return self._config
 
     @property
     def variant_cache(self) -> dict[str, list[dict[str, Any]]]:
+        """Pre-fetched variant cache keyed by gene name (read-only alias)."""
         return self._variant_cache
 
     def fetch_variants(
@@ -239,8 +240,7 @@ class ClinicalModule:
             self._variant_cache[gene_name] = raw_variants
         else:
             logger.info(
-                "ClinicalModule: gene %s not in cache and fetch_if_missing=False "
-                "— returning empty",
+                "ClinicalModule: gene %s not in cache and fetch_if_missing=False — returning empty",
                 gene_name,
             )
             raw_variants = []
@@ -267,9 +267,7 @@ class ClinicalModule:
         """
         return self.annotate("", gene_name)
 
-    def run(
-        self, tis_sites: list[TranslationInitiationSite]
-    ) -> list[TranslationInitiationSite]:
+    def run(self, tis_sites: list[TranslationInitiationSite]) -> list[TranslationInitiationSite]:
         """Annotate all TIS sites with clinical variant data.
 
         Args:

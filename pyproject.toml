@@ -39,10 +39,16 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "D"]
+# D403: biology terms are case-sensitive (pI, uORF, gnomAD, mRNA) — don't auto-capitalize.
+ignore = ["D403"]
 pydocstyle = { convention = "google" }
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*.py" = ["D100", "D101", "D102", "D103"]
+"tests/*.py" = ["D100", "D101", "D102", "D103", "D205"]
+"scripts/*.py" = ["D103"]
+# setup_databases.py loads .env before `from typing import Any` by design.
+# `pysam` appears only in a quoted type annotation.
+"scripts/setup_databases.py" = ["D103", "E402", "F821"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -124,12 +124,14 @@ class MotifsModule:
             summary[f"{name}_density_per100aa"] = round(count * 100.0 / seq_len, 4)
 
             for m in matches:
-                hits.append({
-                    "name": name,
-                    "pos": m.start(),
-                    "end": m.end(),
-                    "match": m.group(),
-                })
+                hits.append(
+                    {
+                        "name": name,
+                        "pos": m.start(),
+                        "end": m.end(),
+                        "match": m.group(),
+                    }
+                )
 
         # Aggregate: 14-3-3 totals
         total_1433 = summary["Mode1_1433"] + summary["Mode2_1433"]
@@ -145,9 +147,7 @@ class MotifsModule:
 
         return {"hits": hits, "summary": summary}
 
-    def run(
-        self, tis_sites: list[TranslationInitiationSite]
-    ) -> list[TranslationInitiationSite]:
+    def run(self, tis_sites: list[TranslationInitiationSite]) -> list[TranslationInitiationSite]:
         """Scan differential sequences for SLiMs and annotate each site.
 
         Args:

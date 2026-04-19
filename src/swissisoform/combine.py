@@ -34,14 +34,28 @@ DEDUP_KEY: tuple[str, ...] = ("Symbol", "Tid", "GenomePos", "StartCodon")
 # Fields that should be identical across samples for a given dedup key.
 # We copy these once from the first sample's row; conflicts raise an error.
 SHARED_FIELDS: tuple[str, ...] = (
-    "Symbol", "Gid", "Tid", "GenomePos", "StartCodon",
-    "TisType", "RecatTISType", "AASeq", "AALen", "Start",
+    "Symbol",
+    "Gid",
+    "Tid",
+    "GenomePos",
+    "StartCodon",
+    "TisType",
+    "RecatTISType",
+    "AASeq",
+    "AALen",
+    "Start",
 )
 
 # Per-sample metrics pivoted into {sample}_{metric} wide columns
 PER_SAMPLE_METRICS: tuple[str, ...] = (
-    "TISCounts", "NormTISCounts", "TISPvalue", "RiboPvalue",
-    "FisherQvalue", "Imputed", "GeneRNASeqCounts", "TotalRNASeqCounts",
+    "TISCounts",
+    "NormTISCounts",
+    "TISPvalue",
+    "RiboPvalue",
+    "FisherQvalue",
+    "Imputed",
+    "GeneRNASeqCounts",
+    "TotalRNASeqCounts",
 )
 
 
@@ -78,9 +92,7 @@ def combine_filtered_samples(
             continue
         missing = [c for c in DEDUP_KEY if c not in df.columns]
         if missing:
-            raise ValueError(
-                f"Sample {sample!r} missing dedup key columns: {missing}"
-            )
+            raise ValueError(f"Sample {sample!r} missing dedup key columns: {missing}")
         df = df.copy()
         df["_sample"] = sample
         frames.append(df)
@@ -95,21 +107,17 @@ def combine_filtered_samples(
     _verify_shared_fields(long)
 
     # Take shared fields from the first row per key
-    shared = (
-        long.drop_duplicates(subset=list(DEDUP_KEY), keep="first")
-        [list(SHARED_FIELDS)]
-        .reset_index(drop=True)
-    )
+    shared = long.drop_duplicates(subset=list(DEDUP_KEY), keep="first")[
+        list(SHARED_FIELDS)
+    ].reset_index(drop=True)
 
     # Pivot per-sample metrics to wide columns
     metric_cols = [m for m in PER_SAMPLE_METRICS if m in long.columns]
-    wide = (
-        long.pivot_table(
-            index=list(DEDUP_KEY),
-            columns="_sample",
-            values=metric_cols,
-            aggfunc="first",
-        )
+    wide = long.pivot_table(
+        index=list(DEDUP_KEY),
+        columns="_sample",
+        values=metric_cols,
+        aggfunc="first",
     )
     # Flatten MultiIndex columns: ("TISCounts", "HeLa") → "HeLa_TISCounts"
     wide.columns = [f"{sample}_{metric}" for metric, sample in wide.columns]
@@ -124,13 +132,16 @@ def combine_filtered_samples(
 
     present_cols = [f"present_{s}" for s in samples]
     combined["samples"] = combined[present_cols].apply(
-        lambda row: [s for s in samples if row[f"present_{s}"]], axis=1,
+        lambda row: [s for s in samples if row[f"present_{s}"]],
+        axis=1,
     )
     combined["n_samples"] = combined[present_cols].sum(axis=1).astype(int)
 
     logger.info(
         "combine_filtered_samples: %d samples → %d rows (long) → %d unique TIS (wide)",
-        len(samples), len(long), len(combined),
+        len(samples),
+        len(long),
+        len(combined),
     )
     return combined
 
@@ -145,7 +156,8 @@ def _verify_shared_fields(long: pd.DataFrame) -> None:
     break annotation.
     """
     check_fields = [
-        f for f in ("AASeq", "AALen", "TisType", "RecatTISType", "Start", "Gid")
+        f
+        for f in ("AASeq", "AALen", "TisType", "RecatTISType", "Start", "Gid")
         if f in long.columns
     ]
     if not check_fields:
@@ -155,6 +167,5 @@ def _verify_shared_fields(long: pd.DataFrame) -> None:
     if not bad.empty:
         examples = bad.head(3).to_dict(orient="index")
         raise ValueError(
-            f"{len(bad)} TIS have inconsistent shared fields across samples. "
-            f"Examples: {examples}"
+            f"{len(bad)} TIS have inconsistent shared fields across samples. Examples: {examples}"
         )

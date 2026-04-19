@@ -7,7 +7,6 @@ files are required.
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from swissisoform.clinical.validate import ConsequenceValidator
 
@@ -19,37 +18,67 @@ from swissisoform.clinical.validate import ConsequenceValidator
 # Exon 1: positions 100-108 (9 bp = 3 codons)
 # Exon 2: positions 200-208 (9 bp = 3 codons)
 # Total: 18 bp = 6 codons
-CDS_DF = pd.DataFrame([
-    {
-        "chromosome": "chr1", "start": 100, "end": 108, "strand": "+",
-        "gene_id": "GENE1", "transcript_id": "TX1", "feature_type": "CDS",
-    },
-    {
-        "chromosome": "chr1", "start": 200, "end": 208, "strand": "+",
-        "gene_id": "GENE1", "transcript_id": "TX1", "feature_type": "CDS",
-    },
-    {
-        "chromosome": "chr1", "start": 100, "end": 102, "strand": "+",
-        "gene_id": "GENE1", "transcript_id": "TX1", "feature_type": "start_codon",
-    },
-])
+CDS_DF = pd.DataFrame(
+    [
+        {
+            "chromosome": "chr1",
+            "start": 100,
+            "end": 108,
+            "strand": "+",
+            "gene_id": "GENE1",
+            "transcript_id": "TX1",
+            "feature_type": "CDS",
+        },
+        {
+            "chromosome": "chr1",
+            "start": 200,
+            "end": 208,
+            "strand": "+",
+            "gene_id": "GENE1",
+            "transcript_id": "TX1",
+            "feature_type": "CDS",
+        },
+        {
+            "chromosome": "chr1",
+            "start": 100,
+            "end": 102,
+            "strand": "+",
+            "gene_id": "GENE1",
+            "transcript_id": "TX1",
+            "feature_type": "start_codon",
+        },
+    ]
+)
 
 # Minus strand gene: single CDS exon, positions 500-508
-CDS_DF_MINUS = pd.DataFrame([
-    {
-        "chromosome": "chr2", "start": 500, "end": 508, "strand": "-",
-        "gene_id": "GENE2", "transcript_id": "TX2", "feature_type": "CDS",
-    },
-    {
-        "chromosome": "chr2", "start": 506, "end": 508, "strand": "-",
-        "gene_id": "GENE2", "transcript_id": "TX2", "feature_type": "start_codon",
-    },
-])
+CDS_DF_MINUS = pd.DataFrame(
+    [
+        {
+            "chromosome": "chr2",
+            "start": 500,
+            "end": 508,
+            "strand": "-",
+            "gene_id": "GENE2",
+            "transcript_id": "TX2",
+            "feature_type": "CDS",
+        },
+        {
+            "chromosome": "chr2",
+            "start": 506,
+            "end": 508,
+            "strand": "-",
+            "gene_id": "GENE2",
+            "transcript_id": "TX2",
+            "feature_type": "start_codon",
+        },
+    ]
+)
 
 
 # ---------------------------------------------------------------------------
 # Position map tests
 # ---------------------------------------------------------------------------
+
 
 class TestBuildPositionMap:
     """Tests for ConsequenceValidator.build_position_map."""
@@ -85,10 +114,19 @@ class TestBuildPositionMap:
 
     def test_empty_cds(self):
         """No CDS data -> empty map."""
-        validator = ConsequenceValidator(cds_df=pd.DataFrame(
-            columns=["chromosome", "start", "end", "strand",
-                     "gene_id", "transcript_id", "feature_type"]
-        ))
+        validator = ConsequenceValidator(
+            cds_df=pd.DataFrame(
+                columns=[
+                    "chromosome",
+                    "start",
+                    "end",
+                    "strand",
+                    "gene_id",
+                    "transcript_id",
+                    "feature_type",
+                ]
+            )
+        )
         assert validator.build_position_map("MISSING") == {}
 
     def test_none_cds(self):
@@ -108,6 +146,7 @@ class TestBuildPositionMap:
 # Intronic / position-not-in-map test
 # ---------------------------------------------------------------------------
 
+
 class TestValidateIntronic:
     """Tests for positions that fall between exons."""
 
@@ -123,6 +162,7 @@ class TestValidateIntronic:
 # ---------------------------------------------------------------------------
 # Indel tests
 # ---------------------------------------------------------------------------
+
 
 class TestValidateIndels:
     """Tests for insertion and deletion classification."""
@@ -161,6 +201,7 @@ class TestValidateIndels:
 # SNV tests (no genome — validated=False)
 # ---------------------------------------------------------------------------
 
+
 class TestValidateSNVNoGenome:
     """SNV validation without genome FASTA."""
 
@@ -175,6 +216,7 @@ class TestValidateSNVNoGenome:
 # ---------------------------------------------------------------------------
 # SNV tests (with injected coding sequence)
 # ---------------------------------------------------------------------------
+
 
 class TestValidateSNVWithSequence:
     """SNV classification with manually injected coding sequences."""
@@ -255,6 +297,7 @@ class TestValidateSNVWithSequence:
 # Protein position calculation
 # ---------------------------------------------------------------------------
 
+
 class TestProteinPosition:
     """Tests for protein position derivation from coding position."""
 
@@ -272,6 +315,7 @@ class TestProteinPosition:
 # ---------------------------------------------------------------------------
 # Batch validation
 # ---------------------------------------------------------------------------
+
 
 class TestValidateVariantsBatch:
     """Tests for the batch validate_variants method."""
@@ -329,20 +373,21 @@ class TestValidateVariantsBatch:
 # GTF loader test
 # ---------------------------------------------------------------------------
 
+
 class TestLoadCdsFeatures:
     """Tests for the load_cds_features GTF reader."""
 
     def test_load_cds_features(self, tmp_path):
         """Parses CDS and start_codon from a minimal GTF."""
         gtf_content = (
-            '##description: test\n'
-            'chr1\tHAVANA\tgene\t100\t500\t.\t+\t.\t'
+            "##description: test\n"
+            "chr1\tHAVANA\tgene\t100\t500\t.\t+\t.\t"
             'gene_id "G1"; transcript_id "T1";\n'
-            'chr1\tHAVANA\tCDS\t100\t200\t.\t+\t0\t'
+            "chr1\tHAVANA\tCDS\t100\t200\t.\t+\t0\t"
             'gene_id "G1"; transcript_id "T1";\n'
-            'chr1\tHAVANA\tstart_codon\t100\t102\t.\t+\t0\t'
+            "chr1\tHAVANA\tstart_codon\t100\t102\t.\t+\t0\t"
             'gene_id "G1"; transcript_id "T1";\n'
-            'chr1\tHAVANA\texon\t100\t500\t.\t+\t.\t'
+            "chr1\tHAVANA\texon\t100\t500\t.\t+\t.\t"
             'gene_id "G1"; transcript_id "T1";\n'
         )
         gtf_file = tmp_path / "test.gtf"

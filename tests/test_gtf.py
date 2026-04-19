@@ -7,7 +7,7 @@ from swissisoform.io.gtf import load_transcript_annotations
 # Build GTF lines individually to stay under line-length limit
 _HEADER = "##description: test gtf\n##provider: GENCODE\n"
 _GENE_LINE = (
-    'chr1\tHAVANA\tgene\t100\t500\t.\t+\t.\t'
+    "chr1\tHAVANA\tgene\t100\t500\t.\t+\t.\t"
     'gene_id "ENSG00000000001.1"; gene_type "protein_coding";'
 )
 _TXN1_ATTRS = (
@@ -17,7 +17,7 @@ _TXN1_ATTRS = (
 )
 _TXN1_LINE = f"chr1\tHAVANA\ttranscript\t100\t500\t.\t+\t.\t{_TXN1_ATTRS}"
 _EXON_LINE = (
-    'chr1\tHAVANA\texon\t100\t200\t.\t+\t.\t'
+    "chr1\tHAVANA\texon\t100\t200\t.\t+\t.\t"
     'gene_id "ENSG00000000001.1"; transcript_id "ENST00000000001.1";'
 )
 _TXN2_ATTRS = (
@@ -28,14 +28,16 @@ _TXN2_ATTRS = (
 )
 _TXN2_LINE = f"chr1\tHAVANA\ttranscript\t100\t500\t.\t+\t.\t{_TXN2_ATTRS}"
 
-SAMPLE_GTF = "\n".join([
-    _HEADER.rstrip(),
-    _GENE_LINE,
-    _TXN1_LINE,
-    _EXON_LINE,
-    _TXN2_LINE,
-    "",
-])
+SAMPLE_GTF = "\n".join(
+    [
+        _HEADER.rstrip(),
+        _GENE_LINE,
+        _TXN1_LINE,
+        _EXON_LINE,
+        _TXN2_LINE,
+        "",
+    ]
+)
 
 
 class TestLoadTranscriptAnnotations:
@@ -53,10 +55,17 @@ class TestLoadTranscriptAnnotations:
         gtf.write_text(SAMPLE_GTF)
         df = load_transcript_annotations(str(gtf))
         expected = {
-            "chromosome", "source", "feature_type",
-            "start", "end", "strand",
-            "gene_id", "gene_type", "transcript_id",
-            "transcript_type", "transcript_support_level",
+            "chromosome",
+            "source",
+            "feature_type",
+            "start",
+            "end",
+            "strand",
+            "gene_id",
+            "gene_type",
+            "transcript_id",
+            "transcript_type",
+            "transcript_support_level",
             "MANE_Select",
         }
         assert expected.issubset(set(df.columns))

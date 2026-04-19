@@ -33,8 +33,7 @@ def parse_genome_pos(genome_pos: str) -> tuple[str, int, int, str]:
         return chrom, int(start_str), int(end_str), strand
     except (ValueError, AttributeError) as exc:
         raise ValueError(
-            f"Cannot parse GenomePos '{genome_pos}'; "
-            "expected format 'chr:start-end:strand'"
+            f"Cannot parse GenomePos '{genome_pos}'; expected format 'chr:start-end:strand'"
         ) from exc
 
 
@@ -146,12 +145,8 @@ def _annotate_tis_locus(
 
     # Extract start (forward) or end (reverse) as integer locus
     coords = tis_df[genome_position_column].str.split(":").str[1]
-    tis_df.loc[forward_mask, "Locus"] = (
-        coords[forward_mask].str.split("-").str[0].astype(int)
-    )
-    tis_df.loc[reverse_mask, "Locus"] = (
-        coords[reverse_mask].str.split("-").str[1].astype(int)
-    )
+    tis_df.loc[forward_mask, "Locus"] = coords[forward_mask].str.split("-").str[0].astype(int)
+    tis_df.loc[reverse_mask, "Locus"] = coords[reverse_mask].str.split("-").str[1].astype(int)
     tis_df["Locus"] = tis_df["Locus"].astype(int)
 
     return tis_df
@@ -176,8 +171,8 @@ def _merge_gtf_annotations(tis_df: pd.DataFrame, gtf_path: str) -> pd.DataFrame:
 
     # Keep original columns plus selected GTF columns
     gtf_merge_cols = [
-        c for c in ["MANE_Select", "transcript_support_level", "gene_type",
-                     "transcript_type"]
+        c
+        for c in ["MANE_Select", "transcript_support_level", "gene_type", "transcript_type"]
         if c in tis_df.columns
     ]
     tis_df = tis_df[tis_columns + gtf_merge_cols]

@@ -34,6 +34,7 @@ from swissisoform.config import (
     ConservationConfig,
     PipelineConfig,
 )
+from swissisoform.io.parquet import paired_tis_dataframe
 from swissisoform.io.ribotish import load_ribotish_predictions
 from swissisoform.modules.biophysics import BiophysicsModule
 from swissisoform.modules.clinical import ClinicalModule
@@ -118,14 +119,9 @@ def main() -> None:
         print(f"  {g:10s} raw={len(gdf):>4}  native_annotated={len(ann):>3}")
 
     hdr("STAGE 1 — Upstream (filter + impute + drop uncanonical)")
-    ref = UpstreamReference.load(
-        gtf_path=GTF, genome_fasta=GENOME, protein_fasta=PROTEIN
-    )
+    ref = UpstreamReference.load(gtf_path=GTF, genome_fasta=GENOME, protein_fasta=PROTEIN)
     final, dropped = run_sample(HELA, HELA_RNASEQ, GTF, sample="HeLa", reference=ref)
-    print(
-        f"final: {len(final):,}  dropped: {len(dropped):,}  "
-        f"imputed: {final['Imputed'].sum():,}"
-    )
+    print(f"final: {len(final):,}  dropped: {len(dropped):,}  imputed: {final['Imputed'].sum():,}")
     for g in TEST_GENES:
         fg = final[final["Symbol"] == g]
         native_ann = fg[fg["TisType"].str.startswith("Annotated") & ~fg["Imputed"]]
@@ -157,8 +153,12 @@ def main() -> None:
     cfg = build_config()
     print("Reference DBs:")
     print(f"  DIAMOND: {'ok' if DIAMOND_DB.exists() else 'MISSING'}  {DIAMOND_DB}")
-    print(f"  gnomAD:  {'ok' if GNOMAD_DB.exists() else 'MISSING (falls back to API)'}  {GNOMAD_DB}")
-    print(f"  ClinVar: {'ok' if CLINVAR_DB.exists() else 'MISSING (falls back to API)'}  {CLINVAR_DB}")
+    print(
+        f"  gnomAD:  {'ok' if GNOMAD_DB.exists() else 'MISSING (falls back to API)'}  {GNOMAD_DB}"
+    )
+    print(
+        f"  ClinVar: {'ok' if CLINVAR_DB.exists() else 'MISSING (falls back to API)'}  {CLINVAR_DB}"
+    )
     print(f"  COSMIC:  {'ok' if COSMIC_DB.exists() else 'MISSING (skipped)'}  {COSMIC_DB}")
 
     # DeepLoc: batch-infer every unique protein once, return hash-keyed dict
@@ -190,9 +190,7 @@ def main() -> None:
     print(f"clinical: prefetching + validating variants for {len(gene_names)} genes")
     for gene_name in gene_names:
         canonical_tid = gene_by_name[gene_name].canonical_transcript_id
-        variants = clinical_mod.fetch_variants(
-            gene_name, transcript_id=canonical_tid
-        )
+        variants = clinical_mod.fetch_variants(gene_name, transcript_id=canonical_tid)
         clinical_mod._variant_cache[gene_name] = variants
         with_pos = sum(1 for v in variants if v.get("protein_pos") is not None)
         print(
@@ -232,17 +230,11 @@ def main() -> None:
             f"\n{gene.gene_name}  ({gene.canonical_transcript_id}, "
             f"{len(gene.canonical_protein.rstrip('*'))} aa)"
         )
-        print(
-            f"  biophysics:    pI={bio.get('pI'):.2f}  "
-            f"gravy={bio.get('gravy'):.3f}"
-        )
+        print(f"  biophysics:    pI={bio.get('pI'):.2f}  gravy={bio.get('gravy'):.3f}")
         print(f"  motifs:        {len(mot.get('hits', []))} hits")
         ms_hits = mass.get("hits", [])
         unique_ms = sum(1 for h in ms_hits if h.get("unique_to_isoform") is True)
-        print(
-            f"  massspec:      {len(ms_hits)} tryptic peptides "
-            f"({unique_ms} marked unique)"
-        )
+        print(f"  massspec:      {len(ms_hits)} tryptic peptides ({unique_ms} marked unique)")
         cons_sum = cons.get("summary", {})
         print(
             f"  conservation:  score={cons_sum.get('conservation_score')} "
@@ -261,6 +253,49 @@ def main() -> None:
             f"  localization:  deeploc={loc.get('deeploc_prediction')}  "
             f"signals={loc.get('deeploc_signals')}"
         )
+
+        # Per-TIS spot check so we can SEE canonical vs each isoform.
+        for site in sorted(
+            gene.tis_sites,
+            key=lambda s: (s.orf_type.value, s.position),
+        ):
+            ia = site.isoform_annotations
+            ibio = ia.get("biophysics", {})
+            imot = ia.get("motifs", {})
+            imass = ia.get("massspec", {})
+            icons = ia.get("conservation", {})
+            iclin = ia.get("clinical", {})
+            iloc = ia.get("localization", {})
+            ilen = len(site.isoform_protein.rstrip("*"))
+            kozak = site.kozak_context or "—"
+            ms_hits = imass.get("hits", []) or []
+            ms_unique = sum(1 for h in ms_hits if h.get("unique_to_isoform") is True)
+            cons_sum = icons.get("summary", {}) or {}
+            clin_sum = iclin.get("summary", {}) or {}
+            print(f"    TIS {site.tis_id} ({site.orf_type.value}, {ilen} aa, kozak={kozak})")
+            print(
+                f"      bio pI={ibio.get('pI')} gravy={ibio.get('gravy')}  "
+                f"motifs={len(imot.get('hits', []) or [])}  "
+                f"ms={len(ms_hits)} (uniq={ms_unique})  "
+                f"cons={cons_sum.get('conservation_score')}/"
+                f"{cons_sum.get('status')}  "
+                f"clin={clin_sum.get('total_variants', 0)} "
+                f"(path={clin_sum.get('pathogenic_count', 0)})  "
+                f"loc={iloc.get('deeploc_prediction')}/"
+                f"{iloc.get('deeploc_signals')}"
+            )
+
+    hdr("STAGE 6 — Paired parquet output")
+    out_dir = Path(__file__).parent.parent / "data" / "output" / "5gene_e2e"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    paired = paired_tis_dataframe(genes)
+    all_path = out_dir / "all_paired.parquet"
+    paired.to_parquet(all_path, index=False)
+    print(f"wrote {all_path} ({len(paired)} rows, {len(paired.columns)} cols)")
+    for gene_name, sub in paired.groupby("gene_name"):
+        gpath = out_dir / f"{gene_name}_paired.parquet"
+        sub.to_parquet(gpath, index=False)
+        print(f"  {gene_name}: {len(sub)} rows -> {gpath.name}")
 
 
 if __name__ == "__main__":

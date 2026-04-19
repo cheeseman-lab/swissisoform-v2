@@ -21,8 +21,7 @@ class TestBiophysicsModule:
         result = module.run(synthetic_tis)
         prefix = f"{module.MODULE_NAME}_"
         expected_keys = [
-            col[len(prefix):] if col.startswith(prefix) else col
-            for col in module.OUTPUT_COLUMNS
+            col[len(prefix) :] if col.startswith(prefix) else col for col in module.OUTPUT_COLUMNS
         ]
         for site in result:
             ann = site.isoform_annotations[module.MODULE_NAME]
@@ -129,8 +128,7 @@ class TestAnnotateMethod:
         assert isinstance(result, dict)
         prefix = f"{module.MODULE_NAME}_"
         expected_keys = [
-            col[len(prefix):] if col.startswith(prefix) else col
-            for col in module.OUTPUT_COLUMNS
+            col[len(prefix) :] if col.startswith(prefix) else col for col in module.OUTPUT_COLUMNS
         ]
         for key in expected_keys:
             assert key in result, f"Missing key {key!r}"
@@ -160,10 +158,7 @@ class TestAnnotateMethod:
         """annotate() works on a full canonical protein sequence (not just diffs)."""
         module = BiophysicsModule(config)
         # A realistic canonical protein fragment (human ubiquitin, first 76 AA)
-        ubiquitin = (
-            "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQ"
-            "KESTLHLVLRLRGG"
-        )
+        ubiquitin = "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"
         result = module.annotate(ubiquitin)
         for key, val in result.items():
             assert val is not None, f"Expected non-None for {key!r} on canonical protein"

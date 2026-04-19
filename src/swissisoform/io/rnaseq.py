@@ -1,4 +1,4 @@
-"""RNA-seq count-file parsing for TIS normalization.
+r"""RNA-seq count-file parsing for TIS normalization.
 
 Reads HTSeq-count output files (``ENSG<version>\\tcount``), drops QC
 indices (``__no_feature`` etc.), and provides helpers to aggregate
@@ -59,17 +59,12 @@ def load_sample_manifest(
     reps = pd.read_csv(replicate_manifest)
     tis_reps = reps[reps["condition"] == condition]
     files_per_sample = (
-        tis_reps.groupby("sample")["rnaseq_count_file"].apply(list).rename(
-            "rnaseq_count_files"
-        )
+        tis_reps.groupby("sample")["rnaseq_count_file"].apply(list).rename("rnaseq_count_files")
     )
-    merged = samples.merge(
-        files_per_sample, left_on="sample", right_index=True, how="left"
-    )
+    merged = samples.merge(files_per_sample, left_on="sample", right_index=True, how="left")
     missing = merged[merged["rnaseq_count_files"].isnull()]
     if not missing.empty:
         raise ValueError(
-            f"Samples without {condition} replicates in manifest: "
-            f"{missing['sample'].tolist()}"
+            f"Samples without {condition} replicates in manifest: {missing['sample'].tolist()}"
         )
     return merged

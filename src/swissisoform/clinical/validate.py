@@ -90,14 +90,10 @@ class ConsequenceValidator:
 
         if not start_codons.empty:
             canonical_start = (
-                start_codons.iloc[0]["start"]
-                if strand == "+"
-                else start_codons.iloc[0]["end"]
+                start_codons.iloc[0]["start"] if strand == "+" else start_codons.iloc[0]["end"]
             )
         else:
-            canonical_start = (
-                tx_cds["start"].min() if strand == "+" else tx_cds["end"].max()
-            )
+            canonical_start = tx_cds["start"].min() if strand == "+" else tx_cds["end"].max()
 
         # Sort CDS regions
         if strand == "+":
@@ -235,9 +231,7 @@ class ConsequenceValidator:
         if len(ref) != len(alt):
             length_diff = abs(len(alt) - len(ref))
             if length_diff % 3 == 0:
-                consequence = (
-                    "inframe_insertion" if len(alt) > len(ref) else "inframe_deletion"
-                )
+                consequence = "inframe_insertion" if len(alt) > len(ref) else "inframe_deletion"
             else:
                 consequence = "frameshift_variant"
             return {
@@ -250,10 +244,23 @@ class ConsequenceValidator:
                 "validated": True,
             }
 
+        # Multi-nucleotide variant (MNV): len(ref) == len(alt) > 1.
+        # Codon-level translation would need to walk multiple codons; skip
+        # for now and classify as mnv so it doesn't spam reference_mismatch.
+        if len(ref) > 1:
+            return {
+                "consequence": "mnv",
+                "protein_pos": coding_pos // 3,
+                "aa_ref": None,
+                "aa_alt": None,
+                "codon_ref": None,
+                "codon_alt": None,
+                "validated": True,
+            }
+
         # SNV: need coding sequence for codon analysis
-        coding_seq = (
-            self._coding_seq_cache.get(transcript_id)
-            or self.build_coding_sequence(transcript_id)
+        coding_seq = self._coding_seq_cache.get(transcript_id) or self.build_coding_sequence(
+            transcript_id
         )
 
         if not coding_seq:
@@ -301,8 +308,7 @@ class ConsequenceValidator:
         # Verify reference matches expectation
         if codon_ref[offset] != ref_base:
             logger.warning(
-                "Reference mismatch at %s:%d — expected %s at offset %d of codon %s, "
-                "got %s",
+                "Reference mismatch at %s:%d — expected %s at offset %d of codon %s, got %s",
                 transcript_id,
                 genomic_pos,
                 ref_base,

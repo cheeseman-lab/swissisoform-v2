@@ -25,17 +25,39 @@ MAJOR_WEIGHTS = [0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1]
 PARTIAL_WEIGHTS = [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 1, 0.1, 0.1, 1, 1, 1, 1]
 
 AMBIGUITY_DICT: dict[str, set[str]] = {
-    "A": {"A"}, "C": {"C"}, "G": {"G"}, "T": {"T"}, "U": {"T"},
-    "R": {"A", "G"}, "Y": {"C", "T"}, "M": {"A", "C"},
-    "K": {"G", "T"}, "S": {"C", "G"}, "W": {"A", "T"},
-    "B": {"C", "G", "T"}, "D": {"A", "G", "T"}, "H": {"A", "C", "T"},
-    "V": {"A", "C", "G"}, "N": {"A", "C", "G", "T"},
+    "A": {"A"},
+    "C": {"C"},
+    "G": {"G"},
+    "T": {"T"},
+    "U": {"T"},
+    "R": {"A", "G"},
+    "Y": {"C", "T"},
+    "M": {"A", "C"},
+    "K": {"G", "T"},
+    "S": {"C", "G"},
+    "W": {"A", "T"},
+    "B": {"C", "G", "T"},
+    "D": {"A", "G", "T"},
+    "H": {"A", "C", "T"},
+    "V": {"A", "C", "G"},
+    "N": {"A", "C", "G", "T"},
     # Lowercase versions
-    "a": {"A"}, "c": {"C"}, "g": {"G"}, "t": {"T"}, "u": {"T"},
-    "r": {"A", "G"}, "y": {"C", "T"}, "m": {"A", "C"},
-    "k": {"G", "T"}, "s": {"C", "G"}, "w": {"A", "T"},
-    "b": {"C", "G", "T"}, "d": {"A", "G", "T"}, "h": {"A", "C", "T"},
-    "v": {"A", "C", "G"}, "n": {"A", "C", "G", "T"},
+    "a": {"A"},
+    "c": {"C"},
+    "g": {"G"},
+    "t": {"T"},
+    "u": {"T"},
+    "r": {"A", "G"},
+    "y": {"C", "T"},
+    "m": {"A", "C"},
+    "k": {"G", "T"},
+    "s": {"C", "G"},
+    "w": {"A", "T"},
+    "b": {"C", "G", "T"},
+    "d": {"A", "G", "T"},
+    "h": {"A", "C", "T"},
+    "v": {"A", "C", "G"},
+    "n": {"A", "C", "G", "T"},
 }
 
 # ---------------------------------------------------------------------------
@@ -176,9 +198,7 @@ class InitiationContextModule:
             "utr5_gc_content": gc,
         }
 
-    def run(
-        self, tis_sites: list[TranslationInitiationSite]
-    ) -> list[TranslationInitiationSite]:
+    def run(self, tis_sites: list[TranslationInitiationSite]) -> list[TranslationInitiationSite]:
         """Annotate all TIS sites with Kozak context features.
 
         Thin wrapper that calls ``annotate_site()`` for each site and stores

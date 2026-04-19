@@ -79,9 +79,7 @@ class GeneRefModule:
         """
         return self.annotate_by_gene(gene.gene_name)
 
-    def run(
-        self, tis_sites: list[TranslationInitiationSite]
-    ) -> list[TranslationInitiationSite]:
+    def run(self, tis_sites: list[TranslationInitiationSite]) -> list[TranslationInitiationSite]:
         """Annotate each TIS site with gene-level reference data.
 
         Backward-compatible wrapper: for standalone use (outside the pipeline
@@ -101,7 +99,5 @@ class GeneRefModule:
             The same sites with ``isoform_annotations["generef"]`` populated.
         """
         for site in tis_sites:
-            site.isoform_annotations[self.MODULE_NAME] = self.annotate_by_gene(
-                site.gene_name
-            )
+            site.isoform_annotations[self.MODULE_NAME] = self.annotate_by_gene(site.gene_name)
         return tis_sites

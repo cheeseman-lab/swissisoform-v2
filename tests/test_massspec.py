@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import copy
-
-from swissisoform.config import PipelineConfig
-from swissisoform.models import TranslationInitiationSite, ORFType
 from swissisoform.modules.massspec import MassSpecModule
 
 
@@ -25,7 +21,7 @@ class TestMassSpecModule:
         pep_seqs = [p["peptide"] for p in peptides]
         # 0-missed cleavages:
         assert "MAAAAAALLLLLLLR" in pep_seqs  # pos 0-15, 15 AA
-        assert "BBBBBBBBR" in pep_seqs         # pos 15-24, 9 AA
+        assert "BBBBBBBBR" in pep_seqs  # pos 15-24, 9 AA
         # 1-missed cleavage:
         assert "MAAAAAALLLLLLLRBBBBBBBBR" in pep_seqs  # pos 0-24, 24 AA
 
@@ -50,7 +46,7 @@ class TestMassSpecModule:
         peptides = module._tryptic_digest(protein)
         seq = protein.rstrip("*").upper()
         for pep in peptides:
-            assert seq[pep["pos"]:pep["end"]] == pep["peptide"]
+            assert seq[pep["pos"] : pep["end"]] == pep["peptide"]
             assert pep["length"] == pep["end"] - pep["pos"]
 
     def test_tryptic_digest_min_max_length(self, config):
@@ -129,7 +125,8 @@ class TestMassSpecModule:
 
     def test_empty_protein(self, config):
         """Empty string returns empty hits; unique/validated are None (unknown)
-        when no canonical/gene was supplied."""
+        when no canonical/gene was supplied.
+        """
         module = MassSpecModule(config)
         result = module.annotate("")
         assert result["hits"] == []

@@ -116,11 +116,11 @@ _TAIL_MATCH_FRACTION = 0.95
 
 
 def _tail_matches(seq_a: str, seq_b: str) -> bool:
-    """Return True if *seq_a* and *seq_b* align to at least _TAIL_MATCH_FRACTION
-    over the shorter of (remaining length, ``_MIN_TAIL_VERIFY``).
+    """Return True if *seq_a* and *seq_b* tails align.
 
-    Returns True if either sequence is shorter than ``_MIN_TAIL_VERIFY`` AND
-    they match exactly — that's the only sound way to accept very short tails.
+    Aligns to at least ``_TAIL_MATCH_FRACTION`` over the shorter of
+    (remaining length, ``_MIN_TAIL_VERIFY``). If either sequence is shorter
+    than ``_MIN_TAIL_VERIFY``, requires an exact match.
     """
     if not seq_a or not seq_b:
         return False
@@ -163,7 +163,7 @@ def _find_canonical_offset(isoform: str, canonical: str) -> int | None:
         return None
 
     # Verify the tail aligns — prefix match alone is not enough
-    iso_tail = iso[idx + check_len:]
+    iso_tail = iso[idx + check_len :]
     can_tail = can[check_len:]
     if _tail_matches(iso_tail, can_tail):
         return idx
@@ -196,7 +196,7 @@ def _find_truncation_offset(isoform: str, canonical: str) -> int | None:
     if idx < 0:
         return None
 
-    can_tail = can[idx + check_len:]
+    can_tail = can[idx + check_len :]
     iso_tail = iso[check_len:]
     if _tail_matches(can_tail, iso_tail):
         return idx
@@ -248,7 +248,9 @@ def compute_diff_region(
     # actual relationship by sequence comparison, not just the nominal label.
     # Ribo-TISH labels are per-transcript; our canonical is per-gene.
     if orf_type in (
-        ORFType.EXTENDED, ORFType.TRUNCATED, ORFType.UOORF,
+        ORFType.EXTENDED,
+        ORFType.TRUNCATED,
+        ORFType.UOORF,
     ):
         ext_offset = _find_canonical_offset(isoform_protein, canonical_protein)
         trunc_offset = _find_truncation_offset(isoform_protein, canonical_protein)
@@ -363,9 +365,7 @@ def _build_canonical_by_tid(gene_rows: pd.DataFrame) -> dict[str, str]:
         existing = by_tid.get(tid)
         if existing is None or len(aaseq) > len(existing):
             if existing is not None:
-                logger.debug(
-                    "Multiple Annotated rows for transcript %s; keeping longest", tid
-                )
+                logger.debug("Multiple Annotated rows for transcript %s; keeping longest", tid)
             by_tid[tid] = aaseq
     return by_tid
 
@@ -376,7 +376,8 @@ def _build_canonical_by_tid(gene_rows: pd.DataFrame) -> dict[str, str]:
 
 
 def _expression_from_row(
-    row: pd.Series, samples: list[str],
+    row: pd.Series,
+    samples: list[str],
 ) -> dict[str, CellLineExpression]:
     """Build ``{cell_line: CellLineExpression}`` from wide sample columns.
 
@@ -396,7 +397,9 @@ def _expression_from_row(
         if pd.isna(raw) or pd.isna(cpm) or pd.isna(pval):
             continue
         expression[sample] = CellLineExpression(
-            raw_count=int(raw), cpm=float(cpm), p_value=float(pval),
+            raw_count=int(raw),
+            cpm=float(cpm),
+            p_value=float(pval),
         )
     return expression
 
@@ -430,10 +433,16 @@ def _row_to_tis(
     orf_type = orf_type_from_ribotish(str(row["TisType"]))
     isoform_protein = str(row["AASeq"])
     gene_name = str(row["Symbol"])
-    tis_id = f"{chrom}:{position}:{strand}:{start_codon}"
+    # Include transcript_id in tis_id so the same genomic start codon on
+    # distinct transcripts (common for the same Symbol across isoforms)
+    # yields distinct TIS identifiers.
+    transcript_id = str(row["Tid"])
+    tis_id = f"{chrom}:{position}:{strand}:{start_codon}:{transcript_id}"
 
     diff_region = compute_diff_region(
-        orf_type, isoform_protein, canonical_protein,
+        orf_type,
+        isoform_protein,
+        canonical_protein,
         context=f"{gene_name} {tis_id}",
     )
 
@@ -448,14 +457,12 @@ def _row_to_tis(
         expression = {}
         tis_pvalue = float(row["TISPvalue"]) if pd.notna(row["TISPvalue"]) else None
         ribo_pvalue = float(row["RiboPvalue"]) if pd.notna(row["RiboPvalue"]) else None
-        fisher_qvalue = (
-            float(row["FisherQvalue"]) if pd.notna(row["FisherQvalue"]) else None
-        )
+        fisher_qvalue = float(row["FisherQvalue"]) if pd.notna(row["FisherQvalue"]) else None
 
     return TranslationInitiationSite(
         tis_id=tis_id,
         gene_name=gene_name,
-        transcript_id=str(row["Tid"]),
+        transcript_id=transcript_id,
         chrom=chrom,
         position=position,
         strand=strand,
@@ -481,8 +488,15 @@ def _row_to_tis(
 
 
 _SHARED_REQUIRED: tuple[str, ...] = (
-    "Symbol", "Gid", "Tid", "TisType", "GenomePos",
-    "StartCodon", "Start", "AALen", "AASeq",
+    "Symbol",
+    "Gid",
+    "Tid",
+    "TisType",
+    "GenomePos",
+    "StartCodon",
+    "Start",
+    "AALen",
+    "AASeq",
 )
 _PER_SAMPLE_REQUIRED: tuple[str, ...] = ("TISPvalue", "RiboPvalue", "FisherQvalue")
 
@@ -497,7 +511,7 @@ def _detect_samples(df: pd.DataFrame) -> list[str] | None:
     present = [c for c in df.columns if c.startswith("present_")]
     if not present:
         return None
-    return sorted(c[len("present_"):] for c in present)
+    return sorted(c[len("present_") :] for c in present)
 
 
 def _validate_columns(df: pd.DataFrame, samples: list[str] | None) -> None:
@@ -573,12 +587,14 @@ def assemble_genes(
     if genome_fasta is not None:
         try:
             import pysam
+
             fasta = pysam.FastaFile(str(genome_fasta))
             logger.info("Loaded genome FASTA %s for Kozak extraction", genome_fasta)
         except Exception as exc:
             logger.warning(
                 "Failed to open genome FASTA %s — Kozak context will be None: %s",
-                genome_fasta, exc,
+                genome_fasta,
+                exc,
             )
             fasta = None
 
@@ -594,9 +610,7 @@ def assemble_genes(
             rows = gene_df[~gene_df["TisType"].str.startswith("Annotated")]
 
         missing = {
-            str(r["Tid"])
-            for _, r in rows.iterrows()
-            if str(r["Tid"]) not in canonical_by_tid
+            str(r["Tid"]) for _, r in rows.iterrows() if str(r["Tid"]) not in canonical_by_tid
         }
         if missing:
             raise ValueError(
@@ -607,8 +621,10 @@ def assemble_genes(
 
         tis_sites: list[TranslationInitiationSite] = [
             _row_to_tis(
-                row, canonical_by_tid[str(row["Tid"])],
-                fasta=fasta, samples=samples,
+                row,
+                canonical_by_tid[str(row["Tid"])],
+                fasta=fasta,
+                samples=samples,
             )
             for _, row in rows.iterrows()
         ]

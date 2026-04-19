@@ -16,15 +16,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 import pandas as pd
+import pytest
 
 from swissisoform.assembly import assemble_genes, compute_diff_region
 from swissisoform.config import PipelineConfig
 from swissisoform.io.parquet import tis_to_dataframe
-from swissisoform.io.ribotish import load_ribotish_predictions, recategorize_tis_type
-from swissisoform.models import DifferentialRegion, Gene, ORFType
+from swissisoform.io.ribotish import load_ribotish_predictions
+from swissisoform.models import Gene, ORFType
 from swissisoform.modules.biophysics import BiophysicsModule
 from swissisoform.modules.core_identity import CoreIdentityModule
 from swissisoform.modules.initiation_context import InitiationContextModule
@@ -73,7 +72,8 @@ def hela_df():
 @pytest.fixture(scope="module")
 def upstream_reference() -> UpstreamReference:
     """Shared GTF + FASTA reference tables (GENCODE CDS/UTR/start_codon
-    + pc_translations.fa)."""
+    + pc_translations.fa).
+    """
     for p in (GTF_PATH, GENOME_FASTA, PROTEIN_FASTA):
         if not p.exists():
             pytest.skip(f"Missing reference: {p}")
@@ -93,20 +93,26 @@ def upstream_hela(upstream_reference):
     if not HELA_PREDICT.exists() or not all(c.exists() for c in HELA_RNASEQ):
         pytest.skip("HeLa predict or RNA-seq counts not available")
     return run_sample(
-        HELA_PREDICT, HELA_RNASEQ, GTF_PATH,
-        sample="HeLa", reference=upstream_reference,
+        HELA_PREDICT,
+        HELA_RNASEQ,
+        GTF_PATH,
+        sample="HeLa",
+        reference=upstream_reference,
     )
 
 
 @pytest.fixture(scope="module")
 def test_genes(upstream_hela) -> list[Gene]:
     """Assemble Gene objects for the 5 test genes from the single-table
-    upstream output."""
+    upstream output.
+    """
     final_df, _ = upstream_hela
     final_df = final_df[final_df["Symbol"].isin(TEST_GENES)]
     fasta_path = GENOME_FASTA if GENOME_FASTA.exists() else None
     return assemble_genes(
-        final_df, gene_names=TEST_GENES, genome_fasta=fasta_path,
+        final_df,
+        gene_names=TEST_GENES,
+        genome_fasta=fasta_path,
     )
 
 
@@ -150,8 +156,7 @@ class TestAssembly:
         """Each gene has a non-empty canonical protein."""
         for gene in test_genes:
             assert len(gene.canonical_protein) > 10, (
-                f"{gene.gene_name} canonical protein too short: "
-                f"{len(gene.canonical_protein)} aa"
+                f"{gene.gene_name} canonical protein too short: {len(gene.canonical_protein)} aa"
             )
 
     def test_tp53_minus_strand(self, test_genes: list[Gene]) -> None:
@@ -206,28 +211,22 @@ class TestAssembly:
         orf_types = {s.orf_type for s in vegfa.tis_sites}
         assert ORFType.TRUNCATED in orf_types
 
-    def test_diff_region_extensions_have_sequence(
-        self, test_genes: list[Gene]
-    ) -> None:
+    def test_diff_region_extensions_have_sequence(self, test_genes: list[Gene]) -> None:
         """Extended TIS sites have non-empty diff_region.sequence."""
         for gene in test_genes:
             for site in gene.tis_sites:
                 if site.orf_type == ORFType.EXTENDED and site.diff_region:
                     assert site.diff_region.sequence, (
-                        f"{gene.gene_name} {site.tis_id}: extension has empty "
-                        "diff_region.sequence"
+                        f"{gene.gene_name} {site.tis_id}: extension has empty diff_region.sequence"
                     )
 
-    def test_diff_region_truncations_have_sequence(
-        self, test_genes: list[Gene]
-    ) -> None:
+    def test_diff_region_truncations_have_sequence(self, test_genes: list[Gene]) -> None:
         """Truncated TIS sites have non-empty diff_region.sequence."""
         for gene in test_genes:
             for site in gene.tis_sites:
                 if site.orf_type == ORFType.TRUNCATED and site.diff_region:
                     assert site.diff_region.sequence, (
-                        f"{gene.gene_name} {site.tis_id}: truncation has empty "
-                        "diff_region.sequence"
+                        f"{gene.gene_name} {site.tis_id}: truncation has empty diff_region.sequence"
                     )
 
     def test_isoform_proteins_nonempty(self, test_genes: list[Gene]) -> None:
@@ -253,10 +252,7 @@ class TestAssembly:
         for gene in test_genes:
             gene_df = final_df[final_df["Symbol"] == gene.gene_name]
             ann = gene_df[gene_df["TisType"].str.startswith("Annotated")]
-            tid_to_ann = {
-                str(r["Tid"]): str(r["AASeq"]).rstrip("*")
-                for _, r in ann.iterrows()
-            }
+            tid_to_ann = {str(r["Tid"]): str(r["AASeq"]).rstrip("*") for _, r in ann.iterrows()}
             for site in gene.tis_sites:
                 expected = tid_to_ann.get(site.transcript_id)
                 assert expected is not None, (
@@ -276,16 +272,15 @@ class TestAssembly:
         self, test_genes: list[Gene], upstream_hela
     ) -> None:
         """Gene.canonical_protein is the longest Annotated AASeq in the
-        post-imputation upstream output for that gene."""
+        post-imputation upstream output for that gene.
+        """
         final_df, _ = upstream_hela
         for gene in test_genes:
             gene_df = final_df[final_df["Symbol"] == gene.gene_name]
             ann = gene_df[gene_df["TisType"].str.startswith("Annotated")]
             if ann.empty:
                 continue
-            longest = max(
-                (str(r["AASeq"]).rstrip("*") for _, r in ann.iterrows()), key=len
-            )
+            longest = max((str(r["AASeq"]).rstrip("*") for _, r in ann.iterrows()), key=len)
             assert gene.canonical_protein.rstrip("*") == longest, (
                 f"{gene.gene_name}: gene.canonical_protein "
                 f"({len(gene.canonical_protein)}aa) != longest Annotated "
@@ -306,17 +301,14 @@ class TestAssembly:
             f"(raw={len(raw)}, native_kept={len(native)}); expected ≥85%"
         )
 
-    def test_upstream_imputes_canonical_for_every_tid(
-        self, upstream_hela
-    ) -> None:
+    def test_upstream_imputes_canonical_for_every_tid(self, upstream_hela) -> None:
         """After run_sample, every Tid in final_df has an Annotated row
         (native or imputed).  This is the invariant that lets assembly
-        drop the fallback-logging and dual-DataFrame complexity."""
+        drop the fallback-logging and dual-DataFrame complexity.
+        """
         final, _ = upstream_hela
         has_ann = (
-            final.assign(_a=lambda d: d["RecatTISType"] == "Annotated")
-            .groupby("Tid")["_a"]
-            .sum()
+            final.assign(_a=lambda d: d["RecatTISType"] == "Annotated").groupby("Tid")["_a"].sum()
         )
         orphans = has_ann[has_ann == 0]
         assert orphans.empty, (
@@ -335,18 +327,14 @@ class TestAssembly:
         """
         final_df, _ = upstream_hela
         native_ann_tids = set(
-            final_df[
-                final_df["TisType"].str.startswith("Annotated") & ~final_df["Imputed"]
-            ]["Tid"]
+            final_df[final_df["TisType"].str.startswith("Annotated") & ~final_df["Imputed"]]["Tid"]
         )
         checked = 0
         for gene in test_genes:
             gene_raw = hela_df[hela_df["Symbol"] == gene.gene_name]
             tid_to_raw = {
                 str(r["Tid"]): str(r["AASeq"]).rstrip("*")
-                for _, r in gene_raw[
-                    gene_raw["TisType"].str.startswith("Annotated")
-                ].iterrows()
+                for _, r in gene_raw[gene_raw["TisType"].str.startswith("Annotated")].iterrows()
             }
             for site in gene.tis_sites:
                 if site.transcript_id not in native_ann_tids:
@@ -362,9 +350,7 @@ class TestAssembly:
                 checked += 1
         assert checked > 0, "No TIS had a native Annotated counterpart — no-op"
 
-    def test_ctnnd1_has_multiple_tis_canonical_lengths(
-        self, test_genes: list[Gene]
-    ) -> None:
+    def test_ctnnd1_has_multiple_tis_canonical_lengths(self, test_genes: list[Gene]) -> None:
         """CTNND1 has multiple transcripts with differing Annotated CDS
         lengths (832, 838, 840, 861, 867 aa in HeLa).  After the per-Tid
         canonical fix, TIS whose transcripts have their own Annotated row
@@ -377,14 +363,11 @@ class TestAssembly:
         ctnnd1 = next(g for g in test_genes if g.gene_name == "CTNND1")
         lengths = {len(s.canonical_protein.rstrip("*")) for s in ctnnd1.tis_sites}
         assert len(lengths) >= 2, (
-            f"CTNND1 TIS canonicals all have length {lengths} — "
-            "per-Tid canonical not dispatching"
+            f"CTNND1 TIS canonicals all have length {lengths} — per-Tid canonical not dispatching"
         )
         # Specifically, at least one TIS should NOT be the gene-level 867aa
         non_default = {ln for ln in lengths if ln != 867}
-        assert non_default, (
-            f"CTNND1 TIS canonicals: {lengths} — all fell back to gene-level 867aa"
-        )
+        assert non_default, f"CTNND1 TIS canonicals: {lengths} — all fell back to gene-level 867aa"
 
 
 # ---------------------------------------------------------------------------
@@ -416,9 +399,7 @@ class TestAnnotation:
             assert "hits" in ann
             assert "summary" in ann
 
-    def test_isoform_biophysics_values_plausible(
-        self, annotated_genes: list[Gene]
-    ) -> None:
+    def test_isoform_biophysics_values_plausible(self, annotated_genes: list[Gene]) -> None:
         """Biophysics produces plausible values on real protein sequences.
 
         Weak-assertion regression guard: a module returning ``{}`` or all-
@@ -437,8 +418,7 @@ class TestAnnotation:
                 # pI only computable for proteins ≥ 3 residues
                 if expected_len >= 3:
                     assert ann["pI"] is not None, (
-                        f"{gene.gene_name} {site.tis_id}: pI None for "
-                        f"{expected_len}-aa protein"
+                        f"{gene.gene_name} {site.tis_id}: pI None for {expected_len}-aa protein"
                     )
                     # Arg-rich peptides can exceed 12; use a wider plausible range
                     assert 3.0 <= ann["pI"] <= 13.0, (
@@ -448,9 +428,7 @@ class TestAnnotation:
                     assert ann["gravy"] is not None
                     assert -5.0 <= ann["gravy"] <= 5.0
 
-    def test_isoform_motifs_positional(
-        self, annotated_genes: list[Gene]
-    ) -> None:
+    def test_isoform_motifs_positional(self, annotated_genes: list[Gene]) -> None:
         """Motifs produces a list of positional hits, each with pos/end/name."""
         for gene in annotated_genes:
             for site in gene.tis_sites:
@@ -466,9 +444,7 @@ class TestAnnotation:
                     # Hits should fall within the protein
                     assert 0 <= hit["pos"] < len(site.isoform_protein)
 
-    def test_canonical_motifs_found_in_tp53(
-        self, annotated_genes: list[Gene]
-    ) -> None:
+    def test_canonical_motifs_found_in_tp53(self, annotated_genes: list[Gene]) -> None:
         """TP53's canonical protein has detectable SLiM motifs.
 
         TP53 is phosphorylated at many [ST]P and [ST]Q sites — a motif
@@ -481,20 +457,14 @@ class TestAnnotation:
             "TP53 has many well-characterized [ST]P/[ST]Q sites, expected >5"
         )
 
-    def test_isoform_core_identity_matches_orf_type(
-        self, annotated_genes: list[Gene]
-    ) -> None:
+    def test_isoform_core_identity_matches_orf_type(self, annotated_genes: list[Gene]) -> None:
         """core_identity.orf_type matches site.orf_type.value and lengths agree."""
         for gene in annotated_genes:
             for site in gene.tis_sites:
                 ann = site.isoform_annotations["core_identity"]
                 assert ann["orf_type"] == site.orf_type.value
-                assert ann["isoform_protein_length"] == len(
-                    site.isoform_protein.rstrip("*")
-                )
-                assert ann["canonical_protein_length"] == len(
-                    site.canonical_protein.rstrip("*")
-                )
+                assert ann["isoform_protein_length"] == len(site.isoform_protein.rstrip("*"))
+                assert ann["canonical_protein_length"] == len(site.canonical_protein.rstrip("*"))
                 assert isinstance(ann["in_frame"], bool)
 
     def test_isoform_initiation_context_kozak_populated_when_fasta(
@@ -517,9 +487,7 @@ class TestAnnotation:
                     )
                     assert len(site.kozak_context) == 13
                     # Start codon at indices 9-11 should match site.start_codon
-                    assert (
-                        site.kozak_context[9:12] == site.start_codon
-                    ), (
+                    assert site.kozak_context[9:12] == site.start_codon, (
                         f"{gene.gene_name} {site.tis_id}: kozak has "
                         f"{site.kozak_context[9:12]} at 9-11, expected "
                         f"{site.start_codon}"
@@ -528,25 +496,19 @@ class TestAnnotation:
                     assert ann["kozak_hamming_full"] is not None
                     assert 0 <= ann["kozak_hamming_full"] <= 13
 
-    def test_site_modules_not_on_canonical(
-        self, annotated_genes: list[Gene]
-    ) -> None:
+    def test_site_modules_not_on_canonical(self, annotated_genes: list[Gene]) -> None:
         """SiteModule output should NOT be in canonical_annotations."""
         for gene in annotated_genes:
             assert "core_identity" not in gene.canonical_annotations
             assert "initiation_context" not in gene.canonical_annotations
 
-    def test_protein_modules_not_in_gene_annotations(
-        self, annotated_genes: list[Gene]
-    ) -> None:
+    def test_protein_modules_not_in_gene_annotations(self, annotated_genes: list[Gene]) -> None:
         """ProteinModule output should NOT be in gene_annotations."""
         for gene in annotated_genes:
             assert "biophysics" not in gene.gene_annotations
             assert "motifs" not in gene.gene_annotations
 
-    def test_no_tis_dropped(
-        self, test_genes: list[Gene], annotated_genes: list[Gene]
-    ) -> None:
+    def test_no_tis_dropped(self, test_genes: list[Gene], annotated_genes: list[Gene]) -> None:
         """Pipeline does not drop any TIS sites."""
         for orig, ann in zip(
             sorted(test_genes, key=lambda g: g.gene_name),
@@ -596,12 +558,11 @@ class TestORFTypeAnnotations:
                         f"{gene.gene_name} {site.tis_id}: uORF should be out-of-frame"
                     )
 
-    def test_short_proteins_biophysics_computed(
-        self, annotated_genes: list[Gene]
-    ) -> None:
+    def test_short_proteins_biophysics_computed(self, annotated_genes: list[Gene]) -> None:
         """Short (≥3 aa) proteins get real biophysics values (pI, gravy),
         not just a ``length`` field — which is just string length and
-        doesn't prove anything was computed."""
+        doesn't prove anything was computed.
+        """
         checked = 0
         for gene in annotated_genes:
             for site in gene.tis_sites:
@@ -610,8 +571,7 @@ class TestORFTypeAnnotations:
                     assert ann["length"] > 0
                     # pI and gravy ARE the signal; length alone is trivial
                     assert ann["pI"] is not None, (
-                        f"{gene.gene_name} {site.tis_id}: pI None for "
-                        f"{site.aa_len}-aa protein"
+                        f"{gene.gene_name} {site.tis_id}: pI None for {site.aa_len}-aa protein"
                     )
                     assert 3.0 < ann["pI"] < 13.0
                     assert ann["gravy"] is not None
@@ -724,32 +684,55 @@ class TestAssembleGenesPerTidCanonical:
         # T2: long transcript (500 aa annotated)
         # Truncated TIS from T1: a valid in-frame suffix of T1's canonical
         short_canonical = "M" + "A" * 199  # 200 aa
-        long_canonical = "M" + "E" * 499   # 500 aa
-        truncated_from_t1 = "A" * 150      # suffix of T1 minus M+49 residues
+        long_canonical = "M" + "E" * 499  # 500 aa
+        truncated_from_t1 = "A" * 150  # suffix of T1 minus M+49 residues
 
-        df = pd.DataFrame([
-            {
-                "Symbol": "GENEX", "Gid": "G1",
-                "Tid": "T1", "TisType": "Annotated",
-                "GenomePos": "chr1:100-1000:+", "StartCodon": "ATG",
-                "Start": 100, "AALen": 200, "AASeq": short_canonical,
-                "TISPvalue": 0.01, "RiboPvalue": 0.01, "FisherQvalue": 0.01,
-            },
-            {
-                "Symbol": "GENEX", "Gid": "G1",
-                "Tid": "T2", "TisType": "Annotated",
-                "GenomePos": "chr1:200-2000:+", "StartCodon": "ATG",
-                "Start": 200, "AALen": 500, "AASeq": long_canonical,
-                "TISPvalue": 0.01, "RiboPvalue": 0.01, "FisherQvalue": 0.01,
-            },
-            {
-                "Symbol": "GENEX", "Gid": "G1",
-                "Tid": "T1", "TisType": "Truncated:Known",
-                "GenomePos": "chr1:150-1000:+", "StartCodon": "ATG",
-                "Start": 150, "AALen": 150, "AASeq": truncated_from_t1,
-                "TISPvalue": 0.01, "RiboPvalue": 0.01, "FisherQvalue": 0.01,
-            },
-        ])
+        df = pd.DataFrame(
+            [
+                {
+                    "Symbol": "GENEX",
+                    "Gid": "G1",
+                    "Tid": "T1",
+                    "TisType": "Annotated",
+                    "GenomePos": "chr1:100-1000:+",
+                    "StartCodon": "ATG",
+                    "Start": 100,
+                    "AALen": 200,
+                    "AASeq": short_canonical,
+                    "TISPvalue": 0.01,
+                    "RiboPvalue": 0.01,
+                    "FisherQvalue": 0.01,
+                },
+                {
+                    "Symbol": "GENEX",
+                    "Gid": "G1",
+                    "Tid": "T2",
+                    "TisType": "Annotated",
+                    "GenomePos": "chr1:200-2000:+",
+                    "StartCodon": "ATG",
+                    "Start": 200,
+                    "AALen": 500,
+                    "AASeq": long_canonical,
+                    "TISPvalue": 0.01,
+                    "RiboPvalue": 0.01,
+                    "FisherQvalue": 0.01,
+                },
+                {
+                    "Symbol": "GENEX",
+                    "Gid": "G1",
+                    "Tid": "T1",
+                    "TisType": "Truncated:Known",
+                    "GenomePos": "chr1:150-1000:+",
+                    "StartCodon": "ATG",
+                    "Start": 150,
+                    "AALen": 150,
+                    "AASeq": truncated_from_t1,
+                    "TISPvalue": 0.01,
+                    "RiboPvalue": 0.01,
+                    "FisherQvalue": 0.01,
+                },
+            ]
+        )
 
         genes = assemble_genes(df, gene_names=["GENEX"])
         assert len(genes) == 1
@@ -783,21 +766,37 @@ class TestAssembleGenesPerTidCanonical:
         rather than silently fall back to the gene-level longest.
         """
         gene_canonical = "M" + "A" * 199
-        df = pd.DataFrame([
-            {
-                "Symbol": "GENEY", "Gid": "G2",
-                "Tid": "T_ANN", "TisType": "Annotated",
-                "GenomePos": "chr2:100-1000:+", "StartCodon": "ATG",
-                "Start": 100, "AALen": 200, "AASeq": gene_canonical,
-                "TISPvalue": 0.01, "RiboPvalue": 0.01, "FisherQvalue": 0.01,
-            },
-            {
-                "Symbol": "GENEY", "Gid": "G2",
-                "Tid": "T_ORPHAN", "TisType": "Truncated:Known",
-                "GenomePos": "chr2:150-1000:+", "StartCodon": "ATG",
-                "Start": 150, "AALen": 150, "AASeq": "A" * 150,
-                "TISPvalue": 0.01, "RiboPvalue": 0.01, "FisherQvalue": 0.01,
-            },
-        ])
+        df = pd.DataFrame(
+            [
+                {
+                    "Symbol": "GENEY",
+                    "Gid": "G2",
+                    "Tid": "T_ANN",
+                    "TisType": "Annotated",
+                    "GenomePos": "chr2:100-1000:+",
+                    "StartCodon": "ATG",
+                    "Start": 100,
+                    "AALen": 200,
+                    "AASeq": gene_canonical,
+                    "TISPvalue": 0.01,
+                    "RiboPvalue": 0.01,
+                    "FisherQvalue": 0.01,
+                },
+                {
+                    "Symbol": "GENEY",
+                    "Gid": "G2",
+                    "Tid": "T_ORPHAN",
+                    "TisType": "Truncated:Known",
+                    "GenomePos": "chr2:150-1000:+",
+                    "StartCodon": "ATG",
+                    "Start": 150,
+                    "AALen": 150,
+                    "AASeq": "A" * 150,
+                    "TISPvalue": 0.01,
+                    "RiboPvalue": 0.01,
+                    "FisherQvalue": 0.01,
+                },
+            ]
+        )
         with pytest.raises(ValueError, match="T_ORPHAN|no Annotated"):
             assemble_genes(df, gene_names=["GENEY"])

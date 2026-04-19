@@ -82,9 +82,7 @@ def get_utr_lengths(cds_df: pd.DataFrame, utr_df: pd.DataFrame) -> pd.DataFrame:
         | ((merged["strand"] == "-") & (merged["end"] > merged["cds_start"]))
     ].copy()
     upstream["utr_length"] = upstream["end"] - upstream["start"] + 1
-    totals = (
-        upstream.groupby("transcript_id")["utr_length"].sum().rename("Start")
-    )
+    totals = upstream.groupby("transcript_id")["utr_length"].sum().rename("Start")
     return totals.reset_index().rename(columns={"transcript_id": "Tid"})
 
 
@@ -98,8 +96,8 @@ def get_start_codons(
     rows for split codons). We concatenate those rows in genomic order,
     then reverse-complement for minus-strand transcripts.
     """
-    from pyfaidx import Fasta
     from Bio.Seq import Seq
+    from pyfaidx import Fasta
 
     genome = Fasta(str(genome_fasta))
 
@@ -110,9 +108,7 @@ def get_start_codons(
             seq = seq.reverse_complement()
         per_tid[row.transcript_id] = per_tid.get(row.transcript_id, "") + str(seq)
 
-    return pd.DataFrame(
-        {"Tid": list(per_tid.keys()), "StartCodon": list(per_tid.values())}
-    )
+    return pd.DataFrame({"Tid": list(per_tid.keys()), "StartCodon": list(per_tid.values())})
 
 
 def get_protein_products(protein_fasta: str | Path) -> pd.DataFrame:
@@ -191,9 +187,7 @@ def impute_missing_canonical_starts(
         transcript_ids = tis_df["Tid"].unique().tolist()
 
     has_annotated = (
-        tis_df.assign(_ann=lambda x: x["RecatTISType"] == "Annotated")
-        .groupby("Tid")["_ann"]
-        .sum()
+        tis_df.assign(_ann=lambda x: x["RecatTISType"] == "Annotated").groupby("Tid")["_ann"].sum()
     )
     missing = set(has_annotated[has_annotated == 0].index) & set(transcript_ids)
     if not missing:
@@ -226,19 +220,23 @@ def impute_missing_canonical_starts(
     keep_cols = [
         c
         for c in [
-            "Gid", "Tid", "Symbol", "GeneType",
-            "gene_type", "transcript_type",
-            "MANE_Select", "transcript_support_level",
-            "Chromosome", "Strand",
-            "GeneRNASeqCounts", "TotalRNASeqCounts", "Sample",
+            "Gid",
+            "Tid",
+            "Symbol",
+            "GeneType",
+            "gene_type",
+            "transcript_type",
+            "MANE_Select",
+            "transcript_support_level",
+            "Chromosome",
+            "Strand",
+            "GeneRNASeqCounts",
+            "TotalRNASeqCounts",
+            "Sample",
         ]
         if c in tis_df.columns
     ]
-    base = (
-        tis_df[tis_df["Tid"].isin(missing)]
-        .drop_duplicates(subset=["Tid"])
-        .loc[:, keep_cols]
-    )
+    base = tis_df[tis_df["Tid"].isin(missing)].drop_duplicates(subset=["Tid"]).loc[:, keep_cols]
 
     gp = genome_pos[["Tid", "GenomePos"]].copy()
     gp["GenomeStart"] = gp["GenomePos"].apply(_extract_genome_start)

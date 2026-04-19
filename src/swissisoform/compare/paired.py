@@ -71,9 +71,7 @@ class PairedComparison:
         }
 
     @staticmethod
-    def compare_structures(
-        canonical_metrics: dict, isoform_metrics: dict
-    ) -> dict:
+    def compare_structures(canonical_metrics: dict, isoform_metrics: dict) -> dict:
         """Compare structural prediction metrics between canonical and isoform.
 
         Args:

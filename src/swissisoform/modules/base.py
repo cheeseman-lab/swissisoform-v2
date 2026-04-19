@@ -36,7 +36,9 @@ class ProteinModule(Protocol):
     OUTPUT_COLUMNS: list[str]
     SCOPE: str
 
-    def __init__(self, config: PipelineConfig) -> None: ...
+    def __init__(self, config: PipelineConfig) -> None:
+        """Initialize the module with pipeline configuration."""
+        ...
 
     def annotate(self, protein: str) -> dict[str, Any]:
         """Annotate a single protein sequence.
@@ -69,7 +71,9 @@ class SiteModule(Protocol):
     OUTPUT_COLUMNS: list[str]
     SCOPE: str
 
-    def __init__(self, config: PipelineConfig) -> None: ...
+    def __init__(self, config: PipelineConfig) -> None:
+        """Initialize the module with pipeline configuration."""
+        ...
 
     def annotate_site(self, site: TranslationInitiationSite) -> dict[str, Any]:
         """Annotate a single TIS site.
@@ -100,13 +104,11 @@ def validate_protein_annotations(
     """
     prefix = f"{module_name}_"
     expected_keys = [
-        col[len(prefix):] if col.startswith(prefix) else col for col in output_columns
+        col[len(prefix) :] if col.startswith(prefix) else col for col in output_columns
     ]
     for key in expected_keys:
         if key not in annotations:
-            raise ValueError(
-                f"Module '{module_name}' missing key '{key}' in annotations"
-            )
+            raise ValueError(f"Module '{module_name}' missing key '{key}' in annotations")
 
 
 def validate_module_output(
@@ -139,7 +141,7 @@ def validate_module_output(
 
     prefix = f"{module_name}_"
     expected_keys = [
-        col[len(prefix):] if col.startswith(prefix) else col for col in output_columns
+        col[len(prefix) :] if col.startswith(prefix) else col for col in output_columns
     ]
 
     for i, site in enumerate(output_sites):

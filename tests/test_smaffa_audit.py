@@ -32,9 +32,7 @@ def reference() -> UpstreamReference:
     for p in (GTF, GENOME, PROTEIN):
         if not p.exists():
             pytest.skip(f"Missing reference file: {p}")
-    return UpstreamReference.load(
-        gtf_path=GTF, genome_fasta=GENOME, protein_fasta=PROTEIN
-    )
+    return UpstreamReference.load(gtf_path=GTF, genome_fasta=GENOME, protein_fasta=PROTEIN)
 
 
 @pytest.fixture(scope="module")
@@ -47,9 +45,7 @@ def hela_run(reference: UpstreamReference) -> tuple[pd.DataFrame, pd.DataFrame]:
     ]
     if not predict.exists() or not all(c.exists() for c in counts):
         pytest.skip("HeLa inputs missing")
-    return run_sample(
-        predict, counts, GTF, sample="HeLa", reference=reference
-    )
+    return run_sample(predict, counts, GTF, sample="HeLa", reference=reference)
 
 
 @pytest.fixture(scope="module")
@@ -65,9 +61,7 @@ def smaffa_hela() -> pd.DataFrame:
 class TestSmaffaAudit:
     """Regression guard: our filter stays byte-compatible with smaffa's."""
 
-    def test_non_imputed_rows_subset_of_smaffa(
-        self, hela_run, smaffa_hela: pd.DataFrame
-    ) -> None:
+    def test_non_imputed_rows_subset_of_smaffa(self, hela_run, smaffa_hela: pd.DataFrame) -> None:
         """Our non-imputed output is a SUBSET of smaffa's filter output.
 
         The filter produces exactly what smaffa's does; we then drop any
@@ -77,12 +71,8 @@ class TestSmaffaAudit:
         """
         ours_final, _ = hela_run
         ours_native = ours_final[~ours_final["Imputed"]]
-        ours_keys = set(
-            zip(ours_native["Tid"], ours_native["GenomePos"], ours_native["Start"])
-        )
-        smaffa_keys = set(
-            zip(smaffa_hela["Tid"], smaffa_hela["GenomePos"], smaffa_hela["Start"])
-        )
+        ours_keys = set(zip(ours_native["Tid"], ours_native["GenomePos"], ours_native["Start"]))
+        smaffa_keys = set(zip(smaffa_hela["Tid"], smaffa_hela["GenomePos"], smaffa_hela["Start"]))
         assert ours_keys.issubset(smaffa_keys), (
             f"{len(ours_keys - smaffa_keys)} rows in ours but not smaffa"
         )
@@ -104,21 +94,17 @@ class TestSmaffaAudit:
         self, hela_run, smaffa_hela: pd.DataFrame, gene: str
     ) -> None:
         """Every native TIS we keep for this gene is present in smaffa's
-        filter output (at the same Tid/GenomePos/Start)."""
+        filter output (at the same Tid/GenomePos/Start).
+        """
         ours_final, _ = hela_run
-        ours_native = ours_final[
-            (~ours_final["Imputed"]) & (ours_final["Symbol"] == gene)
-        ]
+        ours_native = ours_final[(~ours_final["Imputed"]) & (ours_final["Symbol"] == gene)]
         smaffa = smaffa_hela[smaffa_hela["Symbol"] == gene]
 
-        ours_keys = set(
-            zip(ours_native["Tid"], ours_native["GenomePos"], ours_native["Start"])
-        )
+        ours_keys = set(zip(ours_native["Tid"], ours_native["GenomePos"], ours_native["Start"]))
         smaffa_keys = set(zip(smaffa["Tid"], smaffa["GenomePos"], smaffa["Start"]))
         only_ours = ours_keys - smaffa_keys
         assert not only_ours, (
-            f"{gene}: {len(only_ours)} rows in ours but not smaffa: "
-            f"{list(only_ours)[:3]}"
+            f"{gene}: {len(only_ours)} rows in ours but not smaffa: {list(only_ours)[:3]}"
         )
 
     def test_imputation_fills_eif4g1(self, hela_run) -> None:
@@ -150,9 +136,7 @@ class TestSmaffaAudit:
         ours_final, _ = hela_run
         pc = ours_final[ours_final["transcript_type"] == "protein_coding"]
         has_ann = (
-            pc.assign(_ann=lambda d: d["RecatTISType"] == "Annotated")
-            .groupby("Tid")["_ann"]
-            .sum()
+            pc.assign(_ann=lambda d: d["RecatTISType"] == "Annotated").groupby("Tid")["_ann"].sum()
         )
         orphan_tids = set(has_ann[has_ann == 0].index)
 

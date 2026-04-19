@@ -94,16 +94,33 @@ def write_sidecar(
     artifact: Path,
     extra: dict[str, Any] | None = None,
 ) -> None:
-    """Write ``_setup.json`` recording provenance for a DB artifact."""
+    """Write ``_setup.json`` recording provenance for a DB artifact.
+
+    Handles both single-file and directory artifacts (e.g. COSMIC's
+    per-VCF parquet directory). For directories, records the aggregate
+    size and per-file sha256 sums instead of a single hash.
+    """
     db_dir.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
         "source_url": source_url,
         "version": version,
         "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "artifact": str(artifact.relative_to(ROOT)),
-        "artifact_size_bytes": artifact.stat().st_size,
-        "artifact_sha256": _sha256(artifact),
     }
+    if artifact.is_dir():
+        files = sorted(f for f in artifact.rglob("*") if f.is_file())
+        payload["artifact_is_directory"] = True
+        payload["artifact_size_bytes"] = sum(f.stat().st_size for f in files)
+        payload["artifact_files"] = {
+            str(f.relative_to(artifact)): {
+                "size_bytes": f.stat().st_size,
+                "sha256": _sha256(f),
+            }
+            for f in files
+        }
+    else:
+        payload["artifact_size_bytes"] = artifact.stat().st_size
+        payload["artifact_sha256"] = _sha256(artifact)
     if extra:
         payload.update(extra)
     (db_dir / "_setup.json").write_text(json.dumps(payload, indent=2))
@@ -151,11 +168,16 @@ def setup_diamond(refresh: bool = False) -> None:
         run(["wget", "-q", "--show-progress", DIAMOND_URL, "-O", str(DIAMOND_FASTA)])
 
     # diamond makedb reads gz directly
-    run([
-        "diamond", "makedb",
-        "--in", str(DIAMOND_FASTA),
-        "-d", str(DIAMOND_DB.with_suffix("")),  # diamond appends .dmnd
-    ])
+    run(
+        [
+            "diamond",
+            "makedb",
+            "--in",
+            str(DIAMOND_FASTA),
+            "-d",
+            str(DIAMOND_DB.with_suffix("")),  # diamond appends .dmnd
+        ]
+    )
 
     write_sidecar(
         DIAMOND_DIR,
@@ -173,15 +195,25 @@ def setup_diamond(refresh: bool = False) -> None:
 CLINVAR_DIR = REF / "clinvar"
 CLINVAR_GZ = CLINVAR_DIR / "variant_summary.txt.gz"
 CLINVAR_PARQUET = CLINVAR_DIR / "variant_summary.parquet"
-CLINVAR_URL = (
-    "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/variant_summary.txt.gz"
-)
+CLINVAR_URL = "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/tab_delimited/variant_summary.txt.gz"
 # Columns we keep + the downstream-standardized names we map them to
 _CLINVAR_KEEP = [
-    "Type", "Name", "GeneSymbol", "ClinicalSignificance", "RS# (dbSNP)",
-    "PhenotypeIDS", "PhenotypeList", "Origin", "Assembly", "Chromosome",
-    "Start", "Stop", "ReferenceAllele", "AlternateAllele",
-    "VariationID", "HGNC_ID",
+    "Type",
+    "Name",
+    "GeneSymbol",
+    "ClinicalSignificance",
+    "RS# (dbSNP)",
+    "PhenotypeIDS",
+    "PhenotypeList",
+    "Origin",
+    "Assembly",
+    "Chromosome",
+    "Start",
+    "Stop",
+    "ReferenceAllele",
+    "AlternateAllele",
+    "VariationID",
+    "HGNC_ID",
 ]
 
 
@@ -201,7 +233,10 @@ def setup_clinvar(refresh: bool = False) -> None:
     logger.info("clinvar: parsing %s", CLINVAR_GZ)
     t0 = time.perf_counter()
     df = pd.read_csv(
-        CLINVAR_GZ, sep="\t", low_memory=False, na_values=["-", "", "na"],
+        CLINVAR_GZ,
+        sep="\t",
+        low_memory=False,
+        na_values=["-", "", "na"],
         usecols=lambda c: c in _CLINVAR_KEEP or True,  # keep all cols; subset below
     )
     # Filter to GRCh38 assembly
@@ -213,7 +248,9 @@ def setup_clinvar(refresh: bool = False) -> None:
     df.to_parquet(CLINVAR_PARQUET, index=False)
     logger.info(
         "clinvar: wrote %d rows × %d cols to %s (%.1fs)",
-        *df.shape, CLINVAR_PARQUET, time.perf_counter() - t0,
+        *df.shape,
+        CLINVAR_PARQUET,
+        time.perf_counter() - t0,
     )
 
     write_sidecar(
@@ -234,9 +271,7 @@ GNOMAD_PARQUET = GNOMAD_DIR / "gnomad_v4.1_exome.parquet"
 GNOMAD_VCF_DIR = GNOMAD_DIR / "vcf"  # per-chromosome VCFs staged here
 # HTTPS mirror of the GCS bucket (public). Per-chromosome files:
 #   https://gnomad-public-us-east-1.s3.amazonaws.com/release/4.1/vcf/exomes/gnomad.exomes.v4.1.sites.chr{N}.vcf.bgz
-GNOMAD_BASE = (
-    "https://gnomad-public-us-east-1.s3.amazonaws.com/release/4.1/vcf/exomes/"
-)
+GNOMAD_BASE = "https://gnomad-public-us-east-1.s3.amazonaws.com/release/4.1/vcf/exomes/"
 GNOMAD_CHROMS = [str(i) for i in range(1, 23)] + ["X", "Y"]
 
 
@@ -263,16 +298,21 @@ def _parse_gnomad_vcf(vcf_path: Path, parquet_path: Path) -> int:
 
     Returns the number of rows written.
     """
-    import pysam
     import pyarrow as pa
     import pyarrow.parquet as pq
+    import pysam
 
     vcf = pysam.VariantFile(str(vcf_path))
     vep_fields = _parse_vep_header(vcf)
     idx = {name: i for i, name in enumerate(vep_fields)}
 
     keep_cols = [
-        "Consequence", "SYMBOL", "CANONICAL", "HGVSp", "HGVSc", "Protein_position",
+        "Consequence",
+        "SYMBOL",
+        "CANONICAL",
+        "HGVSp",
+        "HGVSc",
+        "Protein_position",
     ]
     for c in keep_cols:
         if c not in idx:
@@ -325,19 +365,21 @@ def _parse_gnomad_vcf(vcf_path: Path, parquet_path: Path) -> int:
             continue
 
         alt = rec.alts[0] if rec.alts else ""
-        rows.append({
-            "chrom": rec.chrom,
-            "pos": int(rec.pos),
-            "ref": rec.ref or "",
-            "alt": alt,
-            "variant_id": f"{rec.chrom}-{rec.pos}-{rec.ref}-{alt}",
-            "allele_frequency": af,
-            "consequence": canonical_ann[idx["Consequence"]],
-            "gene_symbol": canonical_ann[idx["SYMBOL"]],
-            "hgvsp": canonical_ann[idx["HGVSp"]] or None,
-            "hgvsc": canonical_ann[idx["HGVSc"]] or None,
-            "protein_position": canonical_ann[idx["Protein_position"]] or None,
-        })
+        rows.append(
+            {
+                "chrom": rec.chrom,
+                "pos": int(rec.pos),
+                "ref": rec.ref or "",
+                "alt": alt,
+                "variant_id": f"{rec.chrom}-{rec.pos}-{rec.ref}-{alt}",
+                "allele_frequency": af,
+                "consequence": canonical_ann[idx["Consequence"]],
+                "gene_symbol": canonical_ann[idx["SYMBOL"]],
+                "hgvsp": canonical_ann[idx["HGVSp"]] or None,
+                "hgvsc": canonical_ann[idx["HGVSc"]] or None,
+                "protein_position": canonical_ann[idx["Protein_position"]] or None,
+            }
+        )
         if len(rows) >= BATCH:
             flush()
 
@@ -359,8 +401,6 @@ def setup_gnomad(refresh: bool = False) -> None:
 
     Not run by default from ``all`` — pass ``--include-gnomad``.
     """
-    import pandas as pd
-
     if is_built(GNOMAD_PARQUET, refresh):
         logger.info("gnomad: %s already exists — skipping", GNOMAD_PARQUET)
         return
@@ -390,13 +430,34 @@ def setup_gnomad(refresh: bool = False) -> None:
         n = _parse_gnomad_vcf(vcf_path, per_chrom_parquet)
         logger.info(
             "gnomad: chr%s wrote %d variants in %.1fs",
-            chrom, n, time.perf_counter() - t0,
+            chrom,
+            n,
+            time.perf_counter() - t0,
         )
 
-    logger.info("gnomad: concatenating %d per-chrom parquets", len(per_chrom_paths))
-    df = pd.concat([pd.read_parquet(p) for p in per_chrom_paths], ignore_index=True)
-    df.to_parquet(GNOMAD_PARQUET, index=False)
-    logger.info("gnomad: wrote %d total variants to %s", len(df), GNOMAD_PARQUET)
+    # Stream-concat per-chrom parquets — peak memory bounded by the largest
+    # per-chrom parquet (~3 GB for chr1), vs ~120M-row pandas concat OOM.
+    import pyarrow.parquet as pq
+
+    logger.info(
+        "gnomad: stream-concatenating %d per-chrom parquets -> %s",
+        len(per_chrom_paths),
+        GNOMAD_PARQUET,
+    )
+    total_rows = 0
+    writer: pq.ParquetWriter | None = None
+    try:
+        for p in per_chrom_paths:
+            table = pq.read_table(p)
+            if writer is None:
+                writer = pq.ParquetWriter(GNOMAD_PARQUET, table.schema, compression="snappy")
+            writer.write_table(table)
+            total_rows += table.num_rows
+            del table  # release before next read
+    finally:
+        if writer is not None:
+            writer.close()
+    logger.info("gnomad: wrote %d total variants to %s", total_rows, GNOMAD_PARQUET)
 
     write_sidecar(
         GNOMAD_DIR,
@@ -404,7 +465,7 @@ def setup_gnomad(refresh: bool = False) -> None:
         version="gnomad_v4.1_exomes",
         artifact=GNOMAD_PARQUET,
         extra={
-            "n_variants": int(len(df)),
+            "n_variants": int(total_rows),
             "chromosomes": GNOMAD_CHROMS,
             "filter": "PASS + canonical-transcript VEP SYMBOL not null",
         },
@@ -426,9 +487,7 @@ COSMIC_FILES = [
     f"Cosmic_NonCodingVariants_Vcf_{COSMIC_VERSION}_{COSMIC_ASSEMBLY}.tar",
     f"Cosmic_CompleteTargetedScreensMutant_Vcf_{COSMIC_VERSION}_{COSMIC_ASSEMBLY}.tar",
 ]
-COSMIC_PATH_TEMPLATE = (
-    "grch38/cosmic/{version}/VCF/{filename}"
-)
+COSMIC_PATH_TEMPLATE = "grch38/cosmic/{version}/VCF/{filename}"
 COSMIC_VCFS = [
     f"Cosmic_GenomeScreensMutant_{COSMIC_VERSION}_{COSMIC_ASSEMBLY}.vcf.gz",
     f"Cosmic_NonCodingVariants_{COSMIC_VERSION}_{COSMIC_ASSEMBLY}.vcf.gz",
@@ -458,6 +517,7 @@ extract them, parse INFO fields, and produce a combined parquet at:
 def _cosmic_download_url(path: str, auth_header: str) -> str:
     """Ask the Sanger API for a signed download URL for *path*."""
     import requests
+
     resp = requests.get(
         COSMIC_API,
         params={"path": path, "bucket": "downloads"},
@@ -471,15 +531,19 @@ def _cosmic_download_url(path: str, auth_header: str) -> str:
     return data["url"]
 
 
-def _parse_cosmic_vcf(vcf_path: Path) -> "pd.DataFrame":
-    """Parse a COSMIC VCF.gz into a standardized DataFrame.
+def _parse_cosmic_vcf_streaming(vcf_path: Path, out_path: Path, batch_size: int = 500_000) -> int:
+    """Stream-parse a COSMIC VCF.gz and write a parquet in RecordBatch chunks.
 
-    Columns match the v1 schema consumed by the ClinicalModule COSMIC
-    filter (``GENE_SYMBOL``, ``CHROMOSOME``, ``GENOME_START``,
-    ``GENOMIC_WT_ALLELE``, ``GENOMIC_MUT_ALLELE``, HGVSP/HGVSC, etc.).
+    Peak memory bounded by ``batch_size`` rows; NonCoding VCFs have hundreds
+    of millions of rows, so buffering the full list OOMs. Columns match the
+    v1 schema consumed by ClinicalModule's COSMIC filter.
+
+    Returns the number of rows written.
     """
     import gzip
-    import pandas as pd
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
 
     def parse_info(info_str: str) -> dict[str, str]:
         d: dict[str, str] = {}
@@ -491,38 +555,78 @@ def _parse_cosmic_vcf(vcf_path: Path) -> "pd.DataFrame":
                 d[item] = "True"
         return d
 
-    rows: list[dict[str, Any]] = []
-    with gzip.open(vcf_path, "rt") as fh:
-        for line in fh:
-            if line.startswith("#"):
-                continue
-            fields = line.rstrip("\n").split("\t")
-            if len(fields) < 8:
-                continue
-            chrom, pos, vid, ref, alt, _qual, _filt, info = fields[:8]
-            info_d = parse_info(info)
-            rows.append({
-                "CHROMOSOME": chrom,
-                "GENOME_START": int(pos),
-                "GENOMIC_MUTATION_ID": vid,
-                "GENOMIC_WT_ALLELE": ref,
-                "GENOMIC_MUT_ALLELE": alt,
-                "GENE_SYMBOL": info_d.get("GENE", ""),
-                "TRANSCRIPT_ACCESSION": info_d.get("TRANSCRIPT", ""),
-                "MUTATION_CDS": info_d.get("CDS", ""),
-                "MUTATION_AA": info_d.get("AA", ""),
-                "MUTATION_DESCRIPTION": info_d.get("SO_TERM", ""),
-                "HGVSG": info_d.get("HGVSG", ""),
-                "HGVSC": info_d.get("HGVSC", ""),
-                "HGVSP": info_d.get("HGVSP", ""),
-                "STRAND": info_d.get("STRAND", ""),
-                "LEGACY_MUTATION_ID": info_d.get("LEGACY_ID", ""),
-                "GENOME_SCREEN_SAMPLE_COUNT": info_d.get(
-                    "GENOME_SCREEN_SAMPLE_COUNT", ""
-                ),
-                "IS_CANONICAL": info_d.get("IS_CANONICAL", ""),
-            })
-    return pd.DataFrame(rows)
+    schema = pa.schema(
+        [
+            ("CHROMOSOME", pa.string()),
+            ("GENOME_START", pa.int64()),
+            ("GENOMIC_MUTATION_ID", pa.string()),
+            ("GENOMIC_WT_ALLELE", pa.string()),
+            ("GENOMIC_MUT_ALLELE", pa.string()),
+            ("GENE_SYMBOL", pa.string()),
+            ("TRANSCRIPT_ACCESSION", pa.string()),
+            ("MUTATION_CDS", pa.string()),
+            ("MUTATION_AA", pa.string()),
+            ("MUTATION_DESCRIPTION", pa.string()),
+            ("HGVSG", pa.string()),
+            ("HGVSC", pa.string()),
+            ("HGVSP", pa.string()),
+            ("STRAND", pa.string()),
+            ("LEGACY_MUTATION_ID", pa.string()),
+            ("GENOME_SCREEN_SAMPLE_COUNT", pa.string()),
+            ("IS_CANONICAL", pa.string()),
+        ]
+    )
+
+    # Column-major buffers — much lighter than a list of row dicts.
+    cols: dict[str, list[Any]] = {name: [] for name in schema.names}
+    n_written = 0
+
+    def flush(writer: pq.ParquetWriter) -> None:
+        nonlocal cols, n_written
+        if not cols["CHROMOSOME"]:
+            return
+        batch = pa.record_batch(
+            [pa.array(cols[name], type=schema.field(name).type) for name in schema.names],
+            schema=schema,
+        )
+        writer.write_batch(batch)
+        n_written += len(cols["CHROMOSOME"])
+        cols = {name: [] for name in schema.names}
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with pq.ParquetWriter(out_path, schema, compression="snappy") as writer:
+        with gzip.open(vcf_path, "rt") as fh:
+            for line in fh:
+                if line.startswith("#"):
+                    continue
+                fields = line.rstrip("\n").split("\t")
+                if len(fields) < 8:
+                    continue
+                chrom, pos, vid, ref, alt, _qual, _filt, info = fields[:8]
+                info_d = parse_info(info)
+                cols["CHROMOSOME"].append(chrom)
+                cols["GENOME_START"].append(int(pos))
+                cols["GENOMIC_MUTATION_ID"].append(vid)
+                cols["GENOMIC_WT_ALLELE"].append(ref)
+                cols["GENOMIC_MUT_ALLELE"].append(alt)
+                cols["GENE_SYMBOL"].append(info_d.get("GENE", ""))
+                cols["TRANSCRIPT_ACCESSION"].append(info_d.get("TRANSCRIPT", ""))
+                cols["MUTATION_CDS"].append(info_d.get("CDS", ""))
+                cols["MUTATION_AA"].append(info_d.get("AA", ""))
+                cols["MUTATION_DESCRIPTION"].append(info_d.get("SO_TERM", ""))
+                cols["HGVSG"].append(info_d.get("HGVSG", ""))
+                cols["HGVSC"].append(info_d.get("HGVSC", ""))
+                cols["HGVSP"].append(info_d.get("HGVSP", ""))
+                cols["STRAND"].append(info_d.get("STRAND", ""))
+                cols["LEGACY_MUTATION_ID"].append(info_d.get("LEGACY_ID", ""))
+                cols["GENOME_SCREEN_SAMPLE_COUNT"].append(
+                    info_d.get("GENOME_SCREEN_SAMPLE_COUNT", "")
+                )
+                cols["IS_CANONICAL"].append(info_d.get("IS_CANONICAL", ""))
+                if len(cols["CHROMOSOME"]) >= batch_size:
+                    flush(writer)
+            flush(writer)
+    return n_written
 
 
 def setup_cosmic(refresh: bool = False) -> None:
@@ -536,22 +640,29 @@ def setup_cosmic(refresh: bool = False) -> None:
     import base64
     import os
     import tarfile
-    import pandas as pd
 
-    if is_built(COSMIC_PARQUET, refresh):
-        logger.info("cosmic: %s already exists — skipping", COSMIC_PARQUET)
-        return
+    # COSMIC_PARQUET is a directory (pyarrow dataset of per-VCF parquets).
+    if COSMIC_PARQUET.is_dir():
+        existing = list(COSMIC_PARQUET.glob("*.parquet"))
+        if existing and not refresh:
+            logger.info(
+                "cosmic: %s already contains %d parquet file(s) — skipping",
+                COSMIC_PARQUET,
+                len(existing),
+            )
+            return
+        if refresh:
+            import shutil
+
+            logger.info("refresh: removing %s", COSMIC_PARQUET)
+            shutil.rmtree(COSMIC_PARQUET)
 
     email = os.environ.get("COSMIC_EMAIL")
     password = os.environ.get("COSMIC_PASSWORD")
     if not email or not password:
         print(COSMIC_PREREQ_MSG)
-        raise RuntimeError(
-            "COSMIC_EMAIL and COSMIC_PASSWORD env vars required for download"
-        )
-    auth_header = "Basic " + base64.b64encode(
-        f"{email}:{password}".encode()
-    ).decode()
+        raise RuntimeError("COSMIC_EMAIL and COSMIC_PASSWORD env vars required for download")
+    auth_header = "Basic " + base64.b64encode(f"{email}:{password}".encode()).decode()
 
     COSMIC_RAW.mkdir(parents=True, exist_ok=True)
 
@@ -562,40 +673,53 @@ def setup_cosmic(refresh: bool = False) -> None:
             logger.info("cosmic: %s already downloaded", tar_path.name)
         else:
             logger.info("cosmic: requesting signed URL for %s", fname)
-            api_path = COSMIC_PATH_TEMPLATE.format(
-                version=COSMIC_VERSION, filename=fname
-            )
+            api_path = COSMIC_PATH_TEMPLATE.format(version=COSMIC_VERSION, filename=fname)
             url = _cosmic_download_url(api_path, auth_header)
             run(["wget", "-q", "--show-progress", "-O", str(tar_path), url])
         # Extract into the same dir
         with tarfile.open(tar_path) as tar:
             tar.extractall(COSMIC_RAW)
 
-    # Parse each VCF → DataFrame → combine
-    frames: list[pd.DataFrame] = []
+    # One parquet per VCF inside a directory — pyarrow.dataset reads the
+    # directory as a single logical dataset with filter pushdown.
+    COSMIC_PARQUET.mkdir(parents=True, exist_ok=True)
+    import pyarrow.parquet as pq
+
+    total_rows = 0
+    parsed_files: list[str] = []
     for vcf_name in COSMIC_VCFS:
         vcf_path = COSMIC_RAW / vcf_name
         if not vcf_path.exists():
             logger.warning("cosmic: %s missing after extract — skipping", vcf_name)
             continue
+        # Derive per-VCF output filename inside the directory dataset.
+        out_name = vcf_name.replace(".vcf.gz", ".parquet")
+        out_path = COSMIC_PARQUET / out_name
+        if out_path.exists() and not refresh:
+            logger.info("cosmic: %s already parsed — skipping", out_name)
+            total_rows += pq.ParquetFile(out_path).metadata.num_rows
+            parsed_files.append(vcf_name)
+            continue
         t0 = time.perf_counter()
-        logger.info("cosmic: parsing %s", vcf_name)
-        df = _parse_cosmic_vcf(vcf_path)
+        logger.info("cosmic: streaming %s -> %s", vcf_name, out_name)
+        n = _parse_cosmic_vcf_streaming(vcf_path, out_path)
         logger.info(
-            "cosmic: %s → %d variants (%.1fs)",
-            vcf_name, len(df), time.perf_counter() - t0,
+            "cosmic: %s -> %d variants (%.1fs)",
+            vcf_name,
+            n,
+            time.perf_counter() - t0,
         )
-        frames.append(df)
+        total_rows += n
+        parsed_files.append(vcf_name)
 
-    if not frames:
+    if total_rows == 0:
         raise RuntimeError("No COSMIC VCFs parsed — check downloads")
 
-    combined = pd.concat(frames, ignore_index=True).sort_values(
-        ["CHROMOSOME", "GENOME_START"]
-    )
-    combined.to_parquet(COSMIC_PARQUET, compression="snappy", index=False)
     logger.info(
-        "cosmic: wrote %d variants to %s", len(combined), COSMIC_PARQUET
+        "cosmic: wrote %d variants across %d parquet files in %s",
+        total_rows,
+        len(parsed_files),
+        COSMIC_PARQUET,
     )
 
     write_sidecar(
@@ -604,8 +728,8 @@ def setup_cosmic(refresh: bool = False) -> None:
         version=f"Cosmic_{COSMIC_VERSION}_{COSMIC_ASSEMBLY}",
         artifact=COSMIC_PARQUET,
         extra={
-            "n_variants": int(len(combined)),
-            "source_files": COSMIC_FILES,
+            "n_variants": int(total_rows),
+            "source_files": parsed_files,
         },
     )
 
@@ -620,15 +744,11 @@ DEEPLOC_TARBALL = DEEPLOC_DIR / DEEPLOC_TARBALL_NAME
 DEEPLOC_ENV_NAME = "swissisoform-v2-deeploc"
 # Source tarball — the DTU DeepLoc release isn't freely redownloadable, so
 # we copy from the sibling swissisoform v1 project where it already lives.
-DEEPLOC_SOURCE = Path(
-    "/lab/barcheese01/mdiberna/swissisoform/deeploc-2.1.All.tar.gz"
-)
+DEEPLOC_SOURCE = Path("/lab/barcheese01/mdiberna/swissisoform/deeploc-2.1.All.tar.gz")
 
 
 def _conda_env_exists(name: str) -> bool:
-    result = subprocess.run(
-        ["conda", "env", "list"], capture_output=True, text=True, check=True
-    )
+    result = subprocess.run(["conda", "env", "list"], capture_output=True, text=True, check=True)
     for line in result.stdout.splitlines():
         if line and not line.startswith("#"):
             env_name = line.split()[0]
@@ -640,6 +760,7 @@ def _conda_env_exists(name: str) -> bool:
 def _conda_run(env_name: str, cmd: list[str]) -> None:
     """``conda run`` with PYTHONNOUSERSITE=1 so ~/.local/ can't shadow env packages."""
     import os
+
     environ = dict(os.environ)
     environ["PYTHONNOUSERSITE"] = "1"
     full = ["conda", "run", "-n", env_name] + cmd
@@ -717,9 +838,14 @@ def setup_deeploc(refresh: bool = False) -> None:
     # Env exists — smoke-test that DeepLoc2 imports cleanly.
     logger.info("deeploc: env %s exists; verifying import", DEEPLOC_ENV_NAME)
     try:
-        _conda_run(DEEPLOC_ENV_NAME, [
-            "python", "-c", "import DeepLoc2; print('deeploc import ok')",
-        ])
+        _conda_run(
+            DEEPLOC_ENV_NAME,
+            [
+                "python",
+                "-c",
+                "import DeepLoc2; print('deeploc import ok')",
+            ],
+        )
     except subprocess.CalledProcessError:
         logger.error(
             "deeploc: env %s exists but DeepLoc2 failed to import. "

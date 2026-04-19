@@ -132,9 +132,7 @@ class PipelineConfig:
     """
 
     cell_lines: list[str] = field(
-        default_factory=lambda: [
-            "HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"
-        ]
+        default_factory=lambda: ["HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"]
     )
     data_dir: Path = Path("data/reference")
     genome_fasta: Path | None = None

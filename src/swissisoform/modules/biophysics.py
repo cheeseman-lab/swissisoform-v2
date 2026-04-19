@@ -34,23 +34,61 @@ PIPI_AA = set("FYWRHQN")
 PRIONLIKE_AA = set("QNGSY")
 
 KD_HYDROPATHY: dict[str, float] = {
-    "A": 1.8, "R": -4.5, "N": -3.5, "D": -3.5, "C": 2.5,
-    "E": -3.5, "Q": -3.5, "G": -0.4, "H": -3.2, "I": 4.5,
-    "L": 3.8, "K": -3.9, "M": 1.9, "F": 2.8, "P": -1.6,
-    "S": -0.8, "T": -0.7, "W": -0.9, "Y": -1.3, "V": 4.2,
+    "A": 1.8,
+    "R": -4.5,
+    "N": -3.5,
+    "D": -3.5,
+    "C": 2.5,
+    "E": -3.5,
+    "Q": -3.5,
+    "G": -0.4,
+    "H": -3.2,
+    "I": 4.5,
+    "L": 3.8,
+    "K": -3.9,
+    "M": 1.9,
+    "F": 2.8,
+    "P": -1.6,
+    "S": -0.8,
+    "T": -0.7,
+    "W": -0.9,
+    "Y": -1.3,
+    "V": 4.2,
 }
 
 PK_VALUES: dict[str, float] = {
-    "N_term": 9.69, "C_term": 2.34,
-    "D": 3.9, "E": 4.07, "C": 8.18, "Y": 10.46,
-    "H": 6.04, "K": 10.54, "R": 12.48,
+    "N_term": 9.69,
+    "C_term": 2.34,
+    "D": 3.9,
+    "E": 4.07,
+    "C": 8.18,
+    "Y": 10.46,
+    "H": 6.04,
+    "K": 10.54,
+    "R": 12.48,
 }
 
 TOP_IDP: dict[str, float] = {
-    "A": 0.06, "R": 0.18, "N": 0.007, "D": 0.192, "C": -0.02,
-    "E": 0.736, "Q": 0.318, "G": 0.166, "H": 0.303, "I": -0.486,
-    "L": -0.326, "K": 0.586, "M": -0.397, "F": -0.697, "P": 0.987,
-    "S": 0.341, "T": 0.059, "W": -0.884, "Y": -0.510, "V": -0.121,
+    "A": 0.06,
+    "R": 0.18,
+    "N": 0.007,
+    "D": 0.192,
+    "C": -0.02,
+    "E": 0.736,
+    "Q": 0.318,
+    "G": 0.166,
+    "H": 0.303,
+    "I": -0.486,
+    "L": -0.326,
+    "K": 0.586,
+    "M": -0.397,
+    "F": -0.697,
+    "P": 0.987,
+    "S": 0.341,
+    "T": 0.059,
+    "W": -0.884,
+    "Y": -0.510,
+    "V": -0.121,
 }
 
 _MIN_SEQ_LEN = 3
@@ -275,12 +313,24 @@ class BiophysicsModule:
 
     # Keys in the annotation dict (without the module prefix).
     _ANNOTATION_KEYS: list[str] = [
-        "pI", "gravy", "disorder", "fraction_charged",
-        "fraction_disorder_promoting", "aromaticity", "instability_index",
-        "length", "shannon_entropy", "normalized_complexity",
-        "mean_window_entropy", "fraction_lcr", "aa_diversity",
-        "longest_homopolymer", "pipi_propensity", "prionlike_fraction",
-        "rg_fg_density", "llps_score",
+        "pI",
+        "gravy",
+        "disorder",
+        "fraction_charged",
+        "fraction_disorder_promoting",
+        "aromaticity",
+        "instability_index",
+        "length",
+        "shannon_entropy",
+        "normalized_complexity",
+        "mean_window_entropy",
+        "fraction_lcr",
+        "aa_diversity",
+        "longest_homopolymer",
+        "pipi_propensity",
+        "prionlike_fraction",
+        "rg_fg_density",
+        "llps_score",
     ]
 
     def __init__(self, config: PipelineConfig) -> None:
@@ -358,9 +408,7 @@ class BiophysicsModule:
     # Convenience wrapper (backward-compatible)
     # --------------------------------------------------------------------- #
 
-    def run(
-        self, tis_sites: list[TranslationInitiationSite]
-    ) -> list[TranslationInitiationSite]:
+    def run(self, tis_sites: list[TranslationInitiationSite]) -> list[TranslationInitiationSite]:
         """Compute biophysical annotations for each TIS site.
 
         Thin wrapper around :meth:`annotate` that extracts the differential

@@ -68,7 +68,7 @@ class TestInitiationContextModule:
             ann = site.isoform_annotations[mod.MODULE_NAME]
             prefix = f"{mod.MODULE_NAME}_"
             for col in mod.OUTPUT_COLUMNS:
-                key = col[len(prefix):] if col.startswith(prefix) else col
+                key = col[len(prefix) :] if col.startswith(prefix) else col
                 assert key in ann, f"Missing column {key} for {site.tis_id}"
 
     def test_no_sites_lost(self, synthetic_tis, config):
@@ -168,7 +168,7 @@ class TestAnnotateSite:
         assert isinstance(result, dict)
         prefix = f"{mod.MODULE_NAME}_"
         for col in mod.OUTPUT_COLUMNS:
-            key = col[len(prefix):] if col.startswith(prefix) else col
+            key = col[len(prefix) :] if col.startswith(prefix) else col
             assert key in result, f"Missing key {key}"
 
     def test_annotate_site_kozak(self, config):

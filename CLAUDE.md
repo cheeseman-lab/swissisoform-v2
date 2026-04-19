@@ -118,8 +118,8 @@ All 9 modules implemented. Data model supports symmetric canonical/isoform annot
 | 1. Wiring layer | `pipeline.py` — AnnotationPipeline | **Done** |
 | 2. Harder modules | clinical, conservation, massspec | **Done** |
 | 3. Assembly + real test | `assembly.py` + 5-gene E2E on HeLa Ribo-TISH data | **Done** |
-| 3b. **Expensive modules E2E** | Wire massspec (pipeline fix), clinical (cache), conservation (cache) into E2E | **Next** |
-| 4. Comparator extension | Positional subset to diff region + scalar deltas | Pending |
+| 3b. **Expensive modules E2E** | massspec, clinical (+ ConsequenceValidator), conservation (batch), localization (DeepLoc precompute) wired; all 3 clinical DBs (gnomAD + ClinVar + COSMIC) built from source and queried locally | **Done (2026-04-19)** |
+| 4. Comparator extension | Positional subset to diff region + scalar deltas | **Next** |
 | 5. CLI | `__main__.py` entry point | Pending |
 | 6. Full end-to-end | All modules on real data, all 6 cell lines | Pending |
 

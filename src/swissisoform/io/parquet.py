@@ -182,8 +182,9 @@ def genes_to_dataframe(genes: list[Gene]) -> pd.DataFrame:
         genes: Gene objects to serialize.
 
     Returns:
-        DataFrame with one row per gene. Gene annotations are flattened
-        as ``{annotation_key}_{sub_key}`` columns.
+        DataFrame with one row per gene. Gene-level annotations flatten as
+        ``{annotation_key}_{sub_key}`` and canonical protein annotations
+        flatten as ``canonical_{module}_{key}``.
     """
     rows: list[dict[str, Any]] = []
     for gene in genes:
@@ -199,6 +200,73 @@ def genes_to_dataframe(genes: list[Gene]) -> pd.DataFrame:
                     row[f"{annot_key}_{sub_key}"] = sub_val
             else:
                 row[annot_key] = annot_val
+        row.update(_flatten_annotations("canonical", gene.canonical_annotations))
         rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
+def _flatten_annotations(prefix: str, annotations: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for module_name, annot_dict in annotations.items():
+        for key, value in annot_dict.items():
+            out[f"{prefix}_{module_name}_{key}"] = value
+    return out
+
+
+def paired_tis_dataframe(genes: list[Gene]) -> pd.DataFrame:
+    """One row per TIS with paired canonical + isoform annotations.
+
+    Each row carries both ``canonical_{module}_{key}`` columns (from the
+    gene's canonical protein annotations) and ``isoform_{module}_{key}``
+    columns (from the TIS's own isoform annotations), so the comparator
+    can diff them without another pass over ``Gene`` objects.
+
+    Args:
+        genes: Gene objects with both ``canonical_annotations`` and per-TIS
+            ``isoform_annotations`` populated by ``AnnotationPipeline``.
+
+    Returns:
+        DataFrame with identity + expression wide cols + paired annotation
+        cols, one row per TIS across all input genes.
+    """
+    rows: list[dict[str, Any]] = []
+    for gene in genes:
+        canonical_cols = _flatten_annotations("canonical", gene.canonical_annotations)
+        canonical_len = len(gene.canonical_protein.rstrip("*"))
+        for site in gene.tis_sites:
+            diff = site.diff_region
+            row: dict[str, Any] = {
+                "gene_name": gene.gene_name,
+                "gene_id": gene.gene_id,
+                "canonical_transcript_id": gene.canonical_transcript_id,
+                "tis_id": site.tis_id,
+                "transcript_id": site.transcript_id,
+                "chrom": site.chrom,
+                "position": site.position,
+                "strand": site.strand,
+                "start_codon": site.start_codon,
+                "orf_type": site.orf_type.value,
+                "aa_len": site.aa_len,
+                "canonical_len": canonical_len,
+                "isoform_len": len(site.isoform_protein.rstrip("*")),
+                "differential_sequence": diff.sequence if diff else "",
+                "diff_isoform_start": diff.isoform_start if diff else None,
+                "diff_isoform_end": diff.isoform_end if diff else None,
+                "diff_canonical_start": diff.canonical_start if diff else None,
+                "diff_canonical_end": diff.canonical_end if diff else None,
+                "kozak_context": site.kozak_context,
+                "tis_pvalue": site.tis_pvalue,
+                "ribo_pvalue": site.ribo_pvalue,
+                "fisher_qvalue": site.fisher_qvalue,
+            }
+            for cell_line, expr in site.expression.items():
+                row[f"expr_{cell_line}_raw_count"] = expr.raw_count
+                row[f"expr_{cell_line}_cpm"] = expr.cpm
+                row[f"expr_{cell_line}_p_value"] = expr.p_value
+                row[f"expr_{cell_line}_initiation_efficiency"] = expr.initiation_efficiency
+            row.update(canonical_cols)
+            row.update(_flatten_annotations("isoform", site.isoform_annotations))
+            rows.append(row)
 
     return pd.DataFrame(rows)

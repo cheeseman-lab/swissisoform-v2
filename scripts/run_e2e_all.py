@@ -52,9 +52,7 @@ PROTEIN = DATA / "gencode.v49.pc_translations.fa"
 SAMPLE_MANIFEST = DATA / "ribotish_sample_manifest.csv"
 REPLICATE_MANIFEST = DATA / "ribotish_replicate_manifest.csv"
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("run_e2e_all")
 
 
@@ -63,7 +61,8 @@ def hdr(title: str) -> None:
 
 
 def run_upstream_all(
-    reference: UpstreamReference, cfg: PipelineConfig,
+    reference: UpstreamReference,
+    cfg: PipelineConfig,
 ) -> dict[str, pd.DataFrame]:
     """Run upstream per cell line.  Write CSV, return in-memory dict."""
     manifest = load_sample_manifest(SAMPLE_MANIFEST, REPLICATE_MANIFEST)
@@ -77,14 +76,20 @@ def run_upstream_all(
 
         t0 = time.perf_counter()
         final_df, _ = run_sample(
-            predict, rnaseq_files, GTF,
-            sample=sample, config=cfg, reference=reference,
+            predict,
+            rnaseq_files,
+            GTF,
+            sample=sample,
+            config=cfg,
+            reference=reference,
         )
         filtered_out.parent.mkdir(parents=True, exist_ok=True)
         final_df.to_csv(filtered_out, index=False)
         per_sample[sample] = final_df
         logger.info(
-            "%s: %d filtered rows (%.1fs)", sample, len(final_df),
+            "%s: %d filtered rows (%.1fs)",
+            sample,
+            len(final_df),
             time.perf_counter() - t0,
         )
     return per_sample
@@ -115,15 +120,16 @@ def spot_check(combined_annot: pd.DataFrame, samples: list[str]) -> None:
 
     hdr("Sample rows — 5 random TIS with per-sample expression")
     show = [
-        "gene_name", "transcript_id", "orf_type", "start_codon",
-        "biophysics_length", "biophysics_pI",
+        "gene_name",
+        "transcript_id",
+        "orf_type",
+        "start_codon",
+        "biophysics_length",
+        "biophysics_pI",
     ]
     show = [c for c in show if c in combined_annot.columns]
     expr_show = [c for c in combined_annot.columns if c.endswith("_raw_count")][:3]
-    view = (
-        combined_annot[show + expr_show]
-        .sample(n=min(5, len(combined_annot)), random_state=0)
-    )
+    view = combined_annot[show + expr_show].sample(n=min(5, len(combined_annot)), random_state=0)
     with pd.option_context("display.max_columns", None, "display.width", 220):
         print(view.to_string(index=False))
 
@@ -133,9 +139,7 @@ def main() -> None:
     cfg = PipelineConfig()
 
     print("Loading shared GTF + genome + protein-product reference tables…")
-    reference = UpstreamReference.load(
-        gtf_path=GTF, genome_fasta=GENOME, protein_fasta=PROTEIN
-    )
+    reference = UpstreamReference.load(gtf_path=GTF, genome_fasta=GENOME, protein_fasta=PROTEIN)
 
     hdr("STAGE 1 — Upstream per cell line (filter + impute)")
     per_sample = run_upstream_all(reference, cfg)
@@ -146,7 +150,9 @@ def main() -> None:
     combined.to_parquet(combined_upstream_out, index=False)
     logger.info(
         "combined upstream: %d unique TIS across %d samples → %s",
-        len(combined), len(per_sample), combined_upstream_out,
+        len(combined),
+        len(per_sample),
+        combined_upstream_out,
     )
 
     hdr("STAGE 3 — Assembly (one pass)")
@@ -154,7 +160,8 @@ def main() -> None:
     genes = assemble_genes(combined, genome_fasta=GENOME)
     logger.info(
         "assembled %d genes, %d unique TIS (%.1fs)",
-        len(genes), sum(len(g.tis_sites) for g in genes),
+        len(genes),
+        sum(len(g.tis_sites) for g in genes),
         time.perf_counter() - t0,
     )
 

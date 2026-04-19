@@ -101,9 +101,7 @@ class CoreIdentityModule:
         """
         diff_len = _protein_length(site.diff_region.sequence if site.diff_region else "")
         in_frame = _is_in_frame(site)
-        large_trunc = (
-            site.orf_type == ORFType.TRUNCATED and diff_len > self.truncation_max_aa
-        )
+        large_trunc = site.orf_type == ORFType.TRUNCATED and diff_len > self.truncation_max_aa
 
         return {
             "variant_id": f"{site.gene_name}_{site.tis_id}",
@@ -115,9 +113,7 @@ class CoreIdentityModule:
             "large_truncation_warning": large_trunc,
         }
 
-    def run(
-        self, tis_sites: list[TranslationInitiationSite]
-    ) -> list[TranslationInitiationSite]:
+    def run(self, tis_sites: list[TranslationInitiationSite]) -> list[TranslationInitiationSite]:
         """Compute core identity annotations for each TIS site.
 
         Thin wrapper implementing the ``SiteModule`` protocol: iterates over

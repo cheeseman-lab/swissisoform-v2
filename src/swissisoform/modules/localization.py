@@ -69,15 +69,11 @@ def precompute_deeploc(
         proteins = {f"seq_{i}": s for i, s in enumerate(proteins)}
 
     if _shutil.which("conda") is None:
-        logger.warning(
-            "precompute_deeploc: 'conda' binary not on PATH — returning empty."
-        )
+        logger.warning("precompute_deeploc: 'conda' binary not on PATH — returning empty.")
         return {}
 
     # Check env existence via `conda env list`
-    env_list = subprocess.run(
-        ["conda", "env", "list"], capture_output=True, text=True, check=False
-    )
+    env_list = subprocess.run(["conda", "env", "list"], capture_output=True, text=True, check=False)
     if conda_env not in env_list.stdout:
         logger.warning(
             "precompute_deeploc: conda env %r not found — run "
@@ -94,7 +90,10 @@ def precompute_deeploc(
 
     logger.info(
         "precompute_deeploc: %d inputs → %d unique sequences (model=%s, device=%s)",
-        len(proteins), len(hash_to_seq), model, device,
+        len(proteins),
+        len(hash_to_seq),
+        model,
+        device,
     )
 
     # Write FASTA in cwd (shared-HPC policy: no /tmp)
@@ -112,16 +111,25 @@ def precompute_deeploc(
     # Resolve the env's deeploc2 binary explicitly so a stale
     # ~/.local/bin/deeploc2 shim can't shadow it.
     env_prefix = subprocess.run(
-        ["conda", "run", "-n", conda_env, "python", "-c",
-         "import sys; print(sys.prefix)"],
-        capture_output=True, text=True, check=True,
+        ["conda", "run", "-n", conda_env, "python", "-c", "import sys; print(sys.prefix)"],
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.strip()
     deeploc_bin = _P(env_prefix) / "bin" / "deeploc2"
     cmd = [
         str(deeploc_bin),
-        "-f", str(fasta), "-m", model, "-d", device, "-o", str(outdir),
+        "-f",
+        str(fasta),
+        "-m",
+        model,
+        "-d",
+        device,
+        "-o",
+        str(outdir),
     ]
     import os as _os
+
     env = dict(_os.environ)
     env["PYTHONNOUSERSITE"] = "1"
     # Redirect torch hub cache to cwd — home dir has limited quota on
@@ -133,9 +141,7 @@ def precompute_deeploc(
     env["XDG_CACHE_HOME"] = str(torch_cache / "xdg")
     logger.info("precompute_deeploc: %s", " ".join(cmd))
     try:
-        proc = subprocess.run(
-            cmd, check=True, capture_output=True, text=True, env=env
-        )
+        proc = subprocess.run(cmd, check=True, capture_output=True, text=True, env=env)
         if proc.stdout:
             logger.info("precompute_deeploc stdout (tail):\n%s", proc.stdout[-800:])
         if proc.stderr:
@@ -143,13 +149,15 @@ def precompute_deeploc(
     except subprocess.CalledProcessError as exc:
         logger.error(
             "precompute_deeploc: deeploc2 failed (exit %d). stderr=%s",
-            exc.returncode, exc.stderr[-800:] if exc.stderr else "",
+            exc.returncode,
+            exc.stderr[-800:] if exc.stderr else "",
         )
         return {}
 
     # Parse results CSV — schema: Protein_ID, Localizations, Signals,
     # Membrane types, <per-location probs>
     import pandas as pd
+
     results_csvs = list(outdir.glob("results_*.csv"))
     if not results_csvs:
         logger.error("precompute_deeploc: no results_*.csv in %s", outdir)
@@ -164,6 +172,12 @@ def precompute_deeploc(
             "deeploc_signals": row.get("Signals"),
             "deeploc_membrane": row.get("Membrane types"),
         }
+    # Clean up the per-call tempdir (FASTA + DeepLoc output CSV) so repeat
+    # runs don't accumulate ``deeploc_*`` directories in the repo root.
+    try:
+        _shutil.rmtree(tmpdir)
+    except OSError:
+        logger.warning("precompute_deeploc: failed to remove tempdir %s", tmpdir)
     return result
 
 
@@ -245,12 +259,19 @@ class LocalizationModule:
             "wolfpsort_prediction": pred.get("wolfpsort"),
         }
 
-    def run(
-        self, tis_sites: list[TranslationInitiationSite]
-    ) -> list[TranslationInitiationSite]:
-        """Attach localization annotations to each TIS site's isoform protein."""
+    def run(self, tis_sites: list[TranslationInitiationSite]) -> list[TranslationInitiationSite]:
+        """Attach localization annotations to each TIS site's isoform protein.
+
+        Supports two keying strategies on ``self.predictions``:
+        1) tis_id-keyed (legacy / test-fixture shape)
+        2) protein-hash-keyed (what ``precompute_deeploc`` returns)
+
+        Tries tis_id first, falls back to protein hash. Missing keys yield
+        all-``None`` annotation fields so downstream code stays uniform.
+        """
         for site in tis_sites:
-            site.isoform_annotations[self.MODULE_NAME] = self.annotate(
-                site.isoform_protein
-            )
+            if site.tis_id in self.predictions:
+                site.isoform_annotations[self.MODULE_NAME] = self.annotate_by_key(site.tis_id)
+            else:
+                site.isoform_annotations[self.MODULE_NAME] = self.annotate(site.isoform_protein)
         return tis_sites

@@ -33,7 +33,7 @@ from swissisoform.io.canonical import (
     load_reference_features,
 )
 from swissisoform.io.ribotish import load_ribotish_predictions, recategorize_tis_type
-from swissisoform.io.rnaseq import load_sample_manifest, sum_replicate_counts
+from swissisoform.io.rnaseq import sum_replicate_counts
 from swissisoform.models import Gene, TranslationInitiationSite
 
 logger = logging.getLogger(__name__)
@@ -104,7 +104,9 @@ def run_sample(
 
     logger.info(
         "run_sample[%s]: %d raw TIS, %.2e total mapped reads",
-        sample, len(df), total_reads,
+        sample,
+        len(df),
+        total_reads,
     )
 
     # 5: upstream-reference-faithful filter
@@ -157,15 +159,18 @@ def run_sample(
         logger.info(
             "run_sample[%s]: dropping %d rows from %d uncanonical transcripts "
             "(GENCODE cds_start_NF / incomplete CDS)",
-            sample, n_rows, len(uncanonical_tids),
+            sample,
+            n_rows,
+            len(uncanonical_tids),
         )
-        final_df = final_df[~final_df["Tid"].isin(uncanonical_tids)].reset_index(
-            drop=True
-        )
+        final_df = final_df[~final_df["Tid"].isin(uncanonical_tids)].reset_index(drop=True)
 
     logger.info(
         "run_sample[%s]: kept %d, dropped %d, imputed %d canonical rows",
-        sample, len(filtered_df), len(dropped_df), len(imputed_df),
+        sample,
+        len(filtered_df),
+        len(dropped_df),
+        len(imputed_df),
     )
     return final_df, dropped_df
 
@@ -187,6 +192,7 @@ class UpstreamReference:
         protein_products: pd.DataFrame,
         cds_df: pd.DataFrame,
     ) -> None:
+        """Hold preloaded reference tables shared across upstream sample runs."""
         self.genome_pos = genome_pos
         self.utr_lengths = utr_lengths
         self.start_codons = start_codons
@@ -308,7 +314,9 @@ def run_upstream(
 
     logger.info(
         "run_upstream: %d TIS after filter (from %d raw); %d Annotated rows retained",
-        len(filtered_df), len(df), len(annotated_df),
+        len(filtered_df),
+        len(df),
+        len(annotated_df),
     )
     return filtered_df, annotated_df
 
@@ -364,6 +372,7 @@ class AnnotationPipeline:
         site_modules: list[Any] | None = None,
         gene_modules: list[Any] | None = None,
     ) -> None:
+        """Initialize with optional module lists (defaults to empty lists)."""
         self.protein_modules = protein_modules or []
         self.site_modules = site_modules or []
         self.gene_modules = gene_modules or []

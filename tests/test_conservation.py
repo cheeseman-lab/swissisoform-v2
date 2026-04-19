@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import copy
-import os
 import textwrap
 from pathlib import Path
 from unittest.mock import patch
@@ -15,7 +13,6 @@ from swissisoform.modules.conservation import (
     CONSERVATION_LABELS,
     ConservationModule,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -48,7 +45,8 @@ class TestConservationModule:
 
     def test_annotate_no_config(self, config_no_conservation):
         """No conservation config -> empty hits, score None (couldn't run),
-        status=not_run. Distinguishes from "ran and found nothing" (score 0)."""
+        status=not_run. Distinguishes from "ran and found nothing" (score 0).
+        """
         mod = ConservationModule(config_no_conservation)
         result = mod.annotate("MEEPQSDPSVEPPLSQETFSDLWKLLPENNVLSPLPS")
         assert result["hits"] == []
@@ -266,8 +264,12 @@ class TestConservationModule:
         assert isinstance(result["summary"], dict)
         summary = result["summary"]
         for key in [
-            "conservation_score", "conservation_label",
-            "best_pident", "best_evalue", "n_hits", "tool_used",
+            "conservation_score",
+            "conservation_label",
+            "best_pident",
+            "best_evalue",
+            "n_hits",
+            "tool_used",
         ]:
             assert key in summary, f"Missing summary key: {key}"
 

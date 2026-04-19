@@ -117,9 +117,7 @@ class TestClinicalModule:
         assert result["hits"] == []
         assert result["summary"]["total_variants"] == 0
 
-    def test_annotate_unknown_gene_returns_empty(
-        self, clinical_module: ClinicalModule
-    ) -> None:
+    def test_annotate_unknown_gene_returns_empty(self, clinical_module: ClinicalModule) -> None:
         """Gene not in cache returns empty hits."""
         result = clinical_module.annotate("FAKE", "UNKNOWN_GENE")
         assert result["hits"] == []

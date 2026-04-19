@@ -40,8 +40,18 @@ CONSERVATION_LABELS: dict[int, str] = {
 }
 
 BLAST_TABULAR_COLUMNS = [
-    "qseqid", "sseqid", "pident", "length", "mismatch", "gapopen",
-    "qstart", "qend", "sstart", "send", "evalue", "bitscore",
+    "qseqid",
+    "sseqid",
+    "pident",
+    "length",
+    "mismatch",
+    "gapopen",
+    "qstart",
+    "qend",
+    "sstart",
+    "send",
+    "evalue",
+    "bitscore",
 ]
 
 # Tool preference order
@@ -212,23 +222,29 @@ class ConservationModule:
                 if len(parts) < 12:
                     continue
                 try:
-                    hits.append({
-                        "subject_id": parts[1],
-                        "pident": float(parts[2]),
-                        "length": int(parts[3]),
-                        "evalue": float(parts[10]),
-                        "bitscore": float(parts[11]),
-                        "qstart": int(parts[6]) - 1,  # convert to 0-indexed
-                        "qend": int(parts[7]) - 1,
-                        "sstart": int(parts[8]),
-                        "send": int(parts[9]),
-                    })
+                    hits.append(
+                        {
+                            "subject_id": parts[1],
+                            "pident": float(parts[2]),
+                            "length": int(parts[3]),
+                            "evalue": float(parts[10]),
+                            "bitscore": float(parts[11]),
+                            "qstart": int(parts[6]) - 1,  # convert to 0-indexed
+                            "qend": int(parts[7]) - 1,
+                            "sstart": int(parts[8]),
+                            "send": int(parts[9]),
+                        }
+                    )
                 except (ValueError, IndexError):
                     continue
         return hits
 
     def _build_search_cmd(
-        self, query_fasta: str, db_path: str, output_file: str, tool: str,
+        self,
+        query_fasta: str,
+        db_path: str,
+        output_file: str,
+        tool: str,
     ) -> list[str]:
         """Build the subprocess command for the given tool.
 
@@ -246,39 +262,68 @@ class ConservationModule:
             # appropriate for per-protein conservation lookup against a
             # reviewed reference like SwissProt.
             return [
-                "diamond", "blastp",
-                "-q", query_fasta,
-                "-d", db_path,
-                "-o", output_file,
-                "--outfmt", "6", "qseqid", "sseqid", "pident", "length",
-                "mismatch", "gapopen", "qstart", "qend", "sstart", "send",
-                "evalue", "bitscore",
-                "--max-target-seqs", "10",
+                "diamond",
+                "blastp",
+                "-q",
+                query_fasta,
+                "-d",
+                db_path,
+                "-o",
+                output_file,
+                "--outfmt",
+                "6",
+                "qseqid",
+                "sseqid",
+                "pident",
+                "length",
+                "mismatch",
+                "gapopen",
+                "qstart",
+                "qend",
+                "sstart",
+                "send",
+                "evalue",
+                "bitscore",
+                "--max-target-seqs",
+                "10",
                 "--quiet",
             ]
         if tool == "blastp":
             return [
                 "blastp",
-                "-query", query_fasta,
-                "-db", db_path,
-                "-outfmt", "6 qseqid sseqid pident length mismatch gapopen"
+                "-query",
+                query_fasta,
+                "-db",
+                db_path,
+                "-outfmt",
+                "6 qseqid sseqid pident length mismatch gapopen"
                 " qstart qend sstart send evalue bitscore",
-                "-max_target_seqs", "10",
-                "-out", output_file,
+                "-max_target_seqs",
+                "10",
+                "-out",
+                output_file,
             ]
         # mmseqs
         tmp_dir = os.path.join(os.path.dirname(output_file), "mmseqs_tmp")
         os.makedirs(tmp_dir, exist_ok=True)
         return [
-            "mmseqs", "easy-search",
-            query_fasta, db_path, output_file, tmp_dir,
-            "--format-output", "query,target,pident,alnlen,mismatch,gapopen,"
-            "qstart,qend,tstart,tend,evalue,bits",
-            "-s", "7.5",
+            "mmseqs",
+            "easy-search",
+            query_fasta,
+            db_path,
+            output_file,
+            tmp_dir,
+            "--format-output",
+            "query,target,pident,alnlen,mismatch,gapopen,qstart,qend,tstart,tend,evalue,bits",
+            "-s",
+            "7.5",
         ]
 
     def _run_search(
-        self, protein: str, tool: str, db_path: str,
+        self,
+        protein: str,
+        tool: str,
+        db_path: str,
     ) -> list[dict[str, Any]] | None:
         """Run a sequence search subprocess and parse results.
 
@@ -309,12 +354,17 @@ class ConservationModule:
 
             try:
                 result = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=600,
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
                 )
                 if result.returncode != 0:
                     logger.warning(
                         "%s search failed (exit %d): %s",
-                        tool, result.returncode, result.stderr[:200],
+                        tool,
+                        result.returncode,
+                        result.stderr[:200],
                     )
                     return None  # couldn't run — don't claim "no hits"
             except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
@@ -420,7 +470,9 @@ class ConservationModule:
         if not self._config.conservation or not self._db_path or not self._tool:
             logger.warning(
                 "ConservationModule.precompute_batch: not configured to run "
-                "(tool=%r db=%r) — skipping", self._tool, self._db_path,
+                "(tool=%r db=%r) — skipping",
+                self._tool,
+                self._db_path,
             )
             return 0
         if not self._db_path.exists():
@@ -447,20 +499,23 @@ class ConservationModule:
                 for qid, seq in qid_to_seq.items():
                     fh.write(f">{qid}\n{seq}\n")
             output_file = os.path.join(tmp_dir, "results.tsv")
-            cmd = self._build_search_cmd(
-                query_fasta, str(self._db_path), output_file, self._tool
-            )
+            cmd = self._build_search_cmd(query_fasta, str(self._db_path), output_file, self._tool)
             logger.info(
                 "ConservationModule.precompute_batch: %d unique proteins via %s",
-                len(qid_to_seq), self._tool,
+                len(qid_to_seq),
+                self._tool,
             )
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=3600,
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=3600,
             )
             if result.returncode != 0:
                 logger.error(
                     "diamond batch failed (exit %d): %s",
-                    result.returncode, result.stderr[:400],
+                    result.returncode,
+                    result.stderr[:400],
                 )
                 return 0
 
@@ -514,9 +569,7 @@ class ConservationModule:
                 }
             else:
                 # Ran successfully, no homologs → legit score 0
-                self._precomputed[seq] = self._empty_result(
-                    status="no_hits", tool=self._tool
-                )
+                self._precomputed[seq] = self._empty_result(status="no_hits", tool=self._tool)
         logger.info(
             "ConservationModule.precompute_batch: cached %d proteins",
             len(qid_to_seq),
@@ -524,7 +577,8 @@ class ConservationModule:
         return len(qid_to_seq)
 
     def run(
-        self, tis_sites: list[TranslationInitiationSite],
+        self,
+        tis_sites: list[TranslationInitiationSite],
     ) -> list[TranslationInitiationSite]:
         """Annotate all TIS sites with conservation data.
 

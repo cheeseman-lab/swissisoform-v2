@@ -62,9 +62,7 @@ def normalize_tis_counts(
     """
     df = df.copy()
     if total_reads is None:
-        total_reads = (
-            df.drop_duplicates(["Chromosome", "Locus", "Strand"])[count_col].sum()
-        )
+        total_reads = df.drop_duplicates(["Chromosome", "Locus", "Strand"])[count_col].sum()
     df[output_col] = (df[count_col] / total_reads) * scale_factor
     return df
 
@@ -101,9 +99,7 @@ def identify_reference_transcripts(
     if transcript_support_levels is None:
         transcript_support_levels = ["1", "2", "3"]
 
-    logger.info(
-        "Selecting reference transcripts from %d TIS sites", len(df)
-    )
+    logger.info("Selecting reference transcripts from %d TIS sites", len(df))
 
     # Step 1: MANE_Select or allowed TSL
     mane_mask = df["MANE_Select"] == True  # noqa: E712
@@ -219,10 +215,7 @@ def filter_tis(
     # material, not hypotheses we test.  They must still pass Step 2
     # (reference transcript).
     if exempt_annotated:
-        exempt_mask = (
-            reference_mask
-            & tis_df["TisType"].astype(str).str.startswith("Annotated")
-        )
+        exempt_mask = reference_mask & tis_df["TisType"].astype(str).str.startswith("Annotated")
     else:
         exempt_mask = pd.Series(False, index=tis_df.index)
 
@@ -273,9 +266,7 @@ def filter_tis(
             subset = subset[~downstream_mask]
 
     # Mark excluded surviving TIS as UpstreamTIS
-    downstream_exclusion_idxs = surviving[
-        ~surviving.index.isin(tis_idx_to_keep)
-    ].index.tolist()
+    downstream_exclusion_idxs = surviving[~surviving.index.isin(tis_idx_to_keep)].index.tolist()
     tis_df["DropReason"] = _append_tag(
         tis_df["DropReason"],
         "UpstreamTIS",
@@ -287,9 +278,7 @@ def filter_tis(
     filtered_df = tis_df[inclusion_mask].reset_index(drop=True)
     dropped_df = tis_df[~inclusion_mask].reset_index(drop=True)
 
-    logger.info(
-        "Kept %d TIS, dropped %d TIS", len(filtered_df), len(dropped_df)
-    )
+    logger.info("Kept %d TIS, dropped %d TIS", len(filtered_df), len(dropped_df))
 
     if return_dropped:
         return filtered_df, dropped_df

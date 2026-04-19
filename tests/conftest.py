@@ -85,7 +85,8 @@ SYNTHETIC_TIS: list[TranslationInitiationSite] = [
         canonical_protein=CANONICAL_POS,
         isoform_protein="MRGSHHHHHGS" + CANONICAL_POS,
         diff_region=DifferentialRegion(
-            isoform_start=0, isoform_end=11,
+            isoform_start=0,
+            isoform_end=11,
             sequence="MRGSHHHHHGS",
         ),
         kozak_context="TCCACCATGAGGA",
@@ -109,7 +110,8 @@ SYNTHETIC_TIS: list[TranslationInitiationSite] = [
         canonical_protein=CANONICAL_POS,
         isoform_protein="LRRPPAGA" + CANONICAL_POS,
         diff_region=DifferentialRegion(
-            isoform_start=0, isoform_end=8,
+            isoform_start=0,
+            isoform_end=8,
             sequence="LRRPPAGA",
         ),
         kozak_context="AGCGTCCTGACTG",
@@ -133,7 +135,8 @@ SYNTHETIC_TIS: list[TranslationInitiationSite] = [
         canonical_protein=CANONICAL_NEG,
         isoform_protein="MAGTKLM" + CANONICAL_NEG,
         diff_region=DifferentialRegion(
-            isoform_start=0, isoform_end=7,
+            isoform_start=0,
+            isoform_end=7,
             sequence="MAGTKLM",
         ),
         kozak_context="GCCACCATGGCTG",
@@ -157,7 +160,8 @@ SYNTHETIC_TIS: list[TranslationInitiationSite] = [
         canonical_protein=CANONICAL_POS,
         isoform_protein=CANONICAL_POS[9:],
         diff_region=DifferentialRegion(
-            canonical_start=0, canonical_end=9,
+            canonical_start=0,
+            canonical_end=9,
             sequence="EEPQSDPSV",
         ),
         kozak_context="ACCGCCATGGTCA",
@@ -181,7 +185,8 @@ SYNTHETIC_TIS: list[TranslationInitiationSite] = [
         canonical_protein=CANONICAL_NEG,
         isoform_protein=CANONICAL_NEG[6:],
         diff_region=DifferentialRegion(
-            canonical_start=0, canonical_end=6,
+            canonical_start=0,
+            canonical_end=6,
             sequence="DLSALR",
         ),
         kozak_context="TGCACCATGCAGT",
@@ -205,7 +210,8 @@ SYNTHETIC_TIS: list[TranslationInitiationSite] = [
         canonical_protein=CANONICAL_MULTI,
         isoform_protein="MPKLQRST*",
         diff_region=DifferentialRegion(
-            isoform_start=0, isoform_end=9,
+            isoform_start=0,
+            isoform_end=9,
             sequence="MPKLQRST*",
         ),
         kozak_context="CCCGCCATGCCCA",
@@ -229,7 +235,8 @@ SYNTHETIC_TIS: list[TranslationInitiationSite] = [
         canonical_protein=CANONICAL_MULTI,
         isoform_protein="MFLGRT" + CANONICAL_MULTI,
         diff_region=DifferentialRegion(
-            isoform_start=0, isoform_end=6,
+            isoform_start=0,
+            isoform_end=6,
             sequence="MFLGRT",
         ),
         kozak_context="GCTGCCATGTTCG",

@@ -28,9 +28,7 @@ def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
 
     print("Loading shared reference tables (GTF + FASTAs)…")
-    reference = UpstreamReference.load(
-        gtf_path=GTF, genome_fasta=GENOME, protein_fasta=PROTEIN
-    )
+    reference = UpstreamReference.load(gtf_path=GTF, genome_fasta=GENOME, protein_fasta=PROTEIN)
 
     manifest = load_sample_manifest(SAMPLE_MANIFEST, REPLICATE_MANIFEST)
     cfg = PipelineConfig()

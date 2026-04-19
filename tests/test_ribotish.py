@@ -15,6 +15,7 @@ from swissisoform.io.ribotish import (
 # parse_genome_pos
 # ---------------------------------------------------------------------------
 
+
 class TestParseGenomePos:
     """Tests for parse_genome_pos helper."""
 
@@ -70,9 +71,7 @@ class TestLoadRibotishPredictions:
 
     def test_basic_load(self, tmp_path):
         tsv = tmp_path / "test.txt"
-        tsv.write_text(
-            RIBOTISH_HEADER + "\n" + _make_row() + "\n"
-        )
+        tsv.write_text(RIBOTISH_HEADER + "\n" + _make_row() + "\n")
         df = load_ribotish_predictions(tsv)
         assert len(df) == 1
         assert "Chromosome" in df.columns
@@ -81,28 +80,26 @@ class TestLoadRibotishPredictions:
 
     def test_locus_forward_strand(self, tmp_path):
         tsv = tmp_path / "test.txt"
-        tsv.write_text(
-            RIBOTISH_HEADER + "\n" + _make_row("chr1:100-200:+") + "\n"
-        )
+        tsv.write_text(RIBOTISH_HEADER + "\n" + _make_row("chr1:100-200:+") + "\n")
         df = load_ribotish_predictions(tsv)
         assert df.iloc[0]["Locus"] == 100
 
     def test_locus_reverse_strand(self, tmp_path):
         tsv = tmp_path / "test.txt"
-        tsv.write_text(
-            RIBOTISH_HEADER + "\n" + _make_row("chr1:944693-959240:-") + "\n"
-        )
+        tsv.write_text(RIBOTISH_HEADER + "\n" + _make_row("chr1:944693-959240:-") + "\n")
         df = load_ribotish_predictions(tsv)
         assert df.iloc[0]["Locus"] == 959240
 
     def test_multiple_rows(self, tmp_path):
         tsv = tmp_path / "test.txt"
-        rows = "\n".join([
-            RIBOTISH_HEADER,
-            _make_row("chr1:100-200:+"),
-            _make_row("chr2:300-400:-"),
-            _make_row("chrX:500-600:+"),
-        ])
+        rows = "\n".join(
+            [
+                RIBOTISH_HEADER,
+                _make_row("chr1:100-200:+"),
+                _make_row("chr2:300-400:-"),
+                _make_row("chrX:500-600:+"),
+            ]
+        )
         tsv.write_text(rows + "\n")
         df = load_ribotish_predictions(tsv)
         assert len(df) == 3
@@ -121,30 +118,33 @@ class TestLoadRibotishPredictions:
 # recategorize_tis_type
 # ---------------------------------------------------------------------------
 
+
 class TestRecategorizeTisType:
     """Tests for recategorize_tis_type."""
 
     @pytest.fixture()
     def tis_types_df(self) -> pd.DataFrame:
-        return pd.DataFrame({
-            "TisType": [
-                "Annotated",
-                "Truncated",
-                "Truncated:Known",
-                "Extended",
-                "Extended:CDSFrameOverlap",
-                "5'UTR",
-                "5'UTR:CDSFrameOverlap",
-                "5'UTR:Known",
-                "Novel",
-                "Novel:CDSFrameOverlap",
-                "Novel:Known",
-                "Internal",
-                "Internal:CDSFrameOverlap",
-                "3'UTR",
-                "3'UTR:CDSFrameOverlap",
-            ],
-        })
+        return pd.DataFrame(
+            {
+                "TisType": [
+                    "Annotated",
+                    "Truncated",
+                    "Truncated:Known",
+                    "Extended",
+                    "Extended:CDSFrameOverlap",
+                    "5'UTR",
+                    "5'UTR:CDSFrameOverlap",
+                    "5'UTR:Known",
+                    "Novel",
+                    "Novel:CDSFrameOverlap",
+                    "Novel:Known",
+                    "Internal",
+                    "Internal:CDSFrameOverlap",
+                    "3'UTR",
+                    "3'UTR:CDSFrameOverlap",
+                ],
+            }
+        )
 
     def test_annotated(self, tis_types_df):
         result = recategorize_tis_type(tis_types_df)

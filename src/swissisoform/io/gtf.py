@@ -48,23 +48,34 @@ def load_transcript_annotations(
             if len(fields) != 9:
                 continue
 
-            features_list.append({
-                "chromosome": fields[0],
-                "source": fields[1],
-                "feature_type": fields[2],
-                "start": int(fields[3]),
-                "end": int(fields[4]),
-                "strand": fields[6],
-                "attributes": fields[8],
-            })
+            features_list.append(
+                {
+                    "chromosome": fields[0],
+                    "source": fields[1],
+                    "feature_type": fields[2],
+                    "start": int(fields[3]),
+                    "end": int(fields[4]),
+                    "strand": fields[6],
+                    "attributes": fields[8],
+                }
+            )
 
     if not features_list:
         logger.warning("No features of type '%s' found in %s", feature_type, gtf_path)
         return pd.DataFrame(
             columns=[
-                "chromosome", "source", "feature_type", "start", "end", "strand",
-                "gene_id", "gene_type", "transcript_id", "transcript_type",
-                "transcript_support_level", "MANE_Select",
+                "chromosome",
+                "source",
+                "feature_type",
+                "start",
+                "end",
+                "strand",
+                "gene_id",
+                "gene_type",
+                "transcript_id",
+                "transcript_type",
+                "transcript_support_level",
+                "MANE_Select",
             ]
         )
 
@@ -85,9 +96,18 @@ def load_transcript_annotations(
     annotations["MANE_Select"] = annotations["attributes"].str.contains("MANE_Select")
 
     # Select and order output columns
-    output_columns = [
-        "chromosome", "source", "feature_type", "start", "end", "strand",
-    ] + extracted_columns + ["MANE_Select"]
+    output_columns = (
+        [
+            "chromosome",
+            "source",
+            "feature_type",
+            "start",
+            "end",
+            "strand",
+        ]
+        + extracted_columns
+        + ["MANE_Select"]
+    )
 
     logger.info("Loaded %d %s annotations", len(annotations), feature_type)
     return annotations[output_columns].reset_index(drop=True)
@@ -107,7 +127,13 @@ def load_cds_features(gtf_path: str) -> pd.DataFrame:
         transcript_id, feature_type.
     """
     output_columns = [
-        "chromosome", "start", "end", "strand", "gene_id", "transcript_id", "feature_type",
+        "chromosome",
+        "start",
+        "end",
+        "strand",
+        "gene_id",
+        "transcript_id",
+        "feature_type",
     ]
     features_list: list[dict] = []
 
@@ -132,15 +158,17 @@ def load_cds_features(gtf_path: str) -> pd.DataFrame:
             gene_id_match = _extract_attr(attrs, "gene_id")
             transcript_id_match = _extract_attr(attrs, "transcript_id")
 
-            features_list.append({
-                "chromosome": fields[0],
-                "start": int(fields[3]),
-                "end": int(fields[4]),
-                "strand": fields[6],
-                "gene_id": gene_id_match,
-                "transcript_id": transcript_id_match,
-                "feature_type": feat_type,
-            })
+            features_list.append(
+                {
+                    "chromosome": fields[0],
+                    "start": int(fields[3]),
+                    "end": int(fields[4]),
+                    "strand": fields[6],
+                    "gene_id": gene_id_match,
+                    "transcript_id": transcript_id_match,
+                    "feature_type": feat_type,
+                }
+            )
 
     if not features_list:
         logger.warning("No CDS/start_codon features found in %s", gtf_path)

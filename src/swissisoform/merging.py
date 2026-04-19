@@ -95,9 +95,7 @@ def pair_canonical_isoforms(
     )
 
     # Merge alternatives with their canonical match
-    paired_df = alternative_subset.merge(
-        canonical_subset, left_on=id_columns, right_index=True
-    )
+    paired_df = alternative_subset.merge(canonical_subset, left_on=id_columns, right_index=True)
 
     # Compute downstream metrics
     if "CanonicalStart" in paired_df.columns and "Start" in paired_df.columns:
@@ -108,8 +106,7 @@ def pair_canonical_isoforms(
 
     if "CanonicalTISCounts" in paired_df.columns and "TISCounts" in paired_df.columns:
         paired_df = paired_df.assign(
-            FoldChangeFromCanonical=lambda x: (x["TISCounts"] + 1)
-            / (x["CanonicalTISCounts"] + 1),
+            FoldChangeFromCanonical=lambda x: (x["TISCounts"] + 1) / (x["CanonicalTISCounts"] + 1),
             LogFoldChangeFromCanonical=lambda x: np.log2(x["FoldChangeFromCanonical"]),
         )
 

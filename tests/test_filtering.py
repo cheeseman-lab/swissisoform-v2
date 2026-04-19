@@ -69,16 +69,33 @@ class TestNormalizeTisCounts:
 
     def test_rpm_auto_total_deduplicates(self):
         """When total_reads is None, use deduplicated sum of TISCounts."""
-        df = _make_tis_df([
-            {"TISCounts": 100, "Chromosome": "chr1", "Locus": 100, "Strand": "+",
-             "Tid": "ENST00000000001.1"},
-            # Same genomic position, different transcript -- should be counted once
-            {"TISCounts": 100, "Chromosome": "chr1", "Locus": 100, "Strand": "+",
-             "Tid": "ENST00000000002.1"},
-            # Different genomic position
-            {"TISCounts": 200, "Chromosome": "chr1", "Locus": 200, "Strand": "+",
-             "Tid": "ENST00000000003.1"},
-        ])
+        df = _make_tis_df(
+            [
+                {
+                    "TISCounts": 100,
+                    "Chromosome": "chr1",
+                    "Locus": 100,
+                    "Strand": "+",
+                    "Tid": "ENST00000000001.1",
+                },
+                # Same genomic position, different transcript -- should be counted once
+                {
+                    "TISCounts": 100,
+                    "Chromosome": "chr1",
+                    "Locus": 100,
+                    "Strand": "+",
+                    "Tid": "ENST00000000002.1",
+                },
+                # Different genomic position
+                {
+                    "TISCounts": 200,
+                    "Chromosome": "chr1",
+                    "Locus": 200,
+                    "Strand": "+",
+                    "Tid": "ENST00000000003.1",
+                },
+            ]
+        )
         result = normalize_tis_counts(df)
         # Deduplicated total = 100 + 200 = 300
         expected_first = (100 / 300) * 1e6
@@ -100,43 +117,51 @@ class TestIdentifyReferenceTranscripts:
     """Tests for identify_reference_transcripts."""
 
     def test_returns_tids(self):
-        df = _make_tis_df([
-            {"Tid": "ENST1", "MANE_Select": True, "transcript_support_level": "1"},
-        ])
+        df = _make_tis_df(
+            [
+                {"Tid": "ENST1", "MANE_Select": True, "transcript_support_level": "1"},
+            ]
+        )
         result = identify_reference_transcripts(df)
         assert isinstance(result, list)
         assert "ENST1" in result
 
     def test_filters_by_tsl(self):
-        df = _make_tis_df([
-            {"Tid": "ENST1", "MANE_Select": False, "transcript_support_level": "1"},
-            {"Tid": "ENST2", "MANE_Select": False, "transcript_support_level": "5"},
-        ])
+        df = _make_tis_df(
+            [
+                {"Tid": "ENST1", "MANE_Select": False, "transcript_support_level": "1"},
+                {"Tid": "ENST2", "MANE_Select": False, "transcript_support_level": "5"},
+            ]
+        )
         result = identify_reference_transcripts(df, transcript_support_levels=["1", "2", "3"])
         assert "ENST1" in result
         assert "ENST2" not in result
 
     def test_respects_mane_select(self):
         """MANE_Select transcripts should be kept regardless of TSL."""
-        df = _make_tis_df([
-            {"Tid": "ENST1", "MANE_Select": True, "transcript_support_level": "5"},
-        ])
+        df = _make_tis_df(
+            [
+                {"Tid": "ENST1", "MANE_Select": True, "transcript_support_level": "5"},
+            ]
+        )
         result = identify_reference_transcripts(df, transcript_support_levels=["1"])
         assert "ENST1" in result
 
     def test_filters_by_significance(self):
-        df = _make_tis_df([
-            {"Tid": "ENST1", "MANE_Select": True, "TISPvalue": 0.5},
-        ])
-        result = identify_reference_transcripts(
-            df, tis_enrichment_max_p=0.01
+        df = _make_tis_df(
+            [
+                {"Tid": "ENST1", "MANE_Select": True, "TISPvalue": 0.5},
+            ]
         )
+        result = identify_reference_transcripts(df, tis_enrichment_max_p=0.01)
         assert "ENST1" not in result
 
     def test_filters_by_min_counts(self):
-        df = _make_tis_df([
-            {"Tid": "ENST1", "MANE_Select": True, "TISCounts": 5},
-        ])
+        df = _make_tis_df(
+            [
+                {"Tid": "ENST1", "MANE_Select": True, "TISCounts": 5},
+            ]
+        )
         result = identify_reference_transcripts(df, min_tis_counts=10)
         assert "ENST1" not in result
 
@@ -151,37 +176,63 @@ class TestFilterTis:
 
     def _make_standard_df(self) -> pd.DataFrame:
         """Build a DataFrame with a mix of passing and failing TIS."""
-        return _make_tis_df([
-            # Passes all filters
-            {
-                "Tid": "ENST1", "MANE_Select": True,
-                "TISCounts": 50, "NormTISCounts": 1.0,
-                "TISPvalue": 0.001, "RiboPvalue": 0.001, "FisherQvalue": 0.01,
-                "TisType": "Annotated", "Start": 10, "GenomePos": "chr1:100-200:+",
-            },
-            # Low normalized counts
-            {
-                "Tid": "ENST1", "MANE_Select": True,
-                "TISCounts": 1, "NormTISCounts": 0.01,
-                "TISPvalue": 0.001, "RiboPvalue": 0.001, "FisherQvalue": 0.01,
-                "TisType": "Extended", "Start": 50, "GenomePos": "chr1:150-250:+",
-            },
-            # Not significant
-            {
-                "Tid": "ENST2", "MANE_Select": True,
-                "TISCounts": 50, "NormTISCounts": 1.0,
-                "TISPvalue": 0.5, "RiboPvalue": 0.001, "FisherQvalue": 0.01,
-                "TisType": "Extended", "Start": 10, "GenomePos": "chr2:100-200:+",
-            },
-            # Not reference transcript
-            {
-                "Tid": "ENST3", "MANE_Select": False,
-                "transcript_support_level": "5",
-                "TISCounts": 50, "NormTISCounts": 1.0,
-                "TISPvalue": 0.001, "RiboPvalue": 0.001, "FisherQvalue": 0.01,
-                "TisType": "Extended", "Start": 10, "GenomePos": "chr3:100-200:+",
-            },
-        ])
+        return _make_tis_df(
+            [
+                # Passes all filters
+                {
+                    "Tid": "ENST1",
+                    "MANE_Select": True,
+                    "TISCounts": 50,
+                    "NormTISCounts": 1.0,
+                    "TISPvalue": 0.001,
+                    "RiboPvalue": 0.001,
+                    "FisherQvalue": 0.01,
+                    "TisType": "Annotated",
+                    "Start": 10,
+                    "GenomePos": "chr1:100-200:+",
+                },
+                # Low normalized counts
+                {
+                    "Tid": "ENST1",
+                    "MANE_Select": True,
+                    "TISCounts": 1,
+                    "NormTISCounts": 0.01,
+                    "TISPvalue": 0.001,
+                    "RiboPvalue": 0.001,
+                    "FisherQvalue": 0.01,
+                    "TisType": "Extended",
+                    "Start": 50,
+                    "GenomePos": "chr1:150-250:+",
+                },
+                # Not significant
+                {
+                    "Tid": "ENST2",
+                    "MANE_Select": True,
+                    "TISCounts": 50,
+                    "NormTISCounts": 1.0,
+                    "TISPvalue": 0.5,
+                    "RiboPvalue": 0.001,
+                    "FisherQvalue": 0.01,
+                    "TisType": "Extended",
+                    "Start": 10,
+                    "GenomePos": "chr2:100-200:+",
+                },
+                # Not reference transcript
+                {
+                    "Tid": "ENST3",
+                    "MANE_Select": False,
+                    "transcript_support_level": "5",
+                    "TISCounts": 50,
+                    "NormTISCounts": 1.0,
+                    "TISPvalue": 0.001,
+                    "RiboPvalue": 0.001,
+                    "FisherQvalue": 0.01,
+                    "TisType": "Extended",
+                    "Start": 10,
+                    "GenomePos": "chr3:100-200:+",
+                },
+            ]
+        )
 
     def test_returns_filtered_and_dropped(self):
         df = self._make_standard_df()
@@ -197,42 +248,61 @@ class TestFilterTis:
     def test_drops_non_reference(self):
         df = self._make_standard_df()
         _, dropped = filter_tis(df, return_dropped=True)
-        non_ref = dropped[
-            dropped["DropReason"].str.contains("NotReferenceTranscript", na=False)
-        ]
+        non_ref = dropped[dropped["DropReason"].str.contains("NotReferenceTranscript", na=False)]
         assert len(non_ref) >= 1
 
     def test_keeps_annotated_sites(self):
         """Annotated TIS should survive filtering when they pass basic thresholds."""
-        df = _make_tis_df([
-            {
-                "Tid": "ENST1", "MANE_Select": True,
-                "TISCounts": 50, "NormTISCounts": 1.0,
-                "TISPvalue": 0.001, "RiboPvalue": 0.001, "FisherQvalue": 0.01,
-                "TisType": "Annotated", "Start": 10, "GenomePos": "chr1:100-200:+",
-            },
-        ])
+        df = _make_tis_df(
+            [
+                {
+                    "Tid": "ENST1",
+                    "MANE_Select": True,
+                    "TISCounts": 50,
+                    "NormTISCounts": 1.0,
+                    "TISPvalue": 0.001,
+                    "RiboPvalue": 0.001,
+                    "FisherQvalue": 0.01,
+                    "TisType": "Annotated",
+                    "Start": 10,
+                    "GenomePos": "chr1:100-200:+",
+                },
+            ]
+        )
         filtered = filter_tis(df)
         assert len(filtered) == 1
         assert "Annotated" in filtered.iloc[0]["TisType"]
 
     def test_distance_deduplication(self):
         """Two TIS within 30nt on same transcript: only the higher-count one survives."""
-        df = _make_tis_df([
-            {
-                "Tid": "ENST1", "MANE_Select": True,
-                "TISCounts": 100, "NormTISCounts": 5.0,
-                "TISPvalue": 0.001, "RiboPvalue": 0.001, "FisherQvalue": 0.01,
-                "TisType": "Extended", "Start": 10, "GenomePos": "chr1:100-200:+",
-            },
-            {
-                "Tid": "ENST1", "MANE_Select": True,
-                "TISCounts": 50, "NormTISCounts": 2.0,
-                "TISPvalue": 0.001, "RiboPvalue": 0.001, "FisherQvalue": 0.01,
-                "TisType": "Truncated", "Start": 20,  # within 30nt of Start=10
-                "GenomePos": "chr1:110-200:+",
-            },
-        ])
+        df = _make_tis_df(
+            [
+                {
+                    "Tid": "ENST1",
+                    "MANE_Select": True,
+                    "TISCounts": 100,
+                    "NormTISCounts": 5.0,
+                    "TISPvalue": 0.001,
+                    "RiboPvalue": 0.001,
+                    "FisherQvalue": 0.01,
+                    "TisType": "Extended",
+                    "Start": 10,
+                    "GenomePos": "chr1:100-200:+",
+                },
+                {
+                    "Tid": "ENST1",
+                    "MANE_Select": True,
+                    "TISCounts": 50,
+                    "NormTISCounts": 2.0,
+                    "TISPvalue": 0.001,
+                    "RiboPvalue": 0.001,
+                    "FisherQvalue": 0.01,
+                    "TisType": "Truncated",
+                    "Start": 20,  # within 30nt of Start=10
+                    "GenomePos": "chr1:110-200:+",
+                },
+            ]
+        )
         filtered, dropped = filter_tis(df, return_dropped=True)
         assert len(filtered) == 1
         assert filtered.iloc[0]["NormTISCounts"] == pytest.approx(5.0)
@@ -243,21 +313,34 @@ class TestFilterTis:
 
         When both are within the distance buffer, annotated wins.
         """
-        df = _make_tis_df([
-            {
-                "Tid": "ENST1", "MANE_Select": True,
-                "TISCounts": 50, "NormTISCounts": 2.0,
-                "TISPvalue": 0.001, "RiboPvalue": 0.001, "FisherQvalue": 0.01,
-                "TisType": "Annotated", "Start": 10, "GenomePos": "chr1:100-200:+",
-            },
-            {
-                "Tid": "ENST1", "MANE_Select": True,
-                "TISCounts": 200, "NormTISCounts": 10.0,
-                "TISPvalue": 0.001, "RiboPvalue": 0.001, "FisherQvalue": 0.01,
-                "TisType": "Extended", "Start": 15,  # within 30nt
-                "GenomePos": "chr1:105-200:+",
-            },
-        ])
+        df = _make_tis_df(
+            [
+                {
+                    "Tid": "ENST1",
+                    "MANE_Select": True,
+                    "TISCounts": 50,
+                    "NormTISCounts": 2.0,
+                    "TISPvalue": 0.001,
+                    "RiboPvalue": 0.001,
+                    "FisherQvalue": 0.01,
+                    "TisType": "Annotated",
+                    "Start": 10,
+                    "GenomePos": "chr1:100-200:+",
+                },
+                {
+                    "Tid": "ENST1",
+                    "MANE_Select": True,
+                    "TISCounts": 200,
+                    "NormTISCounts": 10.0,
+                    "TISPvalue": 0.001,
+                    "RiboPvalue": 0.001,
+                    "FisherQvalue": 0.01,
+                    "TisType": "Extended",
+                    "Start": 15,  # within 30nt
+                    "GenomePos": "chr1:105-200:+",
+                },
+            ]
+        )
         filtered = filter_tis(df)
         # Annotated should be kept, higher-count Extended excluded
         assert len(filtered) == 1
@@ -265,21 +348,34 @@ class TestFilterTis:
 
     def test_distance_dedup_keeps_distant_tis(self):
         """Two TIS more than 30nt apart should both survive."""
-        df = _make_tis_df([
-            {
-                "Tid": "ENST1", "MANE_Select": True,
-                "TISCounts": 100, "NormTISCounts": 5.0,
-                "TISPvalue": 0.001, "RiboPvalue": 0.001, "FisherQvalue": 0.01,
-                "TisType": "Extended", "Start": 10, "GenomePos": "chr1:100-200:+",
-            },
-            {
-                "Tid": "ENST1", "MANE_Select": True,
-                "TISCounts": 50, "NormTISCounts": 2.0,
-                "TISPvalue": 0.001, "RiboPvalue": 0.001, "FisherQvalue": 0.01,
-                "TisType": "Truncated", "Start": 100,  # > 30nt away
-                "GenomePos": "chr1:190-290:+",
-            },
-        ])
+        df = _make_tis_df(
+            [
+                {
+                    "Tid": "ENST1",
+                    "MANE_Select": True,
+                    "TISCounts": 100,
+                    "NormTISCounts": 5.0,
+                    "TISPvalue": 0.001,
+                    "RiboPvalue": 0.001,
+                    "FisherQvalue": 0.01,
+                    "TisType": "Extended",
+                    "Start": 10,
+                    "GenomePos": "chr1:100-200:+",
+                },
+                {
+                    "Tid": "ENST1",
+                    "MANE_Select": True,
+                    "TISCounts": 50,
+                    "NormTISCounts": 2.0,
+                    "TISPvalue": 0.001,
+                    "RiboPvalue": 0.001,
+                    "FisherQvalue": 0.01,
+                    "TisType": "Truncated",
+                    "Start": 100,  # > 30nt away
+                    "GenomePos": "chr1:190-290:+",
+                },
+            ]
+        )
         filtered = filter_tis(df)
         assert len(filtered) == 2
 
@@ -298,10 +394,15 @@ class TestExemptAnnotated:
 
     def _base_row(self, **overrides) -> dict:
         row = {
-            "Tid": "ENST_REF", "MANE_Select": True,
-            "TISCounts": 100, "NormTISCounts": 5.0,
-            "TISPvalue": 0.001, "RiboPvalue": 0.001, "FisherQvalue": 0.01,
-            "TisType": "Annotated", "Start": 10,
+            "Tid": "ENST_REF",
+            "MANE_Select": True,
+            "TISCounts": 100,
+            "NormTISCounts": 5.0,
+            "TISPvalue": 0.001,
+            "RiboPvalue": 0.001,
+            "FisherQvalue": 0.01,
+            "TisType": "Annotated",
+            "Start": 10,
             "GenomePos": "chr1:100-200:+",
         }
         row.update(overrides)
@@ -309,14 +410,19 @@ class TestExemptAnnotated:
 
     def test_exempt_annotated_keeps_nonsig_annotated(self):
         """An Annotated row that fails significance survives when
-        exempt_annotated=True."""
-        df = _make_tis_df([
-            self._base_row(
-                # Fails all three significance filters
-                TISPvalue=0.5, RiboPvalue=0.5, FisherQvalue=0.5,
-                NormTISCounts=0.001,  # Also fails count filter
-            ),
-        ])
+        exempt_annotated=True.
+        """
+        df = _make_tis_df(
+            [
+                self._base_row(
+                    # Fails all three significance filters
+                    TISPvalue=0.5,
+                    RiboPvalue=0.5,
+                    FisherQvalue=0.5,
+                    NormTISCounts=0.001,  # Also fails count filter
+                ),
+            ]
+        )
         filtered, dropped = filter_tis(df, exempt_annotated=True, return_dropped=True)
         assert len(filtered) == 1, (
             f"exempt_annotated=True should keep nonsig Annotated; got "
@@ -326,12 +432,16 @@ class TestExemptAnnotated:
 
     def test_non_exempt_drops_nonsig_annotated(self):
         """Same row drops when exempt_annotated=False (upstream-reference-faithful)."""
-        df = _make_tis_df([
-            self._base_row(
-                TISPvalue=0.5, RiboPvalue=0.5, FisherQvalue=0.5,
-                NormTISCounts=0.001,
-            ),
-        ])
+        df = _make_tis_df(
+            [
+                self._base_row(
+                    TISPvalue=0.5,
+                    RiboPvalue=0.5,
+                    FisherQvalue=0.5,
+                    NormTISCounts=0.001,
+                ),
+            ]
+        )
         filtered, dropped = filter_tis(df, exempt_annotated=False, return_dropped=True)
         assert len(filtered) == 0
         assert len(dropped) == 1
@@ -341,14 +451,17 @@ class TestExemptAnnotated:
     def test_exempt_still_requires_reference_transcript(self):
         """Annotated row from a NON-reference transcript still drops with
         NotReferenceTranscript even when exempt_annotated=True.  Exemption
-        does not override the reference-transcript gate."""
-        df = _make_tis_df([
-            self._base_row(
-                Tid="ENST_BAD",
-                MANE_Select=False,
-                transcript_support_level="5",
-            ),
-        ])
+        does not override the reference-transcript gate.
+        """
+        df = _make_tis_df(
+            [
+                self._base_row(
+                    Tid="ENST_BAD",
+                    MANE_Select=False,
+                    transcript_support_level="5",
+                ),
+            ]
+        )
         filtered, dropped = filter_tis(df, exempt_annotated=True, return_dropped=True)
         assert len(filtered) == 0
         assert len(dropped) == 1
@@ -356,13 +469,18 @@ class TestExemptAnnotated:
 
     def test_exempt_does_not_exempt_alt_tis(self):
         """Non-Annotated rows still get filtered normally when
-        exempt_annotated=True."""
-        df = _make_tis_df([
-            self._base_row(
-                TisType="Extended",
-                TISPvalue=0.5, RiboPvalue=0.5, FisherQvalue=0.5,
-            ),
-        ])
+        exempt_annotated=True.
+        """
+        df = _make_tis_df(
+            [
+                self._base_row(
+                    TisType="Extended",
+                    TISPvalue=0.5,
+                    RiboPvalue=0.5,
+                    FisherQvalue=0.5,
+                ),
+            ]
+        )
         filtered, dropped = filter_tis(df, exempt_annotated=True, return_dropped=True)
         assert len(filtered) == 0
         assert len(dropped) == 1

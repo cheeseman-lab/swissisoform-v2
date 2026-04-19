@@ -99,12 +99,14 @@ class MassSpecModule:
                 if key in seen:
                     continue
                 seen.add(key)
-                peptides.append({
-                    "peptide": pep,
-                    "pos": start,
-                    "end": end,
-                    "length": pep_len,
-                })
+                peptides.append(
+                    {
+                        "peptide": pep,
+                        "pos": start,
+                        "end": end,
+                        "length": pep_len,
+                    }
+                )
 
         return peptides
 
@@ -190,14 +192,16 @@ class MassSpecModule:
             if validated is True:
                 validated_count += 1
 
-            hits.append({
-                "peptide": pep["peptide"],
-                "pos": pep["pos"],
-                "end": pep["end"],
-                "length": pep["length"],
-                "unique_to_isoform": unique,
-                "validated": validated,
-            })
+            hits.append(
+                {
+                    "peptide": pep["peptide"],
+                    "pos": pep["pos"],
+                    "end": pep["end"],
+                    "length": pep["length"],
+                    "unique_to_isoform": unique,
+                    "validated": validated,
+                }
+            )
 
         lengths = [h["length"] for h in hits]
         summary = {
@@ -210,9 +214,7 @@ class MassSpecModule:
 
         return {"hits": hits, "summary": summary}
 
-    def run(
-        self, tis_sites: list[TranslationInitiationSite]
-    ) -> list[TranslationInitiationSite]:
+    def run(self, tis_sites: list[TranslationInitiationSite]) -> list[TranslationInitiationSite]:
         """Compute mass spec annotations for each TIS site.
 
         Args:

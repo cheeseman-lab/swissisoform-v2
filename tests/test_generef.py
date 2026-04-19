@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from swissisoform.modules.generef import GeneRefModule, _ANNOTATION_KEYS
+from swissisoform.modules.generef import _ANNOTATION_KEYS, GeneRefModule
 
 
 class TestGeneRefModule:
@@ -19,9 +19,7 @@ class TestGeneRefModule:
         module = GeneRefModule(config)
         result = module.run(synthetic_tis)
         prefix = f"{module.MODULE_NAME}_"
-        expected_keys = [
-            col.removeprefix(prefix) for col in module.OUTPUT_COLUMNS
-        ]
+        expected_keys = [col.removeprefix(prefix) for col in module.OUTPUT_COLUMNS]
         for site in result:
             ann = site.isoform_annotations[module.MODULE_NAME]
             for key in expected_keys:

@@ -16,7 +16,6 @@ from swissisoform.config import (
 )
 from swissisoform.models import (
     CellLineExpression,
-    DifferentialRegion,
     Gene,
     ORFType,
     TranslationInitiationSite,
@@ -129,24 +128,41 @@ class TestTranslationInitiationSite:
     def test_annotations_dict_isolation(self):
         """Each site gets its own annotations dict."""
         site_a = TranslationInitiationSite(
-            tis_id="a", gene_name="G", transcript_id="T",
-            chrom="chr1", position=1, strand="+",
-            start_codon="ATG", orf_type=ORFType.UORF,
+            tis_id="a",
+            gene_name="G",
+            transcript_id="T",
+            chrom="chr1",
+            position=1,
+            strand="+",
+            start_codon="ATG",
+            orf_type=ORFType.UORF,
         )
         site_b = TranslationInitiationSite(
-            tis_id="b", gene_name="G", transcript_id="T",
-            chrom="chr1", position=2, strand="+",
-            start_codon="ATG", orf_type=ORFType.UORF,
+            tis_id="b",
+            gene_name="G",
+            transcript_id="T",
+            chrom="chr1",
+            position=2,
+            strand="+",
+            start_codon="ATG",
+            orf_type=ORFType.UORF,
         )
         site_a.isoform_annotations["mod1"] = {"score": 1.0}
         assert "mod1" not in site_b.isoform_annotations
 
     def test_statistical_fields(self):
         site = TranslationInitiationSite(
-            tis_id="x", gene_name="G", transcript_id="T",
-            chrom="chr1", position=1, strand="+",
-            start_codon="ATG", orf_type=ORFType.EXTENDED,
-            tis_pvalue=0.001, ribo_pvalue=0.01, fisher_qvalue=0.05,
+            tis_id="x",
+            gene_name="G",
+            transcript_id="T",
+            chrom="chr1",
+            position=1,
+            strand="+",
+            start_codon="ATG",
+            orf_type=ORFType.EXTENDED,
+            tis_pvalue=0.001,
+            ribo_pvalue=0.01,
+            fisher_qvalue=0.05,
         )
         assert site.tis_pvalue == 0.001
         assert site.ribo_pvalue == 0.01
@@ -195,9 +211,14 @@ class TestVariantAnnotation:
 
 def _make_site(tis_id: str = "site1") -> TranslationInitiationSite:
     return TranslationInitiationSite(
-        tis_id=tis_id, gene_name="G", transcript_id="T",
-        chrom="chr1", position=1, strand="+",
-        start_codon="ATG", orf_type=ORFType.ANNOTATED,
+        tis_id=tis_id,
+        gene_name="G",
+        transcript_id="T",
+        chrom="chr1",
+        position=1,
+        strand="+",
+        start_codon="ATG",
+        orf_type=ORFType.ANNOTATED,
     )
 
 
@@ -259,9 +280,7 @@ class TestConfig:
 
     def test_pipeline_defaults(self):
         pc = PipelineConfig()
-        assert pc.cell_lines == [
-            "HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"
-        ]
+        assert pc.cell_lines == ["HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"]
         assert pc.data_dir == Path("data/reference")
         assert pc.genome_fasta is None
         assert pc.gtf_path is None

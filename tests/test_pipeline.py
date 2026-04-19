@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import copy
-
-from swissisoform.config import PipelineConfig
-from swissisoform.models import Gene, TranslationInitiationSite
 from swissisoform.modules.biophysics import BiophysicsModule
 from swissisoform.modules.core_identity import CoreIdentityModule
 from swissisoform.modules.initiation_context import InitiationContextModule

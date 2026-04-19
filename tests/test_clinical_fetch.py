@@ -6,8 +6,6 @@ import json
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from swissisoform.clinical.fetch import VariantFetcher
 from swissisoform.config import PipelineConfig
 from swissisoform.modules.clinical import ClinicalModule
@@ -229,9 +227,7 @@ class TestVariantFetcher:
 
     @patch("swissisoform.clinical.fetch.requests.get")
     @patch("swissisoform.clinical.fetch.requests.post")
-    def test_fetch_gene_both_sources(
-        self, mock_post: MagicMock, mock_get: MagicMock
-    ) -> None:
+    def test_fetch_gene_both_sources(self, mock_post: MagicMock, mock_get: MagicMock) -> None:
         """Both gnomAD and ClinVar results are combined."""
         mock_post.return_value = _mock_response(MOCK_GNOMAD_RESPONSE)
         mock_get.side_effect = [
@@ -247,9 +243,7 @@ class TestVariantFetcher:
         assert len(hits) == 4  # 2 gnomAD + 2 ClinVar
 
     @patch("swissisoform.clinical.fetch.requests.post")
-    def test_gnomad_protein_pos_none_canonical_hint_in_metadata(
-        self, mock_post: MagicMock
-    ) -> None:
+    def test_gnomad_protein_pos_none_canonical_hint_in_metadata(self, mock_post: MagicMock) -> None:
         """protein_pos is None from the fetcher; the canonical-frame HGVSp
         position is preserved in metadata as ``hgvsp_canonical_hint``.
 
@@ -293,7 +287,6 @@ class TestVariantFetcher:
         assert hits[0]["protein_pos"] is None
         assert hits[0]["genomic_pos"] == 10000
         assert hits[0]["consequence"] == "5_prime_UTR_variant"
-
 
     def test_fetch_cosmic_from_parquet(self, tmp_path: Any) -> None:
         """COSMIC fetcher reads from local parquet and returns hits."""
@@ -379,9 +372,7 @@ class TestClinicalModuleFetch:
         ]
         mod = ClinicalModule(PipelineConfig())
 
-        result = mod.annotate(
-            "", gene_name="TP53", fetch_if_missing=True
-        )
+        result = mod.annotate("", gene_name="TP53", fetch_if_missing=True)
         # All variants filtered out because protein_pos is None without validator
         assert result["summary"]["total_variants"] == 0
         assert result["hits"] == []
@@ -394,7 +385,6 @@ class TestClinicalModuleFetch:
             assert v["protein_pos"] is None
         # The canonical-frame hints are preserved in metadata
         canonical_hints = [
-            v["metadata"].get("hgvsp_canonical_hint")
-            for v in mod.variant_cache["TP53"]
+            v["metadata"].get("hgvsp_canonical_hint") for v in mod.variant_cache["TP53"]
         ]
         assert any(h is not None for h in canonical_hints)
