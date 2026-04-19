@@ -30,14 +30,14 @@ from swissisoform.modules.base import validate_module_output
 
 class TestORFType:
     def test_enum_values(self):
-        assert ORFType.ANNOTATED.value == "Annotated"
-        assert ORFType.EXTENDED.value == "Extended"
-        assert ORFType.TRUNCATED.value == "Truncated"
-        assert ORFType.UORF.value == "uORF"
-        assert ORFType.UOORF.value == "uoORF"
+        assert ORFType.ANNOTATED.value == "annotated"
+        assert ORFType.EXTENDED.value == "extended"
+        assert ORFType.TRUNCATED.value == "truncated"
+        assert ORFType.UORF.value == "uorf"
+        assert ORFType.UOORF.value == "uoorf"
         assert ORFType.INTERNAL_OUT_OF_FRAME.value == "internal_oof"
         assert ORFType.THREE_UTR_ORF.value == "3utr_orf"
-        assert ORFType.ALT_ORF.value == "altORF"
+        assert ORFType.ALT_ORF.value == "alt_orf"
 
     def test_all_members(self):
         assert len(ORFType) == 8

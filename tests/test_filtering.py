@@ -288,3 +288,81 @@ class TestFilterTis:
         result = filter_tis(df, return_dropped=False)
         assert isinstance(result, pd.DataFrame)
         assert "DropReason" in result.columns
+
+
+class TestExemptAnnotated:
+    """``exempt_annotated`` flag: Annotated rows from reference transcripts
+    bypass count and significance drops but must still be on a reference
+    transcript.
+    """
+
+    def _base_row(self, **overrides) -> dict:
+        row = {
+            "Tid": "ENST_REF", "MANE_Select": True,
+            "TISCounts": 100, "NormTISCounts": 5.0,
+            "TISPvalue": 0.001, "RiboPvalue": 0.001, "FisherQvalue": 0.01,
+            "TisType": "Annotated", "Start": 10,
+            "GenomePos": "chr1:100-200:+",
+        }
+        row.update(overrides)
+        return row
+
+    def test_exempt_annotated_keeps_nonsig_annotated(self):
+        """An Annotated row that fails significance survives when
+        exempt_annotated=True."""
+        df = _make_tis_df([
+            self._base_row(
+                # Fails all three significance filters
+                TISPvalue=0.5, RiboPvalue=0.5, FisherQvalue=0.5,
+                NormTISCounts=0.001,  # Also fails count filter
+            ),
+        ])
+        filtered, dropped = filter_tis(df, exempt_annotated=True, return_dropped=True)
+        assert len(filtered) == 1, (
+            f"exempt_annotated=True should keep nonsig Annotated; got "
+            f"{len(filtered)} kept, {len(dropped)} dropped"
+        )
+        assert filtered.iloc[0]["TisType"].startswith("Annotated")
+
+    def test_non_exempt_drops_nonsig_annotated(self):
+        """Same row drops when exempt_annotated=False (upstream-reference-faithful)."""
+        df = _make_tis_df([
+            self._base_row(
+                TISPvalue=0.5, RiboPvalue=0.5, FisherQvalue=0.5,
+                NormTISCounts=0.001,
+            ),
+        ])
+        filtered, dropped = filter_tis(df, exempt_annotated=False, return_dropped=True)
+        assert len(filtered) == 0
+        assert len(dropped) == 1
+        reason = str(dropped.iloc[0]["DropReason"])
+        assert "NotSignificant" in reason or "LowReadcounts" in reason
+
+    def test_exempt_still_requires_reference_transcript(self):
+        """Annotated row from a NON-reference transcript still drops with
+        NotReferenceTranscript even when exempt_annotated=True.  Exemption
+        does not override the reference-transcript gate."""
+        df = _make_tis_df([
+            self._base_row(
+                Tid="ENST_BAD",
+                MANE_Select=False,
+                transcript_support_level="5",
+            ),
+        ])
+        filtered, dropped = filter_tis(df, exempt_annotated=True, return_dropped=True)
+        assert len(filtered) == 0
+        assert len(dropped) == 1
+        assert "NotReferenceTranscript" in str(dropped.iloc[0]["DropReason"])
+
+    def test_exempt_does_not_exempt_alt_tis(self):
+        """Non-Annotated rows still get filtered normally when
+        exempt_annotated=True."""
+        df = _make_tis_df([
+            self._base_row(
+                TisType="Extended",
+                TISPvalue=0.5, RiboPvalue=0.5, FisherQvalue=0.5,
+            ),
+        ])
+        filtered, dropped = filter_tis(df, exempt_annotated=True, return_dropped=True)
+        assert len(filtered) == 0
+        assert len(dropped) == 1

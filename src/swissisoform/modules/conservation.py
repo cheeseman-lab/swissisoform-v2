@@ -149,12 +149,32 @@ class ConservationModule:
         return 0
 
     @staticmethod
-    def _empty_result() -> dict[str, Any]:
-        """Return an empty annotation with score 0 and no hits.
+    def _empty_result(status: str = "no_hits", tool: str | None = None) -> dict[str, Any]:
+        """Return an empty annotation distinguishing "didn't run" from "no hits".
+
+        Args:
+            status: ``"no_hits"`` (ran, found no homologs → score 0) or
+                ``"not_run"`` (tool/db/config missing → score None).
+            tool: Optional tool name used (for diagnostic purposes).
 
         Returns:
-            Dict with ``"hits"`` (empty list) and ``"summary"`` (score 0).
+            Dict with ``"hits"`` (empty list) and ``"summary"`` with the
+            appropriate semantic for the failure mode.
         """
+        if status == "not_run":
+            return {
+                "hits": [],
+                "summary": {
+                    "conservation_score": None,  # couldn't compute
+                    "conservation_label": None,
+                    "best_pident": None,
+                    "best_evalue": None,
+                    "n_hits": None,
+                    "tool_used": tool,
+                    "status": "not_run",
+                },
+            }
+        # Legit "ran but found nothing" → score 0
         return {
             "hits": [],
             "summary": {
@@ -163,7 +183,8 @@ class ConservationModule:
                 "best_pident": None,
                 "best_evalue": None,
                 "n_hits": 0,
-                "tool_used": None,
+                "tool_used": tool,
+                "status": "no_hits",
             },
         }
 
@@ -221,6 +242,9 @@ class ConservationModule:
             Command list suitable for ``subprocess.run``.
         """
         if tool == "diamond":
+            # Default mode (not --sensitive) — ~10x faster and still
+            # appropriate for per-protein conservation lookup against a
+            # reviewed reference like SwissProt.
             return [
                 "diamond", "blastp",
                 "-q", query_fasta,
@@ -229,7 +253,8 @@ class ConservationModule:
                 "--outfmt", "6", "qseqid", "sseqid", "pident", "length",
                 "mismatch", "gapopen", "qstart", "qend", "sstart", "send",
                 "evalue", "bitscore",
-                "--sensitive",
+                "--max-target-seqs", "10",
+                "--quiet",
             ]
         if tool == "blastp":
             return [
@@ -254,7 +279,7 @@ class ConservationModule:
 
     def _run_search(
         self, protein: str, tool: str, db_path: str,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, Any]] | None:
         """Run a sequence search subprocess and parse results.
 
         Creates a temporary directory (in the current working directory per HPC
@@ -267,7 +292,9 @@ class ConservationModule:
             db_path: Path to the reference database.
 
         Returns:
-            List of hit dicts from ``_parse_blast_tabular``.
+            List of hit dicts on successful run (may be empty).  Returns
+            ``None`` if the subprocess failed — caller should treat this as
+            "could not run" rather than "no homologs found".
         """
         tmp_dir = tempfile.mkdtemp(dir=".")
         try:
@@ -289,10 +316,10 @@ class ConservationModule:
                         "%s search failed (exit %d): %s",
                         tool, result.returncode, result.stderr[:200],
                     )
-                    return []
+                    return None  # couldn't run — don't claim "no hits"
             except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
                 logger.warning("%s search error: %s", tool, exc)
-                return []
+                return None  # couldn't run — don't claim "no hits"
 
             return self._parse_blast_tabular(output_file)
         finally:
@@ -306,39 +333,53 @@ class ConservationModule:
     def annotate(self, protein: str) -> dict[str, Any]:
         """Annotate a single protein sequence with conservation data.
 
+        Distinguishes two "empty" outcomes:
+        - ``status="no_hits"``: search ran successfully but found no homologs.
+          ``conservation_score`` is ``0``.
+        - ``status="not_run"``: could not run (no tool, no db, no config,
+          subprocess failed). ``conservation_score`` is ``None``.
+
         Args:
             protein: Amino acid sequence (may include trailing ``'*'``).
 
         Returns:
             Dict with ``"hits"`` (list of alignment hit dicts) and
-            ``"summary"`` (conservation score, label, best metrics).
+            ``"summary"`` (conservation score, label, best metrics, status).
         """
-        # Empty protein
+        # Empty protein — treat as "no_hits" (nothing to search, legit empty)
         if not protein or not protein.rstrip("*"):
-            return self._empty_result()
+            return self._empty_result(status="no_hits", tool=self._tool)
 
-        # Pre-computed results
-        if protein in self._precomputed:
+        # Pre-computed results — strip stop codon for stable lookup key
+        stripped = protein.rstrip("*")
+        if stripped in self._precomputed:
+            return self._precomputed[stripped]
+        if protein in self._precomputed:  # backward compat for raw keys
             return self._precomputed[protein]
 
-        # No config or no db path
+        # No config or no db path → can't run
         if not self._config.conservation or not self._db_path:
-            return self._empty_result()
+            return self._empty_result(status="not_run")
 
-        # No tool available
+        # No tool available → can't run
         if not self._tool:
-            return self._empty_result()
+            return self._empty_result(status="not_run")
 
-        # Check db file exists
+        # Check db file exists → can't run
         if not self._db_path.exists():
             logger.warning("Database not found: %s", self._db_path)
-            return self._empty_result()
+            return self._empty_result(status="not_run", tool=self._tool)
 
-        # Run search
+        # Run search — returns None if subprocess failed, [] if ran with no hits
         hits = self._run_search(protein, self._tool, str(self._db_path))
 
+        if hits is None:
+            # subprocess error → can't claim "no conservation"
+            return self._empty_result(status="not_run", tool=self._tool)
+
         if not hits:
-            return self._empty_result()
+            # ran successfully, no homologs → legit score 0
+            return self._empty_result(status="no_hits", tool=self._tool)
 
         # Score from best hit (highest bitscore)
         best_hit = max(hits, key=lambda h: h["bitscore"])
@@ -353,8 +394,134 @@ class ConservationModule:
                 "best_evalue": best_hit["evalue"],
                 "n_hits": len(hits),
                 "tool_used": self._tool,
+                "status": "ok",
             },
         }
+
+    def precompute_batch(self, proteins: list[str] | set[str]) -> int:
+        """Run ONE DIAMOND call over a batch of proteins, populate cache.
+
+        ``annotate(protein)`` spawns a fresh DIAMOND subprocess per call,
+        which reloads the ~300 MB SwissProt DB every time — wildly slow
+        for pipelines with dozens or hundreds of unique proteins.  This
+        helper runs a single DIAMOND call on the whole batch, parses per-
+        query hits, and populates ``self._precomputed`` keyed by the exact
+        protein sequence.  Subsequent ``annotate()`` calls hit the cache.
+
+        Args:
+            proteins: Unique protein sequences to search.  Duplicates are
+                deduped; stop codons stripped.
+
+        Returns:
+            Number of unique proteins inserted into the precomputed cache
+            (both hits and no-hits).  Returns 0 if the module isn't
+            configured to run (no tool / no DB).
+        """
+        if not self._config.conservation or not self._db_path or not self._tool:
+            logger.warning(
+                "ConservationModule.precompute_batch: not configured to run "
+                "(tool=%r db=%r) — skipping", self._tool, self._db_path,
+            )
+            return 0
+        if not self._db_path.exists():
+            logger.warning("Database not found: %s", self._db_path)
+            return 0
+
+        # Dedup + strip stop codons
+        unique_seqs: list[str] = []
+        seen: set[str] = set()
+        for raw in proteins:
+            seq = (raw or "").rstrip("*")
+            if seq and seq not in seen:
+                seen.add(seq)
+                unique_seqs.append(seq)
+        if not unique_seqs:
+            return 0
+
+        qid_to_seq = {f"q{i}": s for i, s in enumerate(unique_seqs)}
+        tmp_dir = tempfile.mkdtemp(dir=".")
+        per_query: dict[str, list[dict[str, Any]]] = {qid: [] for qid in qid_to_seq}
+        try:
+            query_fasta = os.path.join(tmp_dir, "query.fasta")
+            with open(query_fasta, "w") as fh:
+                for qid, seq in qid_to_seq.items():
+                    fh.write(f">{qid}\n{seq}\n")
+            output_file = os.path.join(tmp_dir, "results.tsv")
+            cmd = self._build_search_cmd(
+                query_fasta, str(self._db_path), output_file, self._tool
+            )
+            logger.info(
+                "ConservationModule.precompute_batch: %d unique proteins via %s",
+                len(qid_to_seq), self._tool,
+            )
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=3600,
+            )
+            if result.returncode != 0:
+                logger.error(
+                    "diamond batch failed (exit %d): %s",
+                    result.returncode, result.stderr[:400],
+                )
+                return 0
+
+            # qseqid-aware parse (BLAST tabular format 6, first column = qseqid)
+            if os.path.exists(output_file):
+                with open(output_file) as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        parts = line.split("\t")
+                        if len(parts) < 12:
+                            continue
+                        try:
+                            qseqid = parts[0]
+                            hit = {
+                                "subject_id": parts[1],
+                                "pident": float(parts[2]),
+                                "length": int(parts[3]),
+                                "evalue": float(parts[10]),
+                                "bitscore": float(parts[11]),
+                                "qstart": int(parts[6]) - 1,
+                                "qend": int(parts[7]) - 1,
+                                "sstart": int(parts[8]),
+                                "send": int(parts[9]),
+                            }
+                        except (ValueError, IndexError):
+                            continue
+                        if qseqid in per_query:
+                            per_query[qseqid].append(hit)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        # Populate self._precomputed, keyed on the protein sequence
+        for qid, seq in qid_to_seq.items():
+            hits = per_query.get(qid, [])
+            if hits:
+                best = max(hits, key=lambda h: h["bitscore"])
+                score = self._score_pident(best["pident"])
+                self._precomputed[seq] = {
+                    "hits": hits,
+                    "summary": {
+                        "conservation_score": score,
+                        "conservation_label": CONSERVATION_LABELS.get(score, "Unknown"),
+                        "best_pident": best["pident"],
+                        "best_evalue": best["evalue"],
+                        "n_hits": len(hits),
+                        "tool_used": self._tool,
+                        "status": "ok",
+                    },
+                }
+            else:
+                # Ran successfully, no homologs → legit score 0
+                self._precomputed[seq] = self._empty_result(
+                    status="no_hits", tool=self._tool
+                )
+        logger.info(
+            "ConservationModule.precompute_batch: cached %d proteins",
+            len(qid_to_seq),
+        )
+        return len(qid_to_seq)
 
     def run(
         self, tis_sites: list[TranslationInitiationSite],
@@ -363,13 +530,6 @@ class ConservationModule:
 
         Thin wrapper that calls ``annotate()`` for each site's isoform protein
         and stores the result in ``site.isoform_annotations[MODULE_NAME]``.
-
-        Args:
-            tis_sites: Input sites to annotate.
-
-        Returns:
-            The same sites with ``isoform_annotations["conservation"]``
-            populated.
         """
         for site in tis_sites:
             site.isoform_annotations[self.MODULE_NAME] = self.annotate(

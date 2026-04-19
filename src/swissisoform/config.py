@@ -20,6 +20,9 @@ class FilterConfig:
         frame_test_max_p: Maximum p-value for reading frame test.
         combined_test_max_q: Maximum q-value for combined Fisher test.
         tis_distance_buffer: Minimum distance (nt) between TIS sites to merge.
+        exempt_annotated: If True, Annotated TIS from reference transcripts
+            skip count/significance drops (they are reference material, not
+            hypotheses).  Must still pass the reference-transcript filter.
     """
 
     transcript_support_levels: list[str] = field(default_factory=lambda: ["1", "2", "3"])
@@ -28,6 +31,7 @@ class FilterConfig:
     frame_test_max_p: float = 0.01
     combined_test_max_q: float = 0.05
     tis_distance_buffer: int = 30
+    exempt_annotated: bool = True
 
 
 @dataclass
@@ -82,18 +86,27 @@ class ClinicalConfig:
     """Configuration for clinical variant analysis (Module 9).
 
     Attributes:
-        gnomad_api_url: gnomAD GraphQL API endpoint.
-        clinvar_email: Email for NCBI E-utilities authentication.
-        clinvar_api_key: API key for NCBI E-utilities (optional, increases rate limit).
-        cosmic_db: Path to local COSMIC database file.
-        fetch_timeout: Timeout in seconds for HTTP requests to external APIs.
-        max_retries: Maximum number of retry attempts for failed requests.
-        retry_delay: Base delay in seconds between retries (exponential backoff).
+        gnomad_api_url: gnomAD GraphQL API endpoint (fallback when
+            ``gnomad_db`` is None).
+        gnomad_db: Path to local gnomAD bulk parquet built by
+            ``scripts/setup_databases.py gnomad``.  When set, the
+            fetcher reads from disk instead of calling the API.
+        clinvar_email: Email for NCBI E-utilities authentication
+            (fallback when ``clinvar_db`` is None).
+        clinvar_api_key: API key for NCBI E-utilities (fallback only).
+        clinvar_db: Path to local ClinVar parquet built by
+            ``scripts/setup_databases.py clinvar``.
+        cosmic_db: Path to local COSMIC parquet.
+        fetch_timeout: HTTP timeout (fallback paths only).
+        max_retries: Max retry attempts (fallback paths only).
+        retry_delay: Base delay for exponential backoff (fallback only).
     """
 
     gnomad_api_url: str = "https://gnomad.broadinstitute.org/api"
+    gnomad_db: Path | None = None
     clinvar_email: str = ""
     clinvar_api_key: str = ""
+    clinvar_db: Path | None = None
     cosmic_db: Path | None = None
     fetch_timeout: int = 30
     max_retries: int = 3

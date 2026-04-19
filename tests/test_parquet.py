@@ -75,7 +75,7 @@ class TestTisToDataframe:
 
     def test_orf_type_serialized_as_string(self) -> None:
         df = tis_to_dataframe([_make_tis()])
-        assert df["orf_type"].iloc[0] == "Annotated"
+        assert df["orf_type"].iloc[0] == "annotated"
 
     def test_has_expression_columns(self) -> None:
         df = tis_to_dataframe([_make_tis()])

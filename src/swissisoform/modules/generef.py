@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from swissisoform.config import PipelineConfig
-from swissisoform.models import TranslationInitiationSite
+from swissisoform.models import Gene, TranslationInitiationSite
 
 # Annotation keys produced by this module (without the MODULE_NAME prefix).
 _ANNOTATION_KEYS: list[str] = [
@@ -52,10 +52,43 @@ class GeneRefModule:
         """
         self.gene_annotations: dict[str, dict[str, Any]] = gene_annotations or {}
 
+    def annotate_by_gene(self, gene_name: str) -> dict[str, Any]:
+        """Return the gene-reference annotation dict for a given gene name.
+
+        Args:
+            gene_name: Gene symbol to look up.
+
+        Returns:
+            Dict with all keys in ``_ANNOTATION_KEYS``. Missing genes produce
+            a dict of all-None values.
+        """
+        gene_data = self.gene_annotations.get(gene_name, {})
+        return {key: gene_data.get(key) for key in _ANNOTATION_KEYS}
+
+    def annotate_gene(self, gene: Gene) -> dict[str, Any]:
+        """GeneModule protocol method — annotate a Gene object.
+
+        Used by ``AnnotationPipeline`` when GeneRefModule is registered as a
+        ``gene_module``.  Result is written to ``gene.gene_annotations``.
+
+        Args:
+            gene: A Gene object (uses ``gene.gene_name`` for the lookup).
+
+        Returns:
+            Same shape as ``annotate_by_gene``.
+        """
+        return self.annotate_by_gene(gene.gene_name)
+
     def run(
         self, tis_sites: list[TranslationInitiationSite]
     ) -> list[TranslationInitiationSite]:
         """Annotate each TIS site with gene-level reference data.
+
+        Backward-compatible wrapper: for standalone use (outside the pipeline
+        wiring), writes gene-level reference data to each TIS's
+        ``isoform_annotations["generef"]``.  Inside the pipeline wiring, this
+        should NOT be used — register the module as ``gene_modules=[...]``
+        so results land in ``gene.gene_annotations``.
 
         For each site, writes to ``site.isoform_annotations["generef"]`` with keys
         matching ``_ANNOTATION_KEYS``. Values come from ``gene_annotations``
@@ -68,8 +101,7 @@ class GeneRefModule:
             The same sites with ``isoform_annotations["generef"]`` populated.
         """
         for site in tis_sites:
-            gene_data = self.gene_annotations.get(site.gene_name, {})
-            site.isoform_annotations[self.MODULE_NAME] = {
-                key: gene_data.get(key) for key in _ANNOTATION_KEYS
-            }
+            site.isoform_annotations[self.MODULE_NAME] = self.annotate_by_gene(
+                site.gene_name
+            )
         return tis_sites

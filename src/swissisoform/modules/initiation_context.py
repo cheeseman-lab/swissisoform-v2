@@ -1,8 +1,7 @@
 """Module 2 — Initiation context: Kozak Hamming distance and GC content.
 
 Computes Kozak sequence context features for each TIS using the kozak_context
-field (a 13-nt string around the start codon). Ported from coTISja
-analysis_pipeline_helpers.py.
+field (a 13-nt string around the start codon).
 
 Implements the ``SiteModule`` protocol: per-site annotation logic lives in
 ``annotate_site()`` and ``run()`` is a thin loop wrapper.
@@ -92,9 +91,16 @@ class InitiationContextModule:
     Implements the ``SiteModule`` protocol: ``annotate_site()`` computes
     annotations for a single TIS, and ``run()`` loops over all sites.
 
+    Current outputs are derived entirely from ``site.kozak_context`` (a 13-nt
+    string around the start codon).  Additional upstream-sequence features
+    (``upstream_aug_count``, ``gc_window_50bp`` etc.) are NOT implemented in
+    this module; they require 5'UTR sequence from the genome FASTA, which is
+    not available here.  See future work to wire genome access through the
+    assembly layer.
+
     Attributes:
         MODULE_NAME: ``"initiation_context"``
-        OUTPUT_COLUMNS: Nine prefixed column names.
+        OUTPUT_COLUMNS: Five prefixed column names (Kozak-derived only).
         SCOPE: ``"C"`` (per-candidate site).
     """
 
@@ -105,10 +111,6 @@ class InitiationContextModule:
         "initiation_context_kozak_hamming_partial",
         "initiation_context_kozak_hamming_full",
         "initiation_context_utr5_gc_content",
-        "initiation_context_upstream_aug_count",
-        "initiation_context_upstream_non_aug_count",
-        "initiation_context_gc_window_50bp",
-        "initiation_context_gc_window_250bp",
     ]
     SCOPE: str = "C"
 
@@ -172,10 +174,6 @@ class InitiationContextModule:
             "kozak_hamming_partial": partial,
             "kozak_hamming_full": full,
             "utr5_gc_content": gc,
-            "upstream_aug_count": None,
-            "upstream_non_aug_count": None,
-            "gc_window_50bp": None,
-            "gc_window_250bp": None,
         }
 
     def run(

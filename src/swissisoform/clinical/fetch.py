@@ -2,12 +2,19 @@
 
 Synchronous wrappers using the ``requests`` library. No async dependencies.
 
-Important: ``protein_pos`` in hit dicts is a *hint* derived from the database's
-HGVSP annotation when available.  For alternative TIS sites (5' extensions,
-non-canonical start codons) the database HGVSP is relative to the **canonical**
-protein and will not capture mutations in the extension region. The clinical
-module must re-map genomic positions to isoform-specific protein coordinates
-using the TIS site's transcript model before downstream analysis.
+**protein_pos policy:** hit dicts always have ``protein_pos=None`` from the
+fetcher.  Database HGVSP strings are relative to the **canonical** transcript
+and would be wrong for alternative TIS sites (5' extensions, non-canonical
+starts).  The raw HGVSP string is preserved in ``hit["hgvsp"]`` and
+``hit["metadata"]["hgvsp_canonical_hint"]`` so downstream code can parse it
+if it has reason to trust canonical-frame coordinates, but the authoritative
+source of ``protein_pos`` is ``ConsequenceValidator``, which re-maps genomic
+positions to isoform-specific protein coordinates using the transcript model.
+
+Until a validator runs, ``ClinicalModule.annotate`` filters variants by
+``protein_pos is not None`` and will return zero hits — this is the correct
+behavior when we genuinely don't know where the variant falls in the isoform
+protein.
 """
 
 from __future__ import annotations
@@ -71,14 +78,40 @@ class VariantFetcher:
         clinvar_email: str = "",
         clinvar_api_key: str = "",
         cosmic_db: str | None = None,
+        gnomad_db: str | None = None,
+        clinvar_db: str | None = None,
         timeout: int = 30,
         max_retries: int = 3,
         retry_delay: float = 1.0,
     ) -> None:
+        """Initialize a VariantFetcher.
+
+        When the bulk-parquet paths (*gnomad_db*, *clinvar_db*, *cosmic_db*)
+        are provided, ``fetch_gene`` reads from local files via PyArrow
+        filter pushdown.  When omitted, it falls back to the live HTTP
+        sources (gnomAD GraphQL, NCBI E-utilities).  The HTTP fallbacks
+        are intended for tests and first-run situations where the setup
+        script hasn't populated the bulk artifacts yet.
+
+        Args:
+            gnomad_url: gnomAD GraphQL endpoint (used only when
+                *gnomad_db* is None).
+            clinvar_email, clinvar_api_key: NCBI E-utilities auth (used
+                only when *clinvar_db* is None).
+            cosmic_db: Path to the standardized COSMIC parquet built by
+                ``scripts/setup_databases.py cosmic``.
+            gnomad_db: Path to the gene-indexed gnomAD parquet built by
+                ``scripts/setup_databases.py gnomad``.
+            clinvar_db: Path to the ClinVar variant_summary parquet
+                built by ``scripts/setup_databases.py clinvar``.
+            timeout, max_retries, retry_delay: HTTP retry knobs.
+        """
         self.gnomad_url = gnomad_url
         self.clinvar_email = clinvar_email
         self.clinvar_api_key = clinvar_api_key
         self.cosmic_db = cosmic_db
+        self.gnomad_db = gnomad_db
+        self.clinvar_db = clinvar_db
         self.timeout = timeout
         self.max_retries = max_retries
         self.retry_delay = retry_delay
@@ -116,7 +149,57 @@ class VariantFetcher:
     # ------------------------------------------------------------------
 
     def _fetch_gnomad(self, gene_name: str) -> list[dict[str, Any]]:
-        """Fetch variants from gnomAD GraphQL API."""
+        """Fetch gnomAD variants for *gene_name*.
+
+        Prefers the local bulk parquet (``self.gnomad_db``) when configured;
+        falls back to the live GraphQL API otherwise.
+        """
+        if self.gnomad_db:
+            return self._fetch_gnomad_local(gene_name)
+        return self._fetch_gnomad_api(gene_name)
+
+    def _fetch_gnomad_local(self, gene_name: str) -> list[dict[str, Any]]:
+        """Read gnomAD variants for *gene_name* from the bulk parquet."""
+        import os
+
+        if not os.path.exists(self.gnomad_db):
+            logger.warning("gnomAD parquet not found at %s — returning empty", self.gnomad_db)
+            return []
+        try:
+            import pyarrow.dataset as ds
+
+            dataset = ds.dataset(self.gnomad_db, format="parquet")
+            table = dataset.to_table(filter=ds.field("gene_symbol") == gene_name)
+            df = table.to_pandas()
+        except Exception as exc:
+            logger.error("gnomAD parquet query for %s failed: %s", gene_name, exc)
+            return []
+
+        hits: list[dict[str, Any]] = []
+        for _, v in df.iterrows():
+            hgvsp = v.get("hgvsp") or None
+            hits.append({
+                "source": "gnomAD",
+                "variant_id": str(v["variant_id"]),
+                "chrom": f"chr{v['chrom']}" if not str(v["chrom"]).startswith("chr") else str(v["chrom"]),
+                "genomic_pos": int(v["pos"]),
+                "ref": str(v["ref"]),
+                "alt": str(v["alt"]),
+                "consequence": str(v["consequence"]),
+                "protein_pos": None,  # ConsequenceValidator is authoritative
+                "hgvsp": hgvsp,
+                "allele_frequency": float(v["allele_frequency"]) if v["allele_frequency"] is not None else None,
+                "clinical_significance": None,
+                "metadata": {
+                    "hgvsc": v.get("hgvsc") or None,
+                    "hgvsp_canonical_hint": parse_hgvsp_position(hgvsp),
+                    "protein_position_vep": v.get("protein_position") or None,
+                },
+            })
+        return hits
+
+    def _fetch_gnomad_api(self, gene_name: str) -> list[dict[str, Any]]:
+        """Fetch variants from gnomAD GraphQL API (fallback when no parquet)."""
         payload = {
             "query": GNOMAD_QUERY,
             "variables": {
@@ -140,11 +223,12 @@ class VariantFetcher:
             if freq is None or freq.get("af", 0) == 0:
                 continue
 
-            # protein_pos from hgvsp is a *hint* — only valid for the
-            # canonical isoform.  For 5' extensions / non-canonical starts
-            # this will be None and the caller must remap using
-            # genomic_pos + the isoform's transcript model.
-            protein_pos = parse_hgvsp_position(v.get("hgvsp"))
+            # protein_pos is intentionally None here — the HGVSP string is
+            # canonical-coords and would be wrong for alternative TIS.
+            # The canonical-frame hint is preserved in metadata for downstream
+            # validators / debugging.
+            hgvsp = v.get("hgvsp")
+            canonical_hint = parse_hgvsp_position(hgvsp)
 
             hits.append(
                 {
@@ -157,8 +241,8 @@ class VariantFetcher:
                     "ref": v.get("ref", ""),
                     "alt": v.get("alt", ""),
                     "consequence": v.get("consequence", ""),
-                    "protein_pos": protein_pos,
-                    "hgvsp": v.get("hgvsp"),
+                    "protein_pos": None,  # set only by ConsequenceValidator
+                    "hgvsp": hgvsp,
                     "allele_frequency": freq.get("af"),
                     "clinical_significance": None,
                     "metadata": {
@@ -166,6 +250,7 @@ class VariantFetcher:
                         "allele_number": freq.get("an"),
                         "homozygote_count": freq.get("ac_hom"),
                         "hgvsc": v.get("hgvsc"),
+                        "hgvsp_canonical_hint": canonical_hint,
                     },
                 }
             )
@@ -176,7 +261,78 @@ class VariantFetcher:
     # ------------------------------------------------------------------
 
     def _fetch_clinvar(self, gene_name: str) -> list[dict[str, Any]]:
-        """Fetch variants from ClinVar via NCBI E-utilities."""
+        """Fetch ClinVar variants for *gene_name*.
+
+        Prefers the local bulk parquet (``self.clinvar_db``) when configured;
+        falls back to the live NCBI E-utilities otherwise.
+        """
+        if self.clinvar_db:
+            return self._fetch_clinvar_local(gene_name)
+        return self._fetch_clinvar_api(gene_name)
+
+    def _fetch_clinvar_local(self, gene_name: str) -> list[dict[str, Any]]:
+        """Read ClinVar variants for *gene_name* from the bulk parquet."""
+        import os
+
+        if not os.path.exists(self.clinvar_db):
+            logger.warning("ClinVar parquet not found at %s — returning empty", self.clinvar_db)
+            return []
+        try:
+            import pyarrow.dataset as ds
+
+            dataset = ds.dataset(self.clinvar_db, format="parquet")
+            table = dataset.to_table(
+                filter=(ds.field("GeneSymbol") == gene_name)
+                & (ds.field("Assembly") == "GRCh38")
+            )
+            df = table.to_pandas()
+        except Exception as exc:
+            logger.error("ClinVar parquet query for %s failed: %s", gene_name, exc)
+            return []
+
+        import pandas as pd
+
+        def _str_or_empty(val: Any) -> str:
+            if val is None or (isinstance(val, float) and pd.isna(val)):
+                return ""
+            return str(val)
+
+        hits: list[dict[str, Any]] = []
+        for _, r in df.iterrows():
+            title = _str_or_empty(r.get("Name"))
+            hgvsp = _extract_protein_from_title(title) if title else None
+            ref = _str_or_empty(r.get("ReferenceAllele"))
+            alt = _str_or_empty(r.get("AlternateAllele"))
+            if not ref or not alt:
+                parsed_ref, parsed_alt = _extract_ref_alt_from_title(title) if title else ("", "")
+                ref = ref or parsed_ref
+                alt = alt or parsed_alt
+            chrom_raw = _str_or_empty(r.get("Chromosome"))
+            chrom = f"chr{chrom_raw}" if chrom_raw and not chrom_raw.startswith("chr") else chrom_raw
+            clin_sig = _str_or_empty(r.get("ClinicalSignificance")) or None
+
+            hits.append({
+                "source": "ClinVar",
+                "variant_id": f"ClinVar:{r.get('VariationID', '')}",
+                "chrom": chrom,
+                "genomic_pos": int(r["Start"]) if r.get("Start") else 0,
+                "ref": ref,
+                "alt": alt,
+                "consequence": str(r.get("Type") or ""),
+                "protein_pos": None,  # ConsequenceValidator is authoritative
+                "hgvsp": hgvsp,
+                "allele_frequency": None,
+                "clinical_significance": clin_sig,
+                "metadata": {
+                    "title": title,
+                    "rs_id": r.get("RS# (dbSNP)") or None,
+                    "hgvsp_canonical_hint": parse_hgvsp_position(hgvsp),
+                },
+            })
+        return hits
+
+    def _fetch_clinvar_api(self, gene_name: str) -> list[dict[str, Any]]:
+        """Fetch variants from ClinVar via NCBI E-utilities (fallback)."""
         # Step 1: esearch
         esearch_params: dict[str, Any] = {
             "db": "clinvar",
@@ -251,19 +407,22 @@ class VariantFetcher:
                     genomic_pos = loc.get("start", 0)
                     break
 
-        # Extract protein change from title
+        # Parse HGVSp (protein change) and HGVSc (coding change) from title
         hgvsp = _extract_protein_from_title(title)
-        protein_pos = parse_hgvsp_position(hgvsp)
+        ref, alt = _extract_ref_alt_from_title(title)
+        canonical_hint = parse_hgvsp_position(hgvsp)
 
         return {
             "source": "ClinVar",
             "variant_id": f"ClinVar:{uid}",
             "chrom": chrom,
             "genomic_pos": genomic_pos,
-            "ref": "",
-            "alt": "",
+            "ref": ref,
+            "alt": alt,
             "consequence": record.get("obj_type", ""),
-            "protein_pos": protein_pos,
+            # protein_pos left None — HGVSp is canonical-frame, not isoform.
+            # ConsequenceValidator is the authoritative source.
+            "protein_pos": None,
             "hgvsp": hgvsp,
             "allele_frequency": None,
             "clinical_significance": clin_sig or None,
@@ -272,6 +431,7 @@ class VariantFetcher:
                 "review_status": (record.get("clinical_significance") or {}).get(
                     "review_status", ""
                 ),
+                "hgvsp_canonical_hint": canonical_hint,
             },
         }
 
@@ -331,7 +491,7 @@ class VariantFetcher:
             seen.add(dedup_key)
 
             hgvsp = str(row.get("HGVSP", "") or "") or None
-            protein_pos = parse_hgvsp_position(hgvsp)
+            canonical_hint = parse_hgvsp_position(hgvsp)
 
             hits.append(
                 {
@@ -342,7 +502,9 @@ class VariantFetcher:
                     "ref": ref,
                     "alt": alt,
                     "consequence": str(row.get("MUTATION_DESCRIPTION", "") or ""),
-                    "protein_pos": protein_pos,
+                    # protein_pos left None — HGVSp is canonical-frame.
+                    # ConsequenceValidator is the authoritative source.
+                    "protein_pos": None,
                     "hgvsp": hgvsp,
                     "allele_frequency": None,
                     "clinical_significance": None,
@@ -351,6 +513,7 @@ class VariantFetcher:
                         "somatic_status": str(row.get("MUTATION_SOMATIC_STATUS", "") or ""),
                         "mutation_aa": str(row.get("MUTATION_AA", "") or ""),
                         "mutation_cds": str(row.get("MUTATION_CDS", "") or ""),
+                        "hgvsp_canonical_hint": canonical_hint,
                     },
                 }
             )
@@ -430,3 +593,40 @@ def _extract_protein_from_title(title: str) -> str | None:
     if match:
         return match.group().strip("()")
     return None
+
+
+def _extract_ref_alt_from_title(title: str) -> tuple[str, str]:
+    """Extract ref/alt bases from a ClinVar title's HGVSc notation.
+
+    Examples:
+        ``"NM_000546.6(TP53):c.215C>G (p.Pro72Arg)"`` -> ``("C", "G")``
+        ``"NM_xxx.1:c.100delA"`` -> ``("A", "")`` (deletion)
+        ``"NM_xxx.1:c.100insGT"`` -> ``("", "GT")`` (insertion)
+
+    Returns:
+        Tuple of (ref, alt). Either or both may be empty strings when the
+        title is a structural variant or the pattern isn't recognized.
+    """
+    import re
+
+    # Standard SNV: c.215C>G
+    snv = re.search(r"c\.\d+([ACGT])>([ACGT])", title)
+    if snv:
+        return snv.group(1), snv.group(2)
+
+    # Deletion: c.100delA or c.100_102del
+    delete = re.search(r"c\.\d+(?:_\d+)?del([ACGT]*)", title)
+    if delete:
+        return delete.group(1), ""
+
+    # Insertion: c.100insGT or c.100_101insGT
+    insert = re.search(r"c\.\d+(?:_\d+)?ins([ACGT]+)", title)
+    if insert:
+        return "", insert.group(1)
+
+    # Duplication: c.100dupA
+    dup = re.search(r"c\.\d+(?:_\d+)?dup([ACGT]*)", title)
+    if dup:
+        return "", dup.group(1)
+
+    return "", ""

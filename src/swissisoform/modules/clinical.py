@@ -10,6 +10,7 @@ Can operate in two modes:
 
 from __future__ import annotations
 
+import logging
 import re
 from collections import Counter
 from typing import Any
@@ -17,6 +18,8 @@ from typing import Any
 from swissisoform.clinical.validate import ConsequenceValidator
 from swissisoform.config import PipelineConfig
 from swissisoform.models import TranslationInitiationSite
+
+logger = logging.getLogger(__name__)
 
 
 def parse_hgvsp_position(hgvsp: str | None) -> int | None:
@@ -176,6 +179,12 @@ class ClinicalModule:
             cosmic_db=str(clinical_cfg.cosmic_db)
             if clinical_cfg and clinical_cfg.cosmic_db
             else None,
+            gnomad_db=str(clinical_cfg.gnomad_db)
+            if clinical_cfg and clinical_cfg.gnomad_db
+            else None,
+            clinvar_db=str(clinical_cfg.clinvar_db)
+            if clinical_cfg and clinical_cfg.clinvar_db
+            else None,
             timeout=clinical_cfg.fetch_timeout if clinical_cfg else 30,
             max_retries=clinical_cfg.max_retries if clinical_cfg else 3,
             retry_delay=clinical_cfg.retry_delay if clinical_cfg else 1.0,
@@ -199,6 +208,11 @@ class ClinicalModule:
         Looks up variants for the given gene in the variant cache, filters to
         those with protein-space positions, and builds a summary.
 
+        When *gene_name* is empty, this returns an empty result AND logs a
+        warning — an empty gene_name is almost always a wiring bug (e.g. the
+        pipeline forgot to pass gene context), not a legitimate "no variants"
+        case.
+
         Args:
             protein: Protein sequence (unused in cache-lookup mode, but part
                 of the ProteinModule interface).
@@ -210,12 +224,25 @@ class ClinicalModule:
             Dict with 'hits' (list of variant dicts with protein_pos != None)
             and 'summary' (counts by source, consequence, pathogenic).
         """
-        if gene_name and gene_name in self._variant_cache:
+        if not gene_name:
+            logger.warning(
+                "ClinicalModule.annotate called without gene_name — "
+                "returning empty. This is almost always a pipeline wiring "
+                "bug, not a legitimate empty result."
+            )
+            return {"hits": [], "summary": dict(_EMPTY_SUMMARY)}
+
+        if gene_name in self._variant_cache:
             raw_variants = self._variant_cache[gene_name]
-        elif gene_name and fetch_if_missing:
+        elif fetch_if_missing:
             raw_variants = self.fetch_variants(gene_name)
             self._variant_cache[gene_name] = raw_variants
         else:
+            logger.info(
+                "ClinicalModule: gene %s not in cache and fetch_if_missing=False "
+                "— returning empty",
+                gene_name,
+            )
             raw_variants = []
 
         if not raw_variants:

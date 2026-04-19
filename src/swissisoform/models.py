@@ -14,14 +14,14 @@ from typing import Any
 class ORFType(Enum):
     """Classification of open reading frame types relative to canonical CDS."""
 
-    ANNOTATED = "Annotated"
-    EXTENDED = "Extended"
-    TRUNCATED = "Truncated"
-    UORF = "uORF"
-    UOORF = "uoORF"
+    ANNOTATED = "annotated"
+    EXTENDED = "extended"
+    TRUNCATED = "truncated"
+    UORF = "uorf"
+    UOORF = "uoorf"
     INTERNAL_OUT_OF_FRAME = "internal_oof"
     THREE_UTR_ORF = "3utr_orf"
-    ALT_ORF = "altORF"
+    ALT_ORF = "alt_orf"
 
 
 def orf_type_from_ribotish(tis_type: str) -> ORFType:

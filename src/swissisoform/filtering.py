@@ -1,7 +1,9 @@
-"""TIS filtering pipeline ported from coTISja.
+"""TIS filtering pipeline for Ribo-TISH predictions.
 
 Provides RPM normalization, reference transcript identification, and a
 multi-step filtering pipeline that produces high-confidence TIS sites.
+Thresholds and ordering match the upstream reference filter this port is
+audited against.
 """
 
 from __future__ import annotations
@@ -139,6 +141,7 @@ def filter_tis(
     frame_test_max_p: float = 0.01,
     combined_test_max_q: float = 0.05,
     tis_distance_buffer: int = 30,
+    exempt_annotated: bool = True,
     return_dropped: bool = False,
 ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
     """Filter TIS sites through a 5-step pipeline.
@@ -163,6 +166,12 @@ def filter_tis(
         combined_test_max_q: Maximum FisherQvalue.
         tis_distance_buffer: Minimum distance (nt) between kept TIS on the
             same transcript.
+        exempt_annotated: If True (default), Annotated TIS from reference
+            transcripts skip the count and significance drops — they still
+            have to come from a reference transcript but are retained
+            regardless of re-detection p-values.  This preserves canonical
+            reference sequences downstream.  Set False for upstream-
+            reference-faithful behavior.
         return_dropped: If True, return (filtered, dropped) tuple.
 
     Returns:
@@ -205,19 +214,33 @@ def filter_tis(
         tis_df["DropReason"], "NotReferenceTranscript", target_mask=~reference_mask
     )
 
-    # Step 3: Mark low-count TIS
+    # When exempt_annotated, Annotated rows from reference transcripts are
+    # protected from count and significance filters — they are reference
+    # material, not hypotheses we test.  They must still pass Step 2
+    # (reference transcript).
+    if exempt_annotated:
+        exempt_mask = (
+            reference_mask
+            & tis_df["TisType"].astype(str).str.startswith("Annotated")
+        )
+    else:
+        exempt_mask = pd.Series(False, index=tis_df.index)
+
+    # Step 3: Mark low-count TIS (exempt Annotated when configured)
     support_mask = tis_df[count_col] >= min_normalized_counts
     tis_df["DropReason"] = _append_tag(
-        tis_df["DropReason"], "LowReadcounts", target_mask=~support_mask
+        tis_df["DropReason"], "LowReadcounts", target_mask=~support_mask & ~exempt_mask
     )
 
-    # Step 4: Mark non-significant TIS
+    # Step 4: Mark non-significant TIS (exempt Annotated when configured)
     enrichment_mask = tis_df["TISPvalue"] <= tis_enrichment_max_p
     frame_mask = tis_df["RiboPvalue"] <= frame_test_max_p
     combined_q_mask = tis_df["FisherQvalue"] <= combined_test_max_q
     significance_mask = enrichment_mask & frame_mask & combined_q_mask
     tis_df["DropReason"] = _append_tag(
-        tis_df["DropReason"], "NotSignificant", target_mask=~significance_mask
+        tis_df["DropReason"],
+        "NotSignificant",
+        target_mask=~significance_mask & ~exempt_mask,
     )
 
     # Step 5: Distance deduplication on surviving TIS

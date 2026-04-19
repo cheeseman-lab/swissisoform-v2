@@ -98,12 +98,19 @@ class TestMassSpecModule:
         assert result["summary"]["unique_peptides"] == len(unique_peps)
 
     def test_unique_to_isoform_no_canonical(self, config):
-        """Without canonical protein, all peptides should have unique_to_isoform=False."""
+        """Without canonical, unique_to_isoform is None (unknown) not False.
+
+        Silently defaulting to False would hide the fact that the caller
+        didn't provide a canonical, and would look identical to "peptide
+        is in canonical".
+        """
         module = MassSpecModule(config)
         protein = "MAAAAAALLLLLLLRKKKKKKKR*"
         result = module.annotate(protein)
         for hit in result["hits"]:
-            assert hit["unique_to_isoform"] is False
+            assert hit["unique_to_isoform"] is None
+        # Summary should also reflect "unknown"
+        assert result["summary"]["unique_peptides"] is None
 
     def test_validated_peptides(self, config):
         """Peptides in validated_peptides dict should be marked validated."""
@@ -121,15 +128,26 @@ class TestMassSpecModule:
         assert result["summary"]["validated_peptides"] >= 1
 
     def test_empty_protein(self, config):
-        """Empty string should return empty hits and zeroed summary."""
+        """Empty string returns empty hits; unique/validated are None (unknown)
+        when no canonical/gene was supplied."""
         module = MassSpecModule(config)
         result = module.annotate("")
         assert result["hits"] == []
         assert result["summary"]["total_peptides"] == 0
-        assert result["summary"]["unique_peptides"] == 0
-        assert result["summary"]["validated_peptides"] == 0
+        # No canonical given → uniqueness is unknown
+        assert result["summary"]["unique_peptides"] is None
+        # No gene given → validation is unknown
+        assert result["summary"]["validated_peptides"] is None
         assert result["summary"]["min_peptide_length"] is None
         assert result["summary"]["max_peptide_length"] is None
+
+    def test_empty_protein_with_canonical(self, config):
+        """Empty isoform with a canonical supplied: unique_peptides is 0 (known)."""
+        module = MassSpecModule(config)
+        result = module.annotate("", canonical_protein="MKKKKK*", gene_name="GENE")
+        assert result["hits"] == []
+        assert result["summary"]["unique_peptides"] == 0
+        assert result["summary"]["validated_peptides"] == 0
 
     def test_run_no_sites_lost(self, synthetic_tis, config):
         """run() must preserve all input sites."""

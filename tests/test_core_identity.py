@@ -36,7 +36,7 @@ class TestCoreIdentityModule:
         result = module.run(synthetic_tis)
         # First site is Annotated
         ann = result[0].isoform_annotations["core_identity"]
-        assert ann["orf_type"] == "Annotated"
+        assert ann["orf_type"] == "annotated"
         assert ann["differential_length_aa"] == 0
         assert ann["in_frame"] is True
         assert ann["large_truncation_warning"] is False
@@ -47,7 +47,7 @@ class TestCoreIdentityModule:
         result = module.run(synthetic_tis)
         # Second site is Extension with "MRGSHHHHHGS" differential
         ann = result[1].isoform_annotations["core_identity"]
-        assert ann["orf_type"] == "Extended"
+        assert ann["orf_type"] == "extended"
         assert ann["differential_length_aa"] == 11
         assert ann["in_frame"] is True
         assert ann["isoform_protein_length"] > ann["canonical_protein_length"]
@@ -58,7 +58,7 @@ class TestCoreIdentityModule:
         result = module.run(synthetic_tis)
         # Site index 4 is Truncated +strand, differential "EEPQSDPSV" = 9 aa
         ann = result[4].isoform_annotations["core_identity"]
-        assert ann["orf_type"] == "Truncated"
+        assert ann["orf_type"] == "truncated"
         assert ann["in_frame"] is True
         assert ann["large_truncation_warning"] is False
 
@@ -103,7 +103,7 @@ class TestCoreIdentityModule:
         result = module.run(synthetic_tis)
         # Site index 6 is uORF
         ann = result[6].isoform_annotations["core_identity"]
-        assert ann["orf_type"] == "uORF"
+        assert ann["orf_type"] == "uorf"
         assert ann["in_frame"] is False
 
     def test_protein_length_excludes_stop_codon(self, synthetic_tis, config):
@@ -159,7 +159,7 @@ class TestCoreIdentityModule:
         """annotate_site on extension site returns correct values."""
         module = CoreIdentityModule(config)
         ann = module.annotate_site(synthetic_tis[1])
-        assert ann["orf_type"] == "Extended"
+        assert ann["orf_type"] == "extended"
         assert ann["differential_length_aa"] == 11
         assert ann["in_frame"] is True
         assert ann["isoform_protein_length"] > ann["canonical_protein_length"]

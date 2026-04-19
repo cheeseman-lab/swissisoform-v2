@@ -6,10 +6,13 @@ optionally cross-referencing with pre-computed PepQuery2 validation results.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from swissisoform.config import PipelineConfig
 from swissisoform.models import TranslationInitiationSite
+
+logger = logging.getLogger(__name__)
 
 
 class MassSpecModule:
@@ -108,28 +111,46 @@ class MassSpecModule:
     def annotate(
         self,
         protein: str,
-        canonical_protein: str = "",
-        gene_name: str = "",
+        canonical_protein: str | None = None,
+        gene_name: str | None = None,
     ) -> dict[str, Any]:
         """Compute mass spectrometry annotations for a protein.
 
+        When *canonical_protein* is ``None`` (unknown), ``unique_to_isoform``
+        is set to ``None`` for every peptide — NOT ``False`` — because we
+        cannot tell whether a peptide is unique without the canonical digest.
+        Summary ``unique_peptides`` is also ``None`` in that case.
+
         Args:
             protein: Isoform protein sequence.
-            canonical_protein: Canonical protein sequence for uniqueness comparison.
-            gene_name: Gene name for PepQuery result lookup.
+            canonical_protein: Canonical protein sequence for uniqueness
+                comparison. ``None`` means "unknown" (output will not claim
+                uniqueness). Empty string is treated as unknown.
+            gene_name: Gene name for PepQuery result lookup. ``None``/empty
+                means "unknown" (no validation performed).
 
         Returns:
             Dict with keys 'hits' (list of peptide dicts) and 'summary' (stats dict).
         """
         isoform_peptides = self._tryptic_digest(protein)
 
+        # Normalize missing values — empty string is treated as "unknown"
+        canonical_known = bool(canonical_protein)
+        gene_known = bool(gene_name)
+
+        if not canonical_known:
+            logger.debug(
+                "MassSpec.annotate called without canonical_protein — "
+                "unique_to_isoform will be None (unknown) for every peptide"
+            )
+
         if not isoform_peptides:
             return {
                 "hits": [],
                 "summary": {
                     "total_peptides": 0,
-                    "unique_peptides": 0,
-                    "validated_peptides": 0,
+                    "unique_peptides": 0 if canonical_known else None,
+                    "validated_peptides": 0 if gene_known else None,
                     "min_peptide_length": None,
                     "max_peptide_length": None,
                 },
@@ -137,12 +158,14 @@ class MassSpecModule:
 
         # Build canonical peptide set for uniqueness check
         canonical_pep_seqs: set[str] = set()
-        if canonical_protein:
+        if canonical_known:
             canonical_digested = self._tryptic_digest(canonical_protein)
             canonical_pep_seqs = {p["peptide"] for p in canonical_digested}
 
         # Get validated peptide set for this gene
-        gene_validated: set[str] = self.validated_peptides.get(gene_name, set())
+        gene_validated: set[str] = (
+            self.validated_peptides.get(gene_name, set()) if gene_known else set()
+        )
 
         # Annotate each peptide
         hits: list[dict[str, Any]] = []
@@ -150,12 +173,21 @@ class MassSpecModule:
         validated_count = 0
 
         for pep in isoform_peptides:
-            unique = pep["peptide"] not in canonical_pep_seqs if canonical_protein else False
-            validated = pep["peptide"] in gene_validated if gene_validated else False
+            # unique is None (unknown) when canonical is missing — NOT False
+            if canonical_known:
+                unique = pep["peptide"] not in canonical_pep_seqs
+            else:
+                unique = None
 
-            if unique:
+            # validated is None (unknown) when gene is missing — NOT False
+            if gene_known:
+                validated = pep["peptide"] in gene_validated
+            else:
+                validated = None
+
+            if unique is True:
                 unique_count += 1
-            if validated:
+            if validated is True:
                 validated_count += 1
 
             hits.append({
@@ -170,8 +202,8 @@ class MassSpecModule:
         lengths = [h["length"] for h in hits]
         summary = {
             "total_peptides": len(hits),
-            "unique_peptides": unique_count,
-            "validated_peptides": validated_count,
+            "unique_peptides": unique_count if canonical_known else None,
+            "validated_peptides": validated_count if gene_known else None,
             "min_peptide_length": min(lengths),
             "max_peptide_length": max(lengths),
         }

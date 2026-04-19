@@ -247,16 +247,27 @@ class TestVariantFetcher:
         assert len(hits) == 4  # 2 gnomAD + 2 ClinVar
 
     @patch("swissisoform.clinical.fetch.requests.post")
-    def test_gnomad_protein_pos_from_hgvsp(self, mock_post: MagicMock) -> None:
-        """protein_pos is 0-indexed from hgvsp."""
+    def test_gnomad_protein_pos_none_canonical_hint_in_metadata(
+        self, mock_post: MagicMock
+    ) -> None:
+        """protein_pos is None from the fetcher; the canonical-frame HGVSp
+        position is preserved in metadata as ``hgvsp_canonical_hint``.
+
+        Rationale: HGVSp strings are canonical-transcript-relative and would
+        be wrong for alternative TIS. The authoritative source of
+        ``protein_pos`` is ``ConsequenceValidator``, which re-maps genomic
+        positions to the isoform's protein coordinates.
+        """
         mock_post.return_value = _mock_response(MOCK_GNOMAD_RESPONSE)
         fetcher = VariantFetcher(max_retries=1)
         hits = fetcher.fetch_gene("TP53", sources=["gnomad"])
 
-        # "p.Arg42Gly" -> protein_pos 41
-        assert hits[0]["protein_pos"] == 41
-        # "p.Ala60=" -> protein_pos 59
-        assert hits[1]["protein_pos"] == 59
+        # protein_pos is intentionally None — caller must validate
+        assert hits[0]["protein_pos"] is None
+        assert hits[1]["protein_pos"] is None
+        # Canonical-frame hint preserved in metadata
+        assert hits[0]["metadata"]["hgvsp_canonical_hint"] == 41
+        assert hits[1]["metadata"]["hgvsp_canonical_hint"] == 59
 
     @patch("swissisoform.clinical.fetch.requests.post")
     def test_gnomad_skips_zero_af(self, mock_post: MagicMock) -> None:
@@ -313,7 +324,11 @@ class TestVariantFetcher:
 
         assert len(hits) == 2  # only TP53, not BRCA1
         assert all(h["source"] == "COSMIC" for h in hits)
-        assert hits[0]["protein_pos"] == 71  # p.Pro72Arg → 0-indexed 71
+        # protein_pos from fetcher is None (HGVSp is canonical-frame only);
+        # authoritative value comes from ConsequenceValidator.
+        assert hits[0]["protein_pos"] is None
+        # Canonical-frame hint preserved in metadata
+        assert hits[0]["metadata"]["hgvsp_canonical_hint"] == 71
         assert hits[0]["genomic_pos"] == 7675088
         assert hits[0]["metadata"]["cosmic_sample_count"] == 100
 
@@ -346,10 +361,17 @@ class TestClinicalModuleFetch:
 
     @patch("swissisoform.clinical.fetch.requests.get")
     @patch("swissisoform.clinical.fetch.requests.post")
-    def test_annotate_with_fetch_if_missing(
+    def test_annotate_with_fetch_if_missing_no_validator(
         self, mock_post: MagicMock, mock_get: MagicMock
     ) -> None:
-        """annotate with fetch_if_missing=True fetches and caches variants."""
+        """Without a ConsequenceValidator, fetched variants have protein_pos=None
+        and annotate() filters them out.
+
+        This is the correct, honest behavior: the fetcher cannot know the
+        isoform-frame protein position from HGVSp alone (HGVSp is canonical-
+        frame), so without a validator we refuse to claim positions. The
+        raw variants are still cached for when a validator is attached.
+        """
         mock_post.return_value = _mock_response(MOCK_GNOMAD_RESPONSE)
         mock_get.side_effect = [
             _mock_response(MOCK_CLINVAR_ESEARCH),
@@ -360,11 +382,19 @@ class TestClinicalModuleFetch:
         result = mod.annotate(
             "", gene_name="TP53", fetch_if_missing=True
         )
-        # annotate() filters to variants with protein_pos != None.
-        # gnomAD: 2 variants (both have hgvsp -> protein_pos).
-        # ClinVar: 2 variants (both have protein change in title -> protein_pos).
-        assert result["summary"]["total_variants"] == 4
-        assert len(result["hits"]) == 4
+        # All variants filtered out because protein_pos is None without validator
+        assert result["summary"]["total_variants"] == 0
+        assert result["hits"] == []
 
-        # Should now be cached (raw variants, before filtering)
+        # But raw variants ARE cached (4 total: 2 gnomAD + 2 ClinVar)
         assert "TP53" in mod.variant_cache
+        assert len(mod.variant_cache["TP53"]) == 4
+        # And all have protein_pos=None (honest output)
+        for v in mod.variant_cache["TP53"]:
+            assert v["protein_pos"] is None
+        # The canonical-frame hints are preserved in metadata
+        canonical_hints = [
+            v["metadata"].get("hgvsp_canonical_hint")
+            for v in mod.variant_cache["TP53"]
+        ]
+        assert any(h is not None for h in canonical_hints)

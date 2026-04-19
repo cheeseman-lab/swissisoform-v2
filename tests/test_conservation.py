@@ -47,12 +47,15 @@ class TestConservationModule:
     """Tests for the ConservationModule."""
 
     def test_annotate_no_config(self, config_no_conservation):
-        """No conservation config -> empty hits, score 0, tool_used None."""
+        """No conservation config -> empty hits, score None (couldn't run),
+        status=not_run. Distinguishes from "ran and found nothing" (score 0)."""
         mod = ConservationModule(config_no_conservation)
         result = mod.annotate("MEEPQSDPSVEPPLSQETFSDLWKLLPENNVLSPLPS")
         assert result["hits"] == []
-        assert result["summary"]["conservation_score"] == 0
+        # score is None because we COULDN'T run, not because we found nothing
+        assert result["summary"]["conservation_score"] is None
         assert result["summary"]["tool_used"] is None
+        assert result["summary"]["status"] == "not_run"
 
     def test_annotate_precomputed(self, config_no_conservation):
         """Precomputed results are returned directly."""
@@ -177,7 +180,7 @@ class TestConservationModule:
         return_value=None,
     )
     def test_detect_tool_none(self, mock_detect):
-        """When no tool is available, annotate returns empty result."""
+        """When no tool is available, score is None (couldn't run)."""
         cfg = PipelineConfig(
             conservation=ConservationConfig(diamond_db=Path("/fake/db.dmnd")),
         )
@@ -185,7 +188,9 @@ class TestConservationModule:
         assert mod._tool is None
         result = mod.annotate("MEEPQSDPSVEPPLSQETFSDLWKLLPENNVLSPLPS")
         assert result["summary"]["tool_used"] is None
-        assert result["summary"]["conservation_score"] == 0
+        # score is None because we COULDN'T run — not "ran, found nothing" (0)
+        assert result["summary"]["conservation_score"] is None
+        assert result["summary"]["status"] == "not_run"
 
     @patch(
         "swissisoform.modules.conservation.ConservationModule._detect_tool",

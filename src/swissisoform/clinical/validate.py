@@ -371,7 +371,11 @@ class ConsequenceValidator:
             ref = variant.get("ref")
             alt = variant.get("alt")
 
-            if gpos is None or ref is None or alt is None:
+            # Treat empty string / zero / None as "missing" — for e.g. indels
+            # where one side is "" legitimately, we need a stricter check per
+            # variant type, but at this level both must be present and truthy
+            # for SNV validation to be meaningful.
+            if not gpos or ref is None or alt is None or (ref == "" and alt == ""):
                 continue
 
             result = self.validate_variant(transcript_id, gpos, ref, alt)
