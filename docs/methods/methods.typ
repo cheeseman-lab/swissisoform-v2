@@ -1,0 +1,668 @@
+#set document(
+  title: "SwissIsoform v2 — Methods",
+  author: "Matteo DiBernardo",
+)
+#set page(
+  paper: "us-letter",
+  margin: (x: 1in, y: 1in),
+  numbering: "1",
+)
+#set text(font: "New Computer Modern", size: 11pt, lang: "en")
+#set par(justify: true, leading: 0.65em, first-line-indent: 0em)
+#show heading: set block(above: 1.4em, below: 0.8em)
+#set heading(numbering: "1.1.1")
+
+#import "@preview/fletcher:0.5.8" as fletcher: diagram, node, edge
+
+#align(center)[
+  #text(size: 14pt, weight: "bold")[
+    Methods: systematic annotation of alternative translation initiation sites
+  ]
+  #v(0.2em)
+  #text(size: 10pt)[Draft — #datetime.today().display()]
+]
+#v(1em)
+
+#let stage(body, fill: rgb("#e8ecf7")) = box(
+  fill: fill,
+  stroke: 0.6pt,
+  inset: 8pt,
+  radius: 3pt,
+  width: 100%,
+  body,
+)
+
+#let mod(name, what, fill: rgb("#e8f5ea")) = box(
+  fill: fill,
+  stroke: 0.5pt,
+  inset: 6pt,
+  radius: 2pt,
+  width: 100%,
+  [#text(size: 8.5pt, weight: "bold")[#name] \ #text(size: 7.5pt)[#what]],
+)
+
+#figure(
+  {
+    set text(size: 9pt)
+    set par(leading: 0.4em, justify: false)
+
+    // ── Inputs row ─────────────────────────────────────────────────────
+    grid(
+      columns: (1fr, 1fr, 1fr),
+      column-gutter: 6pt,
+      stage(fill: rgb("#f3efe0"))[
+        *Ribosome profiling* \
+        #text(size: 8pt)[
+          Ribo-TISH `predict_all.txt` \
+          (6 cell lines, 21 columns/row) \
+          raw counts · p-values · AASeq
+        ]
+      ],
+      stage(fill: rgb("#f3efe0"))[
+        *RNA-seq depth* \
+        #text(size: 8pt)[
+          HTSeq-count (gene-level) \
+          matched replicates × 6 cell lines \
+          → total mapped reads for RPM
+        ]
+      ],
+      stage(fill: rgb("#f3efe0"))[
+        *Reference annotation* \
+        #text(size: 8pt)[
+          GENCODE v49 (GRCh38) \
+          primary-assembly FASTA \
+          GTF + protein FASTA
+        ]
+      ],
+    )
+
+    v(4pt)
+    align(center)[↓]
+    v(4pt)
+
+    // ── Upstream per-sample ────────────────────────────────────────────
+    stage[
+      *1. Per-sample upstream* (§1.1–1.3) #h(1fr) _one invocation per cell line_
+
+      #v(2pt)
+      #text(size: 8.5pt)[
+        TIS-type recategorization → RPM normalization against total mapped reads →
+        reference-transcript pre-filter (MANE Select or TSL ∈ {1, 2, 3}) →
+        mark non-reference / low-RPM / non-significant / distance-redundant events →
+        impute canonical starts from GENCODE CDS + start_codon + pc_translations →
+        drop transcripts still missing a canonical (`cds_start_NF`)
+      ]
+    ]
+
+    v(4pt)
+    align(center)[↓]
+    v(4pt)
+
+    // ── Cross-cell-line combine ────────────────────────────────────────
+    stage[
+      *2. Cross-cell-line combine* (§1.4)
+      #v(2pt)
+      #text(size: 8.5pt)[
+        Union of distinct (chromosome, position, strand, codon, transcript)
+        tuples across the six samples. Each tuple carries a vector of
+        per-cell-line expression metrics; zero counts fill non-observing
+        samples. Differential expression is deferred downstream.
+      ]
+    ]
+
+    v(4pt)
+    align(center)[↓]
+    v(4pt)
+
+    // ── Gene assembly ──────────────────────────────────────────────────
+    stage[
+      *3. Gene assembly* (§2)
+      #v(2pt)
+      #text(size: 8.5pt)[
+        One gene record per symbol. For each alternative TIS: select its
+        *transcript-specific canonical* (not the gene-level longest),
+        derive the *differential region* (N-terminal extension prefix,
+        N-terminal truncation prefix, or whole ORF for uORFs / altORFs),
+        extract the *13-nt Kozak window* (strand-aware, ATG at
+        positions 9–11), and attach per-cell-line expression.
+      ]
+    ]
+
+    v(4pt)
+    align(center)[↓]
+    v(4pt)
+
+    // ── Symmetric annotation — modules ─────────────────────────────────
+    stage(fill: rgb("#e6f3e8"))[
+      *4. Symmetric annotation* (§3–4) #h(1fr) _protein methods run on both canonical and isoform_
+
+      #v(4pt)
+
+      #text(size: 8pt, weight: "bold")[Protein-level methods] #h(0.5em)
+      #text(size: 7.5pt)[(run on canonical ×1 per gene AND on isoform ×1 per TIS)]
+
+      #v(3pt)
+      #grid(
+        columns: (1fr, 1fr, 1fr),
+        column-gutter: 4pt,
+        row-gutter: 4pt,
+        mod[Biophysics][18 descriptors: pI, GRAVY, molecular weight, net charge, instability, aromaticity, disorder (TOP-IDP), Shannon complexity, 4 LLPS components],
+        mod[Linear motifs][14 ELM-derived SLiM patterns (CDK / ATM / 14-3-3 / SH3 / PIP / RING / ZnF etc.) — positional hits + density],
+        mod[Subcellular localization][DeepLoc 2.1 (ESM-1b embeddings, Fast mode) in isolated env; batched FASTA for amortized ESM cost],
+        mod[Clinical variant burden][gnomAD v4.1 + ClinVar + COSMIC v102 via PyArrow pushdown; codon-level re-validation in isoform frame],
+        mod[Evolutionary conservation][DIAMOND v2.1 vs. UniProt SwissProt; hit count saturating at 9, `no_hits` vs. `not_run` distinguished],
+        mod[Proteomic detectability][In-silico tryptic digest (≤1 missed cleavage, 7–30 aa), uniqueness flag vs. canonical, optional PepQuery2 hit],
+      )
+
+      #v(8pt)
+
+      #grid(
+        columns: (2fr, 1fr),
+        column-gutter: 6pt,
+        align: top,
+        [
+          #text(size: 8pt, weight: "bold")[Site-level methods] #h(0.5em)
+          #text(size: 7.5pt)[(run ×1 per TIS)]
+          #v(3pt)
+          #grid(
+            columns: (1fr, 1fr),
+            column-gutter: 4pt,
+            mod(fill: rgb("#eef2f5"))[ORF classification][Ribo-TISH label, isoform/canonical lengths, in-frame flag],
+            mod(fill: rgb("#eef2f5"))[Kozak strength][Hamming distance to `gccgccRccATGG` under full, major, and partial weighting schemes; GC content],
+          )
+        ],
+        [
+          #text(size: 8pt, weight: "bold")[Gene-level methods] #h(0.5em)
+          #text(size: 7.5pt)[(×1 per gene)]
+          #v(3pt)
+          #mod(fill: rgb("#faf0ea"))[Gene reference][HGNC symbol, OMIM associations, GENCODE biotype — attached once per gene]
+        ],
+      )
+    ]
+
+    v(4pt)
+    align(center)[↓]
+    v(4pt)
+
+    // ── Output ────────────────────────────────────────────────────────
+    stage(fill: rgb("#f7e9e7"))[
+      *5. Differential annotation table* (§5)
+      #v(2pt)
+      #text(size: 8.5pt)[
+        One row per alternative TIS with identity columns (gene, transcript,
+        genomic coords, ORF type, Kozak), per-cell-line expression
+        (`expr_{cell_line}_{metric}`), and paired annotation columns
+        (`canonical_{method}_{field}`, `isoform_{method}_{field}`).
+        Canonical–isoform differentials are derived post-hoc from this table.
+      ]
+    ]
+  },
+  caption: [Overview of the SwissIsoform v2 annotation pipeline. Sand-colored
+  boxes denote external inputs and reference data; blue denotes per-sample
+  and cross-sample preprocessing; green denotes the symmetric canonical /
+  isoform annotation layer with its nine methods grouped by dispatch
+  protocol (six protein-level, two site-level, one gene-level); red denotes
+  the final differential-annotation table.],
+) <fig:overview>
+
+#v(1em)
+
+= Translation initiation site identification
+
+== Ribosome-profiling data and input preparation
+
+Candidate translation initiation sites (TIS) were identified with
+Ribo-TISH @ribotish applied to ribosome-profiling libraries from six
+human cell lines (HeLa, K562, U2OS, and RPE1 in asynchronous, quiescent,
+and senescent states). Ribo-TISH produced, for each sample, a tab-delimited
+table of candidate initiation events in which each row specified a genomic
+locus, strand, a supporting transcript identifier, the inferred start codon
+and amino-acid sequence of the resulting open reading frame (ORF), together
+with its raw read count (TISCounts), a two-sided enrichment p-value
+comparing the ribosome footprint pile-up at the candidate codon against
+local background, a frame-preference p-value, a Fisher-combined q-value,
+and the initial ORF-type classification assigned by Ribo-TISH
+(Annotated, Extended, Truncated, 5$prime$UTR, 3$prime$UTR, Internal, or
+Novel). To normalize across samples of differing depth, we recoded
+Ribo-TISH's composite labels into a controlled vocabulary and divided
+each TIS's raw read count by the sum of uniquely-mapped RNA-seq reads
+assigned to the corresponding gene by HTSeq-count @htseq, scaled to
+reads per million (RPM).
+
+== Reference-transcript pre-filter and significance filtering
+
+Per-sample processing of the normalized TIS table proceeds as a fixed
+sequence of five operations applied in order. First, a permissive
+_reference-transcript pre-filter_ selects the set of transcript
+identifiers on which any downstream event may reside: a transcript
+qualifies if it is MANE Select @mane, or if its GENCODE @gencode
+transcript support level is 1, 2, or 3. This pre-filter runs with no
+expression or significance thresholds, because its purpose is to set the
+universe of permissible transcript models rather than to score events.
+Second, every TIS event assigned to a transcript outside this universe
+is marked with the drop reason _NotReferenceTranscript_. Third, events
+with an RPM below 0.1 are marked _LowReadcounts_. Fourth, events failing
+any of three statistical criteria — a TIS-enrichment test
+$p lt.eq 0.01$, a frame-preference test $p lt.eq 0.01$, and a Fisher-
+combined $q lt.eq 0.05$ — are marked _NotSignificant_. Fifth, a
+distance-deduplication pass on the surviving events enforces a minimum
+spacing of 30 nucleotides between retained TIS on any given transcript:
+within each transcript, surviving events are sorted in descending RPM,
+canonical starts (`Annotated` events) are selected preferentially, and
+subsequent events whose genomic start falls within the 30-nucleotide
+downstream buffer of a retained event are marked _UpstreamTIS_. TIS
+rows are retained when they carry no drop reason across all five steps;
+all thresholds are exposed as configurable parameters.
+
+== Canonical-start imputation and uncanonical-transcript removal
+
+Because the five-step filter can legitimately remove a transcript's own
+canonical start (for instance, when an annotated event's re-detection
+p-value does not clear the significance threshold in a particular
+sample), the downstream comparison may be left without a canonical
+reference against which to compute a differential region. To guarantee
+that every surviving reference transcript carries a canonical record, we
+applied a post-filter _canonical-imputation_ step: for every reference
+transcript lacking an `Annotated` row in the filtered output, a
+synthetic canonical TIS record was reconstructed from the GENCODE v49
+annotation by combining the transcript's CDS coordinates, its
+`start_codon` feature, and its protein sequence from the GENCODE protein
+FASTA (`pc_translations`). The resulting row inherits the transcript's
+coordinates, the trinucleotide of its start codon (extracted from the
+primary-assembly GRCh38 FASTA), and the full amino-acid sequence of the
+encoded protein, and is tagged with zero-valued expression fields so
+that downstream layers treat it as a reference fixture rather than an
+empirical observation. Imputation supersedes — rather than augments — the
+alternative convention of exempting `Annotated` rows from significance
+filtering, and we run the filter in non-exempting mode to match the
+upstream reference implementation exactly.
+
+After imputation, transcripts that still lack an `Annotated` row are
+removed. These are transcripts that GENCODE flags as `cds_start_NF`
+(coding-sequence 5$prime$ end not defined) or that retain an intron on
+a protein-coding gene: by construction their canonical start is not
+defined, and any alternative-TIS annotation against them would produce
+ill-defined differential coordinates. The output of this upstream
+processing is, per sample, a filtered TIS table in which every distinct
+reference transcript contributes exactly one `Annotated` row plus zero
+or more alternative initiation rows (`Extended`, `Truncated`, `uORF`,
+etc.), all in a shared schema.
+
+== Cross-cell-line aggregation
+
+Because each cell line was processed independently through the pipeline
+above, a given alternative TIS may be supported in multiple cell lines
+with independent expression estimates. We combined the six per-sample
+tables by taking the union of distinct
+$("chromosome", "locus", "strand", "start codon", "transcript")$ tuples
+across samples and attaching, to each such tuple, a vector of
+cell-line-specific expression metrics (raw count, RPM, one-sided
+significance, and Ribo-TISH initiation efficiency score) carried forward
+from whichever sample(s) observed the event. Alternative events observed
+in only a single cell line were retained but flagged with zero expression
+in non-observing samples; canonical rows, by construction, appear in every
+cell line. Cross-cell-line differential analysis is performed downstream
+on this unified table rather than during upstream filtering, so that the
+filter logic remains a pure within-sample operation.
+
+= Construction of canonical–isoform pairs
+
+== Gene and TIS domain representation
+
+From the aggregated filtered table we constructed, for each gene symbol,
+a structured _gene record_ containing: the gene's GENCODE identifier, a
+gene-level representative canonical transcript (defined as the longest
+GENCODE protein-coding transcript bearing a defined CDS start), the
+protein sequence of that representative canonical, and a list of
+alternative TIS records. Each TIS record carries the canonical protein of
+its _own_ transcript — not the gene-level longest — because Ribo-TISH
+classifies ORF type (e.g. `Extended`, `Truncated`) relative to the CDS of
+the transcript on which the event was detected; comparing an alternative
+start against a transcript whose CDS it does not modify would produce
+spurious differential coordinates. When a TIS's own transcript lacked an
+`Annotated` row in the filtered output, the record fell back to the
+gene-level canonical with a record of the substitution.
+
+== Differential-region derivation
+
+For each alternative TIS we computed a _differential region_: the interval
+of the isoform protein that is not shared with its transcript-specific
+canonical. The interval was derived directly from the two amino-acid
+sequences rather than from coordinates, which allowed the same logic to
+handle frame-preserving extensions, frame-preserving truncations, and
+out-of-frame or non-coding-frame alternative ORFs without special cases:
+
+- *Extensions* (`Ext:Known` or `Ext:Novel`): the isoform is longer than
+  its canonical; the differential region is the N-terminal segment of
+  the isoform spanning positions $0..delta$, where $delta$ is the length
+  difference, and the remainder of the isoform matches the canonical's
+  full length exactly.
+- *Truncations* (`Trunc:Known` or `Trunc:Novel`): the canonical is longer
+  than the isoform; the differential region is the N-terminal segment of
+  the canonical that is _absent_ from the isoform, spanning the first
+  $|delta|$ canonical positions.
+- *uORFs, altORFs, internal ORFs, and ORFs in UTR regions*: no meaningful
+  shared frame exists; the entire isoform protein is treated as
+  differential.
+
+The derivation also accepts cross-transcript canonicals by verifying the
+tail of the shorter sequence against the corresponding tail of the longer
+at $gt.eq 95%$ identity over at least the final 15 residues; failures
+trigger a warning and fall back to treating the entire isoform as
+differential. This guard protects against silently emitting spurious
+differential regions when a TIS's transcript changes frame mid-protein
+relative to the gene-level canonical.
+
+== Kozak-context extraction
+
+For each TIS we extracted a 13-nucleotide window spanning positions
+$-9$ to $+4$ of the mRNA, with the initiation codon occupying
+positions 9 through 11 (0-indexed). Extraction was strand-aware: on plus
+strand the window was read directly from the primary-assembly GRCh38
+FASTA; on minus strand the reverse-complement of the corresponding
+plus-strand interval was taken so that the final string is read
+5$prime$ → 3$prime$ in mRNA orientation. This window matches the
+consensus encoding `gccgccRccATGG` used for Kozak scoring and is
+populated whether the start codon is ATG or a near-cognate (CTG, GTG,
+TTG, ACG, AAG); the identity of the trinucleotide at positions 9–11 is
+preserved in the TIS record independently of the window itself.
+
+= Symmetric annotation of canonical and isoform proteins
+
+The central operation of the pipeline is the _symmetric application_ of
+protein-level annotation methods to both the canonical and the
+alternative isoform protein of each initiation event. The principle is
+that any method capable of describing a protein property — biophysical,
+evolutionary, functional, or clinical — should be run identically on
+both sequences, with no a-priori assumption about which end of the
+comparison represents the "reference". Canonical annotations are
+computed once per gene and cached; isoform annotations are computed once
+per TIS. The comparator layer, described in §5, then derives
+canonical-versus-isoform differentials post-hoc from these two complete
+annotation records.
+
+Methods fall into three dispatch classes, distinguished by the scope of
+information each requires:
+
+- *Protein-level methods* receive only an amino-acid sequence, and
+  optionally the gene symbol and the canonical protein against which
+  uniqueness is to be assessed. Such methods are run twice per TIS:
+  once on the canonical protein and once on the alternative isoform
+  protein.
+- *Site-level methods* receive the full TIS record, including its
+  coordinates, ORF-type classification, and Kozak window. They are run
+  once per TIS and write only into the isoform-level annotation slot,
+  because site-level context (ORF type, initiation-codon identity, Kozak
+  strength) is a property of the alternative event rather than of the
+  gene.
+- *Gene-level methods* receive the gene symbol and any gene-level
+  metadata, and write into a gene-level annotation slot independent of
+  any individual TIS.
+
+= Annotation methods
+
+== Biophysical descriptors
+
+For each protein sequence we computed eighteen biophysical descriptors
+that summarize the global physicochemical character of the polypeptide:
+length, molecular weight, theoretical isoelectric point (pI), the Kyte–
+Doolittle hydropathy index (GRAVY) @kd, aromatic fraction, the net charge
+at physiological pH, the instability index, a TOP-IDP disorder propensity
+score derived from the intrinsic-disorder amino-acid propensities of
+Campen et al. @topidp, the fraction of disorder-promoting residues, a
+low-complexity score derived from Shannon entropy over a sliding 50-
+residue window, and four liquid-liquid phase-separation (LLPS) score
+components comprising the prion-like-domain content (Q/N/G/S/Y fraction),
+the aromatic-residue fraction, the pi-pi interaction propensity (F/Y/W/R/
+H/Q/N), and the cation-$pi$ potential. Protein parameters requiring
+standard biochemical constants (pI, instability, aromaticity) were
+computed with BioPython's ProtParam module @biopython; descriptors
+requiring residue-level propensity tables (TOP-IDP, LLPS components,
+Shannon complexity) were implemented directly against published
+residue-level propensity values. Residue-level vectors suitable for
+downstream positional comparisons (per-residue hydropathy and disorder
+propensity) are retained alongside the scalar summaries.
+
+== Linear-motif scanning
+
+Short linear motifs (SLiMs) were identified by regular-expression search
+against fourteen canonical patterns curated from the ELM database
+@elm and earlier SLiM literature: CDK-substrate consensus (`[ST]P`),
+ATM/ATR-substrate consensus (`[ST]Q`), 14-3-3 Mode I and Mode II binding
+motifs, EB1 SxIP-class microtubule-plus-end tracking, RGG
+methylation/RNA-binding motifs, SH3-domain class-I and class-II binding,
+heme-regulatory motif (CP) and cytochrome-c heme-binding motif (CXXCH),
+PCNA-interacting PIP-box and APIM motifs, C2H2 zinc-finger and RING-
+finger E3-ligase consensus patterns. Hits were recorded with their
+start and end coordinates within the protein, the literal matching
+substring, and the motif name; the summary counts motif-type densities
+(hits per residue) and the number of residues involved in overlapping
+hits.
+
+== Subcellular localization
+
+Subcellular localization was predicted with DeepLoc 2.1 @deeploc,
+operating in its "Fast" mode which uses ESM-1b @esm1b embeddings as
+input. Because DeepLoc's runtime dependencies are pinned to a Python 3.8
+environment that conflicts with the rest of the analysis stack, DeepLoc
+was executed within an isolated conda environment whose stdout was
+consumed by the main pipeline. To amortize the substantial fixed cost of
+ESM embedding, all unique canonical and isoform protein sequences in a
+batch were written to a single FASTA, DeepLoc was invoked once, and the
+per-sequence predictions (primary localization, signal-peptide / NLS /
+mitochondrial / peroxisomal sub-predictions, and membrane-type call)
+were joined back onto the input records by sequence identity. A
+protein-hash-keyed lookup served as a deduplicating memoization layer,
+so that identical sequences arising in different genes or cell lines
+were predicted exactly once per analysis run. Per-residue ESM embeddings
+were not retained; only the final categorical and probabilistic outputs
+were written to the annotation table.
+
+== Clinical variant burden and codon-level consequence validation
+
+Clinical annotations drew on three primary variant databases, each
+preprocessed from its authoritative source to a columnar parquet with
+filter pushdown:
+
+- *gnomAD v4.1 exomes* @gnomad: per-chromosome VCF files were parsed,
+  filtered to `PASS` records with a canonical-transcript VEP annotation
+  bearing a non-null gene symbol, and projected to a tabular
+  representation preserving genomic coordinates, allele identifiers,
+  allele frequency, consequence term, HGVSp / HGVSc strings, and
+  canonical-frame protein position. Per-chromosome tables were then
+  concatenated into a single gene-indexed parquet via streaming
+  row-group appends, which bounds peak memory by the largest per-chrom
+  partition rather than the full ≈$10^8$-record table.
+- *ClinVar* @clinvar: the `variant_summary.txt.gz` table was filtered to
+  the GRCh38 assembly. When parsing alleles, we preferred the
+  VCF-format columns (`ReferenceAlleleVCF`, `AlternateAlleleVCF`,
+  `PositionVCF`) because these are guaranteed to be in genomic
+  plus-strand orientation; the non-VCF allele columns and the HGVSc
+  title parse are both transcript-direction, which would silently
+  mis-validate minus-strand genes. Clinical-significance terms were
+  preserved verbatim from the submission.
+- *COSMIC v102 (GRCh38)* @cosmic: the Genome Screens Mutant,
+  NonCoding Variants, and Complete Targeted Screens Mutant VCF
+  distributions were downloaded via the Sanger authenticated API and
+  stream-parsed to per-VCF parquet partitions in a single directory
+  dataset. Stream parsing writes one RecordBatch per fixed-row-count
+  buffer directly to the parquet writer, which avoids accumulating
+  hundreds of millions of row dictionaries in memory.
+
+Retrieval for a query gene is a filter-pushdown read: PyArrow's dataset
+layer evaluates the `gene_symbol` predicate at the parquet level and
+materializes only the matching rows. All three databases return hits in
+a unified schema carrying source, variant identifier, chromosome,
+1-based genomic position, reference and alternate alleles, consequence
+term, raw HGVSp and HGVSc strings, allele frequency where applicable,
+and clinical-significance label where applicable.
+
+Because HGVSp strings in the source databases are expressed in the
+frame of the canonical transcript, they are _not_ valid indicators of
+protein position for alternative TIS events, which may re-frame the
+protein entirely (extensions) or eliminate the N-terminus (truncations,
+uORFs). We therefore implemented a dedicated codon-level consequence
+validator that re-maps every queried variant from its genomic position
+to an isoform-specific coding position using the GTF-derived CDS
+exon-boundary table for the TIS's transcript. The mapping is
+strand-aware: on plus strand, genomic positions within CDS exons are
+assigned sequential 0-indexed coding positions in 5$prime$ → 3$prime$
+order; on minus strand, exons are walked in descending genomic order
+and the genomic positions within each exon are traversed high-to-low,
+with the reference and alternate bases complemented before codon
+assembly. For single-nucleotide variants, the codon containing the
+variant position was extracted from the isoform's reference coding
+sequence, translated, and compared with the translation of the mutant
+codon to assign a consequence in
+$\{"synonymous", "missense", "nonsense", "reference\_mismatch"\}$. For
+in-frame indels we assigned `inframe_insertion` or `inframe_deletion`
+from the length differential; frameshifts were labelled accordingly.
+Multi-nucleotide substitutions (equal-length reference and alternate
+alleles both longer than one base) were assigned the label `mnv` without
+a single-codon translation, because a full implementation would require
+walking multiple codons and is deferred. Variants outside the isoform's
+coding interval — including variants that fall upstream of truncated
+TIS starts, downstream of extended stops, or within introns — were
+assigned protein position `None` and excluded from downstream clinical
+summaries.
+
+The per-protein clinical annotation therefore consists of: a positional
+list of validated variants, each with genomic coordinates, isoform-
+specific protein position, isoform-specific amino-acid change, source
+database, clinical significance, and population allele frequency; and a
+per-protein summary reporting total validated variant count, counts by
+source, counts by consequence class, and counts of variants annotated
+pathogenic or likely pathogenic in ClinVar.
+
+== Evolutionary conservation
+
+Conservation scores were derived from a local sequence-similarity search
+against UniProt SwissProt reviewed sequences @uniprot using DIAMOND v2.1
+@diamond in blastp-equivalent mode with default e-value threshold and
+the `--more-sensitive` sensitivity preset. For each protein, hits were
+tabulated with their alignment positions, identity, and bit score, and
+a summary conservation score in ${0, ..., 9}$ was assigned by counting
+distinct high-confidence hits (identity $gt.eq 40%$, alignment length
+$gt.eq 50%$ of query) and saturating at 9. A dedicated status field
+distinguishes three operational outcomes: `no_hits` (the tool ran but
+returned zero matches — a biologically meaningful negative result,
+particularly for short ORFs of fewer than 25 residues which fall below
+the BLAST-family sensitivity floor), `ok` (at least one hit), and
+`not_run` (the tool was not available). To amortize the per-invocation
+cost of spawning the search binary, all unique query sequences in an
+analysis run are submitted as a single batched FASTA and results are
+joined back onto the input records by sequence identity.
+
+== In-silico proteomic detectability
+
+We assessed the mass-spectrometric detectability of every protein by
+in-silico tryptic digestion, cleaving the sequence after every lysine
+or arginine residue that is not immediately followed by proline
+(KP / RP exceptions) and allowing up to one missed cleavage. Peptides
+shorter than 7 or longer than 30 residues — outside the typical tandem
+mass-spectrometry observation range — were discarded. Each retained
+peptide was recorded with its sequence, start position, end position,
+length, and a uniqueness flag indicating whether the peptide sequence
+occurs anywhere in the canonical protein's tryptic digest. The
+uniqueness flag is the primary handle for downstream experimental
+validation: unique peptides are the candidates that could, in principle,
+distinguish the alternative isoform from the canonical in a
+proteomics experiment. When pre-computed PepQuery2 @pepquery validation
+results were provided, peptides already observed in a reanalysis of
+public proteomics datasets were additionally flagged as experimentally
+validated. For the canonical protein annotation, uniqueness is
+undefined (there is no alternative sequence to compare against) and the
+flag is recorded as `None` rather than `False`, to distinguish the
+semantically-undefined case from an empirically-negative one.
+
+== ORF classification and initiation-context descriptors
+
+Two site-level annotators record metadata specific to the alternative
+initiation event. The ORF-classification method re-exposes the
+recategorized Ribo-TISH ORF-type label (`Annotated`, `Ext:Known`,
+`Ext:Novel`, `Trunc:Known`, `Trunc:Novel`, `uORF`, `3'UTR:altORF`,
+`Internal`, `Novel`, `NotInCDS`) together with the lengths of the
+isoform and of its transcript-specific canonical, and a boolean
+flag indicating whether the alternative start maintains the canonical
+reading frame. The initiation-context method scores the 13-nucleotide
+Kozak window against three weighting schemes derived from @kozak:
+a full-length Hamming distance against the `gccgccRccATGG` consensus,
+a "major-position" Hamming distance restricted to the strongly
+conserved positions ($-3$ and $+4$), and a partial-weighting score that
+applies weight 1 to the major positions and 0.1 to the minor positions.
+The same method records the GC content of the window and the
+trinucleotide at the initiation codon.
+
+== Gene-level reference annotation
+
+A gene-level method attaches to each gene a summary of external reference
+information indexed by gene symbol: the HGNC-approved gene symbol and
+alternative symbols, OMIM disease associations and phenotype labels
+where applicable, and the GENCODE biotype of the gene. This annotation
+is computed once per gene and shared across all TIS records of that
+gene; it is not subjected to canonical-versus-isoform comparison.
+
+= Differential annotation table
+
+The output of the pipeline is a tabular representation in which each
+row corresponds to exactly one alternative TIS. The columns of each row
+fall into four groups:
+
+1. *Identity*: gene symbol, gene identifier, canonical transcript
+   identifier, TIS identifier (composed as
+   `chromosome:position:strand:codon:transcript_id` so that distinct
+   TIS events at the same codon on different transcripts remain
+   distinguishable), TIS-supporting transcript identifier, chromosome,
+   position, strand, initiation codon, ORF type, isoform and canonical
+   protein lengths, differential region sequence and coordinates, and
+   Kozak window.
+2. *Per-sample expression*: for each cell line, the raw read count,
+   RPM-normalized count, one-sided initiation-significance p-value, and
+   Ribo-TISH initiation-efficiency score, laid out as wide columns
+   (`expr_{cell_line}_{metric}`) so that cross-cell-line comparisons
+   translate to column arithmetic.
+3. *Canonical annotations*: for each protein-level annotation method,
+   the complete output of that method applied to the TIS's
+   transcript-specific canonical protein, flattened as
+   `canonical_{method}_{field}` columns.
+4. *Isoform annotations*: symmetrically, the complete output of each
+   protein-level method applied to the alternative isoform protein, the
+   output of each site-level method, and the output of each
+   gene-level method, flattened as `isoform_{method}_{field}` columns.
+
+This two-pane layout realizes the central design decision of the
+pipeline: canonical-versus-isoform differentials are computed
+_post-hoc_ from two complete and independently-derived annotation
+records, rather than stored as pre-subtracted deltas. Scalar differentials
+(e.g. $Delta "pI"$ between canonical and isoform) reduce to column
+subtraction; positional differentials (e.g. ClinVar variants falling
+within a truncation's lost region) are derived by intersecting each
+positional hit list against the differential-region coordinates carried
+in the identity columns. Storing both panes together ensures that the
+same pair of annotation records is equally available for aggregate
+analyses (pathway-level burden of alternative extensions), for
+per-event analyses (whether a given truncation disrupts a specific
+motif), and for re-comparison under alternative definitions of the
+reference (for instance, asking whether an alternative isoform's
+localization matches that of a paralogue canonical).
+
+= Reference data and versioning
+
+Reference data supporting the pipeline were built from primary sources
+with machine-readable provenance: every reference artifact (DIAMOND
+database, ClinVar parquet, gnomAD parquet, COSMIC parquet directory,
+GENCODE FASTA/GTF, DeepLoc environment) was recorded alongside a sidecar
+document capturing the source URL, version, timestamp of retrieval,
+size in bytes, and SHA-256 checksum for each file. GENCODE v49 (GRCh38
+primary assembly) was used throughout for gene, transcript, CDS, and
+protein-translation annotation; UniProt SwissProt reviewed was used at
+the current release snapshotted at analysis time; gnomAD v4.1 exome
+sites, ClinVar's current `variant_summary.txt.gz` release, and COSMIC
+v102 (GRCh38) provided clinical variant data; DeepLoc 2.1 with ESM-1b
+weights provided localization predictions.
+
+#pagebreak()
+
+#heading(level: 1, numbering: none)[References]
+
+#bibliography("methods.bib", title: none, style: "nature")
