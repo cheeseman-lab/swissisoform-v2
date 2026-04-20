@@ -32,9 +32,8 @@ python scripts/setup_databases.py gnomad       # ~4-6 h (heavy — ~90 M variant
 # 4. Run the 5-gene E2E smoke test (HeLa, writes paired parquet)
 python scripts/inspect_e2e.py
 
-# 5. Run tests
-pytest                              # fast tests only (~3 s)
-pytest -m slow                      # tier-2 integration (real genome)
+# 5. Run tests (unit + integration; ~30–60 s end to end)
+pytest
 ```
 
 ## What the pipeline does
@@ -197,7 +196,7 @@ scripts/
   run_e2e_all.py             # 5-gene pipeline smoke (combine-first, dedup, annotate)
   inspect_e2e.py             # 5-gene diagnostic walkthrough + paired parquet output
 
-tests/                       # pytest — 317 fast + 30 slow
+tests/                       # pytest — 368 tests (unit + integration)
 data/reference/              # gitignored — primary-source reference DBs
 data/output/                 # gitignored — pipeline outputs (paired parquets, logs)
 docs/                        # design spec, technical spec, wave-1 plan
@@ -210,7 +209,7 @@ docs/                        # design spec, technical spec, wave-1 plan
 ruff check src/
 ruff format src/
 
-# Fast tests only
+# All tests (unit + integration)
 pytest
 
 # With coverage

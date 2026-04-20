@@ -242,7 +242,7 @@ def compute_diff_region(
     can = _strip_stop(canonical_protein)
 
     if orf_type == ORFType.ANNOTATED:
-        return DifferentialRegion(sequence="")
+        return DifferentialRegion(sequence="", confidence="exact")
 
     # For non-unique ORF types (in-frame with canonical), determine the
     # actual relationship by sequence comparison, not just the nominal label.
@@ -261,6 +261,7 @@ def compute_diff_region(
                 isoform_start=0,
                 isoform_end=ext_offset,
                 sequence=iso[:ext_offset],
+                confidence="tail_verified",
             )
 
         # If isoform is found as a suffix of canonical → truncation
@@ -269,6 +270,7 @@ def compute_diff_region(
                 canonical_start=0,
                 canonical_end=trunc_offset,
                 sequence=can[:trunc_offset],
+                confidence="tail_verified",
             )
 
         # Length-based fallback for truncations (low confidence)
@@ -287,6 +289,7 @@ def compute_diff_region(
                     canonical_start=0,
                     canonical_end=delta,
                     sequence=can[:delta],
+                    confidence="length_fallback",
                 )
 
         # Degraded fallback: treat entire isoform as differential
@@ -303,13 +306,15 @@ def compute_diff_region(
             isoform_start=0,
             isoform_end=len(iso),
             sequence=iso,
+            confidence="whole_isoform_fallback",
         )
 
-    # uORF, altORF, internal OOF, 3'UTR ORF: entire isoform is unique
+    # uORF, altORF, internal OOF, 3'UTR ORF: entire isoform is unique by definition
     return DifferentialRegion(
         isoform_start=0,
         isoform_end=len(iso),
         sequence=iso,
+        confidence="exact",
     )
 
 

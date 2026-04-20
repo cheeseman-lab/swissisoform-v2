@@ -8,7 +8,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
+
+# Confidence tiers for DifferentialRegion.
+# - "exact": canonical diff (annotated → empty; uORF/altORF/internal/3utr → entire isoform)
+# - "tail_verified": sequence relationship confirmed by ≥95% tail match
+# - "length_fallback": truncation with unmatched sequences; diff derived from length delta
+# - "whole_isoform_fallback": sequences unrelated; entire isoform marked differential
+DiffRegionConfidence = Literal[
+    "exact", "tail_verified", "length_fallback", "whole_isoform_fallback"
+]
 
 
 class ORFType(Enum):
@@ -88,6 +97,9 @@ class DifferentialRegion:
         canonical_start: Start position in canonical protein coords (0-indexed), or None.
         canonical_end: End position in canonical protein coords (exclusive), or None.
         sequence: The actual differential amino acid sequence.
+        confidence: How the region was derived. Downstream positional analyses
+            should treat ``length_fallback`` and ``whole_isoform_fallback`` as
+            low-confidence and optionally filter or down-weight them.
     """
 
     isoform_start: int | None = None
@@ -95,6 +107,7 @@ class DifferentialRegion:
     canonical_start: int | None = None
     canonical_end: int | None = None
     sequence: str = ""
+    confidence: DiffRegionConfidence = "exact"
 
 
 @dataclass

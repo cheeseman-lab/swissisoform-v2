@@ -138,7 +138,6 @@ def annotated_genes(test_genes) -> list[Gene]:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.slow
 class TestAssembly:
     """Tests that Gene objects are correctly assembled from raw Ribo-TISH data."""
 
@@ -375,7 +374,6 @@ class TestAssembly:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.slow
 class TestAnnotation:
     """Tests that the annotation pipeline produces correct output structure."""
 
@@ -524,7 +522,6 @@ class TestAnnotation:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.slow
 class TestORFTypeAnnotations:
     """Spot-check annotations for specific ORF types across the gene set."""
 
@@ -584,7 +581,6 @@ class TestORFTypeAnnotations:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.slow
 class TestSerialization:
     """Test that annotated output can be serialized to DataFrame."""
 
@@ -667,6 +663,56 @@ class TestComputeDiffRegion:
             "MEEPQSDP*",
         )
         assert dr.sequence == ""
+        assert dr.confidence == "exact"
+
+    def test_confidence_tail_verified_extension(self) -> None:
+        """Clean extension with exact canonical suffix → tail_verified."""
+        dr = compute_diff_region(
+            ORFType.EXTENDED,
+            "MRGSHHHHHGSMEEPQSDP*",
+            "MEEPQSDP*",
+        )
+        assert dr.confidence == "tail_verified"
+
+    def test_confidence_tail_verified_truncation(self) -> None:
+        """Clean truncation with exact isoform suffix → tail_verified."""
+        dr = compute_diff_region(
+            ORFType.TRUNCATED,
+            "SDPSVEPPL*",
+            "MEEPQSDPSVEPPL*",
+        )
+        assert dr.confidence == "tail_verified"
+
+    def test_confidence_length_fallback_truncation(self) -> None:
+        """Truncation with sequences that don't share a tail → length_fallback."""
+        dr = compute_diff_region(
+            ORFType.TRUNCATED,
+            "MRKAAAA*",  # Unrelated to canonical — no shared suffix
+            "MEEPQSDPSVEPPL*",
+        )
+        assert dr.confidence == "length_fallback"
+        assert dr.canonical_start == 0
+        assert dr.canonical_end == len("MEEPQSDPSVEPPL") - len("MRKAAAA")
+
+    def test_confidence_whole_isoform_fallback_extension(self) -> None:
+        """Extension with unrelated sequences → whole_isoform_fallback."""
+        dr = compute_diff_region(
+            ORFType.EXTENDED,
+            "MRKAAAA*",  # unrelated to canonical
+            "MEEPQSDP*",
+        )
+        assert dr.confidence == "whole_isoform_fallback"
+        assert dr.isoform_start == 0
+        assert dr.isoform_end == len("MRKAAAA")
+
+    def test_confidence_uorf_exact(self) -> None:
+        """uORFs are always whole-isoform by definition → exact."""
+        dr = compute_diff_region(
+            ORFType.UORF,
+            "MPKLQRST*",
+            "MEEPQSDPSVEPPL*",
+        )
+        assert dr.confidence == "exact"
 
 
 class TestAssembleGenesPerTidCanonical:

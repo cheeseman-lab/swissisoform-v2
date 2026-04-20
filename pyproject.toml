@@ -53,8 +53,7 @@ pydocstyle = { convention = "google" }
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "slow: integration tests (full pipeline, real genome data)",
     "gpu: requires GPU (structure prediction, embeddings)",
     "network: requires network access (API calls, downloads)",
 ]
-addopts = "-m 'not slow and not gpu and not network' --tb=short -q"
+addopts = "-m 'not gpu and not network' --tb=short -q"

@@ -35,6 +35,7 @@ _PROTEIN_COLS = [
     "canonical_protein",
     "isoform_protein",
     "differential_sequence",
+    "diff_region_confidence",
     "kozak_context",
 ]
 
@@ -68,6 +69,9 @@ def tis_to_dataframe(sites: list[TranslationInitiationSite]) -> pd.DataFrame:
             "canonical_protein": site.canonical_protein,
             "isoform_protein": site.isoform_protein,
             "differential_sequence": site.diff_region.sequence if site.diff_region else "",
+            "diff_region_confidence": (
+                site.diff_region.confidence if site.diff_region else "exact"
+            ),
             "kozak_context": site.kozak_context,
         }
 
@@ -165,6 +169,7 @@ def dataframe_to_tis(df: pd.DataFrame) -> list[TranslationInitiationSite]:
             isoform_protein=row.get("isoform_protein", ""),
             diff_region=DifferentialRegion(
                 sequence=row.get("differential_sequence", ""),
+                confidence=row.get("diff_region_confidence", "exact"),
             ),
             kozak_context=row.get("kozak_context"),
             expression=expression,
@@ -251,6 +256,7 @@ def paired_tis_dataframe(genes: list[Gene]) -> pd.DataFrame:
                 "canonical_len": canonical_len,
                 "isoform_len": len(site.isoform_protein.rstrip("*")),
                 "differential_sequence": diff.sequence if diff else "",
+                "diff_region_confidence": diff.confidence if diff else "exact",
                 "diff_isoform_start": diff.isoform_start if diff else None,
                 "diff_isoform_end": diff.isoform_end if diff else None,
                 "diff_canonical_start": diff.canonical_start if diff else None,

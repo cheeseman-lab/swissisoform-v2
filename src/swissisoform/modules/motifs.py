@@ -29,7 +29,7 @@ MOTIF_DEFS: list[tuple[str, str, str]] = [
     ("RGG_Sites", r"RGG", "RGG methylation / RNA binding"),
     ("SH3_ClassI", r"[RK].{2}P.{2}P", "SH3 domain binding Class I"),
     ("SH3_ClassII", r"P.{2}P.[RK]", "SH3 domain binding Class II"),
-    ("Heme_CP_HRM", r"CP", "Heme regulatory motif"),
+    ("Heme_CP_HRM", r"C[^C].{2}C[^C]H", "Heme regulatory motif"),
     ("Heme_CXXCH", r"C.{2}CH", "Cytochrome c heme binding"),
     ("PIP_box", r"Q.{2}[ILMV].{2}[FY][FY]", "PCNA-interacting peptide box"),
     ("APIM", r"[KR][FYW][ILMV][ILMV][KR]", "PCNA-interacting motif"),

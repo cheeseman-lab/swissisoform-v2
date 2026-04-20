@@ -57,7 +57,6 @@ def smaffa_hela() -> pd.DataFrame:
     return pd.read_csv(path)
 
 
-@pytest.mark.slow
 class TestSmaffaAudit:
     """Regression guard: our filter stays byte-compatible with smaffa's."""
 

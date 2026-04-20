@@ -108,6 +108,21 @@ class TestMotifsModule:
             assert "end" in hit
             assert "match" in hit
 
+    def test_heme_cp_hrm_not_dipeptide(self, config):
+        """Heme_CP_HRM must not match bare CP dipeptides — the pattern
+        requires C[^C].{2}C[^C]H context (ELM LIG_Heme_HRM_1-like).
+        """
+        mod = MotifsModule(config)
+        # Bare CP in a proteome-like context: should NOT hit.
+        bare = mod.annotate("MAACPDEFGHIK")
+        assert [h for h in bare["hits"] if h["name"] == "Heme_CP_HRM"] == []
+        # C[^C].{2}C[^C]H with non-C flanks: should hit once at pos 2 on "CADACAH".
+        legit = mod.annotate("MACADACAHMMM")
+        heme_hits = [h for h in legit["hits"] if h["name"] == "Heme_CP_HRM"]
+        assert len(heme_hits) == 1
+        assert heme_hits[0]["pos"] == 2
+        assert heme_hits[0]["match"] == "CADACAH"
+
     def test_annotate_strip_stop_codon(self, config):
         """annotate('SP*') finds 1 CDK hit (trailing * stripped)."""
         mod = MotifsModule(config)

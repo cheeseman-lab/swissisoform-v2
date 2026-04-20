@@ -241,14 +241,11 @@ All modules must:
 ## Tests
 
 ```bash
-# Fast tests only (Tier 1 — synthetic, < 5s)
+# All tests (unit + real-genome integration)
 pytest
 
 # Single module
 pytest tests/test_biophysics.py -v
-
-# Integration (Tier 2 — real genome data)
-pytest -m slow
 ```
 
 ## Code Style
