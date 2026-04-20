@@ -138,17 +138,14 @@ All 9 modules implemented. Data model supports symmetric canonical/isoform annot
 | Module | Source | Complexity | Reason |
 |--------|--------|------------|--------|
 | `scoring.py` | TIAP | Medium | Needs full redesign around comparison outputs, not a port |
-| `crossval.py` | TIAP | Medium | Gene-level dataset matching; unclear if spec adds meaningful evidence |
+| `crossval.py` | TIAP | Medium | Dropped 2026-04-19 after attempted port: the available human datasets (Ingolia, QTI, Fedorova, Kagan) are either cross-species, gene-list-only, or without GRCh38 coordinates — the tiered-matching framework can't exercise Tier 1/2 against them. The correct replacement is to treat published human Ribo-seq studies (Chen/Weissman, Chothani, etc.) as additional *inputs* to our upstream pipeline, giving coordinate-level confirmation by construction. That is its own workstream (raw read alignment + matched RNA-seq + Ribo-TISH re-run) and has not been scoped. |
 
 ## Documentation
 
 | Document | Path | Purpose |
 |----------|------|---------|
-| **Design spec** | `docs/superpowers/specs/2026-04-14-swissisoform-v2-orchestration-design.md` | Domain model, module contracts, wave execution strategy |
-| **Wave 1 plan** | `docs/superpowers/plans/2026-04-14-wave1-foundation.md` | Completed implementation plan |
-| Scientific overview | `docs/tis_projects_overview.md` | Biology, 2-paper structure, evidence scoring framework |
-| Technical spec | `docs/tis_technical_spec.md` | Module specs 0-12, code provenance, implementation phases |
-| Gap analysis | `docs/swissisoform_review.md` | Missing modules, scoring expansion, tool recommendations |
+| Methods | `docs/methods/methods.typ` (+ `methods.bib`) | Publication-ready paper methods section (typst source; renders to `methods.pdf`) |
+| Reviews | `docs/reviews/` | Code-review / gap-analysis documents from external reviewers |
 
 ## Source Repos (Read-Only Reference)
 
