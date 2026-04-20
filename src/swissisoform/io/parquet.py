@@ -273,6 +273,8 @@ def paired_tis_dataframe(genes: list[Gene]) -> pd.DataFrame:
                 row[f"expr_{cell_line}_initiation_efficiency"] = expr.initiation_efficiency
             row.update(canonical_cols)
             row.update(_flatten_annotations("isoform", site.isoform_annotations))
+            row.update(_flatten_annotations("diff", site.diff_annotations))
+            row.update(_flatten_annotations("cmp", site.comparison))
             rows.append(row)
 
     return pd.DataFrame(rows)

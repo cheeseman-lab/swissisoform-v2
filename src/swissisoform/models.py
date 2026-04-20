@@ -178,7 +178,14 @@ class TranslationInitiationSite:
     # Isoform-level annotations — per-protein modules write here
     isoform_annotations: dict[str, dict[str, Any]] = field(default_factory=dict)
 
-    # Comparison results — comparator writes here
+    # Differential-region annotations — Scope-A baseline. Populated by the
+    # Comparator when it re-runs ProteinModules on ``diff_region.sequence``
+    # so that enrichment ratios (unique vs. shared) can be derived.
+    diff_annotations: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    # Comparison results — comparator writes here. Per-module dict with
+    # scalar deltas, enrichment ratios, and positional hits restricted to
+    # the differential region.
     comparison: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
