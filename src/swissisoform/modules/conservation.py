@@ -3,10 +3,10 @@
 Implementation of Path 3 from ``docs/reviews/conservation_module_spec.md``:
 nucleotide-level conservation metrics derived from the 241-mammal Cactus
 alignment (Christmas et al. 2023), queried as pre-computed PhyloP and
-PhastCons BigWig tracks.  Start-codon and Kozak-window metrics are computed
-here; region (unique / shared / enrichment) metrics are stubbed — they
-require a protein→genomic coordinate mapper that doesn't exist yet and is
-tracked separately.
+PhastCons BigWig tracks.  Start-codon, Kozak-window, and region (unique /
+shared / enrichment) metrics are all computed here.  Region metrics consume
+``TIS.orf_exons`` and ``TIS.canonical_orf_exons`` produced by the assembly
+layer's Layer-2 walker over the GTF transcript skeletons.
 
 Module type
 -----------
@@ -16,8 +16,8 @@ share the same PhyloP score at the TIS.  ``annotate_site(site)`` reads
 ``chrom`` / ``position`` / ``strand`` directly.
 
 Outputs distinguish ``status="ok"``, ``status="not_run"`` (no BigWig / no
-config), and ``status="region_map_not_implemented"`` for the stubbed region
-metrics.  Missing values never silently become zero.
+config), and ``status="no_skeleton"`` (ORF exons unavailable for region
+metrics).  Missing values never silently become zero.
 """
 
 from __future__ import annotations
@@ -27,6 +27,11 @@ from pathlib import Path
 from typing import Any
 
 from swissisoform.config import PipelineConfig
+from swissisoform.coords import (
+    interval_difference,
+    interval_intersection,
+    interval_length,
+)
 from swissisoform.models import TranslationInitiationSite
 
 logger = logging.getLogger(__name__)
@@ -59,10 +64,11 @@ class ConservationModule:
     - the start codon itself (3 nt window at the TIS)
     - the Kozak window (13 nt: ATG + 9 nt upstream + 1 nt downstream)
 
-    Unique / shared / enrichment region means are declared as outputs but
-    stubbed to ``None`` with ``status="region_map_not_implemented"``.  They
-    require mapping protein-space diff regions to genomic coordinates, which
-    needs the isoform transcript's exon structure — a separate workstream.
+    Unique / shared / enrichment region means are computed from
+    ``site.orf_exons`` and ``site.canonical_orf_exons`` (Layer-2 ORF exon
+    intervals populated by the assembly layer).  When the skeleton is
+    unavailable for a TIS, region means fall through to ``None`` with
+    ``region_status="no_skeleton"``.
 
     Attributes:
         MODULE_NAME: ``"conservation"``
@@ -142,6 +148,35 @@ class ConservationModule:
                 return None
         return None
 
+    @classmethod
+    def _mean_over_intervals(
+        cls,
+        bw,
+        chrom: str,
+        intervals: list[tuple[int, int]],
+    ) -> float | None:
+        """Length-weighted mean BigWig value across a list of intervals.
+
+        Returns ``None`` if the intervals list is empty or every interval
+        returned ``None`` (chromosome absent / all-NaN region).
+        """
+        if bw is None or not intervals:
+            return None
+        total_weight = 0
+        weighted_sum = 0.0
+        for start, end in intervals:
+            if end <= start:
+                continue
+            mean = cls._mean_from_bw(bw, chrom, start, end)
+            if mean is None:
+                continue
+            width = end - start
+            weighted_sum += mean * width
+            total_weight += width
+        if total_weight == 0:
+            return None
+        return weighted_sum / total_weight
+
     # ------------------------------------------------------------------
     # Coordinate windows around the TIS
     # ------------------------------------------------------------------
@@ -210,23 +245,48 @@ class ConservationModule:
         phylop_status = "ok" if self._phylop_bw is not None else "not_run"
         phastcons_status = "ok" if self._phastcons_bw is not None else "not_run"
 
+        # ── Region metrics (unique vs shared) from Layer-2 ORF exons ──────
+        # Unique region = isoform ORF exons minus canonical ORF exons.
+        # Shared region = intersection of the two.
+        region_status: str
+        if not site.orf_exons or not site.canonical_orf_exons:
+            unique_intervals: list[tuple[int, int]] = []
+            shared_intervals: list[tuple[int, int]] = []
+            region_status = "no_skeleton"
+        else:
+            unique_intervals = interval_difference(site.orf_exons, site.canonical_orf_exons)
+            shared_intervals = interval_intersection(site.orf_exons, site.canonical_orf_exons)
+            region_status = "ok"
+
+        phylop_unique = self._mean_over_intervals(self._phylop_bw, chrom, unique_intervals)
+        phylop_shared = self._mean_over_intervals(self._phylop_bw, chrom, shared_intervals)
+        phastcons_unique = self._mean_over_intervals(self._phastcons_bw, chrom, unique_intervals)
+        phastcons_shared = self._mean_over_intervals(self._phastcons_bw, chrom, shared_intervals)
+
+        phylop_enrichment: float | None = None
+        if (
+            phylop_unique is not None
+            and phylop_shared is not None
+            and phylop_shared != 0.0
+        ):
+            phylop_enrichment = phylop_unique / phylop_shared
+
         return {
             "phylop_at_tis": phylop_at_tis,
             "phylop_kozak_mean": phylop_kozak,
-            # Region metrics require protein→genomic mapping on the isoform
-            # transcript (exon-aware).  Stubbed here so downstream consumers
-            # can tell "not computed" from "computed and zero".
-            "phylop_unique_region_mean": None,
-            "phylop_shared_region_mean": None,
-            "phylop_enrichment": None,
+            "phylop_unique_region_mean": phylop_unique,
+            "phylop_shared_region_mean": phylop_shared,
+            "phylop_enrichment": phylop_enrichment,
             "phastcons_at_tis": phastcons_at_tis,
             "phastcons_kozak_mean": phastcons_kozak,
-            "phastcons_unique_region_mean": None,
-            "phastcons_shared_region_mean": None,
+            "phastcons_unique_region_mean": phastcons_unique,
+            "phastcons_shared_region_mean": phastcons_shared,
             "summary": {
                 "phylop_status": phylop_status,
                 "phastcons_status": phastcons_status,
-                "region_status": "region_map_not_implemented",
+                "region_status": region_status,
+                "unique_region_nt": interval_length(unique_intervals),
+                "shared_region_nt": interval_length(shared_intervals),
                 "phylop_bigwig": str(self._phylop_path) if self._phylop_path else None,
                 "phastcons_bigwig": str(self._phastcons_path) if self._phastcons_path else None,
             },

@@ -15,11 +15,13 @@ from typing import Any
 
 import pandas as pd
 
+from swissisoform.coords import orf_exons_from_skeleton
 from swissisoform.models import (
     CellLineExpression,
     DifferentialRegion,
     Gene,
     ORFType,
+    TranscriptCoordinates,
     TranslationInitiationSite,
     orf_type_from_ribotish,
 )
@@ -414,6 +416,7 @@ def _row_to_tis(
     canonical_protein: str,
     fasta: Any | None = None,
     samples: list[str] | None = None,
+    skeleton: TranscriptCoordinates | None = None,
 ) -> TranslationInitiationSite:
     """Convert a single DataFrame row to a TranslationInitiationSite.
 
@@ -455,6 +458,18 @@ def _row_to_tis(
     if fasta is not None:
         kozak_context = extract_kozak_context(fasta, chrom, position, strand)
 
+    aa_len = int(row["AALen"])
+    orf_exons: list[tuple[int, int]] = []
+    canonical_orf_exons_site: list[tuple[int, int]] = []
+    if skeleton is not None:
+        orf_exons = orf_exons_from_skeleton(skeleton, position, aa_len)
+        if skeleton.cds_start is not None and canonical_protein:
+            canonical_orf_exons_site = orf_exons_from_skeleton(
+                skeleton,
+                skeleton.cds_start,
+                len(_strip_stop(canonical_protein)),
+            )
+
     if samples is not None:
         expression = _expression_from_row(row, samples)
         tis_pvalue = ribo_pvalue = fisher_qvalue = None
@@ -475,7 +490,7 @@ def _row_to_tis(
         orf_type=orf_type,
         gene_id=str(row["Gid"]),
         transcript_start=int(row["Start"]),
-        aa_len=int(row["AALen"]),
+        aa_len=aa_len,
         tis_pvalue=tis_pvalue,
         ribo_pvalue=ribo_pvalue,
         fisher_qvalue=fisher_qvalue,
@@ -483,6 +498,8 @@ def _row_to_tis(
         isoform_protein=isoform_protein,
         diff_region=diff_region,
         kozak_context=kozak_context,
+        orf_exons=orf_exons,
+        canonical_orf_exons=canonical_orf_exons_site,
         expression=expression,
     )
 
@@ -542,6 +559,7 @@ def assemble_genes(
     gene_names: list[str] | None = None,
     include_annotated: bool = False,
     genome_fasta: str | Path | None = None,
+    exon_skeletons: dict[str, TranscriptCoordinates] | None = None,
 ) -> list[Gene]:
     """Build Gene objects from an upstream filtered+imputed DataFrame.
 
@@ -568,6 +586,15 @@ def assemble_genes(
             sites (with empty diff_region).  Default ``False``.
         genome_fasta: Optional path to an indexed reference genome FASTA
             for Kozak extraction.
+        exon_skeletons: Optional per-transcript exon skeletons
+            (``transcript_id → TranscriptCoordinates``) produced by
+            :func:`swissisoform.io.gtf.load_exon_skeletons` or held on an
+            :class:`UpstreamReference`. When provided, populates
+            ``Gene.canonical_orf_exons`` and ``TIS.orf_exons`` with the
+            plus-strand genomic intervals covering each ORF's coding
+            nucleotides.  These intervals unblock downstream genomic-coord
+            modules (conservation region means, clinical variant
+            intersection, etc.).
 
     Returns:
         List of Gene objects with ``tis_sites`` populated.
@@ -630,6 +657,9 @@ def assemble_genes(
                 canonical_by_tid[str(row["Tid"])],
                 fasta=fasta,
                 samples=samples,
+                skeleton=(
+                    exon_skeletons.get(str(row["Tid"])) if exon_skeletons else None
+                ),
             )
             for _, row in rows.iterrows()
         ]
@@ -638,12 +668,31 @@ def assemble_genes(
             logger.info("Gene %s has no alternative TIS — skipping", symbol)
             continue
 
+        canonical_orf_exons: list[tuple[int, int]] = []
+        if exon_skeletons:
+            canonical_skeleton = exon_skeletons.get(canonical_tid)
+            if canonical_skeleton is not None and canonical_skeleton.cds_start is not None:
+                canonical_aa_len = len(_strip_stop(canonical_protein))
+                canonical_orf_exons = orf_exons_from_skeleton(
+                    canonical_skeleton,
+                    canonical_skeleton.cds_start,
+                    canonical_aa_len,
+                )
+            elif canonical_skeleton is None:
+                logger.debug(
+                    "Gene %s: no skeleton for canonical transcript %s — "
+                    "canonical_orf_exons left empty",
+                    symbol,
+                    canonical_tid,
+                )
+
         gene = Gene(
             gene_name=str(symbol),
             gene_id=gene_id,
             canonical_transcript_id=canonical_tid,
             canonical_protein=canonical_protein,
             tis_sites=tis_sites,
+            canonical_orf_exons=canonical_orf_exons,
         )
         genes.append(gene)
 

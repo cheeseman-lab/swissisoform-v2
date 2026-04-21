@@ -10,6 +10,8 @@ import logging
 
 import pandas as pd
 
+from swissisoform.models import TranscriptCoordinates
+
 logger = logging.getLogger(__name__)
 
 
@@ -177,6 +179,147 @@ def load_cds_features(gtf_path: str) -> pd.DataFrame:
     df = pd.DataFrame(features_list)
     logger.info("Loaded %d CDS/start_codon features", len(df))
     return df[output_columns].reset_index(drop=True)
+
+
+def load_exon_skeletons(gtf_path: str) -> dict[str, TranscriptCoordinates]:
+    """Load per-transcript exon skeletons from a GTF file.
+
+    Scans exon + CDS + start_codon features in a single pass and builds one
+    :class:`TranscriptCoordinates` per transcript_id. Exons include the full
+    transcript structure (5'UTR + CDS + 3'UTR) so that downstream walkers can
+    handle ORFs that initiate upstream of the canonical ATG (N-terminal
+    extensions, uORFs).
+
+    GTF coordinates are 1-based inclusive; all output coordinates are
+    converted to 0-based half-open.
+
+    Args:
+        gtf_path: Path to a GENCODE-format GTF file.
+
+    Returns:
+        Dict mapping ``transcript_id`` → :class:`TranscriptCoordinates`. Exons
+        are sorted ascending by genomic start (transcript order for ``+``
+        strand, reverse transcript order for ``-`` strand).
+    """
+    skeletons: dict[str, dict] = {}
+
+    logger.info("Loading exon skeletons from %s", gtf_path)
+
+    with open(gtf_path) as handle:
+        for line in handle:
+            if line.startswith("#"):
+                continue
+
+            fields = line.strip().split("\t")
+            if len(fields) != 9:
+                continue
+
+            feat_type = fields[2]
+            if feat_type not in ("exon", "CDS", "start_codon", "stop_codon"):
+                continue
+
+            chrom = fields[0]
+            start_1b = int(fields[3])
+            end_1b = int(fields[4])
+            strand = fields[6]
+            start_0b = start_1b - 1
+            end_0b = end_1b  # GTF inclusive → half-open exclusive
+
+            tid = _extract_attr(fields[8], "transcript_id")
+            if not tid:
+                continue
+
+            entry = skeletons.setdefault(
+                tid,
+                {
+                    "chrom": chrom,
+                    "strand": strand,
+                    "exons": [],
+                    "start_codon_positions": [],
+                    "stop_codon_positions": [],
+                    "cds_min": None,
+                    "cds_max": None,
+                },
+            )
+
+            if feat_type == "exon":
+                entry["exons"].append((start_0b, end_0b))
+            elif feat_type == "start_codon":
+                entry["start_codon_positions"].append((start_0b, end_0b))
+            elif feat_type == "stop_codon":
+                entry["stop_codon_positions"].append((start_0b, end_0b))
+            elif feat_type == "CDS":
+                if entry["cds_min"] is None or start_0b < entry["cds_min"]:
+                    entry["cds_min"] = start_0b
+                if entry["cds_max"] is None or end_0b > entry["cds_max"]:
+                    entry["cds_max"] = end_0b
+
+    coords_by_tid: dict[str, TranscriptCoordinates] = {}
+    for tid, entry in skeletons.items():
+        exons = sorted(entry["exons"])
+        strand = entry["strand"]
+
+        cds_start = _resolve_cds_start(
+            strand=strand,
+            start_codons=entry["start_codon_positions"],
+            cds_min=entry["cds_min"],
+            cds_max=entry["cds_max"],
+        )
+        cds_end = _resolve_cds_end(
+            strand=strand,
+            stop_codons=entry["stop_codon_positions"],
+            cds_min=entry["cds_min"],
+            cds_max=entry["cds_max"],
+        )
+
+        coords_by_tid[tid] = TranscriptCoordinates(
+            transcript_id=tid,
+            chrom=entry["chrom"],
+            strand=strand,
+            exons=exons,
+            cds_start=cds_start,
+            cds_end=cds_end,
+        )
+
+    logger.info("Loaded %d transcript skeletons", len(coords_by_tid))
+    return coords_by_tid
+
+
+def _resolve_cds_start(
+    *,
+    strand: str,
+    start_codons: list[tuple[int, int]],
+    cds_min: int | None,
+    cds_max: int | None,
+) -> int | None:
+    """Return plus-strand 0-based position of the canonical ATG's first nt."""
+    if start_codons:
+        positions = [pos[0] for pos in start_codons]
+        if strand == "-":
+            # A of ATG on mRNA corresponds to the higher plus-strand coord
+            return max(pos[1] for pos in start_codons)
+        return min(positions)
+    # Fall back to CDS extremes
+    if cds_min is None or cds_max is None:
+        return None
+    return cds_max if strand == "-" else cds_min
+
+
+def _resolve_cds_end(
+    *,
+    strand: str,
+    stop_codons: list[tuple[int, int]],
+    cds_min: int | None,
+    cds_max: int | None,
+) -> int | None:
+    """Return plus-strand 0-based position delimiting the stop codon."""
+    if stop_codons:
+        if strand == "-":
+            return min(pos[0] for pos in stop_codons)
+        return max(pos[1] for pos in stop_codons)
+    if cds_min is None or cds_max is None:
+        return None
+    return cds_min if strand == "-" else cds_max
 
 
 def _extract_attr(attributes: str, key: str) -> str:

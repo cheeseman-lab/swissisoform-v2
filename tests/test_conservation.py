@@ -223,8 +223,9 @@ class TestBigWigLookups:
 # ---------------------------------------------------------------------------
 
 
-class TestRegionStubs:
-    def test_region_means_are_none(self, config_with_bigwigs):
+class TestRegionMeans:
+    def test_no_skeleton_gives_none(self, config_with_bigwigs):
+        """Without orf_exons populated, region means fall through to None."""
         mod = ConservationModule(config_with_bigwigs)
         try:
             site = _tis("chr1", 1000, "+")
@@ -236,7 +237,29 @@ class TestRegionStubs:
         assert out["phylop_enrichment"] is None
         assert out["phastcons_unique_region_mean"] is None
         assert out["phastcons_shared_region_mean"] is None
-        assert out["summary"]["region_status"] == "region_map_not_implemented"
+        assert out["summary"]["region_status"] == "no_skeleton"
+
+    def test_extension_region_means(self, config_with_bigwigs):
+        """Extension: isoform has extra upstream exon; unique region lies there."""
+        mod = ConservationModule(config_with_bigwigs)
+        try:
+            site = _tis("chr1", 1000, "+")
+            # Canonical: [1000, 1030) — 30 nt
+            site.canonical_orf_exons = [(1000, 1030)]
+            # Isoform extends upstream to include [900, 930) as well
+            site.orf_exons = [(900, 930), (1000, 1030)]
+            out = mod.annotate_site(site)
+        finally:
+            mod.close()
+
+        # PhyloP == position; unique [900,930) mean = (900+929)/2 = 914.5
+        assert out["phylop_unique_region_mean"] == pytest.approx(914.5)
+        # Shared [1000,1030) mean = (1000+1029)/2 = 1014.5
+        assert out["phylop_shared_region_mean"] == pytest.approx(1014.5)
+        assert out["phylop_enrichment"] == pytest.approx(914.5 / 1014.5)
+        assert out["summary"]["region_status"] == "ok"
+        assert out["summary"]["unique_region_nt"] == 30
+        assert out["summary"]["shared_region_nt"] == 30
 
 
 # ---------------------------------------------------------------------------

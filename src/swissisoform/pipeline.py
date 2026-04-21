@@ -32,9 +32,10 @@ from swissisoform.io.canonical import (
     impute_missing_canonical_starts,
     load_reference_features,
 )
+from swissisoform.io.gtf import load_exon_skeletons
 from swissisoform.io.ribotish import load_ribotish_predictions, recategorize_tis_type
 from swissisoform.io.rnaseq import sum_replicate_counts
-from swissisoform.models import Gene, TranslationInitiationSite
+from swissisoform.models import Gene, TranscriptCoordinates, TranslationInitiationSite
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +192,7 @@ class UpstreamReference:
         start_codons: pd.DataFrame,
         protein_products: pd.DataFrame,
         cds_df: pd.DataFrame,
+        exon_skeletons: dict[str, TranscriptCoordinates] | None = None,
     ) -> None:
         """Hold preloaded reference tables shared across upstream sample runs."""
         self.genome_pos = genome_pos
@@ -201,6 +203,11 @@ class UpstreamReference:
         # transcript_id, feature_type) — consumed by ConsequenceValidator
         # to build genomic→coding position maps for variant validation.
         self.cds_df = cds_df
+        # Per-transcript exon skeletons (Layer 1 of the ORF-exon infrastructure).
+        # Consumed by the assembly layer to populate Gene.canonical_orf_exons
+        # and TIS.orf_exons, which in turn unblocks genomic-coordinate modules
+        # (conservation region means, clinical variant intersection, etc.).
+        self.exon_skeletons = exon_skeletons or {}
 
     @classmethod
     def load(
@@ -223,6 +230,7 @@ class UpstreamReference:
             start_codons=get_start_codons(features["start_codon"], genome_fasta),
             protein_products=get_protein_products(protein_fasta),
             cds_df=features["CDS"],
+            exon_skeletons=load_exon_skeletons(str(gtf_path)),
         )
 
 

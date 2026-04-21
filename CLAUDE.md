@@ -119,11 +119,13 @@ All 9 modules implemented. Data model supports symmetric canonical/isoform annot
 | 2. Harder modules | clinical, conservation, massspec | **Done** |
 | 3. Assembly + real test | `assembly.py` + 5-gene E2E on HeLa Ribo-TISH data | **Done** |
 | 3b. **Expensive modules E2E** | massspec, clinical (+ ConsequenceValidator), conservation (batch), localization (DeepLoc precompute) wired; all 3 clinical DBs (gnomAD + ClinVar + COSMIC) built from source and queried locally | **Done (2026-04-19)** |
-| 4. Comparator extension | Positional subset to diff region + scalar deltas | **Next** |
+| 4. Comparator extension | Positional subset to diff region + scalar deltas | **Done** |
 | 4b. Conservation rewrite | Zoonomia PhyloP/PhastCons BigWig SiteModule (point-based) | **Done (2026-04-21)** |
-| 4c. Conservation region means | Protein→genomic CDS mapper (isoform-aware); unblocks Scope-A for all positional modules | Pending |
-| 5. CLI | `__main__.py` entry point | Pending |
-| 6. Full end-to-end | All modules on real data, all 6 cell lines | Pending |
+| 4c. ORF exon infrastructure | `TranscriptCoordinates` skeleton + Layer-2 walker; conservation region means (unique/shared/enrichment) now live. Unblocks clinical genomic intersection, Scope-A positional subsetting for all genomic modules, Evo 2 DNA extraction. | **Done (2026-04-21)** |
+| 5. CLI | `__main__.py` entry point | **Done** |
+| 6. Evidence scoring | Dual-axis E1–E7 / F1–F6 scoring framework | Pending |
+| 7. Functional / Structure / VEP stubs | Precompute+lookup modules (InterProScan, Chai-1, AlphaMissense) returning None until data exists | Pending |
+| 8. Full end-to-end | All modules on real data, all 6 cell lines | Pending |
 
 ### End-to-End Test Genes (5-gene diagnostic set)
 
@@ -155,14 +157,50 @@ Cactus alignment (Christmas et al. 2023).  Rationale in
   Homology precompute path removed (BigWig random access is cheap).
 - `scripts/download_zoonomia_bigwigs.sh` — idempotent fetch of the two
   tracks (~13 GB total) from UCSC into `data/reference/zoonomia/`.
-- **Stubbed**: `phylop_unique_region_mean`, `phylop_shared_region_mean`,
-  `phylop_enrichment` + phastcons twins.  These need a protein→genomic
-  coordinate mapper over the *isoform* transcript (exon-aware) which
-  doesn't exist yet — flagged with `status="region_map_not_implemented"`
-  and tracked as the next conservation pass.  The same mapper unblocks
-  Scope-A positional subsetting for motifs/clinical/massspec.
 - Path 1/2 from the spec (primate + mammalian MAF frame-intactness) not
   started — requires HAL file download + `hal2maf`.
+
+### ORF exon infrastructure (2026-04-21)
+
+Landed the protein→genomic mapper that Conservation's region metrics
+(and a growing queue of other modules) were blocked on. Two layers:
+
+**Layer 1 — transcript skeleton, shared per transcript_id:**
+`TranscriptCoordinates` dataclass (`models.py`): full exon structure
+(5'UTR + CDS + 3'UTR), `cds_start`, `cds_end`, chrom, strand. Built once
+at GTF loading time by `load_exon_skeletons` (`io/gtf.py`), held on
+`UpstreamReference.exon_skeletons`. Coordinates are 0-based half-open
+plus-strand throughout; mRNA-order concerns live in the walker, not the
+data.
+
+**Layer 2 — per-ORF genomic intervals:**
+`orf_exons_from_skeleton(coords, orf_start_genomic, aa_len)`
+(`coords.py`): walks the skeleton from each ORF's genomic start forward
+through `aa_len * 3` nucleotides, skipping introns. Strand-aware.
+`assemble_genes(..., exon_skeletons=...)` populates:
+
+- `Gene.canonical_orf_exons` (gene-level longest Annotated)
+- `TIS.orf_exons` (per-TIS isoform ORF)
+- `TIS.canonical_orf_exons` (per-Tid canonical, matching `TIS.canonical_protein`)
+
+Also shipped `interval_difference` / `interval_intersection` /
+`interval_length` in `coords.py` — genomic set algebra used to derive
+unique vs. shared regions.
+
+**Conservation region metrics now live.** `modules/conservation.py`
+computes `phylop_unique_region_mean`, `phylop_shared_region_mean`,
+`phylop_enrichment`, and the phastcons twins by:
+1. `unique = site.orf_exons \ site.canonical_orf_exons`
+2. `shared = site.orf_exons ∩ site.canonical_orf_exons`
+3. Length-weighted mean over each interval set, enrichment = unique/shared.
+Stub status `region_map_not_implemented` retired — now returns
+`region_status="ok"` or `"no_skeleton"`.
+
+**What this unblocks (per handoff):**
+- Clinical isoform-level variant intersection (gnomAD/ClinVar coords vs `orf_exons`)
+- Motifs / clinical / massspec Scope-A positional subsetting (genomic path)
+- Evo 2 / AlphaGenome DNA sequence extraction
+- Conservation Path 1/2 MAF extraction over unique regions (pending HAL download)
 
 ### Deferred (unclear value or needs redesign)
 

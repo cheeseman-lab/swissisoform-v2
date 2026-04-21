@@ -67,6 +67,46 @@ def orf_type_from_ribotish(tis_type: str) -> ORFType:
 
 
 @dataclass
+class TranscriptCoordinates:
+    """Exon skeleton for a single transcript (Layer 1 of ORF exon infrastructure).
+
+    Built once per transcript at GTF loading time and shared across all ORFs
+    on that transcript. Downstream Layer 2 walkers consume this to produce
+    per-ORF genomic intervals.
+
+    All coordinates are 0-based half-open plus-strand reference coordinates,
+    regardless of transcript strand. Exons are stored in ascending genomic
+    order; transcript (mRNA) order is ascending for ``+`` strand and
+    descending for ``-`` strand.
+
+    Attributes:
+        transcript_id: Ensembl transcript ID (e.g. ``ENST00000269305.9``).
+        chrom: Chromosome name as it appears in the GTF.
+        strand: ``'+'`` or ``'-'``.
+        exons: Full exon structure (not just CDS) as ``[(start, end), ...]``,
+            ascending genomic order. Includes 5'UTR + CDS + 3'UTR exons so
+            extensions that initiate in the 5'UTR can be walked.
+        cds_start: Plus-strand 0-based genomic position of the canonical ATG's
+            first nucleotide. For ``+`` strand this is the lower coordinate;
+            for ``-`` strand it is the higher coordinate (the A of ATG sits
+            on the minus strand). ``None`` if the transcript has no annotated
+            start codon.
+        cds_end: Plus-strand 0-based genomic position delimiting the end of
+            the canonical CDS. For ``+`` strand this is the exclusive upper
+            bound of the stop codon; for ``-`` strand it is the lower bound
+            (exclusive on the minus-strand walk direction). ``None`` if
+            unavailable.
+    """
+
+    transcript_id: str
+    chrom: str
+    strand: str
+    exons: list[tuple[int, int]]
+    cds_start: int | None = None
+    cds_end: int | None = None
+
+
+@dataclass
 class CellLineExpression:
     """Expression measurements for a TIS in a single cell line.
 
@@ -175,6 +215,18 @@ class TranslationInitiationSite:
     # Context
     kozak_context: str | None = None
 
+    # Genomic exon intervals (plus-strand, 0-based half-open) covering
+    # the isoform ORF's nucleotide sequence, skipping introns. Populated
+    # by the assembly layer from the transcript skeleton. Empty list when
+    # the skeleton isn't available. Symmetric with ``isoform_protein``.
+    orf_exons: list[tuple[int, int]] = field(default_factory=list)
+
+    # Canonical ORF exons for the TIS's *own transcript* — symmetric with
+    # ``canonical_protein`` (which is the per-Tid canonical). Keeping a
+    # per-TIS copy lets SiteModules (conservation, future clinical-genomic)
+    # compute unique/shared region metrics without needing the parent Gene.
+    canonical_orf_exons: list[tuple[int, int]] = field(default_factory=list)
+
     # Isoform-level annotations — per-protein modules write here
     isoform_annotations: dict[str, dict[str, Any]] = field(default_factory=dict)
 
@@ -214,6 +266,12 @@ class Gene:
     tis_sites: list[TranslationInitiationSite] = field(default_factory=list)
     canonical_annotations: dict[str, dict[str, Any]] = field(default_factory=dict)
     gene_annotations: dict[str, Any] = field(default_factory=dict)
+
+    # Genomic exon intervals (plus-strand, 0-based half-open) covering
+    # the canonical ORF, symmetric with ``canonical_protein``. Populated
+    # by the assembly layer from the transcript skeleton; empty list when
+    # the skeleton isn't available.
+    canonical_orf_exons: list[tuple[int, int]] = field(default_factory=list)
 
 
 @dataclass
