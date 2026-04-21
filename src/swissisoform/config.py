@@ -50,6 +50,17 @@ class ConservationConfig:
     Attributes:
         phylop_bigwig: Path to 241-mammal PhyloP BigWig file.
         phastcons_bigwig: Path to 241-mammal PhastCons BigWig file.
+        hal_path: Path to the Zoonomia 241-mammal Cactus HAL file, used by
+            Path 1/2 (primate + mammalian reading-frame integrity). When
+            ``None`` or missing, Path 1/2 reports ``status="not_run"`` and
+            the BigWig paths continue to serve Path 3 metrics.
+        hal_ref_genome: Reference genome name inside the HAL (default
+            ``"hg38"``). Must match one of ``halStats --genomes`` output.
+        hal2maf_binary: ``hal2maf`` executable name resolved on ``PATH``.
+        primate_species: Override for the Path 1 species list; ``None``
+            falls back to :data:`conservation_frame.PRIMATE_SPECIES`.
+        mammalian_species: Override for the Path 2 species list; ``None``
+            falls back to :data:`conservation_frame.MAMMALIAN_SPECIES`.
         diamond_db: Dormant — path to DIAMOND protein database for legacy
             homology search.
         tblastn_db: Dormant — path to tBLASTn nucleotide database for legacy
@@ -58,6 +69,11 @@ class ConservationConfig:
 
     phylop_bigwig: Path | None = None
     phastcons_bigwig: Path | None = None
+    hal_path: Path | None = None
+    hal_ref_genome: str = "hg38"
+    hal2maf_binary: str = "hal2maf"
+    primate_species: list[str] | None = None
+    mammalian_species: list[str] | None = None
     diamond_db: Path | None = None
     tblastn_db: Path | None = None
 

@@ -122,6 +122,7 @@ All 9 modules implemented. Data model supports symmetric canonical/isoform annot
 | 4. Comparator extension | Positional subset to diff region + scalar deltas | **Done** |
 | 4b. Conservation rewrite | Zoonomia PhyloP/PhastCons BigWig SiteModule (point-based) | **Done (2026-04-21)** |
 | 4c. ORF exon infrastructure | `TranscriptCoordinates` skeleton + Layer-2 walker; conservation region means (unique/shared/enrichment) now live. Unblocks clinical genomic intersection, Scope-A positional subsetting for all genomic modules, Evo 2 DNA extraction. | **Done (2026-04-21)** |
+| 4d. Conservation Path 1/2 | Primate + mammalian reading-frame integrity module (MAF parse, frame analysis, `hal2maf` wrapper, species lists). Pure logic fully tested; active on download of Zoonomia HAL. | **Done (2026-04-21)** |
 | 5. CLI | `__main__.py` entry point | **Done** |
 | 6. Evidence scoring | Dual-axis E1–E7 / F1–F6 scoring framework | Pending |
 | 7. Functional / Structure / VEP stubs | Precompute+lookup modules (InterProScan, Chai-1, AlphaMissense) returning None until data exists | Pending |
@@ -157,8 +158,37 @@ Cactus alignment (Christmas et al. 2023).  Rationale in
   Homology precompute path removed (BigWig random access is cheap).
 - `scripts/download_zoonomia_bigwigs.sh` — idempotent fetch of the two
   tracks (~13 GB total) from UCSC into `data/reference/zoonomia/`.
-- Path 1/2 from the spec (primate + mammalian MAF frame-intactness) not
-  started — requires HAL file download + `hal2maf`.
+- Path 1/2 from the spec (primate + mammalian MAF frame-intactness) —
+  scaffolded 2026-04-21 (see below); active once the HAL download lands.
+
+### Conservation Path 1/2 (2026-04-21)
+
+Primate + mammalian reading-frame integrity per
+`docs/reviews/conservation_path12_spec.md`. Pure logic tested end-to-end;
+HAL-dependent path emits `status="not_run"` until the download lands.
+
+- `src/swissisoform/conservation_frame/` subpackage:
+  - `maf.py` — MAF parser (`parse_maf`, `concat_species_rows`).
+  - `frame.py` — per-species `analyze_species` (start-codon conservation,
+    frameshift detection, premature-stop scan, AA pident) plus
+    `aggregate_species_results`.
+  - `species.py` — curated `PRIMATE_SPECIES` (22) and `MAMMALIAN_SPECIES`
+    (23) lists in UCSC assembly names; refinable via `halStats --genomes`.
+  - `hal.py` — `hal2maf` subprocess wrapper with graceful `None` on
+    missing binary / HAL / non-zero exit.
+- `modules/conservation_frame.py` — `ConservationFrameModule` (SiteModule)
+  consumes `TIS.orf_exons` and `TIS.canonical_orf_exons`, queries the
+  unique region via `hal2maf`, reports primate/mammalian aggregates.
+  Distinguishes `not_run` / `no_skeleton` / `no_unique_region` /
+  `no_alignment` / `ok`.
+- `ConservationConfig` gains `hal_path`, `hal_ref_genome`,
+  `hal2maf_binary`, `primate_species`, `mammalian_species`.
+- `scripts/download_zoonomia_hal.sh` — resumable curl with provenance
+  sidecar; 200-600 GB, run on demand.
+- Tests: `test_conservation_frame.py` (MAF parse, frame analysis: identity,
+  substitution, premature stop, start-codon loss, frameshift vs. in-frame
+  deletion, all-gap target) + `test_conservation_frame_module.py`
+  (not_run paths, no_skeleton / no_unique_region, revcomp MAF helper).
 
 ### ORF exon infrastructure (2026-04-21)
 
