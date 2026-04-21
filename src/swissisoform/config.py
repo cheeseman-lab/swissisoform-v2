@@ -38,15 +38,28 @@ class FilterConfig:
 class ConservationConfig:
     """Configuration for conservation analysis (Module 8).
 
+    The active conservation module is BigWig-lookup-based (Zoonomia 241-mammal
+    PhyloP / PhastCons tracks — see ``docs/reviews/conservation_module_spec.md``).
+    Point ``phylop_bigwig`` and ``phastcons_bigwig`` at the files written by
+    ``scripts/download_zoonomia_bigwigs.sh``.
+
+    The homology-search fields (``diamond_db``, ``tblastn_db``) feed the dormant
+    ``conservation_homology`` module kept for reference.  They are not wired
+    into the main pipeline.
+
     Attributes:
-        diamond_db: Path to DIAMOND protein database for ortholog search.
-        tblastn_db: Path to tBLASTn nucleotide database.
-        phylop_bigwig: Path to PhyloP conservation scores BigWig file.
+        phylop_bigwig: Path to 241-mammal PhyloP BigWig file.
+        phastcons_bigwig: Path to 241-mammal PhastCons BigWig file.
+        diamond_db: Dormant — path to DIAMOND protein database for legacy
+            homology search.
+        tblastn_db: Dormant — path to tBLASTn nucleotide database for legacy
+            homology search.
     """
 
+    phylop_bigwig: Path | None = None
+    phastcons_bigwig: Path | None = None
     diamond_db: Path | None = None
     tblastn_db: Path | None = None
-    phylop_bigwig: Path | None = None
 
 
 @dataclass

@@ -12,7 +12,10 @@ For expensive modules:
     - clinical:     reads ClinVar + (when available) gnomAD + COSMIC
                     local parquets built by scripts/setup_databases.py.
                     Falls back to live HTTP for any missing DB.
-    - conservation: runs DIAMOND against the local SwissProt .dmnd.
+    - conservation: Zoonomia PhyloP / PhastCons BigWig lookups at the TIS
+                    and Kozak window.  Tracks are optional — each is looked
+                    up independently and returns None when the BigWig is
+                    absent.
     - massspec:     inline tryptic digest (no DB).
     - localization: precomputes DeepLoc2 on CPU for unique proteins; if
                     DeepLoc2 is not importable the module no-ops with
@@ -64,13 +67,15 @@ HELA_RNASEQ = [
     DATA / "rnaseq_counts/CACGGT_9_htseqcount.txt",
 ]
 
-# Paths to reference DBs built by scripts/setup_databases.py.  Each is
-# optional — the module gracefully falls back to live HTTP or no-ops
-# when a DB is missing.
-DIAMOND_DB = DATA / "diamond" / "swissprot.dmnd"
+# Paths to reference DBs built by scripts/setup_databases.py and
+# scripts/download_zoonomia_bigwigs.sh.  Each is optional — the module
+# gracefully falls back to live HTTP, no-ops, or empty lookups when a DB
+# is missing.
 GNOMAD_DB = DATA / "gnomad" / "gnomad_v4.1_exome.parquet"
 CLINVAR_DB = DATA / "clinvar" / "variant_summary.parquet"
 COSMIC_DB = DATA / "cosmic" / "cosmic_variants.parquet"
+PHYLOP_BW = DATA / "zoonomia" / "cactus241way.phyloP.bw"
+PHASTCONS_BW = DATA / "zoonomia" / "cactus241way.phastCons.bw"
 
 TEST_GENES = ["TP53", "EIF4G1", "VEGFA", "CTNND1", "MYC"]
 
@@ -88,7 +93,8 @@ def build_config() -> PipelineConfig:
         cosmic_db=COSMIC_DB if COSMIC_DB.exists() else None,
     )
     cfg.conservation = ConservationConfig(
-        diamond_db=DIAMOND_DB if DIAMOND_DB.exists() else None,
+        phylop_bigwig=PHYLOP_BW if PHYLOP_BW.exists() else None,
+        phastcons_bigwig=PHASTCONS_BW if PHASTCONS_BW.exists() else None,
     )
     return cfg
 
@@ -152,27 +158,21 @@ def main() -> None:
     hdr("STAGE 3 — Build annotation pipeline + precompute DeepLoc")
     cfg = build_config()
     print("Reference DBs:")
-    print(f"  DIAMOND: {'ok' if DIAMOND_DB.exists() else 'MISSING'}  {DIAMOND_DB}")
+    print(f"  PhyloP:    {'ok' if PHYLOP_BW.exists() else 'MISSING'}  {PHYLOP_BW}")
+    print(f"  PhastCons: {'ok' if PHASTCONS_BW.exists() else 'MISSING'}  {PHASTCONS_BW}")
     print(
-        f"  gnomAD:  {'ok' if GNOMAD_DB.exists() else 'MISSING (falls back to API)'}  {GNOMAD_DB}"
+        f"  gnomAD:    {'ok' if GNOMAD_DB.exists() else 'MISSING (falls back to API)'}  {GNOMAD_DB}"
     )
     print(
-        f"  ClinVar: {'ok' if CLINVAR_DB.exists() else 'MISSING (falls back to API)'}  {CLINVAR_DB}"
+        f"  ClinVar:   {'ok' if CLINVAR_DB.exists() else 'MISSING (falls back to API)'}  {CLINVAR_DB}"
     )
-    print(f"  COSMIC:  {'ok' if COSMIC_DB.exists() else 'MISSING (skipped)'}  {COSMIC_DB}")
+    print(f"  COSMIC:    {'ok' if COSMIC_DB.exists() else 'MISSING (skipped)'}  {COSMIC_DB}")
 
     # DeepLoc: batch-infer every unique protein once, return hash-keyed dict
     deeploc_lookup = precompute_localization(genes)
 
-    # Conservation: ONE DIAMOND call over all unique proteins (vs. one per
-    # annotate() call, which would reload the 293 MB SwissProt DB per call)
-    conservation_mod = ConservationModule(cfg)
-    all_proteins: set[str] = set()
-    for gene in genes:
-        all_proteins.add(gene.canonical_protein)
-        for site in gene.tis_sites:
-            all_proteins.add(site.isoform_protein)
-    conservation_mod.precompute_batch(all_proteins)
+    # Conservation: BigWig-backed SiteModule — cheap random access per TIS,
+    # no precompute needed.  Module is instantiated with the pipeline below.
 
     # ConsequenceValidator uses CDS features from the shared upstream
     # reference — loaded once at stage 1, reused here to avoid a second
@@ -203,13 +203,13 @@ def main() -> None:
             BiophysicsModule(cfg),
             MotifsModule(cfg),
             MassSpecModule(cfg),
-            conservation_mod,
             clinical_mod,
             LocalizationModule(cfg, predictions=deeploc_lookup),
         ],
         site_modules=[
             CoreIdentityModule(cfg),
             InitiationContextModule(cfg),
+            ConservationModule(cfg),
         ],
     )
 
@@ -222,7 +222,6 @@ def main() -> None:
         bio = can.get("biophysics", {})
         mot = can.get("motifs", {})
         mass = can.get("massspec", {})
-        cons = can.get("conservation", {})
         clin = can.get("clinical", {})
         loc = can.get("localization", {})
 
@@ -235,12 +234,7 @@ def main() -> None:
         ms_hits = mass.get("hits", [])
         unique_ms = sum(1 for h in ms_hits if h.get("unique_to_isoform") is True)
         print(f"  massspec:      {len(ms_hits)} tryptic peptides ({unique_ms} marked unique)")
-        cons_sum = cons.get("summary", {})
-        print(
-            f"  conservation:  score={cons_sum.get('conservation_score')} "
-            f"({cons_sum.get('conservation_label')})  "
-            f"tool={cons_sum.get('tool_used')}  status={cons_sum.get('status')}"
-        )
+        # conservation is per-TIS (SiteModule) — shown in per-TIS block below
         clin_sum = clin.get("summary", {})
         clin_hits = clin.get("hits", [])
         print(
@@ -277,8 +271,8 @@ def main() -> None:
                 f"      bio pI={ibio.get('pI')} gravy={ibio.get('gravy')}  "
                 f"motifs={len(imot.get('hits', []) or [])}  "
                 f"ms={len(ms_hits)} (uniq={ms_unique})  "
-                f"cons={cons_sum.get('conservation_score')}/"
-                f"{cons_sum.get('status')}  "
+                f"cons phyloP@tis={icons.get('phylop_at_tis')}/"
+                f"{cons_sum.get('phylop_status')}  "
                 f"clin={clin_sum.get('total_variants', 0)} "
                 f"(path={clin_sum.get('pathogenic_count', 0)})  "
                 f"loc={iloc.get('deeploc_prediction')}/"

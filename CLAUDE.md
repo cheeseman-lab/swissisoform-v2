@@ -98,7 +98,7 @@ All 9 modules implemented. Data model supports symmetric canonical/isoform annot
 | `motifs.py` | ProteinModule | `annotate(protein) -> dict` (positional hits) | Inline (regex) |
 | `localization.py` | ProteinModule | `annotate_by_key(key) -> dict` (lookup) | Lookup (DeepLoc results) |
 | `clinical.py` | ProteinModule | `annotate(protein, gene_name) -> dict` (positional variants) | Inline fetch (gnomAD/ClinVar/COSMIC) + codon-level consequence validation, or cache |
-| `conservation.py` | ProteinModule | `annotate(protein) -> dict` (positional alignment hits) | Inline subprocess (DIAMOND/blastp/MMseqs2) or cache |
+| `conservation.py` | SiteModule | `annotate_site(site) -> dict` (nucleotide-level scores) | Zoonomia 241-mammal PhyloP + PhastCons BigWig lookups (point-based: TIS codon + Kozak). Region means stubbed until protein→genomic CDS mapper lands. |
 | `massspec.py` | ProteinModule | `annotate(protein, canonical, gene_name) -> dict` (positional peptides) | Inline tryptic digest + optional PepQuery lookup |
 | `core_identity.py` | SiteModule | `annotate_site(site) -> dict` | TIS metadata |
 | `initiation_context.py` | SiteModule | `annotate_site(site) -> dict` | TIS metadata |
@@ -120,6 +120,8 @@ All 9 modules implemented. Data model supports symmetric canonical/isoform annot
 | 3. Assembly + real test | `assembly.py` + 5-gene E2E on HeLa Ribo-TISH data | **Done** |
 | 3b. **Expensive modules E2E** | massspec, clinical (+ ConsequenceValidator), conservation (batch), localization (DeepLoc precompute) wired; all 3 clinical DBs (gnomAD + ClinVar + COSMIC) built from source and queried locally | **Done (2026-04-19)** |
 | 4. Comparator extension | Positional subset to diff region + scalar deltas | **Next** |
+| 4b. Conservation rewrite | Zoonomia PhyloP/PhastCons BigWig SiteModule (point-based) | **Done (2026-04-21)** |
+| 4c. Conservation region means | Protein→genomic CDS mapper (isoform-aware); unblocks Scope-A for all positional modules | Pending |
 | 5. CLI | `__main__.py` entry point | Pending |
 | 6. Full end-to-end | All modules on real data, all 6 cell lines | Pending |
 
@@ -132,6 +134,35 @@ All 9 modules implemented. Data model supports symmetric canonical/isoform annot
 | VEGFA | + | Trunc, Novel | 8 | No | Known biology + within-exon truncation |
 | CTNND1 | + | Trunc, Internal, uORF | 21 | Yes (2 introns) | Cross-transcript ORF mismatch |
 | PPP1R15A | + | uORF, Ext | 3 | No | Small gene + uORF edge case |
+
+### Conservation rewrite (2026-04-21)
+
+Swapped the homology-based `ConservationModule` (DIAMOND/blastp/MMseqs2 against
+SwissProt) for a BigWig-lookup SiteModule backed by the Zoonomia 241-mammal
+Cactus alignment (Christmas et al. 2023).  Rationale in
+`docs/reviews/conservation_module_spec.md`.
+
+- New `modules/conservation.py` — SiteModule that opens PhyloP + PhastCons
+  BigWigs once per worker and reads scores at the TIS start codon (3 nt) and
+  Kozak window (13 nt: −9..+4 mRNA, strand-aware).  Distinguishes `not_run`
+  (no BigWig/config) from genuine missing values.
+- Old homology module preserved as `modules/conservation_homology.py`
+  (`ConservationHomologyModule`) — dormant, not wired into the pipeline, kept
+  so protein-similarity evidence can be reintroduced as a separate module.
+- `ConservationConfig` now carries `phylop_bigwig` + `phastcons_bigwig` as
+  first-class fields; `diamond_db` / `tblastn_db` kept as dormant.
+- CLI: `--diamond-db` replaced by `--phylop-bigwig` / `--phastcons-bigwig`.
+  Homology precompute path removed (BigWig random access is cheap).
+- `scripts/download_zoonomia_bigwigs.sh` — idempotent fetch of the two
+  tracks (~13 GB total) from UCSC into `data/reference/zoonomia/`.
+- **Stubbed**: `phylop_unique_region_mean`, `phylop_shared_region_mean`,
+  `phylop_enrichment` + phastcons twins.  These need a protein→genomic
+  coordinate mapper over the *isoform* transcript (exon-aware) which
+  doesn't exist yet — flagged with `status="region_map_not_implemented"`
+  and tracked as the next conservation pass.  The same mapper unblocks
+  Scope-A positional subsetting for motifs/clinical/massspec.
+- Path 1/2 from the spec (primate + mammalian MAF frame-intactness) not
+  started — requires HAL file download + `hal2maf`.
 
 ### Deferred (unclear value or needs redesign)
 

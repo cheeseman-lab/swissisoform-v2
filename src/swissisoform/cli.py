@@ -21,7 +21,7 @@ The ``--workers`` flag controls two parallel sections: per-sample
 upstream processing (one worker per cell line, up to ``--workers``) and
 gene-level annotation after precompute (gene-parallel via
 ``ProcessPoolExecutor``). The expensive precompute phase (DeepLoc
-batch, DIAMOND batch, clinical variant prefetch) is itself single-shot
+batch, clinical variant prefetch) is itself single-shot
 but batched across all unique proteins / genes, which is already the
 bottleneck win compared to per-call invocation.
 """
@@ -126,10 +126,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Max parallel workers for sample upstream + gene annotation.",
     )
     run_p.add_argument(
-        "--diamond-db",
+        "--phylop-bigwig",
         type=Path,
         default=None,
-        help="DIAMOND SwissProt database (enables conservation).",
+        help="Zoonomia 241-mammal PhyloP BigWig (enables conservation).",
+    )
+    run_p.add_argument(
+        "--phastcons-bigwig",
+        type=Path,
+        default=None,
+        help="Zoonomia 241-mammal PhastCons BigWig (enables conservation).",
     )
     run_p.add_argument(
         "--gnomad-db",
@@ -309,7 +315,6 @@ def _annotate_genes_parallel(
     cfg: PipelineConfig,
     *,
     deeploc_lookup: dict,
-    conservation_precomputed: dict,
     clinical_prefetch: dict[str, list[dict[str, Any]]],
     cds_df: pd.DataFrame,
     genome_path: Path,
@@ -330,7 +335,6 @@ def _annotate_genes_parallel(
             genes,
             cfg,
             deeploc_lookup=deeploc_lookup,
-            conservation_precomputed=conservation_precomputed,
             clinical_prefetch=clinical_prefetch,
             cds_df=cds_df,
             genome_path=genome_path,
@@ -344,7 +348,6 @@ def _annotate_genes_parallel(
                 chunk,
                 cfg,
                 deeploc_lookup=deeploc_lookup,
-                conservation_precomputed=conservation_precomputed,
                 clinical_prefetch={
                     g.gene_name: clinical_prefetch.get(g.gene_name, []) for g in chunk
                 },
@@ -372,7 +375,6 @@ def _annotate_genes_serial(
     cfg: PipelineConfig,
     *,
     deeploc_lookup: dict,
-    conservation_precomputed: dict,
     clinical_prefetch: dict[str, list[dict[str, Any]]],
     cds_df: pd.DataFrame,
     genome_path: Path,
@@ -382,21 +384,18 @@ def _annotate_genes_serial(
     clinical_mod = ClinicalModule(cfg, validator=validator)
     clinical_mod._variant_cache.update(clinical_prefetch)
 
-    conservation_mod = ConservationModule(cfg)
-    conservation_mod._precomputed = conservation_precomputed
-
     pipeline = AnnotationPipeline(
         protein_modules=[
             BiophysicsModule(cfg),
             MotifsModule(cfg),
             MassSpecModule(cfg),
-            conservation_mod,
             clinical_mod,
             LocalizationModule(cfg, predictions=deeploc_lookup),
         ],
         site_modules=[
             CoreIdentityModule(cfg),
             InitiationContextModule(cfg),
+            ConservationModule(cfg),
         ],
     )
     return pipeline.run(genes)
@@ -426,7 +425,8 @@ def _build_config(args: argparse.Namespace) -> PipelineConfig:
         cosmic_db=args.cosmic_db if args.cosmic_db else None,
     )
     cfg.conservation = ConservationConfig(
-        diamond_db=args.diamond_db if args.diamond_db else None,
+        phylop_bigwig=args.phylop_bigwig if args.phylop_bigwig else None,
+        phastcons_bigwig=args.phastcons_bigwig if args.phastcons_bigwig else None,
     )
     return cfg
 
@@ -498,21 +498,9 @@ def _run(args: argparse.Namespace) -> int:
             "deeploc precompute: %d proteins in %.1fs", len(proteins), time.perf_counter() - t0
         )
 
-    conservation_precomputed: dict = {}
-    if args.diamond_db and args.diamond_db.exists():
-        t0 = time.perf_counter()
-        conservation_mod = ConservationModule(cfg)
-        unique_proteins = {g.canonical_protein for g in genes}
-        for g in genes:
-            for site in g.tis_sites:
-                unique_proteins.add(site.isoform_protein)
-        conservation_mod.precompute_batch(unique_proteins)
-        conservation_precomputed = conservation_mod._precomputed
-        logger.info(
-            "conservation precompute: %d proteins in %.1fs",
-            len(unique_proteins),
-            time.perf_counter() - t0,
-        )
+    # Conservation is now a SiteModule backed by Zoonomia BigWigs — BigWig
+    # random-access is cheap, so there is no precompute step.  Each gene
+    # worker opens its own pyBigWig handle via ConservationModule.__init__.
 
     clinical_prefetch: dict[str, list[dict[str, Any]]] = {}
     if any([cfg.clinical.gnomad_db, cfg.clinical.clinvar_db, cfg.clinical.cosmic_db]):
@@ -534,7 +522,6 @@ def _run(args: argparse.Namespace) -> int:
         genes,
         cfg,
         deeploc_lookup=deeploc_lookup,
-        conservation_precomputed=conservation_precomputed,
         clinical_prefetch=clinical_prefetch,
         cds_df=ref.cds_df,
         genome_path=args.genome,

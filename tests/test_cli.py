@@ -166,7 +166,6 @@ def test_annotate_genes_serial_rebuilds_pipeline(config, tmp_path):
         [gene],
         config,
         deeploc_lookup={},
-        conservation_precomputed={},
         clinical_prefetch={},
         cds_df=cds_df,
         genome_path=fake_genome,
