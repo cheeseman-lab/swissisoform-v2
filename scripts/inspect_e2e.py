@@ -32,16 +32,19 @@ from pathlib import Path
 
 from swissisoform.assembly import assemble_genes
 from swissisoform.clinical.validate import ConsequenceValidator
+from swissisoform.compare.comparator import compare_genes
 from swissisoform.config import (
     ClinicalConfig,
     ConservationConfig,
     PipelineConfig,
+    ScoringConfig,
 )
 from swissisoform.io.parquet import paired_tis_dataframe
 from swissisoform.io.ribotish import load_ribotish_predictions
 from swissisoform.modules.biophysics import BiophysicsModule
 from swissisoform.modules.clinical import ClinicalModule
 from swissisoform.modules.conservation import ConservationModule
+from swissisoform.modules.conservation_frame import ConservationFrameModule
 from swissisoform.modules.core_identity import CoreIdentityModule
 from swissisoform.modules.initiation_context import InitiationContextModule
 from swissisoform.modules.localization import (
@@ -50,6 +53,8 @@ from swissisoform.modules.localization import (
 )
 from swissisoform.modules.massspec import MassSpecModule
 from swissisoform.modules.motifs import MotifsModule
+from swissisoform.modules.scoring import EvidenceScoringModule
+from swissisoform.modules.variant_intersection import VariantIntersectionModule
 from swissisoform.pipeline import AnnotationPipeline, UpstreamReference, run_sample
 
 logging.basicConfig(
@@ -76,6 +81,7 @@ CLINVAR_DB = DATA / "clinvar" / "variant_summary.parquet"
 COSMIC_DB = DATA / "cosmic" / "cosmic_variants.parquet"
 PHYLOP_BW = DATA / "zoonomia" / "cactus241way.phyloP.bw"
 PHASTCONS_BW = DATA / "zoonomia" / "cactus241way.phastCons.bw"
+HAL_FILE = DATA / "zoonomia" / "241-mammalian-2020v2.hal"
 
 TEST_GENES = ["TP53", "EIF4G1", "VEGFA", "CTNND1", "MYC"]
 
@@ -95,6 +101,18 @@ def build_config() -> PipelineConfig:
     cfg.conservation = ConservationConfig(
         phylop_bigwig=PHYLOP_BW if PHYLOP_BW.exists() else None,
         phastcons_bigwig=PHASTCONS_BW if PHASTCONS_BW.exists() else None,
+        hal_path=HAL_FILE if HAL_FILE.exists() else None,
+    )
+    # Demo-friendly scoring thresholds — looser than production defaults so
+    # that at least some existence / functional criteria flip True on the
+    # 5-gene HeLa-only subset.
+    cfg.scoring = ScoringConfig(
+        primate_frac_intact_min=0.3,
+        mammalian_frac_intact_min=0.2,
+        phylop_coding_min=1.0,
+        min_cell_lines=1,
+        existence_high_threshold=3,
+        functional_high_threshold=2,
     )
     return cfg
 
@@ -145,6 +163,7 @@ def main() -> None:
         final[final["Symbol"].isin(TEST_GENES)],
         gene_names=TEST_GENES,
         genome_fasta=GENOME,
+        exon_skeletons=ref.exon_skeletons,
     )
     for gene in sorted(genes, key=lambda g: g.gene_name):
         can_lens = sorted({len(s.canonical_protein.rstrip("*")) for s in gene.tis_sites})
@@ -163,10 +182,13 @@ def main() -> None:
     print(
         f"  gnomAD:    {'ok' if GNOMAD_DB.exists() else 'MISSING (falls back to API)'}  {GNOMAD_DB}"
     )
-    print(
-        f"  ClinVar:   {'ok' if CLINVAR_DB.exists() else 'MISSING (falls back to API)'}  {CLINVAR_DB}"
-    )
+    cv_status = "ok" if CLINVAR_DB.exists() else "MISSING (falls back to API)"
+    print(f"  ClinVar:   {cv_status}  {CLINVAR_DB}")
     print(f"  COSMIC:    {'ok' if COSMIC_DB.exists() else 'MISSING (skipped)'}  {COSMIC_DB}")
+    print(
+        f"  HAL:       {'ok' if HAL_FILE.exists() else 'MISSING (frame module = not_run)'}  "
+        f"{HAL_FILE}"
+    )
 
     # DeepLoc: batch-infer every unique protein once, return hash-keyed dict
     deeploc_lookup = precompute_localization(genes)
@@ -198,6 +220,9 @@ def main() -> None:
             f"({with_pos} with protein_pos)"
         )
 
+    # Variant intersection and scoring run AFTER clinical + conservation in
+    # the same SiteModules list — order matters: they read annotations the
+    # earlier modules attached in the same pass.
     pipeline = AnnotationPipeline(
         protein_modules=[
             BiophysicsModule(cfg),
@@ -210,11 +235,18 @@ def main() -> None:
             CoreIdentityModule(cfg),
             InitiationContextModule(cfg),
             ConservationModule(cfg),
+            ConservationFrameModule(cfg),
+            VariantIntersectionModule(),
+            EvidenceScoringModule(cfg),
         ],
     )
 
-    hdr("STAGE 4 — Annotate")
+    hdr("STAGE 4 — Annotate + compare")
     pipeline.run(genes)
+    # Comparator runs once everything else is populated so scalar deltas
+    # and positional subsets land on ``site.comparison`` before the
+    # (below) reporting loop reads them.
+    compare_genes(genes, scope_a_modules=[BiophysicsModule(cfg)])
 
     hdr("STAGE 5 — Per-gene spot check")
     for gene in sorted(genes, key=lambda g: g.gene_name):
@@ -258,13 +290,17 @@ def main() -> None:
             imot = ia.get("motifs", {})
             imass = ia.get("massspec", {})
             icons = ia.get("conservation", {})
+            iframe = ia.get("conservation_frame", {}) or {}
             iclin = ia.get("clinical", {})
             iloc = ia.get("localization", {})
+            ivi = ia.get("variant_intersection", {}) or {}
+            isc = ia.get("scoring", {}) or {}
             ilen = len(site.isoform_protein.rstrip("*"))
             kozak = site.kozak_context or "—"
             ms_hits = imass.get("hits", []) or []
             ms_unique = sum(1 for h in ms_hits if h.get("unique_to_isoform") is True)
             cons_sum = icons.get("summary", {}) or {}
+            frame_status = (iframe.get("summary") or {}).get("status", "—")
             clin_sum = iclin.get("summary", {}) or {}
             print(f"    TIS {site.tis_id} ({site.orf_type.value}, {ilen} aa, kozak={kozak})")
             print(
@@ -273,10 +309,23 @@ def main() -> None:
                 f"ms={len(ms_hits)} (uniq={ms_unique})  "
                 f"cons phyloP@tis={icons.get('phylop_at_tis')}/"
                 f"{cons_sum.get('phylop_status')}  "
+                f"frame={frame_status} "
+                f"primate_frac={iframe.get('primate_frac_intact')} "
+                f"mamm_frac={iframe.get('mammalian_frac_intact')}  "
                 f"clin={clin_sum.get('total_variants', 0)} "
                 f"(path={clin_sum.get('pathogenic_count', 0)})  "
+                f"vi_unique={ivi.get('n_in_unique_region')} "
+                f"(path={ivi.get('n_pathogenic_in_unique_region')})  "
                 f"loc={iloc.get('deeploc_prediction')}/"
                 f"{iloc.get('deeploc_signals')}"
+            )
+            print(
+                f"      score: existence={isc.get('existence_score')}/"
+                f"{isc.get('existence_evaluable')} "
+                f"(hi_conf={isc.get('existence_high_confidence')})  "
+                f"functional={isc.get('functional_score')}/"
+                f"{isc.get('functional_evaluable')} "
+                f"(hi_conf={isc.get('functional_high_confidence')})"
             )
 
     hdr("STAGE 6 — Paired parquet output")
