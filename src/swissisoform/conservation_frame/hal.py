@@ -22,6 +22,59 @@ def hal2maf_available(hal2maf_binary: str = "hal2maf") -> bool:
     return shutil.which(hal2maf_binary) is not None
 
 
+def extract_tree(
+    hal_path: str | Path,
+    *,
+    halstats_binary: str = "halStats",
+    timeout: float = 60.0,
+) -> str | None:
+    """Run ``halStats --tree`` and return the Newick string.
+
+    The HAL carries the Cactus species tree alongside the alignment; pulling
+    it lets us rank species by phylogenetic depth from ``hg38`` without
+    hand-maintaining clade tables. Returns ``None`` and logs a warning on
+    any failure (missing binary, missing HAL, non-zero exit), so callers
+    can fall back to a default depth map.
+
+    Args:
+        hal_path: Path to the Zoonomia HAL file.
+        halstats_binary: Binary to invoke (default ``"halStats"``).
+        timeout: Seconds before we abandon the subprocess.
+
+    Returns:
+        Newick tree string on success; ``None`` otherwise.
+    """
+    hal_path = Path(hal_path)
+    if not hal_path.exists():
+        logger.warning("HAL file not found: %s", hal_path)
+        return None
+    if shutil.which(halstats_binary) is None:
+        logger.warning("halStats binary not on PATH (%s)", halstats_binary)
+        return None
+
+    cmd = [halstats_binary, "--tree", str(hal_path)]
+    try:
+        completed = subprocess.run(  # noqa: S603 — constrained inputs
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning("halStats --tree failed: %s", exc)
+        return None
+    if completed.returncode != 0:
+        logger.warning(
+            "halStats --tree exit=%d stderr=%s",
+            completed.returncode,
+            completed.stderr.strip()[:200],
+        )
+        return None
+    tree = completed.stdout.strip()
+    return tree or None
+
+
 def extract_maf(
     hal_path: str | Path,
     chrom: str,

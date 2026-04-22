@@ -84,6 +84,72 @@ class TestMetadata:
         assert "conservation_frame_summary" in cols
 
 
+class TestDeepestIntact:
+    """End-to-end: tree supplied via config, alignment faked via monkeypatch."""
+
+    def test_picks_deepest_intact_species(self, monkeypatch, tmp_path):
+        newick = (
+            "(((hg38,panTro6)hominid,"
+            "(rheMac10,calJac4)simian)primate,"
+            "mm10)euarchontoglires;"
+        )
+        fake_hal = tmp_path / "fake.hal"
+        fake_hal.write_bytes(b"")
+        cfg = PipelineConfig(
+            conservation=ConservationConfig(
+                hal_path=fake_hal,
+                hal_tree_newick=newick,
+                primate_species=["panTro6", "rheMac10", "calJac4"],
+                mammalian_species=["panTro6", "rheMac10", "mm10"],
+            ),
+        )
+        mod = ConservationFrameModule(cfg)
+        monkeypatch.setattr(mod, "_available", True)
+
+        # Fake alignment: every species has an intact ATG-anchored ORF.
+        ref = "ATGAAACCCGGGTAA"
+
+        def fake_fetch(chrom, intervals, strand):
+            return ref, {sp: ref for sp in ("panTro6", "rheMac10", "calJac4", "mm10")}
+
+        monkeypatch.setattr(mod, "_fetch_alignment", fake_fetch)
+
+        site = _tis()
+        site.orf_exons = [(1000, 1030)]
+        site.canonical_orf_exons = [(1050, 1080)]  # disjoint → unique = site.orf_exons
+        out = mod.annotate_site(site)
+
+        # Primate list: deepest should be rheMac10 or calJac4 (both depth 2)
+        assert out["primate_deepest_species"] in {"rheMac10", "calJac4"}
+        assert out["primate_max_depth"] == 2
+        # Mammalian list: mm10 is the outgroup (depth 3 in this tree)
+        assert out["mammalian_deepest_species"] == "mm10"
+        assert out["mammalian_max_depth"] == 3
+        assert out["summary"]["tree_loaded"] is True
+
+    def test_no_tree_leaves_deepest_none(self, monkeypatch, tmp_path):
+        fake_hal = tmp_path / "fake.hal"
+        fake_hal.write_bytes(b"")
+        cfg = PipelineConfig(conservation=ConservationConfig(hal_path=fake_hal))
+        mod = ConservationFrameModule(cfg)
+        monkeypatch.setattr(mod, "_available", True)
+
+        ref = "ATGAAATAA"
+        monkeypatch.setattr(
+            mod,
+            "_fetch_alignment",
+            lambda c, i, s: (ref, {"panTro6": ref}),
+        )
+
+        site = _tis()
+        site.orf_exons = [(1000, 1009)]
+        site.canonical_orf_exons = [(2000, 2009)]
+        out = mod.annotate_site(site)
+        assert out["primate_deepest_species"] is None
+        assert out["primate_max_depth"] is None
+        assert out["summary"]["tree_loaded"] is False
+
+
 class TestRevcomp:
     def test_roundtrip(self):
         assert _revcomp_maf("ATGC") == "GCAT"

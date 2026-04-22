@@ -185,10 +185,19 @@ HAL-dependent path emits `status="not_run"` until the download lands.
   `hal2maf_binary`, `primate_species`, `mammalian_species`.
 - `scripts/download_zoonomia_hal.sh` — resumable curl with provenance
   sidecar; 200-600 GB, run on demand.
+- Phylogenetic depth: `conservation_frame/tree.py` parses the HAL's own
+  species tree (via `halStats --tree`, with `hal_tree_newick` config
+  override for tests / offline runs) into a depth map. The module emits
+  `primate_deepest_species` / `primate_max_depth` and mammalian twins —
+  the deepest-MRCA species whose frame is still intact. Named clade
+  labels are deliberately not emitted; depth + species is enough and
+  doesn't drift with Zoonomia releases.
 - Tests: `test_conservation_frame.py` (MAF parse, frame analysis: identity,
   substitution, premature stop, start-codon loss, frameshift vs. in-frame
-  deletion, all-gap target) + `test_conservation_frame_module.py`
-  (not_run paths, no_skeleton / no_unique_region, revcomp MAF helper).
+  deletion, all-gap target), `test_conservation_frame_module.py`
+  (not_run paths, no_skeleton / no_unique_region, revcomp MAF helper,
+  deepest-intact selection with a synthetic tree), and
+  `test_conservation_tree.py` (Newick parser, MRCA depth).
 
 ### ORF exon infrastructure (2026-04-21)
 

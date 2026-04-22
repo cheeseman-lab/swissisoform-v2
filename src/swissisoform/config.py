@@ -57,6 +57,10 @@ class ConservationConfig:
         hal_ref_genome: Reference genome name inside the HAL (default
             ``"hg38"``). Must match one of ``halStats --genomes`` output.
         hal2maf_binary: ``hal2maf`` executable name resolved on ``PATH``.
+        halstats_binary: ``halStats`` executable name; used once at module
+            init to pull the species tree for phylogenetic-depth scoring.
+        hal_tree_newick: Optional override. When set, bypasses
+            ``halStats --tree`` (useful for tests or offline precompute).
         primate_species: Override for the Path 1 species list; ``None``
             falls back to :data:`conservation_frame.PRIMATE_SPECIES`.
         mammalian_species: Override for the Path 2 species list; ``None``
@@ -72,6 +76,8 @@ class ConservationConfig:
     hal_path: Path | None = None
     hal_ref_genome: str = "hg38"
     hal2maf_binary: str = "hal2maf"
+    halstats_binary: str = "halStats"
+    hal_tree_newick: str | None = None
     primate_species: list[str] | None = None
     mammalian_species: list[str] | None = None
     diamond_db: Path | None = None

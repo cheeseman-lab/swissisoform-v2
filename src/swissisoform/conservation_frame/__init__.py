@@ -18,14 +18,24 @@ from swissisoform.conservation_frame.species import (
     MAMMALIAN_SPECIES,
     PRIMATE_SPECIES,
 )
+from swissisoform.conservation_frame.tree import (
+    Node,
+    depth_from_reference,
+    mrca_depth,
+    parse_newick,
+)
 
 __all__ = [
     "MAMMALIAN_SPECIES",
     "MafBlock",
     "MafRow",
+    "Node",
     "PRIMATE_SPECIES",
     "SpeciesFrameResult",
     "aggregate_species_results",
     "analyze_species",
+    "depth_from_reference",
+    "mrca_depth",
     "parse_maf",
+    "parse_newick",
 ]

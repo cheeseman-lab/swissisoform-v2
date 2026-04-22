@@ -34,8 +34,13 @@ from swissisoform.conservation_frame import (
     analyze_species,
     parse_maf,
 )
-from swissisoform.conservation_frame.hal import extract_maf, hal2maf_available
+from swissisoform.conservation_frame.hal import (
+    extract_maf,
+    extract_tree,
+    hal2maf_available,
+)
 from swissisoform.conservation_frame.maf import concat_species_rows
+from swissisoform.conservation_frame.tree import depth_from_reference
 from swissisoform.models import TranslationInitiationSite
 
 logger = logging.getLogger(__name__)
@@ -63,11 +68,15 @@ class ConservationFrameModule:
         "conservation_primate_frac_intact",
         "conservation_primate_start_codon_conserved",
         "conservation_primate_mean_pident",
+        "conservation_primate_deepest_species",
+        "conservation_primate_max_depth",
         "conservation_mammalian_n_species_aligned",
         "conservation_mammalian_n_species_intact_frame",
         "conservation_mammalian_frac_intact",
         "conservation_mammalian_start_codon_conserved",
         "conservation_mammalian_mean_pident",
+        "conservation_mammalian_deepest_species",
+        "conservation_mammalian_max_depth",
         "conservation_frame_summary",
     ]
     SCOPE: str = "C"
@@ -85,6 +94,8 @@ class ConservationFrameModule:
         self._hal_path: Path | None = None
         self._ref_genome: str = "hg38"
         self._binary: str = "hal2maf"
+        self._halstats_binary: str = "halStats"
+        self._tree_newick: str | None = None
         self._primate_species: list[str] = list(PRIMATE_SPECIES)
         self._mammalian_species: list[str] = list(MAMMALIAN_SPECIES)
 
@@ -96,18 +107,41 @@ class ConservationFrameModule:
                     logger.warning("Zoonomia HAL file not found: %s", cfg.hal_path)
             self._ref_genome = cfg.hal_ref_genome
             self._binary = cfg.hal2maf_binary
+            self._halstats_binary = cfg.halstats_binary
+            self._tree_newick = cfg.hal_tree_newick
             if cfg.primate_species is not None:
                 self._primate_species = list(cfg.primate_species)
             if cfg.mammalian_species is not None:
                 self._mammalian_species = list(cfg.mammalian_species)
 
         self._available = self._hal_path is not None and hal2maf_available(self._binary)
+        self._depth_map: dict[str, int] = self._load_depth_map()
+
         if not self._available:
             logger.info(
                 "ConservationFrameModule inactive — hal_path=%s, binary_on_path=%s",
                 self._hal_path,
                 hal2maf_available(self._binary),
             )
+
+    def _load_depth_map(self) -> dict[str, int]:
+        """Pull the Cactus species tree and build ``{species: depth_from_ref}``.
+
+        Priority: explicit ``cfg.hal_tree_newick`` > ``halStats --tree`` on
+        the HAL > empty dict. Failing to build a depth map isn't fatal; the
+        module still returns frame metrics but emits ``None`` for the
+        deepest-species fields.
+        """
+        newick = self._tree_newick
+        if newick is None and self._hal_path is not None:
+            newick = extract_tree(self._hal_path, halstats_binary=self._halstats_binary)
+        if not newick:
+            return {}
+        try:
+            return depth_from_reference(newick, self._ref_genome)
+        except ValueError as exc:
+            logger.warning("Failed to parse Cactus species tree: %s", exc)
+            return {}
 
     # ------------------------------------------------------------------
     # Public API (SiteModule protocol)
@@ -154,6 +188,8 @@ class ConservationFrameModule:
 
         primate_agg = aggregate_species_results(primate_results)
         mammalian_agg = aggregate_species_results(mammalian_results)
+        primate_deepest = self._deepest_intact(primate_results)
+        mammalian_deepest = self._deepest_intact(mammalian_results)
 
         return {
             "primate_n_species_aligned": primate_agg["n_species_aligned"],
@@ -161,17 +197,48 @@ class ConservationFrameModule:
             "primate_frac_intact": primate_agg["frac_intact"],
             "primate_start_codon_conserved": primate_agg["start_codon_conserved"],
             "primate_mean_pident": primate_agg["mean_pident"],
+            "primate_deepest_species": primate_deepest[0],
+            "primate_max_depth": primate_deepest[1],
             "mammalian_n_species_aligned": mammalian_agg["n_species_aligned"],
             "mammalian_n_species_intact_frame": mammalian_agg["n_species_intact_frame"],
             "mammalian_frac_intact": mammalian_agg["frac_intact"],
             "mammalian_start_codon_conserved": mammalian_agg["start_codon_conserved"],
             "mammalian_mean_pident": mammalian_agg["mean_pident"],
+            "mammalian_deepest_species": mammalian_deepest[0],
+            "mammalian_max_depth": mammalian_deepest[1],
             "summary": {
                 "status": "ok",
                 "unique_region_nt": sum(e - s for s, e in unique),
                 "hal_path": str(self._hal_path),
+                "tree_loaded": bool(self._depth_map),
             },
         }
+
+    def _deepest_intact(
+        self, results: list[Any]
+    ) -> tuple[str | None, int | None]:
+        """Return ``(species_name, depth)`` for the deepest intact-frame species.
+
+        Ranks by ``self._depth_map`` (built once from the Cactus tree).
+        Species without a depth entry are ignored — their phylogenetic
+        position is unknown, and ranking them would be misleading. When the
+        depth map is empty (no tree loaded) or no species qualify, returns
+        ``(None, None)``.
+        """
+        if not self._depth_map:
+            return None, None
+        best_name: str | None = None
+        best_depth: int | None = None
+        for res in results:
+            if not (res.aligned and res.frame_intact):
+                continue
+            depth = self._depth_map.get(res.species)
+            if depth is None:
+                continue
+            if best_depth is None or depth > best_depth:
+                best_depth = depth
+                best_name = res.species
+        return best_name, best_depth
 
     def run(
         self,
@@ -265,11 +332,15 @@ class ConservationFrameModule:
             "primate_frac_intact": None,
             "primate_start_codon_conserved": None,
             "primate_mean_pident": None,
+            "primate_deepest_species": None,
+            "primate_max_depth": None,
             "mammalian_n_species_aligned": None,
             "mammalian_n_species_intact_frame": None,
             "mammalian_frac_intact": None,
             "mammalian_start_codon_conserved": None,
             "mammalian_mean_pident": None,
+            "mammalian_deepest_species": None,
+            "mammalian_max_depth": None,
             "summary": {"status": status},
         }
 
