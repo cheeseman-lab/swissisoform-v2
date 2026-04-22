@@ -80,8 +80,11 @@ GNOMAD_DB = DATA / "gnomad" / "gnomad_v4.1_exome.parquet"
 CLINVAR_DB = DATA / "clinvar" / "variant_summary.parquet"
 COSMIC_DB = DATA / "cosmic" / "cosmic_variants.parquet"
 PHYLOP_BW = DATA / "zoonomia" / "cactus241way.phyloP.bw"
-PHASTCONS_BW = DATA / "zoonomia" / "cactus241way.phastCons.bw"
+PHASTCONS_BW = DATA / "zoonomia" / "cactus241way.phastCons.bw"  # not shipped for 241-way
 HAL_FILE = DATA / "zoonomia" / "241-mammalian-2020v2.hal"
+# Newick species tree from UCSC — lets ConservationFrameModule build a
+# phylogenetic-depth map without requiring halStats to be installed.
+CACTUS_NEWICK = DATA / "zoonomia" / "hg38.cactus241way.nh"
 
 TEST_GENES = ["TP53", "EIF4G1", "VEGFA", "CTNND1", "MYC"]
 
@@ -98,10 +101,12 @@ def build_config() -> PipelineConfig:
         clinvar_db=CLINVAR_DB if CLINVAR_DB.exists() else None,
         cosmic_db=COSMIC_DB if COSMIC_DB.exists() else None,
     )
+    tree_text = CACTUS_NEWICK.read_text() if CACTUS_NEWICK.exists() else None
     cfg.conservation = ConservationConfig(
         phylop_bigwig=PHYLOP_BW if PHYLOP_BW.exists() else None,
         phastcons_bigwig=PHASTCONS_BW if PHASTCONS_BW.exists() else None,
         hal_path=HAL_FILE if HAL_FILE.exists() else None,
+        hal_tree_newick=tree_text,
     )
     # Demo-friendly scoring thresholds — looser than production defaults so
     # that at least some existence / functional criteria flip True on the
@@ -189,6 +194,8 @@ def main() -> None:
         f"  HAL:       {'ok' if HAL_FILE.exists() else 'MISSING (frame module = not_run)'}  "
         f"{HAL_FILE}"
     )
+    tree_status = "ok" if CACTUS_NEWICK.exists() else "MISSING (depth map = empty)"
+    print(f"  Tree:      {tree_status}  {CACTUS_NEWICK}")
 
     # DeepLoc: batch-infer every unique protein once, return hash-keyed dict
     deeploc_lookup = precompute_localization(genes)
