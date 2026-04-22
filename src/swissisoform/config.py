@@ -103,17 +103,42 @@ class StructureConfig:
 class ScoringConfig:
     """Configuration for evidence scoring (Module 10).
 
+    Evidence scoring produces two independent scores per TIS:
+    ``existence_score`` (E1–E7 — does this isoform really exist?) and
+    ``functional_score`` (F1–F6 — does it change function?). Each
+    criterion returns ``True`` / ``False`` / ``None``; the score is the
+    count of ``True``. Thresholds below are the cutoffs for turning
+    continuous signals into the boolean criterion outputs.
+
     Attributes:
-        min_cell_lines: Minimum cell lines with expression for scoring.
-        existence_high_threshold: Score threshold for high-confidence existence.
-        functional_high_threshold: Score threshold for high-confidence function.
-        truncation_max_aa: Maximum amino acid truncation to consider functional.
+        min_cell_lines: E4 threshold — minimum cell lines with expression.
+        existence_high_threshold: Score cutoff for
+            ``existence_high_confidence``.
+        functional_high_threshold: Score cutoff for
+            ``functional_high_confidence``.
+        truncation_max_aa: Maximum truncation length still considered
+            potentially functional (downstream consumers only).
+        primate_frac_intact_min: E1 threshold — minimum fraction of
+            primate species with intact reading frame.
+        mammalian_frac_intact_min: E2 threshold — same for mammalian
+            radiation.
+        phylop_coding_min: E3 threshold — minimum mean PhyloP over the
+            unique region to count as under coding-level selection.
+        initiation_efficiency_min: E5 threshold — minimum ribosome
+            initiation efficiency across any cell line.
+        massspec_unique_peptides_min: E7 threshold — minimum number of
+            peptides uniquely assigned to the isoform.
     """
 
     min_cell_lines: int = 3
     existence_high_threshold: int = 5
     functional_high_threshold: int = 3
     truncation_max_aa: int = 200
+    primate_frac_intact_min: float = 0.5
+    mammalian_frac_intact_min: float = 0.3
+    phylop_coding_min: float = 1.0
+    initiation_efficiency_min: float = 0.01
+    massspec_unique_peptides_min: int = 1
 
 
 @dataclass
