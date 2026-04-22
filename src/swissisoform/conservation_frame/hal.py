@@ -81,18 +81,25 @@ def extract_maf(
     start: int,
     length: int,
     *,
-    ref_genome: str = "hg38",
+    ref_genome: str = "Homo_sapiens",
     hal2maf_binary: str = "hal2maf",
-    timeout: float = 120.0,
+    timeout: float = 600.0,
 ) -> str | None:
     """Run ``hal2maf`` for a single interval and return the MAF text.
+
+    First-touch of a new chromosome in the 241-way Zoonomia HAL loads
+    per-sequence HDF5 metadata and can take ~90-120 s on networked
+    storage; subsequent queries on the same chromosome complete in ~5-10 s
+    once the kernel page cache is warm. The default timeout is generous
+    to accommodate the cold path; raise it further for larger intervals.
 
     Args:
         hal_path: Path to the Zoonomia HAL file.
         chrom: Reference chromosome name (e.g. ``chr1``).
         start: 0-based start (plus strand).
         length: Number of reference bases to extract.
-        ref_genome: Reference genome name in the HAL (default ``hg38``).
+        ref_genome: Reference genome name in the HAL (default
+            ``Homo_sapiens`` for the 241-mammal Cactus).
         hal2maf_binary: Binary to invoke.
         timeout: Seconds before we abandon the subprocess.
 
@@ -111,14 +118,21 @@ def extract_maf(
         logger.warning("hal2maf binary not on PATH (%s)", hal2maf_binary)
         return None
 
+    # hal2maf v2.2 in the cactus v2.9.9 container takes space-separated
+    # options only (``--refGenome X``, not ``--refGenome=X``); pass args
+    # as separate list items.
     cmd = [
         hal2maf_binary,
         str(hal_path),
         "/dev/stdout",
-        f"--refGenome={ref_genome}",
-        f"--refSequence={chrom}",
-        f"--start={start}",
-        f"--length={length}",
+        "--refGenome",
+        ref_genome,
+        "--refSequence",
+        chrom,
+        "--start",
+        str(start),
+        "--length",
+        str(length),
         "--onlyOrthologs",
     ]
     try:

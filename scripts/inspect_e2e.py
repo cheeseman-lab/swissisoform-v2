@@ -84,7 +84,14 @@ PHASTCONS_BW = DATA / "zoonomia" / "cactus241way.phastCons.bw"  # not shipped fo
 HAL_FILE = DATA / "zoonomia" / "241-mammalian-2020v2.hal"
 # Newick species tree from UCSC — lets ConservationFrameModule build a
 # phylogenetic-depth map without requiring halStats to be installed.
-CACTUS_NEWICK = DATA / "zoonomia" / "hg38.cactus241way.nh"
+# HAL toolkit runs via the cactus singularity image (bioconda cactus has
+# unresolvable dep conflicts). scripts/bin/hal2maf + halStats are thin
+# ``singularity exec`` wrappers; ConservationConfig points at them directly
+# so the main env doesn't need any HAL binary on PATH.
+REPO_ROOT_PATH = Path(__file__).parent.parent
+HAL2MAF_BIN = REPO_ROOT_PATH / "scripts" / "bin" / "hal2maf"
+HALSTATS_BIN = REPO_ROOT_PATH / "scripts" / "bin" / "halStats"
+HAL_SIF = DATA / "zoonomia" / "singularity" / "cactus.sif"
 
 TEST_GENES = ["TP53", "EIF4G1", "VEGFA", "CTNND1", "MYC"]
 
@@ -101,12 +108,24 @@ def build_config() -> PipelineConfig:
         clinvar_db=CLINVAR_DB if CLINVAR_DB.exists() else None,
         cosmic_db=COSMIC_DB if COSMIC_DB.exists() else None,
     )
-    tree_text = CACTUS_NEWICK.read_text() if CACTUS_NEWICK.exists() else None
+    # Don't pass the UCSC ``hg38.cactus241way.nh`` file as the tree: it uses
+    # mixed UCSC + Latin-binomial names (``hg38`` instead of ``Homo_sapiens``,
+    # ``nomLeu3`` instead of ``Nomascus_leucogenys``), which collides with the
+    # Latin-only species lists we feed to hal2maf. Leaving ``hal_tree_newick``
+    # None makes the module pull the tree from the HAL itself via
+    # ``halStats --tree``, which uses consistent Latin binomials.
     cfg.conservation = ConservationConfig(
         phylop_bigwig=PHYLOP_BW if PHYLOP_BW.exists() else None,
         phastcons_bigwig=PHASTCONS_BW if PHASTCONS_BW.exists() else None,
         hal_path=HAL_FILE if HAL_FILE.exists() else None,
-        hal_tree_newick=tree_text,
+        hal_tree_newick=None,
+        hal2maf_binary=str(HAL2MAF_BIN) if HAL_SIF.exists() else "hal2maf",
+        halstats_binary=str(HALSTATS_BIN) if HAL_SIF.exists() else "halStats",
+        # The Zoonomia 241-mammal HAL names the reference genome
+        # ``Homo_sapiens``, not ``hg38``. Species nodes use Latin binomials
+        # throughout — PRIMATE_SPECIES / MAMMALIAN_SPECIES already follow
+        # that convention.
+        hal_ref_genome="Homo_sapiens",
     )
     # Demo-friendly scoring thresholds — looser than production defaults so
     # that at least some existence / functional criteria flip True on the
@@ -194,8 +213,10 @@ def main() -> None:
         f"  HAL:       {'ok' if HAL_FILE.exists() else 'MISSING (frame module = not_run)'}  "
         f"{HAL_FILE}"
     )
-    tree_status = "ok" if CACTUS_NEWICK.exists() else "MISSING (depth map = empty)"
-    print(f"  Tree:      {tree_status}  {CACTUS_NEWICK}")
+    # Tree comes from halStats --tree on the HAL itself, not from the UCSC
+    # .nh file (which has mixed UCSC + Latin-binomial naming).
+    sif_status = "ok" if HAL_SIF.exists() else "MISSING (frame module = not_run)"
+    print(f"  cactus.sif: {sif_status}  {HAL_SIF}")
 
     # DeepLoc: batch-infer every unique protein once, return hash-keyed dict
     deeploc_lookup = precompute_localization(genes)

@@ -866,6 +866,109 @@ def setup_deeploc(refresh: bool = False) -> None:
 
 
 # ---------------------------------------------------------------------------
+# HAL toolkit (hal2maf + halStats via cactus singularity image)
+# ---------------------------------------------------------------------------
+
+HAL_DIR = REF / "zoonomia"
+HAL_SIF_DIR = HAL_DIR / "singularity"
+HAL_SIF = HAL_SIF_DIR / "cactus.sif"
+# Pinned cactus image. Cactus 2.9.9 ships on quay.io/comparative-genomics-toolkit
+# and bundles the HAL toolkit (hal2maf, halStats, halLiftover, etc.). We use
+# singularity because the bioconda ``cactus`` package has unresolvable
+# libdeflate/toil dependency conflicts in our channel mix.
+HAL_DOCKER_URI = "docker://quay.io/comparative-genomics-toolkit/cactus:v2.9.9"
+# Wrapper scripts at scripts/bin/ that ConservationConfig points at — they
+# invoke ``singularity exec`` against HAL_SIF with /lab bind-mounted so
+# absolute HAL paths work inside the container.
+HAL_WRAPPER_HAL2MAF = ROOT / "scripts" / "bin" / "hal2maf"
+HAL_WRAPPER_HALSTATS = ROOT / "scripts" / "bin" / "halStats"
+
+
+HAL_MISSING_SINGULARITY_MSG = """
+HAL setup requires the ``singularity`` CLI. Not found on PATH.
+
+On Whitehead cluster nodes singularity is at /usr/local/bin/singularity —
+check your PATH or module-load singularity before re-running.
+"""
+
+
+def setup_hal(refresh: bool = False) -> None:
+    """Pull the cactus singularity image and verify hal2maf runs.
+
+    Installs the HAL toolkit as a container rather than a conda env because
+    bioconda ``cactus`` has unresolvable dep conflicts in our channels.
+    The wrapper scripts at ``scripts/bin/hal2maf`` + ``halStats`` shell out
+    to ``singularity exec`` against this image, and
+    ``ConservationConfig.hal2maf_binary`` points at the wrapper.
+
+    Args:
+        refresh: Re-pull the image even when it already exists.
+    """
+    if shutil.which("singularity") is None:
+        print(HAL_MISSING_SINGULARITY_MSG)
+        raise RuntimeError("singularity binary not on PATH")
+
+    HAL_SIF_DIR.mkdir(parents=True, exist_ok=True)
+
+    if HAL_SIF.exists() and refresh:
+        logger.info("refresh: removing %s", HAL_SIF)
+        HAL_SIF.unlink()
+
+    if not HAL_SIF.exists():
+        tmp_dir = ROOT / "tmp"
+        tmp_dir.mkdir(exist_ok=True)
+        env = dict(os.environ)
+        env["SINGULARITY_TMPDIR"] = str(tmp_dir)
+        logger.info("hal: pulling %s -> %s", HAL_DOCKER_URI, HAL_SIF)
+        subprocess.run(
+            ["singularity", "pull", str(HAL_SIF), HAL_DOCKER_URI],
+            check=True,
+            env=env,
+        )
+    else:
+        logger.info("hal: %s already pulled — skipping", HAL_SIF)
+
+    for wrapper in (HAL_WRAPPER_HAL2MAF, HAL_WRAPPER_HALSTATS):
+        if not wrapper.exists():
+            raise RuntimeError(f"hal: wrapper script missing: {wrapper}")
+        if not os.access(wrapper, os.X_OK):
+            raise RuntimeError(f"hal: wrapper script not executable: {wrapper}")
+
+    # Smoke-test the wrapper — confirms the container has hal2maf and
+    # /lab bind-mount works.
+    probe = subprocess.run(
+        [str(HAL_WRAPPER_HAL2MAF), "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    # hal2maf --help exits 1 on some cactus builds but still prints usage
+    # to stderr. Accept either 0 or a non-empty usage dump.
+    output = (probe.stdout or "") + (probe.stderr or "")
+    if "hal2maf" not in output.lower() and "usage" not in output.lower():
+        raise RuntimeError(
+            f"hal: wrapper smoke-test failed exit={probe.returncode} "
+            f"output_head={output[:300]}"
+        )
+    logger.info("hal: wrapper smoke-test ok (exit=%d)", probe.returncode)
+
+    write_sidecar(
+        HAL_DIR,
+        source_url=HAL_DOCKER_URI,
+        version="cactus-v2.9.9",
+        artifact=HAL_SIF,
+        extra={
+            "wrapper_hal2maf": str(HAL_WRAPPER_HAL2MAF),
+            "wrapper_halstats": str(HAL_WRAPPER_HALSTATS),
+            "bind_mounts": ["/lab"],
+            "install_source": "singularity pull docker://quay.io/...",
+        },
+    )
+    logger.info("hal: sidecar written")
+
+
+# ---------------------------------------------------------------------------
 # GENCODE (delegates to download_references.sh)
 # ---------------------------------------------------------------------------
 
@@ -889,6 +992,7 @@ _HANDLERS: dict[str, Any] = {
     "gnomad": setup_gnomad,
     "cosmic": setup_cosmic,
     "deeploc": setup_deeploc,
+    "hal": setup_hal,
     "gencode": setup_gencode,
 }
 
@@ -916,7 +1020,7 @@ def main() -> int:
         # gnomAD is the long pole (~6+ hours for all chromosomes) — placed
         # last so lighter DBs finish first and are available for
         # downstream work.
-        targets = ["gencode", "diamond", "clinvar", "cosmic", "deeploc", "gnomad"]
+        targets = ["gencode", "diamond", "clinvar", "cosmic", "deeploc", "hal", "gnomad"]
     else:
         targets = [args.target]
 

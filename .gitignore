@@ -18,7 +18,12 @@ docs/methods/*.pdf
 .claude/
 .torch_cache/
 data/reference/
-data/output/
+data/output/*
+# Except the 5-gene E2E all-paired parquet — checked in so reviewers can
+# inspect actual per-TIS module outputs without re-running the pipeline.
+!data/output/5gene_e2e/
+data/output/5gene_e2e/*
+!data/output/5gene_e2e/all_paired.parquet
 # Slurm job logs — transient, not source
 logs/
 # Internal planning docs — commits must be from docs/methods/ only

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Wrapper: run halStats from the cactus singularity image.
+# See scripts/bin/hal2maf for design rationale.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SIF="${REPO_ROOT}/data/reference/zoonomia/singularity/cactus.sif"
+
+if [[ ! -f "${SIF}" ]]; then
+    echo "cactus.sif not found at ${SIF}" >&2
+    echo "Run: python scripts/setup_databases.py hal" >&2
+    exit 127
+fi
+
+exec singularity exec --bind /lab:/lab "${SIF}" halStats "$@"

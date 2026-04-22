@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Wrapper: run hal2maf from the cactus singularity image.
+#
+# The ComparativeGenomicsToolkit cactus conda package has unresolvable
+# dependency conflicts in our channel mix, so we ship HAL binaries via the
+# official container and bind-mount the lab filesystem so absolute paths to
+# the .hal file and reference FASTA work transparently.
+#
+# ``ConservationConfig.hal2maf_binary`` points at this wrapper.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SIF="${REPO_ROOT}/data/reference/zoonomia/singularity/cactus.sif"
+
+if [[ ! -f "${SIF}" ]]; then
+    echo "cactus.sif not found at ${SIF}" >&2
+    echo "Run: python scripts/setup_databases.py hal" >&2
+    exit 127
+fi
+
+# Bind /lab so absolute paths used by Python callers resolve inside the container.
+exec singularity exec --bind /lab:/lab "${SIF}" hal2maf "$@"
