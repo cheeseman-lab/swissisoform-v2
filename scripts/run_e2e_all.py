@@ -32,10 +32,12 @@ import pandas as pd
 
 from swissisoform.assembly import assemble_genes
 from swissisoform.combine import combine_filtered_samples
-from swissisoform.config import PipelineConfig
+from swissisoform.config import ConservationConfig, PipelineConfig
 from swissisoform.io.parquet import tis_to_dataframe
 from swissisoform.io.rnaseq import load_sample_manifest
 from swissisoform.modules.biophysics import BiophysicsModule
+from swissisoform.modules.conservation import ConservationModule
+from swissisoform.modules.conservation_frame import ConservationFrameModule
 from swissisoform.modules.core_identity import CoreIdentityModule
 from swissisoform.modules.initiation_context import InitiationContextModule
 from swissisoform.modules.massspec import MassSpecModule
@@ -51,6 +53,13 @@ GENOME = DATA / "Gencode_v49_GRCh38.primary_assembly.genome.fa"
 PROTEIN = DATA / "gencode.v49.pc_translations.fa"
 SAMPLE_MANIFEST = DATA / "ribotish_sample_manifest.csv"
 REPLICATE_MANIFEST = DATA / "ribotish_replicate_manifest.csv"
+
+ZOONOMIA = DATA / "zoonomia"
+PHYLOP_BW = ZOONOMIA / "cactus241way.phyloP.bw"
+PHASTCONS_BW = ZOONOMIA / "hg38.phastCons100way.bw"
+HAL_PATH = ZOONOMIA / "241-mammalian-2020v2.hal"
+HAL_TREE = ZOONOMIA / "hg38.cactus241way.nh"
+HAL2MAF_BIN = ROOT / "scripts" / "bin" / "hal2maf"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("run_e2e_all")
@@ -134,9 +143,26 @@ def spot_check(combined_annot: pd.DataFrame, samples: list[str]) -> None:
         print(view.to_string(index=False))
 
 
+def build_conservation_config() -> ConservationConfig:
+    """Build ConservationConfig from files in ``data/reference/zoonomia/``.
+
+    Fields are populated only when the underlying file exists — missing
+    BigWigs / HAL cause the respective modules to emit ``status="not_run"``
+    rather than crash.
+    """
+    tree_newick = HAL_TREE.read_text() if HAL_TREE.exists() else None
+    return ConservationConfig(
+        phylop_bigwig=PHYLOP_BW if PHYLOP_BW.exists() else None,
+        phastcons_bigwig=PHASTCONS_BW if PHASTCONS_BW.exists() else None,
+        hal_path=HAL_PATH if HAL_PATH.exists() else None,
+        hal2maf_binary=str(HAL2MAF_BIN) if HAL2MAF_BIN.exists() else "hal2maf",
+        hal_tree_newick=tree_newick,
+    )
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
-    cfg = PipelineConfig()
+    cfg = PipelineConfig(conservation=build_conservation_config())
 
     print("Loading shared GTF + genome + protein-product reference tables…")
     reference = UpstreamReference.load(gtf_path=GTF, genome_fasta=GENOME, protein_fasta=PROTEIN)
@@ -157,7 +183,11 @@ def main() -> None:
 
     hdr("STAGE 3 — Assembly (one pass)")
     t0 = time.perf_counter()
-    genes = assemble_genes(combined, genome_fasta=GENOME)
+    genes = assemble_genes(
+        combined,
+        genome_fasta=GENOME,
+        exon_skeletons=reference.exon_skeletons,
+    )
     logger.info(
         "assembled %d genes, %d unique TIS (%.1fs)",
         len(genes),
@@ -172,7 +202,12 @@ def main() -> None:
             MotifsModule(cfg),
             MassSpecModule(cfg),
         ],
-        site_modules=[CoreIdentityModule(cfg), InitiationContextModule(cfg)],
+        site_modules=[
+            CoreIdentityModule(cfg),
+            InitiationContextModule(cfg),
+            ConservationModule(cfg),
+            ConservationFrameModule(cfg),
+        ],
     )
     t0 = time.perf_counter()
     pipeline.run(genes)
