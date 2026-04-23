@@ -866,6 +866,90 @@ def setup_deeploc(refresh: bool = False) -> None:
 
 
 # ---------------------------------------------------------------------------
+# PepQuery2 (mass-spec peptide validation)
+# ---------------------------------------------------------------------------
+
+PEPQUERY_DIR = REF / "pepquery"
+PEPQUERY_VERSION = "2.0.2"
+PEPQUERY_TARBALL_URL = f"http://pepquery.org/data/pepquery-{PEPQUERY_VERSION}.tar.gz"
+PEPQUERY_TARBALL = PEPQUERY_DIR / f"pepquery-{PEPQUERY_VERSION}.tar.gz"
+PEPQUERY_JAR = PEPQUERY_DIR / f"pepquery-{PEPQUERY_VERSION}" / f"pepquery-{PEPQUERY_VERSION}.jar"
+
+
+def setup_pepquery(refresh: bool = False) -> None:
+    """Download the PepQuery2 standalone jar from pepquery.org.
+
+    PepQuery2 is a plain Java 11+ CLI.  System Java is already on PATH
+    on this cluster, so we skip the conda-env indirection used for
+    DeepLoc and just stage the jar.  :func:`swissisoform.modules.massspec.precompute_pepquery`
+    invokes it via ``java -jar <PEPQUERY_JAR>``.
+
+    ``-b <dataset>`` at query time pulls MS/MS spectra from PepQueryDB
+    on demand — no local spectral index required at this step.
+    """
+    PEPQUERY_DIR.mkdir(parents=True, exist_ok=True)
+
+    if PEPQUERY_JAR.exists() and not refresh:
+        logger.info("pepquery: jar already present at %s", PEPQUERY_JAR)
+    else:
+        if not PEPQUERY_TARBALL.exists() or refresh:
+            logger.info("pepquery: downloading %s", PEPQUERY_TARBALL_URL)
+            subprocess.run(
+                ["curl", "--fail", "--location", "--retry", "3",
+                 "--output", str(PEPQUERY_TARBALL), PEPQUERY_TARBALL_URL],
+                check=True,
+            )
+        logger.info("pepquery: extracting to %s", PEPQUERY_DIR)
+        subprocess.run(
+            ["tar", "-xzf", str(PEPQUERY_TARBALL), "-C", str(PEPQUERY_DIR)],
+            check=True,
+        )
+        if not PEPQUERY_JAR.exists():
+            raise FileNotFoundError(
+                f"pepquery: extraction finished but {PEPQUERY_JAR} missing — "
+                "tarball layout may have changed upstream."
+            )
+
+    # Smoke-test: `java -jar pepquery.jar` without args prints usage and
+    # exits non-zero.  We just want to confirm Java can load the jar.
+    if shutil.which("java") is None:
+        logger.warning("pepquery: 'java' not on PATH — install openjdk >= 11 before running")
+    else:
+        proc = subprocess.run(
+            ["java", "-jar", str(PEPQUERY_JAR)],
+            capture_output=True, text=True, check=False, timeout=60,
+        )
+        help_blob = (proc.stdout or "") + (proc.stderr or "")
+        if "pepquery" in help_blob.lower() or "Options" in help_blob:
+            logger.info("pepquery: jar loaded OK (Java %s)", _java_version())
+        else:
+            logger.warning(
+                "pepquery: jar ran but output looks wrong (exit=%d); stderr tail=%s",
+                proc.returncode, (proc.stderr or "")[-400:],
+            )
+
+    write_sidecar(
+        PEPQUERY_DIR,
+        source_url=PEPQUERY_TARBALL_URL,
+        version=PEPQUERY_VERSION,
+        artifact=PEPQUERY_JAR,
+        extra={"install_mode": "direct-jar", "java_version": _java_version()},
+    )
+    logger.info("pepquery: jar staged + sidecar written (%s)", PEPQUERY_JAR)
+
+
+def _java_version() -> str:
+    """Short Java version string for the provenance sidecar."""
+    try:
+        proc = subprocess.run(
+            ["java", "-version"], capture_output=True, text=True, check=False, timeout=10,
+        )
+        return (proc.stderr or proc.stdout or "").splitlines()[0] if (proc.stderr or proc.stdout) else "unknown"
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+# ---------------------------------------------------------------------------
 # HAL toolkit (hal2maf + halStats via cactus singularity image)
 # ---------------------------------------------------------------------------
 
@@ -992,6 +1076,7 @@ _HANDLERS: dict[str, Any] = {
     "gnomad": setup_gnomad,
     "cosmic": setup_cosmic,
     "deeploc": setup_deeploc,
+    "pepquery": setup_pepquery,
     "hal": setup_hal,
     "gencode": setup_gencode,
 }

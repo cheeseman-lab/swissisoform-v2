@@ -26,6 +26,13 @@ data/output/5gene_e2e/*
 !data/output/5gene_e2e/all_paired.parquet
 # Slurm job logs — transient, not source
 logs/
+# Runtime caches (PepQuery2 validated-peptide JSON, etc.)
+data/cache/
+# Tempdirs from precompute_pepquery / precompute_deeploc when a run
+# exits without cleanup (kept on 0-hit runs for debugging)
+pepquery_*/
+deeploc_*/
+tmp_pq/
 # Internal planning docs — commits must be from docs/methods/ only
 docs/*.md
 docs/superpowers/

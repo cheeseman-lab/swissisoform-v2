@@ -51,7 +51,11 @@ from swissisoform.modules.localization import (
     LocalizationModule,
     precompute_deeploc,
 )
-from swissisoform.modules.massspec import MassSpecModule
+from swissisoform.modules.massspec import (
+    MassSpecModule,
+    collect_unique_peptides,
+    precompute_pepquery,
+)
 from swissisoform.modules.motifs import MotifsModule
 from swissisoform.modules.scoring import EvidenceScoringModule
 from swissisoform.modules.variant_intersection import VariantIntersectionModule
@@ -80,7 +84,7 @@ GNOMAD_DB = DATA / "gnomad" / "gnomad_v4.1_exome.parquet"
 CLINVAR_DB = DATA / "clinvar" / "variant_summary.parquet"
 COSMIC_DB = DATA / "cosmic" / "cosmic_variants.parquet"
 PHYLOP_BW = DATA / "zoonomia" / "cactus241way.phyloP.bw"
-PHASTCONS_BW = DATA / "zoonomia" / "cactus241way.phastCons.bw"  # not shipped for 241-way
+PHASTCONS_BW = DATA / "zoonomia" / "hg38.phastCons100way.bw"  # 241-way has no phastCons; fall back to 100-vert
 HAL_FILE = DATA / "zoonomia" / "241-mammalian-2020v2.hal"
 # Newick species tree from UCSC — lets ConservationFrameModule build a
 # phylogenetic-depth map without requiring halStats to be installed.
@@ -221,6 +225,26 @@ def main() -> None:
     # DeepLoc: batch-infer every unique protein once, return hash-keyed dict
     deeploc_lookup = precompute_localization(genes)
 
+    # PepQuery2: collect every isoform-unique tryptic peptide across all
+    # TIS, send them in one batched call to PepQueryDB (conda env +
+    # Java).  Empty dict if the env isn't set up yet — massspec then
+    # reports ``pepquery_run=False`` and E6 stays None.
+    unique_peps = collect_unique_peptides(genes)
+    # Default to two deep, well-covered healthy-tissue proteomes:
+    # 29_healthy_tissues (PXD010154, label-free MS1) + GTEx_32_Tissues
+    # (PXD016999, TMT10/11).  Benchmarked at ~0.7 min / peptide on the
+    # competitive-filtering step (vs ~7 min for ``-b w``); 5-gene E2E
+    # finishes in ~15–30 min wall-clock.
+    pepquery_lookup = precompute_pepquery(
+        unique_peps,
+        dataset="Deep_29_healthy_human_tissues_PXD010154,GTEx_32_Tissues_Proteome_PXD016999",
+        reference_db="swissprot:human",
+        cache_dir=Path("./data/cache/pepquery"),
+    )
+    n_hits = sum(len(v) for v in pepquery_lookup.values())
+    n_total = sum(len(v) for v in unique_peps.values())
+    print(f"pepquery: {n_hits}/{n_total} unique peptides validated")
+
     # Conservation: BigWig-backed SiteModule — cheap random access per TIS,
     # no precompute needed.  Module is instantiated with the pipeline below.
 
@@ -255,7 +279,7 @@ def main() -> None:
         protein_modules=[
             BiophysicsModule(cfg),
             MotifsModule(cfg),
-            MassSpecModule(cfg),
+            MassSpecModule(cfg, validated_peptides=pepquery_lookup),
             clinical_mod,
             LocalizationModule(cfg, predictions=deeploc_lookup),
         ],
@@ -265,7 +289,6 @@ def main() -> None:
             ConservationModule(cfg),
             ConservationFrameModule(cfg),
             VariantIntersectionModule(),
-            EvidenceScoringModule(cfg),
         ],
     )
 
@@ -275,6 +298,15 @@ def main() -> None:
     # and positional subsets land on ``site.comparison`` before the
     # (below) reporting loop reads them.
     compare_genes(genes, scope_a_modules=[BiophysicsModule(cfg)])
+
+    # Evidence scoring runs LAST — several of its criteria (F2
+    # localization_change, Scope-A consumers) read ``site.comparison``
+    # which is only populated by ``compare_genes`` above.  Previously
+    # scoring lived inside ``AnnotationPipeline.site_modules`` and
+    # always saw an empty comparison dict.
+    scoring_mod = EvidenceScoringModule(cfg)
+    all_sites = [site for gene in genes for site in gene.tis_sites]
+    scoring_mod.run(all_sites)
 
     hdr("STAGE 5 — Per-gene spot check")
     for gene in sorted(genes, key=lambda g: g.gene_name):

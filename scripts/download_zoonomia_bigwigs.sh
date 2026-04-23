@@ -5,10 +5,11 @@
 # consumed by Path 3 of the conservation module (docs/reviews/
 # conservation_module_spec.md).  ~9 GB, fetched once, reused forever.
 #
-# Note: UCSC does not ship a PhastCons track for the 241-mammal alignment —
-# only the 100-way alignment had one.  ConservationModule gracefully
-# returns None for phastcons_* metrics when the file is absent; no
-# downstream wiring change is needed.
+# Note: UCSC does not ship a PhastCons track for the 241-mammal alignment.
+# We fall back to the hg38 100-vertebrate PhastCons track (broader
+# clade, still a real selection signal) as the default ``phastcons_bigwig``
+# input.  ConservationModule returns None for phastcons_* metrics when no
+# track is configured, so skipping the download is safe.
 #
 # The Newick species tree is downloaded alongside (tens of KB) and used by
 # ConservationFrameModule to build phylogenetic-depth rankings without
@@ -17,6 +18,7 @@
 # Output:
 #   data/reference/zoonomia/cactus241way.phyloP.bw
 #   data/reference/zoonomia/hg38.cactus241way.nh
+#   data/reference/zoonomia/hg38.phastCons100way.bw
 #
 # Idempotent: skips files that already exist and match the expected size range.
 
@@ -33,6 +35,9 @@ mkdir -p "${DEST_DIR}"
 # update these URLs if they 404).
 PHYLOP_URL="https://hgdownload.soe.ucsc.edu/goldenpath/hg38/cactus241way/cactus241way.phyloP.bw"
 TREE_URL="https://hgdownload.soe.ucsc.edu/goldenpath/hg38/cactus241way/hg38.cactus241way.nh"
+# 100-vertebrate PhastCons — broader clade than the 241-mammal alignment, but
+# it's the only hg38 PhastCons track UCSC currently ships.  ~9 GB.
+PHASTCONS_URL="https://hgdownload.soe.ucsc.edu/goldenPath/hg38/phastCons100way/hg38.phastCons100way.bw"
 
 download_if_missing() {
     local url="$1"
@@ -56,10 +61,12 @@ download_if_missing() {
 }
 
 # PhyloP BigWig expected ~9 GB; 500 MB minimum as a truncation sanity check.
-download_if_missing "${PHYLOP_URL}" "${DEST_DIR}/cactus241way.phyloP.bw" $((500 * 1024 * 1024))
+download_if_missing "${PHYLOP_URL}"    "${DEST_DIR}/cactus241way.phyloP.bw"    $((500 * 1024 * 1024))
+download_if_missing "${PHASTCONS_URL}" "${DEST_DIR}/hg38.phastCons100way.bw"   $((500 * 1024 * 1024))
 # Tree is ~11 KB — just redownload if missing or smaller than 1 KB.
-download_if_missing "${TREE_URL}"   "${DEST_DIR}/hg38.cactus241way.nh"   1024
+download_if_missing "${TREE_URL}"      "${DEST_DIR}/hg38.cactus241way.nh"      1024
 
 echo "Done.  Point ConservationConfig at:"
-echo "  phylop_bigwig = ${DEST_DIR}/cactus241way.phyloP.bw"
-echo "  hal_tree_newick = \$(cat ${DEST_DIR}/hg38.cactus241way.nh)"
+echo "  phylop_bigwig    = ${DEST_DIR}/cactus241way.phyloP.bw"
+echo "  phastcons_bigwig = ${DEST_DIR}/hg38.phastCons100way.bw"
+echo "  hal_tree_newick  = \$(cat ${DEST_DIR}/hg38.cactus241way.nh)"

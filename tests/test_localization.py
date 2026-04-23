@@ -15,7 +15,6 @@ class TestLocalizationModule:
                 "deeploc": "Cytoplasm",
                 "deeploc_signals": "Signal peptide",
                 "deeploc_membrane": "Soluble",
-                "wolfpsort": "cyto: 14",
             },
         }
         module = LocalizationModule(config, predictions=predictions)
@@ -23,7 +22,6 @@ class TestLocalizationModule:
         assert ann["deeploc_prediction"] == "Cytoplasm"
         assert ann["deeploc_signals"] == "Signal peptide"
         assert ann["deeploc_membrane"] == "Soluble"
-        assert ann["wolfpsort_prediction"] == "cyto: 14"
 
     def test_annotate_by_key_not_found(self, config):
         """Query missing key, verify all None."""
@@ -32,24 +30,20 @@ class TestLocalizationModule:
         assert ann["deeploc_prediction"] is None
         assert ann["deeploc_signals"] is None
         assert ann["deeploc_membrane"] is None
-        assert ann["wolfpsort_prediction"] is None
 
     def test_annotate_by_key_partial(self, config):
-        """Provide only deeploc, wolfpsort is None."""
+        """Provide only deeploc fields, missing fields are None."""
         predictions = {
             "partial_key": {
                 "deeploc": "Nucleus",
-                "deeploc_signals": "No signal",
-                "deeploc_membrane": "Soluble",
-                # wolfpsort intentionally omitted
+                # signals / membrane intentionally omitted
             },
         }
         module = LocalizationModule(config, predictions=predictions)
         ann = module.annotate_by_key("partial_key")
         assert ann["deeploc_prediction"] == "Nucleus"
-        assert ann["deeploc_signals"] == "No signal"
-        assert ann["deeploc_membrane"] == "Soluble"
-        assert ann["wolfpsort_prediction"] is None
+        assert ann["deeploc_signals"] is None
+        assert ann["deeploc_membrane"] is None
 
     def test_run_no_sites_lost(self, synthetic_tis, config):
         """Output length must equal input length."""
@@ -65,7 +59,6 @@ class TestLocalizationModule:
             "deeploc_prediction",
             "deeploc_signals",
             "deeploc_membrane",
-            "wolfpsort_prediction",
         }
         for site in result:
             ann = site.isoform_annotations["localization"]
@@ -79,7 +72,6 @@ class TestLocalizationModule:
                 "deeploc": "Cytoplasm",
                 "deeploc_signals": "Signal peptide",
                 "deeploc_membrane": "Soluble",
-                "wolfpsort": "cyto: 14",
             },
         }
         module = LocalizationModule(config, predictions=predictions)
@@ -88,7 +80,6 @@ class TestLocalizationModule:
         assert ann["deeploc_prediction"] == "Cytoplasm"
         assert ann["deeploc_signals"] == "Signal peptide"
         assert ann["deeploc_membrane"] == "Soluble"
-        assert ann["wolfpsort_prediction"] == "cyto: 14"
 
     def test_run_unmatched_gets_none(self, synthetic_tis, config):
         """tis_id not in predictions gets None values."""
@@ -98,7 +89,6 @@ class TestLocalizationModule:
                 "deeploc": "Nucleus",
                 "deeploc_signals": None,
                 "deeploc_membrane": None,
-                "wolfpsort": "nucl: 10",
             },
         }
         module = LocalizationModule(config, predictions=predictions)
@@ -106,7 +96,7 @@ class TestLocalizationModule:
         # Second site has no predictions
         ann = result[1].isoform_annotations["localization"]
         assert ann["deeploc_prediction"] is None
-        assert ann["wolfpsort_prediction"] is None
+        assert ann["deeploc_signals"] is None
 
     def test_module_scope(self, config):
         """Module SCOPE should be 'C'."""

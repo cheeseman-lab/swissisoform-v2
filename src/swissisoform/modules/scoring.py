@@ -3,7 +3,7 @@
 Two independent scores per TIS derived from the annotations other
 modules have already attached:
 
-- **Existence (E1–E7)** — is this isoform a real biological entity?
+- **Existence (E1–E6)** — is this isoform a real biological entity?
 - **Functional impact (F1–F6)** — does it change protein function?
 
 Each criterion is a small function returning ``(value, reason)`` where
@@ -28,16 +28,17 @@ Existence:
        (``conservation``)
     E4 Multi-cell-line support (``site.expression``)
     E5 Ribosome initiation efficiency threshold (``site.expression``)
-    E6 Proteomics evidence  — stubbed (``proteomics`` module not wired)
-    E7 Unique-to-isoform mass-spec peptides (``massspec``)
+    E6 Mass-spec validation — PepQuery2-validated unique peptide hits
+       in public MS spectra (``massspec``).  Reports ``None`` until the
+       PepQuery2 precompute lands (it has not).  In-silico tryptic
+       detectability alone is NOT treated as evidence.
 
 Functional impact:
     F1 Structured extension pLDDT — stubbed (``structure`` not wired)
     F2 Localization change (``comparison['localization']``)
     F3 Domain gain / loss — stubbed (``functional`` not wired)
     F4 Targeting change — stubbed (``functional`` not wired)
-    F5 Pathogenic variant enrichment in unique region
-       (``variant_intersection``)
+    F5 Pathogenic variant enrichment (ESM1b) — stubbed (``vep`` not wired)
     F6 Clinical variant overlap in unique region
        (``variant_intersection``)
 """
@@ -203,29 +204,37 @@ def _e5_initiation_efficiency(
     )
 
 
-def _e6_proteomics(
-    site: TranslationInitiationSite, cfg: ScoringConfig  # noqa: ARG001
-) -> CriterionResult:
-    """E6: proteomics evidence — stubbed (``proteomics`` module not built)."""
-    return CriterionResult("E6_proteomics_evidence", None, "proteomics module not wired")
-
-
-def _e7_mass_spec(
+def _e6_mass_spec(
     site: TranslationInitiationSite, cfg: ScoringConfig
 ) -> CriterionResult:
-    """E7: at least ``massspec_unique_peptides_min`` peptides unique to isoform."""
+    """E6: PepQuery2-validated unique peptide(s) match public MS spectra.
+
+    Requires the massspec module to have been initialised with a
+    precomputed ``validated_peptides`` cache covering the gene.  When
+    PepQuery2 has NOT been run (``summary.pepquery_run = False``) the
+    criterion reports ``None`` — the isoform cannot be scored on mass
+    spec until the precompute lands.  In-silico tryptic detectability
+    alone is not evidence of proteomic observation.
+    """
     ann = _annotation(site, "massspec")
     if ann is None:
-        return CriterionResult("E7_mass_spec", None, "massspec not run")
+        return CriterionResult("E6_mass_spec", None, "massspec not run")
+    summary = ann.get("summary") if isinstance(ann, dict) else None
+    if not isinstance(summary, dict) or not summary.get("pepquery_run"):
+        return CriterionResult("E6_mass_spec", None, "pepquery2 not precomputed")
     hits = ann.get("hits")
     if not isinstance(hits, list):
-        return CriterionResult("E7_mass_spec", None, "no hits field")
-    n_unique = sum(1 for h in hits if h.get("unique_to_isoform") is True)
-    passed = n_unique >= cfg.massspec_unique_peptides_min
+        return CriterionResult("E6_mass_spec", None, "no hits field")
+    n_validated_unique = sum(
+        1 for h in hits
+        if h.get("unique_to_isoform") is True and h.get("validated") is True
+    )
+    passed = n_validated_unique >= cfg.massspec_unique_peptides_min
     return CriterionResult(
-        "E7_mass_spec",
+        "E6_mass_spec",
         passed,
-        f"n_unique_peptides={n_unique} (threshold {cfg.massspec_unique_peptides_min})",
+        f"n_validated_unique_peptides={n_validated_unique} "
+        f"(threshold {cfg.massspec_unique_peptides_min})",
     )
 
 
@@ -285,21 +294,17 @@ def _f4_targeting_change(
 def _f5_pathogenic_variant_enrichment(
     site: TranslationInitiationSite, cfg: ScoringConfig  # noqa: ARG001
 ) -> CriterionResult:
-    """F5: at least one pathogenic variant sits in the isoform-unique region."""
-    ann = _annotation(site, "variant_intersection")
-    if not _status_ok(ann):
-        return CriterionResult(
-            "F5_pathogenic_variant_enrichment", None, "variant_intersection not run"
-        )
-    n = ann.get("n_pathogenic_in_unique_region") if ann else None
-    if n is None:
-        return CriterionResult(
-            "F5_pathogenic_variant_enrichment", None, "n_pathogenic_in_unique_region unavailable"
-        )
+    """F5: ESM1b pathogenic-variant enrichment — stubbed (``vep`` not wired).
+
+    The long-term signal is per-residue ESM1b LLR scores summarised over
+    the isoform-unique region vs. the shared region.  ClinVar-pathogenic
+    counts in the unique region are already emitted by
+    ``variant_intersection`` (see ``n_pathogenic_in_unique_region``) but
+    don't enter the functional score — that's ClinVar evidence, not a
+    residue-level pathogenicity prediction.
+    """
     return CriterionResult(
-        "F5_pathogenic_variant_enrichment",
-        n > 0,
-        f"n_pathogenic_in_unique={n}",
+        "F5_pathogenic_variant_enrichment", None, "vep module not wired"
     )
 
 
@@ -335,8 +340,7 @@ EXISTENCE_CRITERIA: list[Criterion] = [
     _e3_phylop_coding_selection,
     _e4_multi_cell_line,
     _e5_initiation_efficiency,
-    _e6_proteomics,
-    _e7_mass_spec,
+    _e6_mass_spec,
 ]
 
 
@@ -353,9 +357,22 @@ FUNCTIONAL_CRITERIA: list[Criterion] = [
 class EvidenceScoringModule:
     """Dual-axis evidence scoring over TIS annotations.
 
-    Runs after all other annotation + comparator passes. Reads their
-    outputs from ``site.isoform_annotations`` and ``site.comparison``,
-    evaluates 13 criteria, and writes the results onto
+    **Run order is load-bearing.**  Several criteria (F2
+    ``localization_change`` today; any future Scope-A consumer)
+    read ``site.comparison``, which is populated by
+    ``swissisoform.compare.comparator.compare_genes``.  This module
+    must therefore run **after** ``compare_genes``, i.e. NOT inside
+    ``AnnotationPipeline.site_modules``.  Use it as a standalone step:
+
+    .. code-block:: python
+
+        pipeline.run(genes)
+        compare_genes(genes, scope_a_modules=[BiophysicsModule(cfg)])
+        scoring_mod = EvidenceScoringModule(cfg)
+        scoring_mod.run([s for g in genes for s in g.tis_sites])
+
+    Reads from ``site.isoform_annotations`` and ``site.comparison``,
+    evaluates 12 criteria (6 existence + 6 functional) and writes them onto
     ``site.isoform_annotations["scoring"]``.
 
     Attributes:

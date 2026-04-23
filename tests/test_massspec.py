@@ -139,12 +139,31 @@ class TestMassSpecModule:
         assert result["summary"]["max_peptide_length"] is None
 
     def test_empty_protein_with_canonical(self, config):
-        """Empty isoform with a canonical supplied: unique_peptides is 0 (known)."""
+        """Empty isoform with a canonical supplied: unique_peptides is 0 (known).
+
+        ``validated_peptides`` stays None because PepQuery2 has not been
+        precomputed for this gene (the cache dict passed at init was
+        empty).  Only an actual PepQuery2 precompute should make
+        ``pepquery_run`` True.
+        """
         module = MassSpecModule(config)
         result = module.annotate("", canonical_protein="MKKKKK*", gene_name="GENE")
         assert result["hits"] == []
         assert result["summary"]["unique_peptides"] == 0
-        assert result["summary"]["validated_peptides"] == 0
+        assert result["summary"]["validated_peptides"] is None
+        assert result["summary"]["pepquery_run"] is False
+
+    def test_validated_peptides_marks_pepquery_run(self, config):
+        """Providing a validated-peptides cache flips ``pepquery_run`` True."""
+        protein = "MAAAAAALLLLLLLRKKKKKKKR*"
+        module_probe = MassSpecModule(config)
+        first_pep = module_probe._tryptic_digest(protein)[0]["peptide"]
+        module = MassSpecModule(
+            config, validated_peptides={"TESTGENE": {first_pep}}
+        )
+        result = module.annotate(protein, gene_name="TESTGENE")
+        assert result["summary"]["pepquery_run"] is True
+        assert result["summary"]["validated_peptides"] >= 1
 
     def test_run_no_sites_lost(self, synthetic_tis, config):
         """run() must preserve all input sites."""

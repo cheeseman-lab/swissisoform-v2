@@ -17,8 +17,7 @@ from swissisoform.modules.scoring import (
     _e3_phylop_coding_selection,
     _e4_multi_cell_line,
     _e5_initiation_efficiency,
-    _e6_proteomics,
-    _e7_mass_spec,
+    _e6_mass_spec,
     _f1_structured_extension,
     _f2_localization_change,
     _f3_domain_change,
@@ -155,30 +154,43 @@ class TestE5InitiationEfficiency:
         assert res.value is True
 
 
-class TestE6Proteomics:
-    def test_stubbed(self):
-        res = _e6_proteomics(_site(), ScoringConfig())
-        assert res.value is None
-        assert "not wired" in res.reason
-
-
-class TestE7MassSpec:
-    def test_passes(self):
+class TestE6MassSpec:
+    def test_passes_when_validated(self):
         site = _site()
         site.isoform_annotations["massspec"] = {
             "hits": [
-                {"unique_to_isoform": True},
-                {"unique_to_isoform": False},
+                {"unique_to_isoform": True, "validated": True},
+                {"unique_to_isoform": True, "validated": False},
             ],
+            "summary": {"pepquery_run": True},
         }
-        res = _e7_mass_spec(site, ScoringConfig(massspec_unique_peptides_min=1))
+        res = _e6_mass_spec(
+            site, ScoringConfig(massspec_unique_peptides_min=1)
+        )
         assert res.value is True
 
-    def test_none_unique(self):
+    def test_fails_when_no_validated_hits(self):
         site = _site()
-        site.isoform_annotations["massspec"] = {"hits": []}
-        res = _e7_mass_spec(site, ScoringConfig(massspec_unique_peptides_min=1))
+        site.isoform_annotations["massspec"] = {
+            "hits": [
+                {"unique_to_isoform": True, "validated": False},
+            ],
+            "summary": {"pepquery_run": True},
+        }
+        res = _e6_mass_spec(
+            site, ScoringConfig(massspec_unique_peptides_min=1)
+        )
         assert res.value is False
+
+    def test_none_when_pepquery_not_run(self):
+        site = _site()
+        site.isoform_annotations["massspec"] = {
+            "hits": [{"unique_to_isoform": True, "validated": None}],
+            "summary": {"pepquery_run": False},
+        }
+        res = _e6_mass_spec(site, ScoringConfig())
+        assert res.value is None
+        assert "pepquery" in res.reason.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -225,32 +237,10 @@ class TestF3F4Stubs:
 
 
 class TestF5PathogenicVariantEnrichment:
-    def test_positive(self):
-        site = _site()
-        site.isoform_annotations["variant_intersection"] = {
-            "n_pathogenic_in_unique_region": 2,
-            "summary": {"status": "ok"},
-        }
-        res = _f5_pathogenic_variant_enrichment(site, ScoringConfig())
-        assert res.value is True
-
-    def test_zero(self):
-        site = _site()
-        site.isoform_annotations["variant_intersection"] = {
-            "n_pathogenic_in_unique_region": 0,
-            "summary": {"status": "ok"},
-        }
-        res = _f5_pathogenic_variant_enrichment(site, ScoringConfig())
-        assert res.value is False
-
-    def test_no_skeleton(self):
-        site = _site()
-        site.isoform_annotations["variant_intersection"] = {
-            "n_pathogenic_in_unique_region": None,
-            "summary": {"status": "no_skeleton"},
-        }
-        res = _f5_pathogenic_variant_enrichment(site, ScoringConfig())
+    def test_stubbed(self):
+        res = _f5_pathogenic_variant_enrichment(_site(), ScoringConfig())
         assert res.value is None
+        assert "not wired" in res.reason
 
 
 class TestF6ClinicalVariantOverlap:
@@ -278,7 +268,7 @@ class TestModuleIntegration:
         # E4 always evaluates (reads site.expression), others None
         assert out["existence_evaluable"] == 1
         assert out["existence_score"] == 0
-        # F1–F4 stubs, F5/F6 require variant_intersection — nothing evaluates
+        # F1/F3/F4/F5 stubs, F2/F6 require comparator/variant data — nothing evaluates
         assert out["functional_evaluable"] == 0
 
     def test_score_counts_only_true(self):
@@ -297,7 +287,6 @@ class TestModuleIntegration:
             "summary": {"status": "ok"},
         }
         site.isoform_annotations["variant_intersection"] = {
-            "n_pathogenic_in_unique_region": 1,
             "n_in_unique_region": 1,
             "summary": {"status": "ok"},
         }
@@ -307,11 +296,11 @@ class TestModuleIntegration:
         # E1, E2, E4 True → existence_score = 3
         assert out["existence_score"] == 3
         assert out["existence_high_confidence"] is True
-        # F5, F6 True → functional_score = 2
-        assert out["functional_score"] == 2
+        # F6 True (F1/F3/F4/F5 stubbed, F2 no comparator data) → functional_score = 1
+        assert out["functional_score"] == 1
         assert out["functional_high_confidence"] is True
         assert out["criteria"]["E1_primate_conservation"] is True
-        assert out["criteria"]["F5_pathogenic_variant_enrichment"] is True
+        assert out["criteria"]["F6_clinical_variant_overlap"] is True
 
     def test_run_populates_annotations(self):
         mod = EvidenceScoringModule(PipelineConfig(scoring=ScoringConfig()))
@@ -323,7 +312,7 @@ class TestModuleIntegration:
 
 class TestMetadata:
     def test_counts(self):
-        assert len(EXISTENCE_CRITERIA) == 7
+        assert len(EXISTENCE_CRITERIA) == 6
         assert len(FUNCTIONAL_CRITERIA) == 6
 
     def test_output_columns(self):

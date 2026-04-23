@@ -185,8 +185,8 @@ class LocalizationModule:
     """Localization annotation module.
 
     Consumes pre-computed subcellular localization predictions and attaches
-    them to TIS sites. The actual prediction tools (DeepLoc, WoLF PSORT)
-    are run separately as GPU jobs; this module only loads and merges results.
+    them to TIS sites. The actual prediction tool (DeepLoc) is run separately
+    as a GPU job; this module only loads and merges results.
 
     Attributes:
         MODULE_NAME: Unique module identifier.
@@ -199,7 +199,6 @@ class LocalizationModule:
         "localization_deeploc_prediction",
         "localization_deeploc_signals",
         "localization_deeploc_membrane",
-        "localization_wolfpsort_prediction",
     ]
     SCOPE: str = "C"
 
@@ -213,7 +212,7 @@ class LocalizationModule:
         Args:
             config: Pipeline configuration.
             predictions: Mapping of key (e.g. tis_id) to prediction dict with keys:
-                deeploc, deeploc_signals, deeploc_membrane, wolfpsort.
+                deeploc, deeploc_signals, deeploc_membrane.
         """
         self.config = config
         self.predictions = predictions or {}
@@ -232,9 +231,8 @@ class LocalizationModule:
 
         Returns:
             Annotation dict with keys: ``deeploc_prediction``,
-            ``deeploc_signals``, ``deeploc_membrane``,
-            ``wolfpsort_prediction``.  All values are ``None`` if the
-            sequence is not in the predictions dict.
+            ``deeploc_signals``, ``deeploc_membrane``.  All values are
+            ``None`` if the sequence is not in the predictions dict.
         """
         h = _protein_hash(protein)
         pred = self.predictions.get(h, {})
@@ -242,7 +240,6 @@ class LocalizationModule:
             "deeploc_prediction": pred.get("deeploc"),
             "deeploc_signals": pred.get("deeploc_signals"),
             "deeploc_membrane": pred.get("deeploc_membrane"),
-            "wolfpsort_prediction": pred.get("wolfpsort"),
         }
 
     def annotate_by_key(self, key: str) -> dict[str, Any]:
@@ -256,7 +253,6 @@ class LocalizationModule:
             "deeploc_prediction": pred.get("deeploc"),
             "deeploc_signals": pred.get("deeploc_signals"),
             "deeploc_membrane": pred.get("deeploc_membrane"),
-            "wolfpsort_prediction": pred.get("wolfpsort"),
         }
 
     def run(self, tis_sites: list[TranslationInitiationSite]) -> list[TranslationInitiationSite]:

@@ -92,7 +92,13 @@ def _scalar_deltas(canonical: dict[str, Any], isoform: dict[str, Any]) -> dict[s
 
 
 def _categorical_changes(canonical: dict[str, Any], isoform: dict[str, Any]) -> dict[str, Any]:
-    """Flag categorical (non-numeric, non-list) fields whose values differ."""
+    """Emit a change flag for every categorical (non-numeric, non-list) field.
+
+    Every shared categorical key produces ``{key}_changed`` (bool) plus
+    ``{key}_canonical`` / ``{key}_isoform`` values — so downstream
+    consumers always see the comparison, not just the rows where values
+    diverged.
+    """
     changes: dict[str, Any] = {}
     for key, iso_val in isoform.items():
         if key in _POSITIONAL_KEYS or _is_numeric(iso_val):
@@ -100,10 +106,9 @@ def _categorical_changes(canonical: dict[str, Any], isoform: dict[str, Any]) -> 
         if isinstance(iso_val, (list, dict)):
             continue
         can_val = canonical.get(key)
-        if iso_val != can_val:
-            changes[f"{key}_changed"] = True
-            changes[f"{key}_canonical"] = can_val
-            changes[f"{key}_isoform"] = iso_val
+        changes[f"{key}_changed"] = iso_val != can_val
+        changes[f"{key}_canonical"] = can_val
+        changes[f"{key}_isoform"] = iso_val
     return changes
 
 
@@ -181,9 +186,14 @@ class Comparator:
                 site.diff_annotations[mod.MODULE_NAME] = mod.annotate(diff_region.sequence)
 
         # ── Per-module comparison ───────────────────────────────────────
-        modules = set(site.isoform_annotations) | set(gene.canonical_annotations)
-        for module_name in modules:
-            canonical_ann = gene.canonical_annotations.get(module_name, {})
+        # Only compare modules that produced canonical output.  SiteModule
+        # outputs (core_identity, initiation_context, conservation_frame,
+        # scoring, ...) live only on the TIS pane — they have no canonical
+        # counterpart, and comparing them against an empty dict would emit
+        # spurious ``cmp_<module>_<field>_canonical = None`` columns.
+        for module_name, canonical_ann in gene.canonical_annotations.items():
+            if not canonical_ann:
+                continue
             isoform_ann = site.isoform_annotations.get(module_name, {})
             diff_ann = site.diff_annotations.get(module_name, {})
             site.comparison[module_name] = self._compare_module(
