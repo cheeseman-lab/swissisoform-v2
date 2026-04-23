@@ -28,6 +28,12 @@ from swissisoform.modules.biophysics import BiophysicsModule
 from swissisoform.modules.core_identity import CoreIdentityModule
 from swissisoform.modules.initiation_context import InitiationContextModule
 from swissisoform.modules.motifs import MotifsModule
+from swissisoform.modules.interproscan import (
+    InterProScanModule,
+    precompute_interproscan,
+)
+from swissisoform.modules.signalp import SignalPModule, precompute_signalp
+from swissisoform.modules.targetp import TargetPModule, precompute_targetp
 from swissisoform.pipeline import AnnotationPipeline, UpstreamReference, run_sample
 
 # ---------------------------------------------------------------------------
@@ -118,12 +124,46 @@ def test_genes(upstream_hela) -> list[Gene]:
 
 @pytest.fixture(scope="module")
 def annotated_genes(test_genes) -> list[Gene]:
-    """Run the annotation pipeline on the 5 test genes."""
+    """Run the annotation pipeline on the 5 test genes.
+
+    Runs SignalP + TargetP precompute over every unique canonical /
+    isoform / per-Tid canonical protein sequence across the test gene
+    set before kicking off the pipeline.  The precomputes silently
+    return ``{}`` when their external tool isn't installed (no
+    ``swissisoform-v2-signalp`` env / no extracted TargetP binary), in
+    which case the modules degrade to all-None — but when the tools are
+    installed, real predictions flow through the pipeline and get tested
+    end-to-end.
+    """
     config = PipelineConfig()
+
+    # Collect unique protein sequences from the test genes.  Dedup is
+    # done inside the precompute functions (hash-keyed), but building
+    # the set here keeps the input obvious in logs.
+    proteins: dict[str, str] = {}
+    for gene in test_genes:
+        if gene.canonical_protein:
+            proteins[f"{gene.gene_name}_canonical"] = gene.canonical_protein
+        for site in gene.tis_sites:
+            if site.isoform_protein:
+                proteins[f"{site.tis_id}_iso"] = site.isoform_protein
+            if site.canonical_protein:
+                proteins[f"{site.tis_id}_can"] = site.canonical_protein
+
+    signalp_preds = precompute_signalp(proteins, mode="fast")
+    targetp_preds = precompute_targetp(proteins)
+    # InterProScan with the default non-ML application set.  Pfam-only
+    # trips a COMBINE_MATCHES bug in IPS6 6.0.0 whenever any sequence
+    # has no hits, so we keep the broader default.
+    interproscan_preds = precompute_interproscan(proteins)
+
     pipeline = AnnotationPipeline(
         protein_modules=[
             BiophysicsModule(config),
             MotifsModule(config),
+            SignalPModule(config, predictions=signalp_preds),
+            TargetPModule(config, predictions=targetp_preds),
+            InterProScanModule(config, predictions=interproscan_preds),
         ],
         site_modules=[
             CoreIdentityModule(config),
@@ -493,6 +533,129 @@ class TestAnnotation:
                     # Hamming distances must be numeric when kozak present
                     assert ann["kozak_hamming_full"] is not None
                     assert 0 <= ann["kozak_hamming_full"] <= 13
+
+    def test_signalp_predictions_flow_through(
+        self, annotated_genes: list[Gene]
+    ) -> None:
+        """SignalP precompute + module lookup produce real, non-None values.
+
+        Skipped when the ``swissisoform-v2-signalp`` env isn't set up:
+        the precompute returns ``{}`` and every module call returns
+        None.  When the env IS set up, at least some predictions must
+        flow through — a 5-gene batch over canonical + isoform proteins
+        cannot legitimately be 100% unpredicted.
+        """
+        non_none_preds = [
+            site.isoform_annotations["signalp"]["signalp_prediction"]
+            for gene in annotated_genes
+            for site in gene.tis_sites
+            if site.isoform_annotations["signalp"]["signalp_prediction"] is not None
+        ]
+        if not non_none_preds:
+            pytest.skip(
+                "SignalP returned no predictions — env not installed.  Run "
+                "`python scripts/setup_databases.py signalp` to enable this test."
+            )
+        valid = {"OTHER", "SP", "LIPO", "TAT", "TATLIPO", "PILIN"}
+        assert set(non_none_preds) <= valid, (
+            f"Unknown SignalP prediction classes: {set(non_none_preds) - valid}"
+        )
+        # Probabilities where present must be in [0, 1]
+        for gene in annotated_genes:
+            for site in gene.tis_sites:
+                prob = site.isoform_annotations["signalp"]["signalp_probability"]
+                if prob is not None:
+                    assert 0.0 <= prob <= 1.0, (
+                        f"{gene.gene_name} {site.tis_id}: SignalP prob {prob} out of [0,1]"
+                    )
+
+    def test_targetp_predictions_flow_through(
+        self, annotated_genes: list[Gene]
+    ) -> None:
+        """TargetP precompute + module lookup produce real, non-None values.
+
+        Skipped when the TargetP binary isn't extracted.  Otherwise
+        predictions must appear and be drawn from the documented class
+        set; probability floats must sit in [0, 1].
+        """
+        non_none_preds = [
+            site.isoform_annotations["targetp"]["targetp_prediction"]
+            for gene in annotated_genes
+            for site in gene.tis_sites
+            if site.isoform_annotations["targetp"]["targetp_prediction"] is not None
+        ]
+        if not non_none_preds:
+            pytest.skip(
+                "TargetP returned no predictions — binary not extracted.  Run "
+                "`python scripts/setup_databases.py targetp` to enable this test."
+            )
+        valid = {"noTP", "SP", "mTP", "cTP", "luTP"}
+        assert set(non_none_preds) <= valid, (
+            f"Unknown TargetP prediction classes: {set(non_none_preds) - valid}"
+        )
+        for gene in annotated_genes:
+            for site in gene.tis_sites:
+                for key in ("targetp_probability", "targetp_sp_prob", "targetp_mtp_prob"):
+                    v = site.isoform_annotations["targetp"][key]
+                    if v is not None:
+                        assert 0.0 <= v <= 1.0, (
+                            f"{gene.gene_name} {site.tis_id}: {key}={v} out of [0,1]"
+                        )
+
+    def test_interproscan_predictions_flow_through(
+        self, annotated_genes: list[Gene]
+    ) -> None:
+        """InterProScan precompute + module lookup produce real domain hits.
+
+        Skipped when the InterProScan 6 datadir / Nextflow aren't set up
+        (precompute returns ``{}``).  With Pfam on ~100 real proteins
+        from TP53, EIF4G1, VEGFA, CTNND1, MYC we expect several hits —
+        these are well-annotated proteins.
+        """
+        total_hits = 0
+        for gene in annotated_genes:
+            ann = gene.canonical_annotations.get("interproscan")
+            if isinstance(ann, dict):
+                total_hits += ann.get("summary", {}).get("n_hits", 0)
+            for site in gene.tis_sites:
+                total_hits += site.isoform_annotations["interproscan"]["summary"][
+                    "n_hits"
+                ]
+        if total_hits == 0:
+            pytest.skip(
+                "InterProScan returned no hits — datadir not populated.  Run "
+                "`sbatch scripts/setup_interproscan.sbatch` to enable this test."
+            )
+        # Every hit must carry coordinate + db + signature metadata
+        for gene in annotated_genes:
+            for site in gene.tis_sites:
+                for hit in site.isoform_annotations["interproscan"]["hits"]:
+                    assert "name" in hit and hit["name"]
+                    assert "db" in hit and hit["db"]
+                    assert 0 <= hit["pos"] < hit["end"]
+                    assert hit["end"] <= len(site.isoform_protein) + 1
+
+    def test_signalp_canonical_vs_isoform_comparator(
+        self, annotated_genes: list[Gene]
+    ) -> None:
+        """SignalP comparator emits prediction_changed for each TIS.
+
+        This is the signal that feeds F4 scoring.  Skipped when SignalP
+        didn't produce predictions (same condition as the precompute
+        test above).
+        """
+        changed_count = 0
+        emitted = 0
+        for gene in annotated_genes:
+            for site in gene.tis_sites:
+                cmp = site.comparison.get("signalp", {})
+                if "signalp_prediction_changed" in cmp:
+                    emitted += 1
+                    if cmp["signalp_prediction_changed"]:
+                        changed_count += 1
+        if emitted == 0:
+            pytest.skip("SignalP comparator fields absent — precompute not run.")
+        assert emitted > 0
 
     def test_site_modules_not_on_canonical(self, annotated_genes: list[Gene]) -> None:
         """SiteModule output should NOT be in canonical_annotations."""

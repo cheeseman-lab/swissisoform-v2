@@ -42,6 +42,8 @@ from swissisoform.modules.core_identity import CoreIdentityModule
 from swissisoform.modules.initiation_context import InitiationContextModule
 from swissisoform.modules.massspec import MassSpecModule
 from swissisoform.modules.motifs import MotifsModule
+from swissisoform.modules.signalp import SignalPModule, precompute_signalp
+from swissisoform.modules.targetp import TargetPModule, precompute_targetp
 from swissisoform.pipeline import AnnotationPipeline, UpstreamReference, run_sample
 
 ROOT = Path(__file__).parent.parent
@@ -195,12 +197,43 @@ def main() -> None:
         time.perf_counter() - t0,
     )
 
+    hdr("STAGE 4a — Precompute DTU tools (SignalP + TargetP)")
+    # Collect every unique protein sequence across canonicals + isoforms
+    # so the subprocess shell-outs dedup maximally.  Both precompute
+    # calls gracefully return {} if the `swissisoform-v2-dtu` env isn't
+    # installed — the modules then degrade to all-None annotations.
+    all_proteins: list[str] = []
+    for g in genes:
+        if g.canonical_protein:
+            all_proteins.append(g.canonical_protein)
+        for s in g.tis_sites:
+            if s.isoform_protein:
+                all_proteins.append(s.isoform_protein)
+            if s.canonical_protein:
+                all_proteins.append(s.canonical_protein)
+    t0 = time.perf_counter()
+    signalp_preds = precompute_signalp(all_proteins)
+    logger.info(
+        "signalp precompute: %d predictions (%.1fs)",
+        len(signalp_preds),
+        time.perf_counter() - t0,
+    )
+    t0 = time.perf_counter()
+    targetp_preds = precompute_targetp(all_proteins)
+    logger.info(
+        "targetp precompute: %d predictions (%.1fs)",
+        len(targetp_preds),
+        time.perf_counter() - t0,
+    )
+
     hdr("STAGE 4 — Annotation (one pass)")
     pipeline = AnnotationPipeline(
         protein_modules=[
             BiophysicsModule(cfg),
             MotifsModule(cfg),
             MassSpecModule(cfg),
+            SignalPModule(cfg, predictions=signalp_preds),
+            TargetPModule(cfg, predictions=targetp_preds),
         ],
         site_modules=[
             CoreIdentityModule(cfg),

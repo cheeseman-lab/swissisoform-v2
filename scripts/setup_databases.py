@@ -1067,6 +1067,347 @@ def setup_gencode(refresh: bool = False) -> None:
 
 
 # ---------------------------------------------------------------------------
+# SignalP 6.0 — academic-license pip-installable tarball (isolated env)
+# ---------------------------------------------------------------------------
+
+SIGNALP_DIR = REF / "signalp"
+SIGNALP_ENV_NAME = "swissisoform-v2-signalp"
+SIGNALP_TARBALL_GLOB = "signalp-6*.tar.gz"
+SIGNALP_EXTRACT_ROOT = SIGNALP_DIR / "signalp6_fast"
+SIGNALP_PACKAGE_DIR = SIGNALP_EXTRACT_ROOT / "signalp-6-package"
+SIGNALP_MODELS_SRC = SIGNALP_PACKAGE_DIR / "models"
+SIGNALP_URL = "https://services.healthtech.dtu.dk/services/SignalP-6.0/"
+
+
+def setup_signalp(refresh: bool = False) -> None:
+    """Create the SignalP 6.0 conda env and install the pip tarball.
+
+    SignalP 6.0 is distributed as an academic-license pip-installable
+    package with separately-bundled model weights.  Install is three steps:
+
+      1. Extract ``signalp-6*.tar.gz`` → ``signalp6_fast/signalp-6-package/``.
+      2. Create env + ``python -m pip install`` the extracted package
+         (not the raw tarball — the tarball's top-level directory isn't
+         a Python project) and downgrade numpy <2 to match torch 1.13.
+         ``python -m pip`` bypasses ``~/.local/bin/pip`` shadowing.
+      3. Copy ``models/*`` into the installed package's ``model_weights/``
+         directory — the models aren't packaged into the wheel.
+
+    Idempotent: skips steps already done unless ``refresh`` is True.
+    """
+    SIGNALP_DIR.mkdir(parents=True, exist_ok=True)
+
+    matches = sorted(SIGNALP_DIR.glob(SIGNALP_TARBALL_GLOB))
+    if not matches:
+        logger.warning(
+            "signalp: no tarball matching %s found in %s.  Download from "
+            "%s (DTU academic license) and drop it there.",
+            SIGNALP_TARBALL_GLOB, SIGNALP_DIR, SIGNALP_URL,
+        )
+        return
+    tarball = matches[-1]
+    logger.info("signalp: tarball → %s", tarball)
+
+    # Step 1 — extract
+    if SIGNALP_PACKAGE_DIR.exists() and not refresh:
+        logger.info("signalp: already extracted at %s", SIGNALP_PACKAGE_DIR)
+    else:
+        if SIGNALP_EXTRACT_ROOT.exists() and refresh:
+            shutil.rmtree(SIGNALP_EXTRACT_ROOT)
+        logger.info("signalp: extracting %s → %s", tarball, SIGNALP_DIR)
+        subprocess.run(["tar", "-xzf", str(tarball), "-C", str(SIGNALP_DIR)], check=True)
+        if not SIGNALP_PACKAGE_DIR.exists():
+            raise FileNotFoundError(
+                f"signalp: extraction finished but {SIGNALP_PACKAGE_DIR} missing"
+            )
+
+    # Step 2 — create env + pip install (if needed)
+    if not _conda_env_exists(SIGNALP_ENV_NAME):
+        logger.info("signalp: creating conda env %s (python=3.10)", SIGNALP_ENV_NAME)
+        subprocess.run(
+            ["conda", "create", "-n", SIGNALP_ENV_NAME, "-c", "conda-forge",
+             "python=3.10", "pip", "-y"],
+            check=True,
+        )
+    else:
+        logger.info("signalp: conda env %s already exists", SIGNALP_ENV_NAME)
+
+    # Always verify the package is importable before skipping the pip install,
+    # so a half-populated env self-heals on re-run.
+    pip_needed = True
+    try:
+        _conda_run(SIGNALP_ENV_NAME, ["python", "-c", "import signalp"])
+        pip_needed = False
+    except subprocess.CalledProcessError:
+        pass
+
+    if pip_needed or refresh:
+        logger.info("signalp: pip-installing %s into %s", SIGNALP_PACKAGE_DIR, SIGNALP_ENV_NAME)
+        _conda_run(
+            SIGNALP_ENV_NAME,
+            ["python", "-m", "pip", "install", "--no-user", str(SIGNALP_PACKAGE_DIR)],
+        )
+        # torch 1.13 (SignalP's pin) requires numpy < 2.
+        logger.info("signalp: pinning numpy<2 (torch 1.13 compat)")
+        _conda_run(
+            SIGNALP_ENV_NAME,
+            ["python", "-m", "pip", "install", "--no-user", "numpy<2"],
+        )
+
+    # Step 3 — copy model weights into the installed package
+    proc = subprocess.run(
+        ["conda", "run", "-n", SIGNALP_ENV_NAME, "python", "-c",
+         "import signalp, os; print(os.path.dirname(signalp.__file__))"],
+        capture_output=True, text=True, check=True,
+    )
+    signalp_pkg_dir = Path(proc.stdout.strip())
+    model_weights_dir = signalp_pkg_dir / "model_weights"
+    model_weights_dir.mkdir(exist_ok=True)
+    target_pt = model_weights_dir / "distilled_model_signalp6.pt"
+    src_pt = SIGNALP_MODELS_SRC / "distilled_model_signalp6.pt"
+    if not src_pt.exists():
+        raise FileNotFoundError(f"signalp: model weights missing at {src_pt}")
+    if target_pt.exists() and not refresh:
+        logger.info("signalp: model weights already in place at %s", target_pt)
+    else:
+        logger.info("signalp: copying %s → %s", src_pt, target_pt)
+        shutil.copyfile(src_pt, target_pt)
+
+    # Step 4 — smoke test: predict on a 1-sequence FASTA
+    smoke_dir = SIGNALP_DIR / ".smoke_test"
+    smoke_dir.mkdir(exist_ok=True)
+    smoke_fa = smoke_dir / "input.fa"
+    smoke_fa.write_text(
+        ">test\nMRAPGCVLLLGLCLLSQAALAGGEHSGEILVGGLFPMHSRGSEGKPCGDIKREGG\n"
+    )
+    try:
+        _conda_run(
+            SIGNALP_ENV_NAME,
+            ["signalp6", "--fastafile", str(smoke_fa), "--organism", "eukarya",
+             "--mode", "fast", "--format", "txt",
+             "--output_dir", str(smoke_dir / "out")],
+        )
+    except subprocess.CalledProcessError as exc:
+        logger.error("signalp: smoke test failed: %s", exc)
+        return
+    logger.info("signalp: smoke test ok")
+
+    write_sidecar(
+        SIGNALP_DIR,
+        source_url=SIGNALP_URL,
+        version=tarball.name,
+        artifact=tarball,
+        extra={"conda_env": SIGNALP_ENV_NAME, "install_mode": "automated"},
+    )
+    logger.info("signalp: verified + sidecar written")
+
+
+# ---------------------------------------------------------------------------
+# TargetP 2.0 — standalone Go binary + bundled TensorFlow libs
+# ---------------------------------------------------------------------------
+
+TARGETP_DIR = REF / "targetp"
+TARGETP_TARBALL_GLOB = "targetp-2*.tar.gz"
+TARGETP_EXTRACT_DIR = TARGETP_DIR / "targetp-2.0"
+TARGETP_BIN = TARGETP_EXTRACT_DIR / "bin" / "targetp"
+TARGETP_URL = "https://services.healthtech.dtu.dk/services/TargetP-2.0/"
+
+
+def setup_targetp(refresh: bool = False) -> None:
+    """Extract the TargetP 2.0 tarball and smoke-test the binary.
+
+    TargetP 2.0 is a self-contained Go binary with bundled TensorFlow C
+    libraries.  Unlike SignalP, it is NOT a Python package — no conda
+    env is required.  This subcommand:
+
+      1. Locates the user-supplied tarball in ``data/reference/targetp/``.
+      2. Extracts it in place if ``targetp-2.0/`` is missing (or if
+         ``refresh`` is True).
+      3. Runs the example invocation from the DTU readme to verify the
+         binary + bundled libs load cleanly.
+      4. Writes a provenance sidecar.
+    """
+    TARGETP_DIR.mkdir(parents=True, exist_ok=True)
+
+    matches = sorted(TARGETP_DIR.glob(TARGETP_TARBALL_GLOB))
+    if not matches:
+        logger.warning(
+            "targetp: no tarball matching %s found in %s.  Download from "
+            "%s (DTU academic license) and drop it there.",
+            TARGETP_TARBALL_GLOB, TARGETP_DIR, TARGETP_URL,
+        )
+        return
+    tarball = matches[-1]
+
+    if TARGETP_BIN.exists() and not refresh:
+        logger.info("targetp: binary already extracted at %s", TARGETP_BIN)
+    else:
+        if TARGETP_EXTRACT_DIR.exists() and refresh:
+            logger.info("targetp: removing stale %s (refresh=True)", TARGETP_EXTRACT_DIR)
+            shutil.rmtree(TARGETP_EXTRACT_DIR)
+        logger.info("targetp: extracting %s → %s", tarball, TARGETP_DIR)
+        subprocess.run(["tar", "-xzf", str(tarball), "-C", str(TARGETP_DIR)], check=True)
+        if not TARGETP_BIN.exists():
+            raise FileNotFoundError(
+                f"targetp: extraction finished but {TARGETP_BIN} missing — "
+                "tarball layout may have changed upstream."
+            )
+
+    # Smoke-test: run the example from the readme and confirm the summary
+    # file appears.  Uses the test FASTA shipped inside the tarball.
+    test_fa = TARGETP_EXTRACT_DIR / "test" / "example.fsa"
+    if not test_fa.exists():
+        logger.warning("targetp: test FASTA missing (%s) — skipping smoke test", test_fa)
+    else:
+        smoke_dir = TARGETP_DIR / ".smoke_test"
+        smoke_dir.mkdir(exist_ok=True)
+        prefix = smoke_dir / "example_short"
+        env = dict(os.environ)
+        lib_dir = TARGETP_EXTRACT_DIR / "lib"
+        env["LD_LIBRARY_PATH"] = (
+            f"{lib_dir}:{env['LD_LIBRARY_PATH']}" if "LD_LIBRARY_PATH" in env else str(lib_dir)
+        )
+        cmd = [
+            str(TARGETP_BIN),
+            "-fasta", str(test_fa),
+            "-org", "non-pl",
+            "-format", "short",
+            "-prefix", str(prefix),
+        ]
+        logger.info("targetp: smoke-test %s", " ".join(cmd))
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True, env=env, cwd=smoke_dir)
+        except subprocess.CalledProcessError as exc:
+            logger.error(
+                "targetp: smoke test failed (exit %d). stderr=%s",
+                exc.returncode, (exc.stderr or "")[-400:],
+            )
+            return
+        summaries = list(smoke_dir.glob("example_short*summary*"))
+        if not summaries:
+            logger.error("targetp: smoke test produced no summary file in %s", smoke_dir)
+            return
+        logger.info("targetp: smoke test ok (%s)", summaries[0].name)
+
+    write_sidecar(
+        TARGETP_DIR,
+        source_url=TARGETP_URL,
+        version=tarball.name,
+        artifact=TARGETP_BIN,
+        extra={"install_mode": "native-binary"},
+    )
+    logger.info("targetp: verified + sidecar written")
+
+
+# ---------------------------------------------------------------------------
+# InterProScan 6 — Nextflow pipeline (DB + singularity images auto-pulled)
+# ---------------------------------------------------------------------------
+
+INTERPROSCAN_DIR = REF / "interproscan"
+INTERPROSCAN_DATADIR = INTERPROSCAN_DIR / "datadir"
+INTERPROSCAN_NF_REPO = "ebi-pf-team/interproscan6"
+INTERPROSCAN_VERSION = "6.0.0"
+INTERPROSCAN_DATA_VERSION = "108.0"
+
+
+def setup_interproscan(refresh: bool = False) -> None:
+    """Pre-warm the InterProScan 6 Nextflow datadir and smoke-test.
+
+    InterProScan 6 is a Nextflow pipeline that orchestrates member-DB
+    Singularity images under a unified interface.  First-run behaviour:
+
+    - The pipeline auto-downloads member DBs into ``--datadir`` (~50 GB).
+    - Singularity images for member tools are pulled into the Nextflow
+      cache by ``-profile singularity``.
+
+    This subcommand kicks off that first run on a trivial 1-protein
+    FASTA so both downloads happen once, in a controlled location, with
+    provenance recorded.  Subsequent precompute runs reuse the cache.
+
+    Idempotent.  ``refresh`` deletes the datadir and re-downloads.
+    """
+    INTERPROSCAN_DIR.mkdir(parents=True, exist_ok=True)
+
+    if shutil.which("nextflow") is None:
+        logger.error(
+            "interproscan: 'nextflow' not on PATH.  Install Nextflow "
+            "(e.g. via conda: conda install -c bioconda nextflow) first."
+        )
+        return
+    if shutil.which("singularity") is None:
+        logger.error(
+            "interproscan: 'singularity' not on PATH — required for the "
+            "singularity profile.  Install singularity / apptainer first."
+        )
+        return
+
+    if INTERPROSCAN_DATADIR.exists() and refresh:
+        logger.info("interproscan: removing existing datadir (refresh=True)")
+        shutil.rmtree(INTERPROSCAN_DATADIR)
+    INTERPROSCAN_DATADIR.mkdir(parents=True, exist_ok=True)
+
+    smoke_dir = INTERPROSCAN_DIR / ".smoke_test"
+    smoke_dir.mkdir(exist_ok=True)
+    smoke_out = smoke_dir / "out"
+    if smoke_out.exists():
+        shutil.rmtree(smoke_out)
+    smoke_out.mkdir()
+    # Use IPS6's canonical -profile test: uses a curated test FASTA + the
+    # full default (non-ML) application set, which avoids the single-app
+    # COMBINE_MATCHES bug that triggers when sequences have null matches.
+    cmd = [
+        "nextflow", "run", INTERPROSCAN_NF_REPO,
+        "-r", INTERPROSCAN_VERSION,
+        "-resume",
+        "-profile", "singularity,test",
+        "--datadir", str(INTERPROSCAN_DATADIR),
+        "--interpro", INTERPROSCAN_DATA_VERSION,
+        "--outdir", str(smoke_out),
+        # Force container-based COMBINE_MATCHES path — the LOCAL variant
+        # fails under Nextflow 25.x due to a Groovy classpath regression
+        # around `lib/uk/ac/ebi/interpro/ProcessCombine.groovy`.
+        "--batchSize", "50000",
+    ]
+    logger.info(
+        "interproscan: first run (auto-downloads DBs + member images, 30–60 min): %s",
+        " ".join(cmd),
+    )
+    try:
+        subprocess.run(cmd, check=True, cwd=INTERPROSCAN_DIR)
+    except subprocess.CalledProcessError as exc:
+        logger.error("interproscan: nextflow run failed: %s", exc)
+        return
+
+    tsv_candidates = sorted(smoke_out.rglob("*.tsv"))
+    if not tsv_candidates:
+        logger.error("interproscan: smoke test produced no .tsv under %s", smoke_out)
+        return
+    logger.info(
+        "interproscan: smoke test ok (%s, %d bytes)",
+        tsv_candidates[0].name, tsv_candidates[0].stat().st_size,
+    )
+
+    # Sidecar artifact is the smoke-test TSV (small + reproducible); we
+    # deliberately do NOT hash the 34 GB datadir — write_sidecar's per-file
+    # sha256 loop would take hours and the hashes would change every time
+    # InterPro rolls a minor data release anyway.
+    write_sidecar(
+        INTERPROSCAN_DIR,
+        source_url=f"https://github.com/{INTERPROSCAN_NF_REPO}",
+        version=f"{INTERPROSCAN_VERSION} (data {INTERPROSCAN_DATA_VERSION})",
+        artifact=tsv_candidates[0],
+        extra={
+            "install_mode": "nextflow+singularity",
+            "datadir": str(INTERPROSCAN_DATADIR.relative_to(ROOT)),
+            "datadir_size_bytes": sum(
+                f.stat().st_size for f in INTERPROSCAN_DATADIR.rglob("*") if f.is_file()
+            ),
+        },
+    )
+    logger.info("interproscan: verified + sidecar written")
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -1079,6 +1420,9 @@ _HANDLERS: dict[str, Any] = {
     "pepquery": setup_pepquery,
     "hal": setup_hal,
     "gencode": setup_gencode,
+    "signalp": setup_signalp,
+    "targetp": setup_targetp,
+    "interproscan": setup_interproscan,
 }
 
 

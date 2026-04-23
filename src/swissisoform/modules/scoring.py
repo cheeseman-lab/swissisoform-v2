@@ -278,17 +278,69 @@ def _f2_localization_change(
 def _f3_domain_change(
     site: TranslationInitiationSite, cfg: ScoringConfig  # noqa: ARG001
 ) -> CriterionResult:
-    """F3: domain gain/loss — stubbed (functional annotation not wired)."""
-    return CriterionResult("F3_domain_change", None, "functional module not wired")
+    """F3: domain gain/loss, fires when an InterProScan hit lies inside the diff region.
+
+    The comparator's positional subset logic writes ``n_hits_in_diff_region``
+    per module onto ``site.comparison[module]``.  For extensions this
+    counts domain hits gained in the isoform's unique extension; for
+    truncations it counts domain hits lost from the canonical's removed
+    region.  Returns ``None`` when the comparator data is missing
+    (precompute not run).
+    """
+    cmp = site.comparison.get("interproscan")
+    if not isinstance(cmp, dict):
+        return CriterionResult(
+            "F3_domain_change", None, "interproscan comparison missing"
+        )
+    n = cmp.get("n_hits_in_diff_region")
+    if n is None:
+        return CriterionResult(
+            "F3_domain_change", None, "n_hits_in_diff_region unavailable"
+        )
+    return CriterionResult(
+        "F3_domain_change",
+        n > 0,
+        f"n_interproscan_hits_in_diff_region={n}",
+    )
 
 
 def _f4_targeting_change(
     site: TranslationInitiationSite, cfg: ScoringConfig  # noqa: ARG001
 ) -> CriterionResult:
-    """F4: targeting signal change — stubbed (functional annotation not wired)."""
-    return CriterionResult(
-        "F4_targeting_change", None, "functional module not wired"
-    )
+    """F4: targeting signal change, fires when SignalP or TargetP disagrees on canonical vs. isoform.
+
+    Reads from ``site.comparison['signalp']`` / ``site.comparison['targetp']``
+    written by the comparator (Scope A).  Returns ``None`` when neither
+    module has produced a comparison (precompute not run), ``False`` when
+    both ran but neither reports a category change, ``True`` when either
+    does.
+    """
+    sp_cmp = site.comparison.get("signalp")
+    tp_cmp = site.comparison.get("targetp")
+
+    def _any_changed(cmp: dict[str, Any] | None) -> bool | None:
+        if not isinstance(cmp, dict):
+            return None
+        changed = [k for k in cmp if k.endswith("_changed")]
+        if not changed:
+            return None
+        return any(cmp.get(k) is True for k in changed)
+
+    sp_state = _any_changed(sp_cmp)
+    tp_state = _any_changed(tp_cmp)
+
+    if sp_state is None and tp_state is None:
+        return CriterionResult(
+            "F4_targeting_change", None, "signalp/targetp comparisons not available"
+        )
+    if sp_state is True or tp_state is True:
+        hits = []
+        if sp_state is True:
+            hits.append("signalp")
+        if tp_state is True:
+            hits.append("targetp")
+        return CriterionResult("F4_targeting_change", True, f"changed in: {','.join(hits)}")
+    return CriterionResult("F4_targeting_change", False, "no targeting change flagged")
 
 
 def _f5_pathogenic_variant_enrichment(
