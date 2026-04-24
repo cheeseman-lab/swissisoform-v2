@@ -8,18 +8,19 @@ Flow:
     assemble_genes (one pass)               -> Gene objects with
                                                 TIS.expression populated
                                                 per cell line
-    AnnotationPipeline (one pass)           -> biophysics, motifs,
-                                                core_identity,
-                                                initiation_context
-    tis_to_dataframe                        -> single parquet
+    precompute (SignalP, TargetP, InterProScan)
+    AnnotationPipeline (one pass)           -> biophysics, motifs, massspec,
+                                                signalp, targetp, interproscan,
+                                                core_identity, initiation_context,
+                                                conservation, conservation_frame
+    compare_genes                            -> site.comparison + diff_annotations
+    EvidenceScoringModule                    -> E1–E7 / F1–F6 evidence score
+    tis_to_dataframe + paired_tis_dataframe -> two parquets (per-TIS, paired)
 
 Every unique TIS is annotated exactly once, regardless of how many
 samples called it.  This is the precondition for wiring the expensive
-modules (clinical, conservation, massspec) cost-effectively —
-deduplication is 6× — 15× fewer module invocations vs the per-sample
-loop.
-
-Excludes the expensive modules; those come next with caching.
+modules cost-effectively — deduplication is 6×–15× fewer module
+invocations vs the per-sample loop.
 """
 
 from __future__ import annotations
@@ -32,16 +33,19 @@ import pandas as pd
 
 from swissisoform.assembly import assemble_genes
 from swissisoform.combine import combine_filtered_samples
+from swissisoform.compare.comparator import compare_genes
 from swissisoform.config import ConservationConfig, PipelineConfig
-from swissisoform.io.parquet import tis_to_dataframe
+from swissisoform.io.parquet import paired_tis_dataframe, tis_to_dataframe
 from swissisoform.io.rnaseq import load_sample_manifest
 from swissisoform.modules.biophysics import BiophysicsModule
 from swissisoform.modules.conservation import ConservationModule
 from swissisoform.modules.conservation_frame import ConservationFrameModule
 from swissisoform.modules.core_identity import CoreIdentityModule
 from swissisoform.modules.initiation_context import InitiationContextModule
+from swissisoform.modules.interproscan import InterProScanModule, precompute_interproscan
 from swissisoform.modules.massspec import MassSpecModule
 from swissisoform.modules.motifs import MotifsModule
+from swissisoform.modules.scoring import EvidenceScoringModule
 from swissisoform.modules.signalp import SignalPModule, precompute_signalp
 from swissisoform.modules.targetp import TargetPModule, precompute_targetp
 from swissisoform.pipeline import AnnotationPipeline, UpstreamReference, run_sample
@@ -197,7 +201,7 @@ def main() -> None:
         time.perf_counter() - t0,
     )
 
-    hdr("STAGE 4a — Precompute DTU tools (SignalP + TargetP)")
+    hdr("STAGE 4a — Precompute heavyweight tools (SignalP + TargetP + InterProScan)")
     # Collect every unique protein sequence across canonicals + isoforms
     # so the subprocess shell-outs dedup maximally.  Both precompute
     # calls gracefully return {} if the `swissisoform-v2-dtu` env isn't
@@ -225,6 +229,13 @@ def main() -> None:
         len(targetp_preds),
         time.perf_counter() - t0,
     )
+    t0 = time.perf_counter()
+    interproscan_preds = precompute_interproscan(all_proteins)
+    logger.info(
+        "interproscan precompute: %d predictions (%.1fs)",
+        len(interproscan_preds),
+        time.perf_counter() - t0,
+    )
 
     hdr("STAGE 4 — Annotation (one pass)")
     pipeline = AnnotationPipeline(
@@ -234,6 +245,7 @@ def main() -> None:
             MassSpecModule(cfg),
             SignalPModule(cfg, predictions=signalp_preds),
             TargetPModule(cfg, predictions=targetp_preds),
+            InterProScanModule(cfg, predictions=interproscan_preds),
         ],
         site_modules=[
             CoreIdentityModule(cfg),
@@ -246,6 +258,17 @@ def main() -> None:
     pipeline.run(genes)
     logger.info("annotation complete (%.1fs)", time.perf_counter() - t0)
 
+    hdr("STAGE 4b — Paired comparison (canonical vs. isoform)")
+    t0 = time.perf_counter()
+    compare_genes(genes, scope_a_modules=[BiophysicsModule(cfg)])
+    logger.info("comparison complete (%.1fs)", time.perf_counter() - t0)
+
+    hdr("STAGE 4c — Evidence scoring (E1–E7, F1–F6)")
+    t0 = time.perf_counter()
+    scoring_mod = EvidenceScoringModule(cfg)
+    scoring_mod.run([s for g in genes for s in g.tis_sites])
+    logger.info("scoring complete (%.1fs)", time.perf_counter() - t0)
+
     hdr("STAGE 5 — Serialize")
     all_sites = [s for g in genes for s in g.tis_sites]
     annot_df = tis_to_dataframe(all_sites)
@@ -253,6 +276,15 @@ def main() -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     annot_df.to_parquet(out_path, index=False)
     logger.info("wrote %d rows × %d cols → %s", *annot_df.shape, out_path)
+
+    paired_df = paired_tis_dataframe(genes)
+    paired_out = OUT / "annotated" / "all_samples_paired.parquet"
+    paired_df.to_parquet(paired_out, index=False)
+    logger.info(
+        "wrote paired (canonical+isoform+cmp) %d rows × %d cols → %s",
+        *paired_df.shape,
+        paired_out,
+    )
 
     spot_check(annot_df, sorted(per_sample))
 

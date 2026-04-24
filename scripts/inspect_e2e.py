@@ -47,6 +47,7 @@ from swissisoform.modules.conservation import ConservationModule
 from swissisoform.modules.conservation_frame import ConservationFrameModule
 from swissisoform.modules.core_identity import CoreIdentityModule
 from swissisoform.modules.initiation_context import InitiationContextModule
+from swissisoform.modules.interproscan import InterProScanModule, precompute_interproscan
 from swissisoform.modules.localization import (
     LocalizationModule,
     precompute_deeploc,
@@ -58,6 +59,8 @@ from swissisoform.modules.massspec import (
 )
 from swissisoform.modules.motifs import MotifsModule
 from swissisoform.modules.scoring import EvidenceScoringModule
+from swissisoform.modules.signalp import SignalPModule, precompute_signalp
+from swissisoform.modules.targetp import TargetPModule, precompute_targetp
 from swissisoform.modules.variant_intersection import VariantIntersectionModule
 from swissisoform.pipeline import AnnotationPipeline, UpstreamReference, run_sample
 
@@ -245,6 +248,27 @@ def main() -> None:
     n_total = sum(len(v) for v in unique_peps.values())
     print(f"pepquery: {n_hits}/{n_total} unique peptides validated")
 
+    # DTU tools (SignalP 6 + TargetP 2) and InterProScan 6 — batch-infer
+    # every unique protein across canonicals + isoforms once, then hand the
+    # hash-keyed predictions to the consumer modules.  Each precompute
+    # gracefully returns {} when its external env / nextflow / datadir is
+    # missing, so the modules degrade to empty hits rather than crash.
+    all_proteins: list[str] = []
+    for g in genes:
+        if g.canonical_protein:
+            all_proteins.append(g.canonical_protein)
+        for s in g.tis_sites:
+            if s.isoform_protein:
+                all_proteins.append(s.isoform_protein)
+            if s.canonical_protein:
+                all_proteins.append(s.canonical_protein)
+    signalp_preds = precompute_signalp(all_proteins)
+    print(f"signalp: {len(signalp_preds)} predictions")
+    targetp_preds = precompute_targetp(all_proteins)
+    print(f"targetp: {len(targetp_preds)} predictions")
+    interproscan_preds = precompute_interproscan(all_proteins)
+    print(f"interproscan: {len(interproscan_preds)} predictions")
+
     # Conservation: BigWig-backed SiteModule — cheap random access per TIS,
     # no precompute needed.  Module is instantiated with the pipeline below.
 
@@ -282,6 +306,9 @@ def main() -> None:
             MassSpecModule(cfg, validated_peptides=pepquery_lookup),
             clinical_mod,
             LocalizationModule(cfg, predictions=deeploc_lookup),
+            SignalPModule(cfg, predictions=signalp_preds),
+            TargetPModule(cfg, predictions=targetp_preds),
+            InterProScanModule(cfg, predictions=interproscan_preds),
         ],
         site_modules=[
             CoreIdentityModule(cfg),
