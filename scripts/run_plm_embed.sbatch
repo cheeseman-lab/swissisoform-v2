@@ -24,10 +24,9 @@ set -euo pipefail
 cd /lab/barcheese01/mdiberna/swissisoform-v2
 
 eval "$(conda shell.bash hook)"
-# The PLM env carries torch + transformers; falls back to the main
-# swissisoform-v2 env if it has them too.
-if conda env list | grep -q "^swissisoform-v2-plm "; then
-    conda activate swissisoform-v2-plm
+# The fold env carries torch + fair-esm; fall back to main env.
+if conda env list | grep -q "^swissisoform-v2-fold "; then
+    conda activate swissisoform-v2-fold
 else
     conda activate swissisoform-v2
 fi

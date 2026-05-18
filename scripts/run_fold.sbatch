@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=mdiberna_fold
-#SBATCH --partition=nvidia-A100-20
+#SBATCH --partition=nvidia-A6000-20
 #SBATCH --gres=gpu:1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
