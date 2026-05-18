@@ -13,10 +13,11 @@ the field we need. This is surfaced via ``existence_evaluable`` /
 ``functional_evaluable`` counts so downstream code can tell a low score
 driven by missing data apart from one driven by genuine non-evidence.
 
-Criteria that depend on modules that don't exist yet (structure, VEP,
-functional annotation stubs) return ``None`` with a stable
-``"<module> not wired"`` reason. When those modules come online the
-scoring module picks them up automatically — no code change here.
+Criteria that depend on modules whose caches are not yet populated
+(structure, PLM VEP) return ``None`` at evaluation time based on the
+annotation status.  F5 (VEP-based pathogenic enrichment) remains
+stubbed pending the intersection logic between PLM LLR scores and
+clinical variant positions.
 
 Criteria
 --------
@@ -34,10 +35,10 @@ Existence:
        detectability alone is NOT treated as evidence.
 
 Functional impact:
-    F1 Structured extension pLDDT — stubbed (``structure`` not wired)
+    F1 Structured extension pLDDT (``structure``)
     F2 Localization change (``comparison['localization']``)
-    F3 Domain gain / loss — stubbed (``functional`` not wired)
-    F4 Targeting change — stubbed (``functional`` not wired)
+    F3 Domain gain / loss (``comparison['interproscan']``)
+    F4 Targeting change (``comparison['signalp']`` / ``comparison['targetp']``)
     F5 Pathogenic variant enrichment (ESM1b) — stubbed (``vep`` not wired)
     F6 Clinical variant overlap in unique region
        (``variant_intersection``)
@@ -246,9 +247,34 @@ def _e6_mass_spec(
 def _f1_structured_extension(
     site: TranslationInitiationSite, cfg: ScoringConfig  # noqa: ARG001
 ) -> CriterionResult:
-    """F1: structured extension by pLDDT — stubbed (structure module not built)."""
+    """F1: structured extension — diff-region pLDDT exceeds 70.
+
+    Reads ``site.isoform_annotations['structure']`` written by
+    ``StructureModule``.  Returns ``None`` when structure cache is
+    empty (``status='no_cache'`` or ``status='too_long'``), ``True``
+    when the mean pLDDT over the differential region is >= 70
+    (AlphaFold convention for confident structure), ``False`` otherwise.
+    """
+    ann = _annotation(site, "structure")
+    if ann is None:
+        return CriterionResult(
+            "F1_structured_extension", None, "structure annotation missing"
+        )
+    status = ann.get("status")
+    if status in ("no_cache", "too_long", "failed"):
+        return CriterionResult(
+            "F1_structured_extension", None, f"structure status={status}"
+        )
+    plddt = ann.get("plddt_diffregion_mean")
+    if plddt is None:
+        return CriterionResult(
+            "F1_structured_extension", None, "plddt_diffregion_mean unavailable"
+        )
+    passed = plddt >= 70.0
     return CriterionResult(
-        "F1_structured_extension", None, "structure module not wired"
+        "F1_structured_extension",
+        passed,
+        f"plddt_diffregion_mean={plddt:.1f} (threshold 70.0)",
     )
 
 
@@ -527,3 +553,4 @@ def _score(results: list[CriterionResult]) -> tuple[int, int]:
     """Return ``(true_count, evaluable_count)`` over a list of criterion results."""
     evaluable = [r for r in results if r.value is not None]
     return sum(1 for r in evaluable if r.value), len(evaluable)
+

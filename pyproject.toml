@@ -33,7 +33,7 @@ gpu = [
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-packages = ["swissisoform", "swissisoform.modules", "swissisoform.compare", "swissisoform.io"]
+packages = ["swissisoform", "swissisoform.modules", "swissisoform.compare", "swissisoform.io", "swissisoform.plm", "swissisoform.structure"]
 
 [tool.ruff]
 line-length = 100

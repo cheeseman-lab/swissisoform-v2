@@ -281,6 +281,7 @@ class ConservationFrameModule:
                 end - start,
                 ref_genome=self._ref_genome,
                 hal2maf_binary=self._binary,
+                timeout=120.0,
             )
             if not maf_text:
                 continue

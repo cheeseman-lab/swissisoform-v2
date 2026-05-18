@@ -1,33 +1,20 @@
-"""Diagnostic walkthrough of the 5-gene E2E pipeline — full module set.
+"""5-gene end-to-end diagnostic pipeline — full module set.
 
-Runs:
+Reference implementation of the complete annotation workflow on
+TP53, EIF4G1, VEGFA, CTNND1, MYC (HeLa only).  Exercises every module
+including precompute steps for DeepLoc, PepQuery, SignalP, TargetP,
+InterProScan, and cache lookups for PLM VEP / Structure.
 
-    run_sample (upstream)
-      -> assemble_genes (Gene + TIS objects)
-      -> AnnotationPipeline with:
-           cheap modules:  biophysics, motifs, core_identity, initiation_context
-           expensive:      clinical, conservation, massspec, localization
-
-For expensive modules:
-    - clinical:     reads ClinVar + (when available) gnomAD + COSMIC
-                    local parquets built by scripts/setup_databases.py.
-                    Falls back to live HTTP for any missing DB.
-    - conservation: Zoonomia PhyloP / PhastCons BigWig lookups at the TIS
-                    and Kozak window.  Tracks are optional — each is looked
-                    up independently and returns None when the BigWig is
-                    absent.
-    - massspec:     inline tryptic digest (no DB).
-    - localization: precomputes DeepLoc2 on CPU for unique proteins; if
-                    DeepLoc2 is not importable the module no-ops with
-                    warnings.
-
-Prints per-gene spot checks for each module's output.
+Usage:
+    python scripts/inspect_e2e.py          # default 5 genes
+    python scripts/inspect_e2e.py --genes TP53 MYC  # subset
 """
 
 from __future__ import annotations
 
+import argparse
 import logging
-from collections import Counter
+import time
 from pathlib import Path
 
 from swissisoform.assembly import assemble_genes
@@ -48,18 +35,17 @@ from swissisoform.modules.conservation_frame import ConservationFrameModule
 from swissisoform.modules.core_identity import CoreIdentityModule
 from swissisoform.modules.initiation_context import InitiationContextModule
 from swissisoform.modules.interproscan import InterProScanModule, precompute_interproscan
-from swissisoform.modules.localization import (
-    LocalizationModule,
-    precompute_deeploc,
-)
+from swissisoform.modules.localization import LocalizationModule, precompute_deeploc
 from swissisoform.modules.massspec import (
     MassSpecModule,
     collect_unique_peptides,
     precompute_pepquery,
 )
 from swissisoform.modules.motifs import MotifsModule
+from swissisoform.modules.plm_vep import PLMVEPModule
 from swissisoform.modules.scoring import EvidenceScoringModule
 from swissisoform.modules.signalp import SignalPModule, precompute_signalp
+from swissisoform.modules.structure import StructureModule
 from swissisoform.modules.targetp import TargetPModule, precompute_targetp
 from swissisoform.modules.variant_intersection import VariantIntersectionModule
 from swissisoform.pipeline import AnnotationPipeline, UpstreamReference, run_sample
@@ -68,8 +54,12 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+logger = logging.getLogger("inspect_e2e")
 
-DATA = Path(__file__).parent.parent / "data" / "reference"
+# ── Paths ────────────────────────────────────────────────────────────────
+
+ROOT = Path(__file__).resolve().parent.parent
+DATA = ROOT / "data" / "reference"
 GTF = DATA / "gencode.v49.primary_assembly.annotation.gtf"
 GENOME = DATA / "Gencode_v49_GRCh38.primary_assembly.genome.fa"
 PROTEIN = DATA / "gencode.v49.pc_translations.fa"
@@ -79,64 +69,40 @@ HELA_RNASEQ = [
     DATA / "rnaseq_counts/CACGGT_9_htseqcount.txt",
 ]
 
-# Paths to reference DBs built by scripts/setup_databases.py and
-# scripts/download_zoonomia_bigwigs.sh.  Each is optional — the module
-# gracefully falls back to live HTTP, no-ops, or empty lookups when a DB
-# is missing.
+# Reference DBs (optional — modules degrade gracefully when absent)
 GNOMAD_DB = DATA / "gnomad" / "gnomad_v4.1_exome.parquet"
 CLINVAR_DB = DATA / "clinvar" / "variant_summary.parquet"
 COSMIC_DB = DATA / "cosmic" / "cosmic_variants.parquet"
 PHYLOP_BW = DATA / "zoonomia" / "cactus241way.phyloP.bw"
-PHASTCONS_BW = DATA / "zoonomia" / "hg38.phastCons100way.bw"  # 241-way has no phastCons; fall back to 100-vert
+PHASTCONS_BW = DATA / "zoonomia" / "hg38.phastCons100way.bw"
 HAL_FILE = DATA / "zoonomia" / "241-mammalian-2020v2.hal"
-# Newick species tree from UCSC — lets ConservationFrameModule build a
-# phylogenetic-depth map without requiring halStats to be installed.
-# HAL toolkit runs via the cactus singularity image (bioconda cactus has
-# unresolvable dep conflicts). scripts/bin/hal2maf + halStats are thin
-# ``singularity exec`` wrappers; ConservationConfig points at them directly
-# so the main env doesn't need any HAL binary on PATH.
-REPO_ROOT_PATH = Path(__file__).parent.parent
-HAL2MAF_BIN = REPO_ROOT_PATH / "scripts" / "bin" / "hal2maf"
-HALSTATS_BIN = REPO_ROOT_PATH / "scripts" / "bin" / "halStats"
 HAL_SIF = DATA / "zoonomia" / "singularity" / "cactus.sif"
+HAL2MAF_BIN = ROOT / "scripts" / "bin" / "hal2maf"
+HALSTATS_BIN = ROOT / "scripts" / "bin" / "halStats"
 
-TEST_GENES = ["TP53", "EIF4G1", "VEGFA", "CTNND1", "MYC"]
+DEFAULT_GENES = ["TP53", "EIF4G1", "VEGFA", "CTNND1", "MYC"]
 
 
-def hdr(title: str) -> None:
-    print(f"\n{'=' * 70}\n{title}\n{'=' * 70}")
+# ── Configuration ────────────────────────────────────────────────────────
 
 
 def build_config() -> PipelineConfig:
-    """Build a PipelineConfig populated with local DB paths when available."""
+    """Build PipelineConfig populated with local DB paths when available."""
     cfg = PipelineConfig()
     cfg.clinical = ClinicalConfig(
         gnomad_db=GNOMAD_DB if GNOMAD_DB.exists() else None,
         clinvar_db=CLINVAR_DB if CLINVAR_DB.exists() else None,
         cosmic_db=COSMIC_DB if COSMIC_DB.exists() else None,
     )
-    # Don't pass the UCSC ``hg38.cactus241way.nh`` file as the tree: it uses
-    # mixed UCSC + Latin-binomial names (``hg38`` instead of ``Homo_sapiens``,
-    # ``nomLeu3`` instead of ``Nomascus_leucogenys``), which collides with the
-    # Latin-only species lists we feed to hal2maf. Leaving ``hal_tree_newick``
-    # None makes the module pull the tree from the HAL itself via
-    # ``halStats --tree``, which uses consistent Latin binomials.
     cfg.conservation = ConservationConfig(
         phylop_bigwig=PHYLOP_BW if PHYLOP_BW.exists() else None,
         phastcons_bigwig=PHASTCONS_BW if PHASTCONS_BW.exists() else None,
         hal_path=HAL_FILE if HAL_FILE.exists() else None,
-        hal_tree_newick=None,
+        hal_tree_newick=None,  # pulled from HAL via halStats --tree
         hal2maf_binary=str(HAL2MAF_BIN) if HAL_SIF.exists() else "hal2maf",
         halstats_binary=str(HALSTATS_BIN) if HAL_SIF.exists() else "halStats",
-        # The Zoonomia 241-mammal HAL names the reference genome
-        # ``Homo_sapiens``, not ``hg38``. Species nodes use Latin binomials
-        # throughout — PRIMATE_SPECIES / MAMMALIAN_SPECIES already follow
-        # that convention.
         hal_ref_genome="Homo_sapiens",
     )
-    # Demo-friendly scoring thresholds — looser than production defaults so
-    # that at least some existence / functional criteria flip True on the
-    # 5-gene HeLa-only subset.
     cfg.scoring = ScoringConfig(
         primate_frac_intact_min=0.3,
         mammalian_frac_intact_min=0.2,
@@ -148,167 +114,102 @@ def build_config() -> PipelineConfig:
     return cfg
 
 
-def precompute_localization(genes) -> dict:
-    """Run DeepLoc2 on every unique protein across *genes* (CPU, Fast model).
+# ── Precompute helpers ───────────────────────────────────────────────────
 
-    Returns a ``{protein_hash: prediction}`` dict that `LocalizationModule`
-    consumes.  Returns empty dict if DeepLoc2 isn't importable — the
-    module degrades gracefully.
-    """
-    proteins: dict[str, str] = {}
+
+def collect_all_proteins(genes) -> list[str]:
+    """Return every protein sequence (canonical + isoform) across genes."""
+    proteins: list[str] = []
+    for g in genes:
+        if g.canonical_protein:
+            proteins.append(g.canonical_protein)
+        for s in g.tis_sites:
+            if s.isoform_protein:
+                proteins.append(s.isoform_protein)
+            if s.canonical_protein:
+                proteins.append(s.canonical_protein)
+    return proteins
+
+
+def write_proteins_fasta(proteins: list[str], out_path: Path) -> int:
+    """Write deduped, sha1-keyed FASTA for GPU precompute jobs."""
+    from swissisoform.plm.embed import protein_hash
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    seen: set[str] = set()
+    n = 0
+    with open(out_path, "w") as fh:
+        for seq in proteins:
+            stripped = seq.rstrip("*").upper()
+            if not stripped:
+                continue
+            h = protein_hash(stripped)
+            if h in seen:
+                continue
+            seen.add(h)
+            fh.write(f">{h}\n{stripped}\n")
+            n += 1
+    return n
+
+
+def run_precompute(genes, all_proteins: list[str]) -> dict:
+    """Run all precompute steps.  Returns dict of prediction lookups."""
+    preds = {}
+
+    # DeepLoc (CPU, subprocess into py3.8 env)
+    deeploc_input = {}
     for gene in genes:
-        proteins[f"canonical_{gene.gene_name}"] = gene.canonical_protein
+        deeploc_input[f"canonical_{gene.gene_name}"] = gene.canonical_protein
         for site in gene.tis_sites:
-            proteins[site.tis_id] = site.isoform_protein
-    print(f"precompute_localization: {len(proteins)} proteins (deduped internally)")
-    return precompute_deeploc(proteins, model="Fast", device="cpu")
+            deeploc_input[site.tis_id] = site.isoform_protein
+    preds["deeploc"] = precompute_deeploc(deeploc_input, model="Fast", device="cpu")
 
-
-def main() -> None:
-    hdr("STAGE 0 — Raw Ribo-TISH")
-    raw = load_ribotish_predictions(HELA)
-    print(f"Raw rows: {len(raw):,}")
-    for g in TEST_GENES:
-        gdf = raw[raw["Symbol"] == g]
-        ann = gdf[gdf["TisType"].str.startswith("Annotated")]
-        print(f"  {g:10s} raw={len(gdf):>4}  native_annotated={len(ann):>3}")
-
-    hdr("STAGE 1 — Upstream (filter + impute + drop uncanonical)")
-    ref = UpstreamReference.load(gtf_path=GTF, genome_fasta=GENOME, protein_fasta=PROTEIN)
-    final, dropped = run_sample(HELA, HELA_RNASEQ, GTF, sample="HeLa", reference=ref)
-    print(f"final: {len(final):,}  dropped: {len(dropped):,}  imputed: {final['Imputed'].sum():,}")
-    for g in TEST_GENES:
-        fg = final[final["Symbol"] == g]
-        native_ann = fg[fg["TisType"].str.startswith("Annotated") & ~fg["Imputed"]]
-        imp_ann = fg[fg["Imputed"]]
-        alt = fg[~fg["TisType"].str.startswith("Annotated")]
-        types = Counter(alt["TisType"])
-        print(
-            f"  {g:10s} alt={len(alt):>3}  native_ann={len(native_ann):>2}  "
-            f"imputed_ann={len(imp_ann):>2}  "
-            f"[{', '.join(f'{k}={v}' for k, v in sorted(types.items()))}]"
-        )
-
-    hdr("STAGE 2 — Assembly")
-    genes = assemble_genes(
-        final[final["Symbol"].isin(TEST_GENES)],
-        gene_names=TEST_GENES,
-        genome_fasta=GENOME,
-        exon_skeletons=ref.exon_skeletons,
-    )
-    for gene in sorted(genes, key=lambda g: g.gene_name):
-        can_lens = sorted({len(s.canonical_protein.rstrip("*")) for s in gene.tis_sites})
-        print(
-            f"  {gene.gene_name}  gene_canonical="
-            f"{len(gene.canonical_protein.rstrip('*'))}aa "
-            f"({gene.canonical_transcript_id})  TIS={len(gene.tis_sites)}  "
-            f"per-TIS canonical lengths={can_lens}"
-        )
-
-    hdr("STAGE 3 — Build annotation pipeline + precompute DeepLoc")
-    cfg = build_config()
-    print("Reference DBs:")
-    print(f"  PhyloP:    {'ok' if PHYLOP_BW.exists() else 'MISSING'}  {PHYLOP_BW}")
-    print(f"  PhastCons: {'ok' if PHASTCONS_BW.exists() else 'MISSING'}  {PHASTCONS_BW}")
-    print(
-        f"  gnomAD:    {'ok' if GNOMAD_DB.exists() else 'MISSING (falls back to API)'}  {GNOMAD_DB}"
-    )
-    cv_status = "ok" if CLINVAR_DB.exists() else "MISSING (falls back to API)"
-    print(f"  ClinVar:   {cv_status}  {CLINVAR_DB}")
-    print(f"  COSMIC:    {'ok' if COSMIC_DB.exists() else 'MISSING (skipped)'}  {COSMIC_DB}")
-    print(
-        f"  HAL:       {'ok' if HAL_FILE.exists() else 'MISSING (frame module = not_run)'}  "
-        f"{HAL_FILE}"
-    )
-    # Tree comes from halStats --tree on the HAL itself, not from the UCSC
-    # .nh file (which has mixed UCSC + Latin-binomial naming).
-    sif_status = "ok" if HAL_SIF.exists() else "MISSING (frame module = not_run)"
-    print(f"  cactus.sif: {sif_status}  {HAL_SIF}")
-
-    # DeepLoc: batch-infer every unique protein once, return hash-keyed dict
-    deeploc_lookup = precompute_localization(genes)
-
-    # PepQuery2: collect every isoform-unique tryptic peptide across all
-    # TIS, send them in one batched call to PepQueryDB (conda env +
-    # Java).  Empty dict if the env isn't set up yet — massspec then
-    # reports ``pepquery_run=False`` and E6 stays None.
+    # PepQuery (Java subprocess + cache)
     unique_peps = collect_unique_peptides(genes)
-    # Default to two deep, well-covered healthy-tissue proteomes:
-    # 29_healthy_tissues (PXD010154, label-free MS1) + GTEx_32_Tissues
-    # (PXD016999, TMT10/11).  Benchmarked at ~0.7 min / peptide on the
-    # competitive-filtering step (vs ~7 min for ``-b w``); 5-gene E2E
-    # finishes in ~15–30 min wall-clock.
-    pepquery_lookup = precompute_pepquery(
+    preds["pepquery"] = precompute_pepquery(
         unique_peps,
         dataset="Deep_29_healthy_human_tissues_PXD010154,GTEx_32_Tissues_Proteome_PXD016999",
         reference_db="swissprot:human",
-        cache_dir=Path("./data/cache/pepquery"),
+        cache_dir=ROOT / "data" / "cache" / "pepquery",
     )
-    n_hits = sum(len(v) for v in pepquery_lookup.values())
-    n_total = sum(len(v) for v in unique_peps.values())
-    print(f"pepquery: {n_hits}/{n_total} unique peptides validated")
 
-    # DTU tools (SignalP 6 + TargetP 2) and InterProScan 6 — batch-infer
-    # every unique protein across canonicals + isoforms once, then hand the
-    # hash-keyed predictions to the consumer modules.  Each precompute
-    # gracefully returns {} when its external env / nextflow / datadir is
-    # missing, so the modules degrade to empty hits rather than crash.
-    all_proteins: list[str] = []
-    for g in genes:
-        if g.canonical_protein:
-            all_proteins.append(g.canonical_protein)
-        for s in g.tis_sites:
-            if s.isoform_protein:
-                all_proteins.append(s.isoform_protein)
-            if s.canonical_protein:
-                all_proteins.append(s.canonical_protein)
-    signalp_preds = precompute_signalp(all_proteins)
-    print(f"signalp: {len(signalp_preds)} predictions")
-    targetp_preds = precompute_targetp(all_proteins)
-    print(f"targetp: {len(targetp_preds)} predictions")
-    interproscan_preds = precompute_interproscan(all_proteins)
-    print(f"interproscan: {len(interproscan_preds)} predictions")
+    # SignalP, TargetP, InterProScan (subprocess / Nextflow)
+    preds["signalp"] = precompute_signalp(all_proteins)
+    preds["targetp"] = precompute_targetp(all_proteins)
+    preds["interproscan"] = precompute_interproscan(all_proteins)
 
-    # Conservation: BigWig-backed SiteModule — cheap random access per TIS,
-    # no precompute needed.  Module is instantiated with the pipeline below.
+    # PLM VEP + Structure: cache lookup only (populate via sbatch scripts)
+    from swissisoform.plm.embed import precompute_plm_esm2
+    from swissisoform.structure.fold import precompute_fold
 
-    # ConsequenceValidator uses CDS features from the shared upstream
-    # reference — loaded once at stage 1, reused here to avoid a second
-    # GTF pass.  Must be wired (not cds_df=None) so validator produces
-    # authoritative protein_pos via codon-level translation, not HGVSP
-    # canonical-frame fallback.
+    preds["plm"] = precompute_plm_esm2(all_proteins, inline=False)
+    preds["structure"] = precompute_fold(all_proteins, backend="boltz", inline=False)
+
+    return preds
+
+
+def build_pipeline(cfg, preds, ref, genes) -> AnnotationPipeline:
+    """Construct the full annotation pipeline with all 16 modules."""
     validator = ConsequenceValidator(cds_df=ref.cds_df, genome_fasta=str(GENOME))
-
-    # Clinical: prefetch variants per gene from the local bulk parquets.
-    # ClinicalModule.annotate() looks up self._variant_cache before any
-    # HTTP/disk fetch; pre-populating here makes the per-TIS path O(1).
     clinical_mod = ClinicalModule(cfg, validator=validator)
+
+    # Prefetch clinical variants per gene
     gene_by_name = {g.gene_name: g for g in genes}
-    gene_names = sorted(gene_by_name)
-    print(f"clinical: prefetching + validating variants for {len(gene_names)} genes")
-    for gene_name in gene_names:
+    for gene_name in sorted(gene_by_name):
         canonical_tid = gene_by_name[gene_name].canonical_transcript_id
         variants = clinical_mod.fetch_variants(gene_name, transcript_id=canonical_tid)
         clinical_mod._variant_cache[gene_name] = variants
-        with_pos = sum(1 for v in variants if v.get("protein_pos") is not None)
-        print(
-            f"  {gene_name} ({canonical_tid}): {len(variants)} variants "
-            f"({with_pos} with protein_pos)"
-        )
 
-    # Variant intersection and scoring run AFTER clinical + conservation in
-    # the same SiteModules list — order matters: they read annotations the
-    # earlier modules attached in the same pass.
-    pipeline = AnnotationPipeline(
+    return AnnotationPipeline(
         protein_modules=[
             BiophysicsModule(cfg),
             MotifsModule(cfg),
-            MassSpecModule(cfg, validated_peptides=pepquery_lookup),
+            MassSpecModule(cfg, validated_peptides=preds["pepquery"]),
             clinical_mod,
-            LocalizationModule(cfg, predictions=deeploc_lookup),
-            SignalPModule(cfg, predictions=signalp_preds),
-            TargetPModule(cfg, predictions=targetp_preds),
-            InterProScanModule(cfg, predictions=interproscan_preds),
+            LocalizationModule(cfg, predictions=preds["deeploc"]),
+            SignalPModule(cfg, predictions=preds["signalp"]),
+            TargetPModule(cfg, predictions=preds["targetp"]),
+            InterProScanModule(cfg, predictions=preds["interproscan"]),
         ],
         site_modules=[
             CoreIdentityModule(cfg),
@@ -316,117 +217,134 @@ def main() -> None:
             ConservationModule(cfg),
             ConservationFrameModule(cfg),
             VariantIntersectionModule(),
+            PLMVEPModule(cfg),
+            StructureModule(cfg),
         ],
     )
 
-    hdr("STAGE 4 — Annotate + compare")
-    pipeline.run(genes)
-    # Comparator runs once everything else is populated so scalar deltas
-    # and positional subsets land on ``site.comparison`` before the
-    # (below) reporting loop reads them.
-    compare_genes(genes, scope_a_modules=[BiophysicsModule(cfg)])
 
-    # Evidence scoring runs LAST — several of its criteria (F2
-    # localization_change, Scope-A consumers) read ``site.comparison``
-    # which is only populated by ``compare_genes`` above.  Previously
-    # scoring lived inside ``AnnotationPipeline.site_modules`` and
-    # always saw an empty comparison dict.
-    scoring_mod = EvidenceScoringModule(cfg)
-    all_sites = [site for gene in genes for site in gene.tis_sites]
-    scoring_mod.run(all_sites)
+# ── Spot-check output ────────────────────────────────────────────────────
 
-    hdr("STAGE 5 — Per-gene spot check")
+
+def print_spot_check(genes) -> None:
+    """Print condensed per-gene / per-TIS spot check."""
     for gene in sorted(genes, key=lambda g: g.gene_name):
         can = gene.canonical_annotations
         bio = can.get("biophysics", {})
-        mot = can.get("motifs", {})
-        mass = can.get("massspec", {})
-        clin = can.get("clinical", {})
+        clin_sum = can.get("clinical", {}).get("summary", {})
         loc = can.get("localization", {})
-
+        n_tis = len(gene.tis_sites)
         print(
             f"\n{gene.gene_name}  ({gene.canonical_transcript_id}, "
-            f"{len(gene.canonical_protein.rstrip('*'))} aa)"
-        )
-        print(f"  biophysics:    pI={bio.get('pI'):.2f}  gravy={bio.get('gravy'):.3f}")
-        print(f"  motifs:        {len(mot.get('hits', []))} hits")
-        ms_hits = mass.get("hits", [])
-        unique_ms = sum(1 for h in ms_hits if h.get("unique_to_isoform") is True)
-        print(f"  massspec:      {len(ms_hits)} tryptic peptides ({unique_ms} marked unique)")
-        # conservation is per-TIS (SiteModule) — shown in per-TIS block below
-        clin_sum = clin.get("summary", {})
-        clin_hits = clin.get("hits", [])
-        print(
-            f"  clinical:      {clin_sum.get('total_variants', 0)} variants  "
-            f"pathogenic={clin_sum.get('pathogenic_count', 0)}  "
-            f"by_source={clin_sum.get('by_source', {})}  "
-            f"with_protein_pos={len(clin_hits)}"
+            f"{len(gene.canonical_protein.rstrip('*'))} aa, {n_tis} TIS)"
         )
         print(
-            f"  localization:  deeploc={loc.get('deeploc_prediction')}  "
-            f"signals={loc.get('deeploc_signals')}"
+            f"  bio pI={bio.get('pI', 0):.2f} gravy={bio.get('gravy', 0):.3f}  "
+            f"clin={clin_sum.get('total_variants', 0)} vars  "
+            f"loc={loc.get('deeploc_prediction')}"
         )
 
-        # Per-TIS spot check so we can SEE canonical vs each isoform.
-        for site in sorted(
-            gene.tis_sites,
-            key=lambda s: (s.orf_type.value, s.position),
-        ):
+        for site in sorted(gene.tis_sites, key=lambda s: (s.orf_type.value, s.position)):
             ia = site.isoform_annotations
-            ibio = ia.get("biophysics", {})
-            imot = ia.get("motifs", {})
-            imass = ia.get("massspec", {})
-            icons = ia.get("conservation", {})
-            iframe = ia.get("conservation_frame", {}) or {}
-            iclin = ia.get("clinical", {})
-            iloc = ia.get("localization", {})
-            ivi = ia.get("variant_intersection", {}) or {}
             isc = ia.get("scoring", {}) or {}
+            iplm = ia.get("plm_vep", {}) or {}
+            istr = ia.get("structure", {}) or {}
             ilen = len(site.isoform_protein.rstrip("*"))
             kozak = site.kozak_context or "—"
-            ms_hits = imass.get("hits", []) or []
-            ms_unique = sum(1 for h in ms_hits if h.get("unique_to_isoform") is True)
-            cons_sum = icons.get("summary", {}) or {}
-            frame_status = (iframe.get("summary") or {}).get("status", "—")
-            clin_sum = iclin.get("summary", {}) or {}
-            print(f"    TIS {site.tis_id} ({site.orf_type.value}, {ilen} aa, kozak={kozak})")
             print(
-                f"      bio pI={ibio.get('pI')} gravy={ibio.get('gravy')}  "
-                f"motifs={len(imot.get('hits', []) or [])}  "
-                f"ms={len(ms_hits)} (uniq={ms_unique})  "
-                f"cons phyloP@tis={icons.get('phylop_at_tis')}/"
-                f"{cons_sum.get('phylop_status')}  "
-                f"frame={frame_status} "
-                f"primate_frac={iframe.get('primate_frac_intact')} "
-                f"mamm_frac={iframe.get('mammalian_frac_intact')}  "
-                f"clin={clin_sum.get('total_variants', 0)} "
-                f"(path={clin_sum.get('pathogenic_count', 0)})  "
-                f"vi_unique={ivi.get('n_in_unique_region')} "
-                f"(path={ivi.get('n_pathogenic_in_unique_region')})  "
-                f"loc={iloc.get('deeploc_prediction')}/"
-                f"{iloc.get('deeploc_signals')}"
+                f"    TIS {site.tis_id} ({site.orf_type.value}, {ilen} aa, kozak={kozak})"
             )
             print(
-                f"      score: existence={isc.get('existence_score')}/"
-                f"{isc.get('existence_evaluable')} "
-                f"(hi_conf={isc.get('existence_high_confidence')})  "
-                f"functional={isc.get('functional_score')}/"
-                f"{isc.get('functional_evaluable')} "
-                f"(hi_conf={isc.get('functional_high_confidence')})"
+                f"      score: existence={isc.get('existence_score')}/{isc.get('existence_evaluable')} "
+                f"(hi={isc.get('existence_high_confidence')})  "
+                f"functional={isc.get('functional_score')}/{isc.get('functional_evaluable')} "
+                f"(hi={isc.get('functional_high_confidence')})"
+            )
+            print(
+                f"      plm[{iplm.get('status', '—')}]  "
+                f"struct[{istr.get('status', '—')}/{istr.get('backend', '—')}]"
             )
 
-    hdr("STAGE 6 — Paired parquet output")
-    out_dir = Path(__file__).parent.parent / "data" / "output" / "5gene_e2e"
+
+# ── Main ─────────────────────────────────────────────────────────────────
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="SwissIsoform v2 — 5-gene E2E diagnostic")
+    parser.add_argument(
+        "--genes", nargs="*", default=DEFAULT_GENES,
+        help=f"Genes to test (default: {' '.join(DEFAULT_GENES)})",
+    )
+    args = parser.parse_args()
+    test_genes = args.genes
+
+    # Stage 0: Load raw predictions
+    t_start = time.perf_counter()
+    raw = load_ribotish_predictions(HELA)
+    logger.info("Raw Ribo-TISH: %d rows", len(raw))
+
+    # Stage 1: Upstream (filter + impute)
+    ref = UpstreamReference.load(gtf_path=GTF, genome_fasta=GENOME, protein_fasta=PROTEIN)
+    final, dropped = run_sample(HELA, HELA_RNASEQ, GTF, sample="HeLa", reference=ref)
+    logger.info("Upstream: %d kept, %d dropped, %d imputed", len(final), len(dropped), final["Imputed"].sum())
+
+    # Stage 2: Assembly
+    genes = assemble_genes(
+        final[final["Symbol"].isin(test_genes)],
+        gene_names=test_genes,
+        genome_fasta=GENOME,
+        exon_skeletons=ref.exon_skeletons,
+    )
+    n_tis = sum(len(g.tis_sites) for g in genes)
+    logger.info("Assembled %d genes, %d TIS", len(genes), n_tis)
+    for g in sorted(genes, key=lambda x: x.gene_name):
+        logger.info("  %s: %d TIS, canonical %s (%d aa)",
+                     g.gene_name, len(g.tis_sites), g.canonical_transcript_id,
+                     len(g.canonical_protein.rstrip("*")))
+
+    # Stage 3: Precompute
+    cfg = build_config()
+    all_proteins = collect_all_proteins(genes)
+
+    n_written = write_proteins_fasta(all_proteins, ROOT / "data" / "cache" / "proteins.fa")
+    logger.info("proteins.fa: %d unique proteins", n_written)
+
+    preds = run_precompute(genes, all_proteins)
+    logger.info(
+        "Precompute done: deeploc=%d signalp=%d targetp=%d ips=%d plm=%d struct=%d",
+        len(preds["deeploc"]), len(preds["signalp"]), len(preds["targetp"]),
+        len(preds["interproscan"]), len(preds["plm"]), len(preds["structure"]),
+    )
+
+    # Stage 4: Annotate + compare + score
+    pipeline = build_pipeline(cfg, preds, ref, genes)
+    pipeline.run(genes)
+    compare_genes(genes, scope_a_modules=[BiophysicsModule(cfg)])
+
+    scoring_mod = EvidenceScoringModule(cfg)
+    all_sites = [site for gene in genes for site in gene.tis_sites]
+    scoring_mod.run(all_sites)
+    logger.info("Annotation + comparison + scoring complete")
+
+    # Stage 5: Spot check
+    print_spot_check(genes)
+
+    # Stage 6: Output
+    out_dir = ROOT / "data" / "output" / "5gene_e2e"
     out_dir.mkdir(parents=True, exist_ok=True)
     paired = paired_tis_dataframe(genes)
     all_path = out_dir / "all_paired.parquet"
     paired.to_parquet(all_path, index=False)
-    print(f"wrote {all_path} ({len(paired)} rows, {len(paired.columns)} cols)")
+    print(f"\nwrote {all_path} ({len(paired)} rows, {len(paired.columns)} cols)")
     for gene_name, sub in paired.groupby("gene_name"):
         gpath = out_dir / f"{gene_name}_paired.parquet"
         sub.to_parquet(gpath, index=False)
         print(f"  {gene_name}: {len(sub)} rows -> {gpath.name}")
 
+    elapsed = time.perf_counter() - t_start
+    logger.info("Total wall time: %.1f min", elapsed / 60)
+
 
 if __name__ == "__main__":
     main()
+

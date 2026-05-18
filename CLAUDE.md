@@ -128,6 +128,7 @@ All 9 modules implemented. Data model supports symmetric canonical/isoform annot
 | 5. CLI | `__main__.py` entry point | **Done** |
 | 6. Evidence scoring | Dual-axis E1–E7 / F1–F6 scoring framework | Pending |
 | 7. Functional / Structure / VEP stubs | Precompute+lookup modules (InterProScan, Chai-1, AlphaMissense) returning None until data exists | Pending |
+| 4g. PLM VEP (ESM-2 LLR) | `PLMVEPModule` (SiteModule) + `swissisoform.plm.embed` cache (`<hash>.npz`, on-disk). Masked-marginal LLR per residue, unique vs shared region enrichment using `diff_region` coords (canonical-space for truncations, isoform-space otherwise). Precompute via `scripts/run_plm_embed.sbatch` (ESM-2 650M, A6000). InterPLM SAE feature path stubbed (cache stashes layer-18 embeddings) — feature module is a follow-up. | **Done (2026-04-28)** |
 | 8. Full end-to-end | All modules on real data, all 6 cell lines | Pending |
 
 ### End-to-End Test Genes (5-gene diagnostic set)

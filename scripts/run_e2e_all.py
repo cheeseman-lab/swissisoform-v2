@@ -1,30 +1,19 @@
-"""End-to-end pipeline: combine all cell lines first, annotate once.
+"""Full-pipeline data loading: upstream → combine → assemble.
 
-Flow:
+Loads all cell lines, filters/imputes, combines into a single deduplicated
+table, and assembles Gene + TIS domain objects.  Module wiring is NOT done
+here — see ``inspect_e2e.py`` for the fully-wired 5-gene reference
+implementation.  Copy that pattern when extending to all genes.
 
-    for each cell line:
-        run_sample (filter + impute)       -> per-sample filtered CSV
-    combine_filtered_samples                -> one wide deduped table
-    assemble_genes (one pass)               -> Gene objects with
-                                                TIS.expression populated
-                                                per cell line
-    precompute (SignalP, TargetP, InterProScan)
-    AnnotationPipeline (one pass)           -> biophysics, motifs, massspec,
-                                                signalp, targetp, interproscan,
-                                                core_identity, initiation_context,
-                                                conservation, conservation_frame
-    compare_genes                            -> site.comparison + diff_annotations
-    EvidenceScoringModule                    -> E1–E7 / F1–F6 evidence score
-    tis_to_dataframe + paired_tis_dataframe -> two parquets (per-TIS, paired)
+Usage:
+    python scripts/run_e2e_all.py [--genes GENE1 GENE2 ...]
 
-Every unique TIS is annotated exactly once, regardless of how many
-samples called it.  This is the precondition for wiring the expensive
-modules cost-effectively — deduplication is 6×–15× fewer module
-invocations vs the per-sample loop.
+Without ``--genes``, assembles every gene in the combined dataset.
 """
 
 from __future__ import annotations
 
+import argparse
 import logging
 import time
 from pathlib import Path
@@ -33,22 +22,9 @@ import pandas as pd
 
 from swissisoform.assembly import assemble_genes
 from swissisoform.combine import combine_filtered_samples
-from swissisoform.compare.comparator import compare_genes
-from swissisoform.config import ConservationConfig, PipelineConfig
-from swissisoform.io.parquet import paired_tis_dataframe, tis_to_dataframe
+from swissisoform.config import PipelineConfig
 from swissisoform.io.rnaseq import load_sample_manifest
-from swissisoform.modules.biophysics import BiophysicsModule
-from swissisoform.modules.conservation import ConservationModule
-from swissisoform.modules.conservation_frame import ConservationFrameModule
-from swissisoform.modules.core_identity import CoreIdentityModule
-from swissisoform.modules.initiation_context import InitiationContextModule
-from swissisoform.modules.interproscan import InterProScanModule, precompute_interproscan
-from swissisoform.modules.massspec import MassSpecModule
-from swissisoform.modules.motifs import MotifsModule
-from swissisoform.modules.scoring import EvidenceScoringModule
-from swissisoform.modules.signalp import SignalPModule, precompute_signalp
-from swissisoform.modules.targetp import TargetPModule, precompute_targetp
-from swissisoform.pipeline import AnnotationPipeline, UpstreamReference, run_sample
+from swissisoform.pipeline import UpstreamReference, run_sample
 
 ROOT = Path(__file__).parent.parent
 DATA = ROOT / "data" / "reference"
@@ -60,19 +36,8 @@ PROTEIN = DATA / "gencode.v49.pc_translations.fa"
 SAMPLE_MANIFEST = DATA / "ribotish_sample_manifest.csv"
 REPLICATE_MANIFEST = DATA / "ribotish_replicate_manifest.csv"
 
-ZOONOMIA = DATA / "zoonomia"
-PHYLOP_BW = ZOONOMIA / "cactus241way.phyloP.bw"
-PHASTCONS_BW = ZOONOMIA / "hg38.phastCons100way.bw"
-HAL_PATH = ZOONOMIA / "241-mammalian-2020v2.hal"
-HAL_TREE = ZOONOMIA / "hg38.cactus241way.nh"
-HAL2MAF_BIN = ROOT / "scripts" / "bin" / "hal2maf"
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("run_e2e_all")
-
-
-def hdr(title: str) -> None:
-    print(f"\n{'=' * 72}\n{title}\n{'=' * 72}")
 
 
 def run_upstream_all(
@@ -110,184 +75,64 @@ def run_upstream_all(
     return per_sample
 
 
-def spot_check(combined_annot: pd.DataFrame, samples: list[str]) -> None:
-    hdr("SPOT CHECK — combined annotated DataFrame")
-    print(f"shape: {combined_annot.shape}  (one row per unique TIS)")
-    print(f"unique genes: {combined_annot['gene_name'].nunique():,}")
-
-    hdr("TIS presence across samples")
-    # Presence flags from combine step were on the upstream combined table,
-    # not the annotated one; re-derive from expression columns that survived
-    # serialization.
-    presence_cols = [c for c in combined_annot.columns if c.endswith("_raw_count")]
-    presence_cols.sort()
-    if presence_cols:
-        presence = combined_annot[presence_cols].notna()
-        presence.columns = [c.replace("_raw_count", "") for c in presence.columns]
-        print("n_samples a TIS was called in (distribution):")
-        dist = presence.sum(axis=1).value_counts().sort_index()
-        print(dist.to_string())
-        print("\nTIS count by sample (from expression columns):")
-        print(presence.sum().to_string())
-
-    hdr("ORF type distribution (one row = one unique TIS)")
-    print(combined_annot["orf_type"].value_counts().to_string())
-
-    hdr("Sample rows — 5 random TIS with per-sample expression")
-    show = [
-        "gene_name",
-        "transcript_id",
-        "orf_type",
-        "start_codon",
-        "biophysics_length",
-        "biophysics_pI",
-    ]
-    show = [c for c in show if c in combined_annot.columns]
-    expr_show = [c for c in combined_annot.columns if c.endswith("_raw_count")][:3]
-    view = combined_annot[show + expr_show].sample(n=min(5, len(combined_annot)), random_state=0)
-    with pd.option_context("display.max_columns", None, "display.width", 220):
-        print(view.to_string(index=False))
-
-
-def build_conservation_config() -> ConservationConfig:
-    """Build ConservationConfig from files in ``data/reference/zoonomia/``.
-
-    Fields are populated only when the underlying file exists — missing
-    BigWigs / HAL cause the respective modules to emit ``status="not_run"``
-    rather than crash.
-    """
-    tree_newick = HAL_TREE.read_text() if HAL_TREE.exists() else None
-    return ConservationConfig(
-        phylop_bigwig=PHYLOP_BW if PHYLOP_BW.exists() else None,
-        phastcons_bigwig=PHASTCONS_BW if PHASTCONS_BW.exists() else None,
-        hal_path=HAL_PATH if HAL_PATH.exists() else None,
-        hal2maf_binary=str(HAL2MAF_BIN) if HAL2MAF_BIN.exists() else "hal2maf",
-        hal_tree_newick=tree_newick,
-    )
-
-
 def main() -> None:
-    OUT.mkdir(parents=True, exist_ok=True)
-    cfg = PipelineConfig(conservation=build_conservation_config())
+    parser = argparse.ArgumentParser(description="SwissIsoform v2 — data loading pipeline")
+    parser.add_argument(
+        "--genes", nargs="*", default=None,
+        help="Restrict assembly to these gene names (default: all genes)",
+    )
+    args = parser.parse_args()
 
-    print("Loading shared GTF + genome + protein-product reference tables…")
+    OUT.mkdir(parents=True, exist_ok=True)
+    cfg = PipelineConfig()
+
+    # ── Stage 1: Load shared references ──────────────────────────────────
+    logger.info("Loading GTF + genome + protein-product reference tables")
     reference = UpstreamReference.load(gtf_path=GTF, genome_fasta=GENOME, protein_fasta=PROTEIN)
 
-    hdr("STAGE 1 — Upstream per cell line (filter + impute)")
+    # ── Stage 2: Upstream per cell line ──────────────────────────────────
+    logger.info("Running upstream (filter + impute) per cell line")
     per_sample = run_upstream_all(reference, cfg)
 
-    hdr("STAGE 2 — Combine")
+    # ── Stage 3: Combine ─────────────────────────────────────────────────
     combined = combine_filtered_samples(per_sample)
-    combined_upstream_out = OUT / "filtered" / "all_samples_combined.parquet"
-    combined.to_parquet(combined_upstream_out, index=False)
+    combined_out = OUT / "filtered" / "all_samples_combined.parquet"
+    combined_out.parent.mkdir(parents=True, exist_ok=True)
+    combined.to_parquet(combined_out, index=False)
     logger.info(
-        "combined upstream: %d unique TIS across %d samples → %s",
+        "Combined upstream: %d unique TIS across %d samples -> %s",
         len(combined),
         len(per_sample),
-        combined_upstream_out,
+        combined_out,
     )
 
-    hdr("STAGE 3 — Assembly (one pass)")
+    # ── Stage 4: Assembly ────────────────────────────────────────────────
     t0 = time.perf_counter()
     genes = assemble_genes(
         combined,
+        gene_names=args.genes,
         genome_fasta=GENOME,
         exon_skeletons=reference.exon_skeletons,
     )
+    n_tis = sum(len(g.tis_sites) for g in genes)
     logger.info(
-        "assembled %d genes, %d unique TIS (%.1fs)",
+        "Assembled %d genes, %d unique TIS (%.1fs)",
         len(genes),
-        sum(len(g.tis_sites) for g in genes),
+        n_tis,
         time.perf_counter() - t0,
     )
 
-    hdr("STAGE 4a — Precompute heavyweight tools (SignalP + TargetP + InterProScan)")
-    # Collect every unique protein sequence across canonicals + isoforms
-    # so the subprocess shell-outs dedup maximally.  Both precompute
-    # calls gracefully return {} if the `swissisoform-v2-dtu` env isn't
-    # installed — the modules then degrade to all-None annotations.
-    all_proteins: list[str] = []
-    for g in genes:
-        if g.canonical_protein:
-            all_proteins.append(g.canonical_protein)
-        for s in g.tis_sites:
-            if s.isoform_protein:
-                all_proteins.append(s.isoform_protein)
-            if s.canonical_protein:
-                all_proteins.append(s.canonical_protein)
-    t0 = time.perf_counter()
-    signalp_preds = precompute_signalp(all_proteins)
+    # ── Done ─────────────────────────────────────────────────────────────
+    # Module wiring, precompute, annotation, comparison, and scoring are
+    # handled by inspect_e2e.py (5-gene reference) or a future production
+    # script that mirrors its pattern for all genes.
     logger.info(
-        "signalp precompute: %d predictions (%.1fs)",
-        len(signalp_preds),
-        time.perf_counter() - t0,
+        "Data loading complete.  %d genes with %d TIS ready for annotation.",
+        len(genes),
+        n_tis,
     )
-    t0 = time.perf_counter()
-    targetp_preds = precompute_targetp(all_proteins)
-    logger.info(
-        "targetp precompute: %d predictions (%.1fs)",
-        len(targetp_preds),
-        time.perf_counter() - t0,
-    )
-    t0 = time.perf_counter()
-    interproscan_preds = precompute_interproscan(all_proteins)
-    logger.info(
-        "interproscan precompute: %d predictions (%.1fs)",
-        len(interproscan_preds),
-        time.perf_counter() - t0,
-    )
-
-    hdr("STAGE 4 — Annotation (one pass)")
-    pipeline = AnnotationPipeline(
-        protein_modules=[
-            BiophysicsModule(cfg),
-            MotifsModule(cfg),
-            MassSpecModule(cfg),
-            SignalPModule(cfg, predictions=signalp_preds),
-            TargetPModule(cfg, predictions=targetp_preds),
-            InterProScanModule(cfg, predictions=interproscan_preds),
-        ],
-        site_modules=[
-            CoreIdentityModule(cfg),
-            InitiationContextModule(cfg),
-            ConservationModule(cfg),
-            ConservationFrameModule(cfg),
-        ],
-    )
-    t0 = time.perf_counter()
-    pipeline.run(genes)
-    logger.info("annotation complete (%.1fs)", time.perf_counter() - t0)
-
-    hdr("STAGE 4b — Paired comparison (canonical vs. isoform)")
-    t0 = time.perf_counter()
-    compare_genes(genes, scope_a_modules=[BiophysicsModule(cfg)])
-    logger.info("comparison complete (%.1fs)", time.perf_counter() - t0)
-
-    hdr("STAGE 4c — Evidence scoring (E1–E7, F1–F6)")
-    t0 = time.perf_counter()
-    scoring_mod = EvidenceScoringModule(cfg)
-    scoring_mod.run([s for g in genes for s in g.tis_sites])
-    logger.info("scoring complete (%.1fs)", time.perf_counter() - t0)
-
-    hdr("STAGE 5 — Serialize")
-    all_sites = [s for g in genes for s in g.tis_sites]
-    annot_df = tis_to_dataframe(all_sites)
-    out_path = OUT / "annotated" / "all_samples_annotated.parquet"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    annot_df.to_parquet(out_path, index=False)
-    logger.info("wrote %d rows × %d cols → %s", *annot_df.shape, out_path)
-
-    paired_df = paired_tis_dataframe(genes)
-    paired_out = OUT / "annotated" / "all_samples_paired.parquet"
-    paired_df.to_parquet(paired_out, index=False)
-    logger.info(
-        "wrote paired (canonical+isoform+cmp) %d rows × %d cols → %s",
-        *paired_df.shape,
-        paired_out,
-    )
-
-    spot_check(annot_df, sorted(per_sample))
 
 
 if __name__ == "__main__":
     main()
+
