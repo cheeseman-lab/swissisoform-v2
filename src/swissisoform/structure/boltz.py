@@ -156,8 +156,20 @@ def fold_one(
                 conf_files.sort()
                 plddt, ptm, _iptm = _parse_confidence_json(conf_files[0])
                 if plddt is None:
-                    status = "failed"
-                else:
+                    # No per-residue pLDDT; try complex_plddt as uniform fallback
+                    with open(conf_files[0]) as _cfh:
+                        _cdata = json.load(_cfh)
+                    cplddt = _cdata.get("complex_plddt")
+                    if cplddt is not None:
+                        seq_len = len(seq.rstrip("*"))
+                        plddt = [float(cplddt)] * seq_len
+                        logger.info(
+                            "boltz: using complex_plddt=%.3f as uniform per-residue for %s",
+                            cplddt, h,
+                        )
+                    else:
+                        status = "failed"
+                if plddt is not None:
                     confidence_payload: dict[str, Any] = {
                         "plddt": [float(v) for v in plddt],
                         "ptm": float(ptm) if ptm is not None else None,
