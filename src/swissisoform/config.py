@@ -139,6 +139,10 @@ class ScoringConfig:
     phylop_coding_min: float = 1.0
     initiation_efficiency_min: float = 0.01
     massspec_unique_peptides_min: int = 1
+    # F1 threshold for mean pLDDT over the differential region. Scale
+    # matches whatever the structure backend emits: Boltz-2 emits 0–1
+    # (so use 0.70); AlphaFold-style backends emit 0–100 (use 70.0).
+    f1_plddt_threshold: float = 0.70
 
 
 @dataclass

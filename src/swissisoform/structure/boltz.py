@@ -156,15 +156,23 @@ def fold_one(
                 conf_files.sort()
                 plddt, ptm, _iptm = _parse_confidence_json(conf_files[0])
                 if plddt is None:
-                    # No per-residue pLDDT; try complex_plddt as uniform fallback
+                    # No per-residue pLDDT in confidence JSON; fall back to
+                    # the scalar ``complex_plddt`` as a UNIFORM per-residue
+                    # value. This is NOT a real per-residue prediction —
+                    # any per-region statistic computed from it (e.g. mean
+                    # over diff region) will just be the scalar itself. We
+                    # mark status="uniform_plddt" so downstream criteria
+                    # (e.g. F1 structured-extension) can opt out rather than
+                    # score against the planted value.
                     with open(conf_files[0]) as _cfh:
                         _cdata = json.load(_cfh)
                     cplddt = _cdata.get("complex_plddt")
                     if cplddt is not None:
                         seq_len = len(seq.rstrip("*"))
                         plddt = [float(cplddt)] * seq_len
+                        status = "uniform_plddt"
                         logger.info(
-                            "boltz: using complex_plddt=%.3f as uniform per-residue for %s",
+                            "boltz: using complex_plddt=%.3f as uniform per-residue for %s (status=uniform_plddt)",
                             cplddt, h,
                         )
                     else:

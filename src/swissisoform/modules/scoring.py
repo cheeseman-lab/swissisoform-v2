@@ -245,15 +245,22 @@ def _e6_mass_spec(
 
 
 def _f1_structured_extension(
-    site: TranslationInitiationSite, cfg: ScoringConfig  # noqa: ARG001
+    site: TranslationInitiationSite, cfg: ScoringConfig
 ) -> CriterionResult:
-    """F1: structured extension — diff-region pLDDT exceeds 70.
+    """F1: structured extension — diff-region pLDDT exceeds threshold.
 
     Reads ``site.isoform_annotations['structure']`` written by
-    ``StructureModule``.  Returns ``None`` when structure cache is
-    empty (``status='no_cache'`` or ``status='too_long'``), ``True``
-    when the mean pLDDT over the differential region is >= 70
-    (AlphaFold convention for confident structure), ``False`` otherwise.
+    ``StructureModule``.  Returns ``None`` when:
+
+    - structure cache is empty (``status ∈ {no_cache, too_long, failed}``)
+    - the backend produced only a scalar complex pLDDT, not per-residue
+      (``status='uniform_plddt'``) — region-level statistics from a
+      uniform fill aren't a real per-region measurement.
+
+    Otherwise returns ``True`` when the mean pLDDT over the differential
+    region is >= ``cfg.f1_plddt_threshold``, ``False`` otherwise. The
+    threshold's scale must match the backend (Boltz-2 emits 0–1,
+    AlphaFold-style emits 0–100).
     """
     ann = _annotation(site, "structure")
     if ann is None:
@@ -261,7 +268,7 @@ def _f1_structured_extension(
             "F1_structured_extension", None, "structure annotation missing"
         )
     status = ann.get("status")
-    if status in ("no_cache", "too_long", "failed"):
+    if status in ("no_cache", "too_long", "failed", "uniform_plddt"):
         return CriterionResult(
             "F1_structured_extension", None, f"structure status={status}"
         )
@@ -270,11 +277,12 @@ def _f1_structured_extension(
         return CriterionResult(
             "F1_structured_extension", None, "plddt_diffregion_mean unavailable"
         )
-    passed = plddt >= 70.0
+    threshold = cfg.f1_plddt_threshold
+    passed = plddt >= threshold
     return CriterionResult(
         "F1_structured_extension",
         passed,
-        f"plddt_diffregion_mean={plddt:.1f} (threshold 70.0)",
+        f"plddt_diffregion_mean={plddt:.3f} (threshold {threshold})",
     )
 
 
@@ -310,9 +318,26 @@ def _f3_domain_change(
     per module onto ``site.comparison[module]``.  For extensions this
     counts domain hits gained in the isoform's unique extension; for
     truncations it counts domain hits lost from the canonical's removed
-    region.  Returns ``None`` when the comparator data is missing
-    (precompute not run).
+    region.
+
+    Returns ``None`` when:
+
+    - the comparator data is missing (precompute not run), or
+    - the IPS annotation's ``summary.status`` is not ``ok`` (precompute
+      run but the scan didn't actually complete — e.g. Nextflow combine
+      step failed).  In that case ``n_hits_in_diff_region`` would be
+      ``0`` and look like a measurement, but isn't one.
     """
+    # Guard: if the IPS scan itself didn't produce data, n_hits_in_diff_region
+    # will be 0 by construction — not a measurement. Surface as None.
+    ips_ann = _annotation(site, "interproscan")
+    if ips_ann is not None:
+        status = ips_ann.get("summary", {}).get("status", "ok")
+        if status != "ok":
+            return CriterionResult(
+                "F3_domain_change", None, f"interproscan status={status}"
+            )
+
     cmp = site.comparison.get("interproscan")
     if not isinstance(cmp, dict):
         return CriterionResult(

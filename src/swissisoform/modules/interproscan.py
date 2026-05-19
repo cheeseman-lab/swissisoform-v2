@@ -264,17 +264,32 @@ class InterProScanModule:
     def annotate(self, protein: str) -> dict[str, Any]:
         """Look up InterProScan hits for *protein* by sequence hash.
 
-        Returns an empty-hits structure when the hash isn't in the
-        predictions dict — the pipeline still writes a well-formed
-        column rather than ``None``.
+        Returns a well-formed dict with a ``summary.status`` field so
+        downstream scoring can distinguish:
+
+        - ``status='ok'`` — precompute ran and this protein was scanned
+          (``n_hits`` may legitimately be 0 — a real measurement).
+        - ``status='no_data'`` — precompute failed or this protein's
+          hash isn't in the predictions dict. Scoring (F3) should
+          return ``None`` rather than ``False``.
         """
         h = _protein_hash(protein)
         pred = self.predictions.get(h)
         if pred is None:
-            return {"hits": [], "summary": {"n_hits": 0, "n_databases": 0, "n_interpro": 0}}
+            return {
+                "hits": [],
+                "summary": {
+                    "n_hits": 0,
+                    "n_databases": 0,
+                    "n_interpro": 0,
+                    "status": "no_data",
+                },
+            }
+        summary = dict(pred.get("summary", {"n_hits": 0, "n_databases": 0, "n_interpro": 0}))
+        summary.setdefault("status", "ok")
         return {
             "hits": pred.get("hits", []),
-            "summary": pred.get("summary", {"n_hits": 0, "n_databases": 0, "n_interpro": 0}),
+            "summary": summary,
         }
 
     def run(self, tis_sites: list[TranslationInitiationSite]) -> list[TranslationInitiationSite]:

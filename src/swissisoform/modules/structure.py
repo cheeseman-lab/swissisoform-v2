@@ -98,10 +98,16 @@ class StructureModule:
         iso_status = iso_metrics.get("status")
 
         # Surface the worst non-ok status if either side failed; otherwise "ok".
+        # Order: too_long > failed > uniform_plddt > ok > partial.
+        # uniform_plddt = backend only produced complex_plddt (uniform fill),
+        # not per-residue. Downstream criteria (F1) should opt out rather
+        # than score against the planted scalar.
         if can_status == "too_long" or iso_status == "too_long":
             status = "too_long"
         elif can_status in ("failed", "oom") or iso_status in ("failed", "oom"):
             status = "failed"
+        elif can_status == "uniform_plddt" or iso_status == "uniform_plddt":
+            status = "uniform_plddt"
         elif can_metrics and iso_metrics:
             status = "ok"
         else:
