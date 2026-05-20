@@ -944,7 +944,8 @@ def _java_version() -> str:
         proc = subprocess.run(
             ["java", "-version"], capture_output=True, text=True, check=False, timeout=10,
         )
-        return (proc.stderr or proc.stdout or "").splitlines()[0] if (proc.stderr or proc.stdout) else "unknown"
+        text = proc.stderr or proc.stdout or ""
+        return text.splitlines()[0] if text else "unknown"
     except Exception:  # noqa: BLE001
         return "unknown"
 

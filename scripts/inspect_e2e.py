@@ -255,7 +255,8 @@ def print_spot_check(genes) -> None:
                 f"    TIS {site.tis_id} ({site.orf_type.value}, {ilen} aa, kozak={kozak})"
             )
             print(
-                f"      score: existence={isc.get('existence_score')}/{isc.get('existence_evaluable')} "
+                f"      score: "
+                f"existence={isc.get('existence_score')}/{isc.get('existence_evaluable')} "
                 f"(hi={isc.get('existence_high_confidence')})  "
                 f"functional={isc.get('functional_score')}/{isc.get('functional_evaluable')} "
                 f"(hi={isc.get('functional_high_confidence')})"
@@ -286,7 +287,10 @@ def main() -> None:
     # Stage 1: Upstream (filter + impute)
     ref = UpstreamReference.load(gtf_path=GTF, genome_fasta=GENOME, protein_fasta=PROTEIN)
     final, dropped = run_sample(HELA, HELA_RNASEQ, GTF, sample="HeLa", reference=ref)
-    logger.info("Upstream: %d kept, %d dropped, %d imputed", len(final), len(dropped), final["Imputed"].sum())
+    logger.info(
+        "Upstream: %d kept, %d dropped, %d imputed",
+        len(final), len(dropped), final["Imputed"].sum(),
+    )
 
     # Stage 2: Assembly
     genes = assemble_genes(

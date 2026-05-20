@@ -93,6 +93,7 @@ class ConservationFrameModule:
 
         self._hal_path: Path | None = None
         self._ref_genome: str = "hg38"
+        self._hal_timeout: float = 300.0
         self._binary: str = "hal2maf"
         self._halstats_binary: str = "halStats"
         self._tree_newick: str | None = None
@@ -107,6 +108,7 @@ class ConservationFrameModule:
                     logger.warning("Zoonomia HAL file not found: %s", cfg.hal_path)
             self._ref_genome = cfg.hal_ref_genome
             self._binary = cfg.hal2maf_binary
+            self._hal_timeout = float(cfg.hal_timeout)
             self._halstats_binary = cfg.halstats_binary
             self._tree_newick = cfg.hal_tree_newick
             if cfg.primate_species is not None:
@@ -281,7 +283,7 @@ class ConservationFrameModule:
                 end - start,
                 ref_genome=self._ref_genome,
                 hal2maf_binary=self._binary,
-                timeout=120.0,
+                timeout=self._hal_timeout,
             )
             if not maf_text:
                 continue

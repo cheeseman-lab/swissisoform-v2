@@ -75,6 +75,12 @@ class ConservationConfig:
     phastcons_bigwig: Path | None = None
     hal_path: Path | None = None
     hal_ref_genome: str = "hg38"
+    # HAL hal2maf subprocess timeout per interval. The default was 120s;
+    # under cluster load this can be too tight (the production 5-gene
+    # run saw ~60 timeouts vs ~10 historically). Raise to 300s to widen
+    # the window. Sites that are still slow probably hit a HAL chunking
+    # pathology and need to be skipped anyway.
+    hal_timeout: float = 300.0
     hal2maf_binary: str = "hal2maf"
     halstats_binary: str = "halStats"
     hal_tree_newick: str | None = None
@@ -149,7 +155,11 @@ class ScoringConfig:
     # F5: require the PLM LLR over the unique region to be at least this
     # much more constrained (i.e. more negative) than the shared region.
     # 0.0 means "unique ≤ shared" suffices.
-    f5_plm_unique_vs_shared_delta: float = 0.0
+    # F5: minimum LLR margin by which the unique region must be more
+    # constrained (more negative) than the shared region. 0.0 = "any
+    # constraint"; 0.5 demands a real enrichment and matches the
+    # production threshold we settled on after the 5-gene polish run.
+    f5_plm_unique_vs_shared_delta: float = 0.5
 
 
 @dataclass
