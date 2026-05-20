@@ -22,6 +22,7 @@ module gracefully no-ops when Nextflow / datadir aren't set up.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,126 @@ INTERPROSCAN_APPLICATIONS: str | None = None
 INTERPROSCAN_VERSION = "6.0.0"
 INTERPROSCAN_DATA_VERSION = "108.0"
 INTERPROSCAN_NF_REPO = "ebi-pf-team/interproscan6"
+
+
+def _ips_fallback_from_workdir(
+    tmpdir,
+    hash_to_seq,
+):
+    """Recover IPS hits from ``calculatedMatches.json`` when combine step failed.
+
+    The InterProScan 6 Nextflow pipeline writes a cross-analysis
+    aggregated match dict at ``<workdir>/work/<task>/calculatedMatches.json``
+    just before the final combine step. When combine fails (e.g. Groovy
+    classpath issue), the per-analysis data is still on disk; we can read
+    it directly.
+
+    The JSON is keyed by MD5 (uppercase) of the input sequence; our cache
+    is keyed by SHA1. We re-key using the input FASTA we wrote.
+
+    Returns the same shape as a successful precompute:
+    ``{sha1_hash: {hits: [...], summary: {n_hits, n_databases, n_interpro}}}``
+    or ``{}`` if no fallback JSON is found.
+    """
+    workdir = Path(tmpdir) / "work"
+    if not workdir.exists():
+        return {}
+
+    candidates = sorted(
+        workdir.rglob("calculatedMatches.json"),
+        key=lambda p: p.stat().st_size,
+        reverse=True,
+    )
+    if not candidates:
+        return {}
+
+    # The aggregated JSON is the largest one (per-task no_matches files
+    # are tiny). Take the largest.
+    json_p = candidates[0]
+    if json_p.stat().st_size < 1024:
+        return {}
+
+    try:
+        with open(json_p) as fh:
+            matches = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("ips fallback: failed to read %s: %s", json_p, exc)
+        return {}
+
+    if not isinstance(matches, dict):
+        return {}
+
+    # Build md5 -> sha1 mapping for our input proteins
+    md5_to_sha1 = {}
+    for sha1, seq in hash_to_seq.items():
+        md5 = hashlib.md5(seq.encode("ascii")).hexdigest().upper()
+        md5_to_sha1[md5] = sha1
+
+    result = {}
+    for md5_key, sig_map in matches.items():
+        sha1_key = md5_to_sha1.get(md5_key)
+        if sha1_key is None:
+            continue
+        if not isinstance(sig_map, dict):
+            continue
+        hits = []
+        dbs = set()
+        interpro_ids = set()
+        for sig_id, sig_data in sig_map.items():
+            if not isinstance(sig_data, dict):
+                continue
+            sig = sig_data.get("signature") or {}
+            sig_lib = sig.get("signatureLibraryRelease") or {}
+            source = sig_data.get("source") or sig_lib.get("library", "")
+            entry = sig.get("entry") or {}
+            interpro_id = entry.get("accession") if entry else None
+            interpro_desc = entry.get("description") if entry else None
+            sig_name = sig.get("name") or sig.get("accession") or sig_id
+            sig_desc = sig.get("description")
+            locations = sig_data.get("locations") or []
+            for loc in locations:
+                if not isinstance(loc, dict):
+                    continue
+                try:
+                    start = int(loc.get("start"))
+                    end = int(loc.get("end"))
+                except (TypeError, ValueError):
+                    continue
+                score = loc.get("evalue")
+                if score is not None:
+                    try:
+                        score = float(score)
+                    except (TypeError, ValueError):
+                        score = None
+                hits.append({
+                    "name": sig.get("accession") or sig_id,
+                    "pos": start - 1,  # 1-based inclusive -> 0-based for comparator
+                    "end": end,
+                    "db": source,
+                    "description": sig_desc or sig_name,
+                    "score": score,
+                    "interpro_id": interpro_id,
+                    "interpro_description": interpro_desc,
+                })
+                if source:
+                    dbs.add(source)
+                if interpro_id:
+                    interpro_ids.add(interpro_id)
+        result[sha1_key] = {
+            "hits": hits,
+            "summary": {
+                "n_hits": len(hits),
+                "n_databases": len(dbs),
+                "n_interpro": len(interpro_ids),
+            },
+        }
+    # Also fill in proteins from input that had no matches
+    for sha1, _seq in hash_to_seq.items():
+        result.setdefault(sha1, {
+            "hits": [],
+            "summary": {"n_hits": 0, "n_databases": 0, "n_interpro": 0},
+        })
+    return result
 
 
 def precompute_interproscan(
@@ -157,6 +278,24 @@ def precompute_interproscan(
             exc.returncode,
             exc.stderr[-800:] if exc.stderr else "",
         )
+        # Fallback: try to recover from the per-task aggregated JSON.
+        # The Nextflow pipeline runs all per-analysis steps successfully
+        # but the final ``combine`` step (a Groovy script) can fail with
+        # a classpath issue on some installs. The cross-analysis match
+        # data lives in ``calculatedMatches.json`` in the work tree,
+        # produced just before combine. If we find it, parse it.
+        fallback = _ips_fallback_from_workdir(tmpdir, hash_to_seq)
+        if fallback:
+            logger.warning(
+                "precompute_interproscan: recovered %d entries from "
+                "calculatedMatches.json fallback (combine step skipped)",
+                len(fallback),
+            )
+            try:
+                _shutil.rmtree(tmpdir)
+            except OSError:
+                pass
+            return fallback
         return {}
 
     # v6's Nextflow pipeline writes TSV under ``<outdir>/<basename>.tsv``.

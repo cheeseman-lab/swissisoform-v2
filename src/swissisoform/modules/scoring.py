@@ -358,7 +358,7 @@ def _f3_domain_change(
 def _f4_targeting_change(
     site: TranslationInitiationSite, cfg: ScoringConfig  # noqa: ARG001
 ) -> CriterionResult:
-    """F4: targeting signal change, fires when SignalP or TargetP disagrees on canonical vs. isoform.
+    """F4: targeting change — SignalP/TargetP disagree on canonical vs. isoform.
 
     Reads from ``site.comparison['signalp']`` / ``site.comparison['targetp']``
     written by the comparator (Scope A).  Returns ``None`` when neither
@@ -395,19 +395,66 @@ def _f4_targeting_change(
 
 
 def _f5_pathogenic_variant_enrichment(
-    site: TranslationInitiationSite, cfg: ScoringConfig  # noqa: ARG001
+    site: TranslationInitiationSite, cfg: ScoringConfig
 ) -> CriterionResult:
-    """F5: ESM1b pathogenic-variant enrichment — stubbed (``vep`` not wired).
+    """F5: pathogenic-variant pressure on a PLM-constrained unique region.
 
-    The long-term signal is per-residue ESM1b LLR scores summarised over
-    the isoform-unique region vs. the shared region.  ClinVar-pathogenic
-    counts in the unique region are already emitted by
-    ``variant_intersection`` (see ``n_pathogenic_in_unique_region``) but
-    don't enter the functional score — that's ClinVar evidence, not a
-    residue-level pathogenicity prediction.
+    Combines two signals:
+
+    1. ``variant_intersection`` — at least ``cfg.f5_min_pathogenic_in_unique``
+       pathogenic variants fall in the isoform-unique region.
+    2. ``plm_vep`` — the unique region's ESM-2 LLR is at least
+       ``cfg.f5_plm_unique_vs_shared_delta`` more constrained (more
+       negative) than the shared region, i.e. selection pressure on the
+       new residues themselves is at least as strong as on the canonical
+       baseline.
+
+    Returns ``None`` when either upstream module didn't produce data
+    (status not ``ok``, or required fields missing).
     """
+    vi = _annotation(site, "variant_intersection")
+    if not _status_ok(vi):
+        return CriterionResult(
+            "F5_pathogenic_variant_enrichment", None, "variant_intersection not run"
+        )
+
+    plm = _annotation(site, "plm_vep")
+    if not _status_ok(plm):
+        return CriterionResult(
+            "F5_pathogenic_variant_enrichment", None, "plm_vep not run"
+        )
+
+    n_path_unique = vi.get("n_pathogenic_in_unique_region") if vi else None
+    if n_path_unique is None:
+        return CriterionResult(
+            "F5_pathogenic_variant_enrichment",
+            None,
+            "n_pathogenic_in_unique_region unavailable",
+        )
+
+    llr_unique = plm.get("mean_llr_unique_region") if plm else None
+    llr_shared = plm.get("mean_llr_shared_region") if plm else None
+    if llr_unique is None or llr_shared is None:
+        return CriterionResult(
+            "F5_pathogenic_variant_enrichment",
+            None,
+            "plm_vep llr fields unavailable",
+        )
+
+    has_pathogenic = n_path_unique >= cfg.f5_min_pathogenic_in_unique
+    # LLR is more negative when more constrained. Require
+    # llr_unique <= llr_shared - delta.
+    plm_more_constrained = llr_unique <= llr_shared - cfg.f5_plm_unique_vs_shared_delta
+
+    passed = bool(has_pathogenic and plm_more_constrained)
     return CriterionResult(
-        "F5_pathogenic_variant_enrichment", None, "vep module not wired"
+        "F5_pathogenic_variant_enrichment",
+        passed,
+        (
+            f"n_path_unique={n_path_unique} (≥{cfg.f5_min_pathogenic_in_unique}); "
+            f"llr_unique={llr_unique:.3f} vs llr_shared={llr_shared:.3f} "
+            f"(delta_min={cfg.f5_plm_unique_vs_shared_delta})"
+        ),
     )
 
 

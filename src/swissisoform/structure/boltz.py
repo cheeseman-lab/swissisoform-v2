@@ -37,6 +37,67 @@ def _write_yaml(seq: str, path: Path) -> None:
     )
 
 
+def _parse_plddt_from_cif(cif_path: Path) -> list[float] | None:
+    """Extract per-residue pLDDT from a Boltz CIF B-factor column.
+
+    Boltz-2 v2.2.x writes real per-residue pLDDT to the CIF's
+    ``B_iso_or_equiv`` column (0–100 scale) even when the
+    ``confidence.json`` file is filled with a uniform scalar. This is the
+    authoritative per-residue source.
+
+    Returns the list of CA-atom pLDDT values (0–1 scale to match
+    ``confidence.json``'s convention), or ``None`` if the CIF can't be
+    parsed.
+    """
+    if not cif_path.exists():
+        return None
+    try:
+        with open(cif_path) as fh:
+            lines = fh.readlines()
+    except OSError:
+        return None
+
+    # Find atom_site loop column order to locate auth_atom_id (label_atom_id)
+    # and B_iso_or_equiv. Schema is typically:
+    #   group_PDB id type_symbol label_atom_id label_alt_id label_comp_id
+    #   label_seq_id auth_seq_id pdbx_PDB_ins_code label_asym_id
+    #   Cartn_x Cartn_y Cartn_z occupancy label_entity_id
+    #   auth_asym_id auth_comp_id B_iso_or_equiv pdbx_PDB_model_num
+    # We parse the header to find indices rather than hardcoding.
+    headers: list[str] = []
+    for line in lines:
+        if line.startswith("_atom_site."):
+            headers.append(line.strip().split(".", 1)[1])
+
+    if not headers:
+        return None
+    try:
+        atom_id_col = headers.index("label_atom_id")
+        bfactor_col = headers.index("B_iso_or_equiv")
+    except ValueError:
+        return None
+
+    plddt = []
+    for line in lines:
+        if not line.startswith("ATOM"):
+            continue
+        fields = line.split()
+        if len(fields) <= bfactor_col:
+            continue
+        if fields[atom_id_col] != "CA":
+            continue
+        try:
+            plddt.append(float(fields[bfactor_col]))
+        except ValueError:
+            continue
+
+    if not plddt:
+        return None
+    # Boltz CIF uses 0–100; normalize to 0–1 to match confidence.json
+    # convention used elsewhere in the pipeline.
+    return [v / 100.0 for v in plddt]
+
+
 def _parse_confidence_json(path: Path) -> tuple[list[float] | None, float | None, float | None]:
     """Return (per-residue plddt list, ptm, iptm) from a Boltz confidence_*.json.
 
@@ -155,6 +216,19 @@ def fold_one(
             if conf_files:
                 conf_files.sort()
                 plddt, ptm, _iptm = _parse_confidence_json(conf_files[0])
+                # Boltz-2 v2.2.x writes a uniform-value list to
+                # confidence.json (every position = complex_plddt); the
+                # real per-residue lives in the CIF B-factor column.
+                # Prefer the CIF when JSON pLDDT is suspiciously uniform.
+                if plddt is not None and len(set(plddt)) == 1 and cif_files:
+                    cif_plddt = _parse_plddt_from_cif(base / "model.cif")
+                    if cif_plddt is not None and len(set(cif_plddt)) > 1:
+                        logger.info(
+                            "boltz: %s confidence.json pLDDT uniform; "
+                            "recovered %d per-residue values from CIF B-factor",
+                            h, len(cif_plddt),
+                        )
+                        plddt = cif_plddt
                 if plddt is None:
                     # No per-residue pLDDT in confidence JSON; fall back to
                     # the scalar ``complex_plddt`` as a UNIFORM per-residue
@@ -172,7 +246,7 @@ def fold_one(
                         plddt = [float(cplddt)] * seq_len
                         status = "uniform_plddt"
                         logger.info(
-                            "boltz: using complex_plddt=%.3f as uniform per-residue for %s (status=uniform_plddt)",
+                            "boltz: complex_plddt=%.3f uniform fallback for %s",
                             cplddt, h,
                         )
                     else:

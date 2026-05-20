@@ -403,10 +403,20 @@ def _expression_from_row(
         pval = row.get(f"{sample}_FisherQvalue")
         if pd.isna(raw) or pd.isna(cpm) or pd.isna(pval):
             continue
+        # Initiation efficiency = TIS reads / total gene RNA-seq reads.
+        # Lets us compare how strongly this start site is used across
+        # cell lines normalised by transcript abundance.
+        gene_rna = row.get(f"{sample}_GeneRNASeqCounts")
+        init_eff: float | None
+        if pd.notna(gene_rna) and float(gene_rna) > 0:
+            init_eff = float(raw) / float(gene_rna)
+        else:
+            init_eff = None
         expression[sample] = CellLineExpression(
             raw_count=int(raw),
             cpm=float(cpm),
             p_value=float(pval),
+            initiation_efficiency=init_eff,
         )
     return expression
 
@@ -474,10 +484,31 @@ def _row_to_tis(
         expression = _expression_from_row(row, samples)
         tis_pvalue = ribo_pvalue = fisher_qvalue = None
     else:
-        expression = {}
+        # Single-sample mode (e.g. per-cell-line inspect runs): bare
+        # TISCounts/NormTISCounts/FisherQvalue/GeneRNASeqCounts columns.
+        # Build a one-entry expression dict labelled with the row's
+        # ``Sample`` column when present, else "sample".
         tis_pvalue = float(row["TISPvalue"]) if pd.notna(row["TISPvalue"]) else None
         ribo_pvalue = float(row["RiboPvalue"]) if pd.notna(row["RiboPvalue"]) else None
         fisher_qvalue = float(row["FisherQvalue"]) if pd.notna(row["FisherQvalue"]) else None
+
+        expression = {}
+        raw = row.get("TISCounts")
+        cpm = row.get("NormTISCounts")
+        if pd.notna(raw) and pd.notna(cpm):
+            gene_rna = row.get("GeneRNASeqCounts")
+            if pd.notna(gene_rna) and float(gene_rna) > 0:
+                init_eff = float(raw) / float(gene_rna)
+            else:
+                init_eff = None
+            sample_name = str(row.get("Sample")) if pd.notna(row.get("Sample", None)) else "sample"
+            qv = row.get("FisherQvalue")
+            expression[sample_name] = CellLineExpression(
+                raw_count=int(raw),
+                cpm=float(cpm),
+                p_value=float(qv) if pd.notna(qv) else float("nan"),
+                initiation_efficiency=init_eff,
+            )
 
     return TranslationInitiationSite(
         tis_id=tis_id,

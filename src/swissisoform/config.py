@@ -143,6 +143,13 @@ class ScoringConfig:
     # matches whatever the structure backend emits: Boltz-2 emits 0–1
     # (so use 0.70); AlphaFold-style backends emit 0–100 (use 70.0).
     f1_plddt_threshold: float = 0.70
+    # F5: minimum pathogenic variants in the unique region to consider
+    # the criterion at all (avoids scoring on isolated singletons).
+    f5_min_pathogenic_in_unique: int = 1
+    # F5: require the PLM LLR over the unique region to be at least this
+    # much more constrained (i.e. more negative) than the shared region.
+    # 0.0 means "unique ≤ shared" suffices.
+    f5_plm_unique_vs_shared_delta: float = 0.0
 
 
 @dataclass
