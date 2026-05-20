@@ -8,9 +8,6 @@ parsing.
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from swissisoform.config import PipelineConfig
 from swissisoform.models import Gene, ORFType, TranslationInitiationSite
 from swissisoform.modules.massspec import (
     _parse_pepquery_output,

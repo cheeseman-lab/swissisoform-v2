@@ -37,10 +37,17 @@ class TestInterProScanModule:
         assert hit["interpro_id"] == "IPR001234"
 
     def test_annotate_missing(self, config):
+        """Unknown sequence yields empty hits + status=no_data, so
+        downstream scoring can distinguish "scan ran, found 0" from
+        "scan never ran for this protein".
+        """
         module = InterProScanModule(config, predictions={})
         ann = module.annotate("MNOPQRST")
         assert ann["hits"] == []
-        assert ann["summary"] == {"n_hits": 0, "n_databases": 0, "n_interpro": 0}
+        assert ann["summary"]["n_hits"] == 0
+        assert ann["summary"]["n_databases"] == 0
+        assert ann["summary"]["n_interpro"] == 0
+        assert ann["summary"]["status"] == "no_data"
 
     def test_run_no_sites_lost(self, synthetic_tis, config):
         module = InterProScanModule(config)

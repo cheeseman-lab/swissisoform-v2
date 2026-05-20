@@ -199,8 +199,45 @@ class TestE6MassSpec:
 
 
 class TestF1StructuredExtension:
-    def test_stubbed(self):
+    def test_no_data(self):
+        """No structure annotation → None."""
         res = _f1_structured_extension(_site(), ScoringConfig())
+        assert res.value is None
+
+    def test_above_threshold(self):
+        site = _site()
+        site.isoform_annotations["structure"] = {
+            "plddt_diffregion_mean": 0.85,
+            "status": "ok",
+        }
+        res = _f1_structured_extension(site, ScoringConfig())
+        assert res.value is True
+
+    def test_below_threshold(self):
+        site = _site()
+        site.isoform_annotations["structure"] = {
+            "plddt_diffregion_mean": 0.40,
+            "status": "ok",
+        }
+        res = _f1_structured_extension(site, ScoringConfig())
+        assert res.value is False
+
+    def test_uniform_plddt_excluded(self):
+        site = _site()
+        site.isoform_annotations["structure"] = {
+            "plddt_diffregion_mean": 0.85,
+            "status": "uniform_plddt",
+        }
+        res = _f1_structured_extension(site, ScoringConfig())
+        assert res.value is None
+
+    def test_too_long_excluded(self):
+        site = _site()
+        site.isoform_annotations["structure"] = {
+            "plddt_diffregion_mean": None,
+            "status": "too_long",
+        }
+        res = _f1_structured_extension(site, ScoringConfig())
         assert res.value is None
 
 
@@ -228,19 +265,134 @@ class TestF2LocalizationChange:
         assert res.value is None
 
 
-class TestF3F4Stubs:
-    def test_domain_stubbed(self):
+class TestF3DomainChange:
+    def test_no_ips_data(self):
+        """No IPS annotation → None (status=no_data)."""
         assert _f3_domain_change(_site(), ScoringConfig()).value is None
 
-    def test_targeting_stubbed(self):
+    def test_hits_in_diff(self):
+        site = _site()
+        site.isoform_annotations["interproscan"] = {
+            "summary": {"status": "ok"},
+        }
+        site.comparison["interproscan"] = {"n_hits_in_diff_region": 2}
+        res = _f3_domain_change(site, ScoringConfig())
+        assert res.value is True
+
+    def test_no_hits_in_diff(self):
+        site = _site()
+        site.isoform_annotations["interproscan"] = {
+            "summary": {"status": "ok"},
+        }
+        site.comparison["interproscan"] = {"n_hits_in_diff_region": 0}
+        res = _f3_domain_change(site, ScoringConfig())
+        assert res.value is False
+
+
+class TestF4TargetingChange:
+    def test_no_comparator_data(self):
+        """No SignalP/TargetP comparison → None."""
         assert _f4_targeting_change(_site(), ScoringConfig()).value is None
+
+    def test_signalp_change(self):
+        site = _site()
+        site.comparison["signalp"] = {"signalp_prediction_changed": True}
+        res = _f4_targeting_change(site, ScoringConfig())
+        assert res.value is True
+
+    def test_targetp_change(self):
+        site = _site()
+        site.comparison["targetp"] = {"targetp_prediction_changed": True}
+        res = _f4_targeting_change(site, ScoringConfig())
+        assert res.value is True
+
+    def test_no_change(self):
+        site = _site()
+        site.comparison["signalp"] = {"signalp_prediction_changed": False}
+        site.comparison["targetp"] = {"targetp_prediction_changed": False}
+        res = _f4_targeting_change(site, ScoringConfig())
+        assert res.value is False
 
 
 class TestF5PathogenicVariantEnrichment:
-    def test_stubbed(self):
+    def test_no_data(self):
+        """Empty site → None (variant_intersection not run)."""
         res = _f5_pathogenic_variant_enrichment(_site(), ScoringConfig())
         assert res.value is None
-        assert "not wired" in res.reason
+        assert "variant_intersection not run" in res.reason
+
+    def test_no_plm(self):
+        site = _site()
+        site.isoform_annotations["variant_intersection"] = {
+            "summary": {"status": "ok"},
+            "n_pathogenic_in_unique_region": 1,
+        }
+        res = _f5_pathogenic_variant_enrichment(site, ScoringConfig())
+        assert res.value is None
+        assert "plm_vep" in res.reason
+
+    def test_pathogenic_and_constrained(self):
+        """≥1 pathogenic variant + unique LLR more constrained by ≥delta → True."""
+        cfg = ScoringConfig(f5_plm_unique_vs_shared_delta=0.5)
+        site = _site()
+        site.isoform_annotations["variant_intersection"] = {
+            "summary": {"status": "ok"},
+            "n_pathogenic_in_unique_region": 2,
+        }
+        site.isoform_annotations["plm_vep"] = {
+            "summary": {"status": "ok"},
+            "mean_llr_unique_region": -3.0,
+            "mean_llr_shared_region": -2.0,  # margin = 1.0 ≥ 0.5
+        }
+        res = _f5_pathogenic_variant_enrichment(site, cfg)
+        assert res.value is True
+
+    def test_pathogenic_but_not_constrained(self):
+        """≥1 pathogenic but unique LLR margin below delta → False."""
+        cfg = ScoringConfig(f5_plm_unique_vs_shared_delta=0.5)
+        site = _site()
+        site.isoform_annotations["variant_intersection"] = {
+            "summary": {"status": "ok"},
+            "n_pathogenic_in_unique_region": 2,
+        }
+        site.isoform_annotations["plm_vep"] = {
+            "summary": {"status": "ok"},
+            "mean_llr_unique_region": -2.2,
+            "mean_llr_shared_region": -2.0,  # margin = 0.2 < 0.5
+        }
+        res = _f5_pathogenic_variant_enrichment(site, cfg)
+        assert res.value is False
+
+    def test_constrained_but_no_pathogenic(self):
+        cfg = ScoringConfig(f5_plm_unique_vs_shared_delta=0.5)
+        site = _site()
+        site.isoform_annotations["variant_intersection"] = {
+            "summary": {"status": "ok"},
+            "n_pathogenic_in_unique_region": 0,
+        }
+        site.isoform_annotations["plm_vep"] = {
+            "summary": {"status": "ok"},
+            "mean_llr_unique_region": -3.0,
+            "mean_llr_shared_region": -2.0,
+        }
+        res = _f5_pathogenic_variant_enrichment(site, cfg)
+        assert res.value is False
+
+    def test_nan_llr_excluded(self):
+        cfg = ScoringConfig()
+        site = _site()
+        site.isoform_annotations["variant_intersection"] = {
+            "summary": {"status": "ok"},
+            "n_pathogenic_in_unique_region": 1,
+        }
+        site.isoform_annotations["plm_vep"] = {
+            "summary": {"status": "ok"},
+            "mean_llr_unique_region": float("nan"),
+            "mean_llr_shared_region": -2.0,
+        }
+        res = _f5_pathogenic_variant_enrichment(site, cfg)
+        assert res.value is None
+        assert "NaN" in res.reason
 
 
 class TestF6ClinicalVariantOverlap:
@@ -268,7 +420,9 @@ class TestModuleIntegration:
         # E4 always evaluates (reads site.expression), others None
         assert out["existence_evaluable"] == 1
         assert out["existence_score"] == 0
-        # F1/F3/F4/F5 stubs, F2/F6 require comparator/variant data — nothing evaluates
+        # All functional criteria correctly return None on empty input:
+        # F1 (structure), F3 (IPS), F5 (vi+plm) check status fields;
+        # F2/F4/F6 need comparator/variant data not present here.
         assert out["functional_evaluable"] == 0
 
     def test_score_counts_only_true(self):
@@ -296,7 +450,8 @@ class TestModuleIntegration:
         # E1, E2, E4 True → existence_score = 3
         assert out["existence_score"] == 3
         assert out["existence_high_confidence"] is True
-        # F6 True (F1/F3/F4/F5 stubbed, F2 no comparator data) → functional_score = 1
+        # F6 True only; F1/F3 None (no struct/ips annotations); F2/F4/F5 None
+        # (no comparator or vi+plm data) → functional_score = 1
         assert out["functional_score"] == 1
         assert out["functional_high_confidence"] is True
         assert out["criteria"]["E1_primate_conservation"] is True
