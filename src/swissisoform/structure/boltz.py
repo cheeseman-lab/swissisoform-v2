@@ -220,8 +220,17 @@ def fold_one(
                 # confidence.json (every position = complex_plddt); the
                 # real per-residue lives in the CIF B-factor column.
                 # Prefer the CIF when JSON pLDDT is suspiciously uniform.
-                if plddt is not None and len(set(plddt)) == 1 and cif_files:
-                    cif_plddt = _parse_plddt_from_cif(base / "model.cif")
+                # Treat as uniform if min == max OR the spread is below a
+                # tiny numerical jitter floor — Boltz writes the same float
+                # to every position, so set-cardinality works in practice,
+                # but defending against floating-point jitter is cheap.
+                _is_uniform = (
+                    plddt is not None
+                    and len(plddt) > 0
+                    and (max(plddt) - min(plddt)) < 1e-6
+                )
+                if _is_uniform and cif_files:
+                    cif_plddt = _parse_plddt_from_cif(cif_files[0])
                     if cif_plddt is not None and len(set(cif_plddt)) > 1:
                         logger.info(
                             "boltz: %s confidence.json pLDDT uniform; "

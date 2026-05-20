@@ -74,20 +74,41 @@ def _ips_fallback_from_workdir(
     """
     workdir = Path(tmpdir) / "work"
     if not workdir.exists():
+        logger.warning("ips fallback: no work/ dir under %s", tmpdir)
         return {}
 
-    candidates = sorted(
-        workdir.rglob("calculatedMatches.json"),
-        key=lambda p: p.stat().st_size,
-        reverse=True,
-    )
+    # Reject stale candidates whose mtime predates the run — Nextflow
+    # work dirs are uniquely-named per run (random hex prefix) so this
+    # double-checks against external reuse. We allow up to 1h backdate
+    # to accommodate clock skew between worker nodes.
+    try:
+        tmpdir_mtime = Path(tmpdir).stat().st_mtime
+        cutoff_mtime = tmpdir_mtime - 3600
+    except OSError:
+        cutoff_mtime = 0.0
+
+    candidates = []
+    for p in workdir.rglob("calculatedMatches.json"):
+        try:
+            stat = p.stat()
+        except OSError:
+            continue
+        if stat.st_mtime < cutoff_mtime:
+            continue
+        candidates.append((stat.st_size, p))
+    candidates.sort(reverse=True)
     if not candidates:
+        logger.error(
+            "ips fallback: no calculatedMatches.json found under %s", workdir
+        )
         return {}
 
-    # The aggregated JSON is the largest one (per-task no_matches files
-    # are tiny). Take the largest.
-    json_p = candidates[0]
-    if json_p.stat().st_size < 1024:
+    # The aggregated JSON is the largest (per-task no_matches files are tiny).
+    json_size, json_p = candidates[0]
+    if json_size < 1024:
+        logger.warning(
+            "ips fallback: largest calculatedMatches.json is only %d bytes", json_size
+        )
         return {}
 
     try:

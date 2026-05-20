@@ -424,26 +424,53 @@ def _f5_pathogenic_variant_enrichment(
             "F5_pathogenic_variant_enrichment", None, "plm_vep not run"
         )
 
-    n_path_unique = vi.get("n_pathogenic_in_unique_region") if vi else None
-    if n_path_unique is None:
+    n_path_unique_raw = vi.get("n_pathogenic_in_unique_region") if vi else None
+    if n_path_unique_raw is None:
         return CriterionResult(
             "F5_pathogenic_variant_enrichment",
             None,
             "n_pathogenic_in_unique_region unavailable",
         )
+    try:
+        n_path_unique = int(n_path_unique_raw)
+    except (TypeError, ValueError):
+        return CriterionResult(
+            "F5_pathogenic_variant_enrichment",
+            None,
+            f"n_pathogenic_in_unique_region not numeric ({n_path_unique_raw!r})",
+        )
 
-    llr_unique = plm.get("mean_llr_unique_region") if plm else None
-    llr_shared = plm.get("mean_llr_shared_region") if plm else None
-    if llr_unique is None or llr_shared is None:
+    llr_unique_raw = plm.get("mean_llr_unique_region") if plm else None
+    llr_shared_raw = plm.get("mean_llr_shared_region") if plm else None
+    if llr_unique_raw is None or llr_shared_raw is None:
         return CriterionResult(
             "F5_pathogenic_variant_enrichment",
             None,
             "plm_vep llr fields unavailable",
         )
+    try:
+        llr_unique = float(llr_unique_raw)
+        llr_shared = float(llr_shared_raw)
+    except (TypeError, ValueError):
+        return CriterionResult(
+            "F5_pathogenic_variant_enrichment",
+            None,
+            f"plm_vep llr fields not numeric ({llr_unique_raw!r}, {llr_shared_raw!r})",
+        )
+    # NaN sentinel — float(‘nan’) compares False to everything
+    if not (llr_unique == llr_unique and llr_shared == llr_shared):
+        return CriterionResult(
+            "F5_pathogenic_variant_enrichment",
+            None,
+            "plm_vep llr fields are NaN",
+        )
 
     has_pathogenic = n_path_unique >= cfg.f5_min_pathogenic_in_unique
     # LLR is more negative when more constrained. Require
-    # llr_unique <= llr_shared - delta.
+    # ``llr_unique <= llr_shared - delta``. The default delta=0 captures
+    # "unique region is at least as constrained as shared" — deliberately
+    # permissive for the initial rollout. Tighten f5_plm_unique_vs_shared_delta
+    # in ScoringConfig (e.g. 0.5–1.0) to demand strict enrichment.
     plm_more_constrained = llr_unique <= llr_shared - cfg.f5_plm_unique_vs_shared_delta
 
     passed = bool(has_pathogenic and plm_more_constrained)
