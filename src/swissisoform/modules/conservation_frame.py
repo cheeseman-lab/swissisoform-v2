@@ -116,6 +116,13 @@ class ConservationFrameModule:
             if cfg.mammalian_species is not None:
                 self._mammalian_species = list(cfg.mammalian_species)
 
+        # Restrict hal2maf to the genomes we actually score (ref + primates +
+        # mammals) instead of all 241 — benchmarked ~8x faster per query (4s
+        # warm vs 33s) and keeps every query well under the timeout.
+        self._target_genomes: list[str] = list(
+            dict.fromkeys([self._ref_genome, *self._primate_species, *self._mammalian_species])
+        )
+
         self._available = self._hal_path is not None and hal2maf_available(self._binary)
         self._depth_map: dict[str, int] = self._load_depth_map()
 
@@ -284,6 +291,7 @@ class ConservationFrameModule:
                 ref_genome=self._ref_genome,
                 hal2maf_binary=self._binary,
                 timeout=self._hal_timeout,
+                target_genomes=self._target_genomes,
             )
             if not maf_text:
                 continue

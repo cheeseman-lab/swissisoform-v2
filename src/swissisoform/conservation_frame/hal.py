@@ -84,6 +84,7 @@ def extract_maf(
     ref_genome: str = "Homo_sapiens",
     hal2maf_binary: str = "hal2maf",
     timeout: float = 600.0,
+    target_genomes: list[str] | None = None,
 ) -> str | None:
     """Run ``hal2maf`` for a single interval and return the MAF text.
 
@@ -102,6 +103,10 @@ def extract_maf(
             ``Homo_sapiens`` for the 241-mammal Cactus).
         hal2maf_binary: Binary to invoke.
         timeout: Seconds before we abandon the subprocess.
+        target_genomes: If given, restrict the alignment to these genome
+            names via ``--targetGenomes``. Projecting to a scored subset
+            (~42 genomes) instead of all 241 is ~8x faster per query
+            (benchmarked 4s warm vs 33s) and keeps queries under the timeout.
 
     Returns:
         Raw MAF text on success; ``None`` when the binary is missing, the
@@ -135,6 +140,8 @@ def extract_maf(
         str(length),
         "--onlyOrthologs",
     ]
+    if target_genomes:
+        cmd += ["--targetGenomes", ",".join(target_genomes)]
     try:
         completed = subprocess.run(  # noqa: S603 — inputs are constrained above
             cmd,
