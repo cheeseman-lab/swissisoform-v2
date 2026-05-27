@@ -382,6 +382,16 @@ def _build_canonical_by_tid(gene_rows: pd.DataFrame) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
+def _min_present_metric(row: pd.Series, samples: list[str], metric: str) -> float | None:
+    """Most-significant (min) ``{sample}_{metric}`` over *samples*; None if all absent."""
+    vals = [
+        float(row[f"{s}_{metric}"])
+        for s in samples
+        if pd.notna(row.get(f"{s}_{metric}"))
+    ]
+    return min(vals) if vals else None
+
+
 def _expression_from_row(
     row: pd.Series,
     samples: list[str],
@@ -482,7 +492,12 @@ def _row_to_tis(
 
     if samples is not None:
         expression = _expression_from_row(row, samples)
-        tis_pvalue = ribo_pvalue = fisher_qvalue = None
+        # Most-significant (min) per-TIS stat across the present cell lines, so
+        # multi-sample rows carry these scalars instead of being left blank.
+        present = [s for s in samples if bool(row.get(f"present_{s}", False))]
+        tis_pvalue = _min_present_metric(row, present, "TISPvalue")
+        ribo_pvalue = _min_present_metric(row, present, "RiboPvalue")
+        fisher_qvalue = _min_present_metric(row, present, "FisherQvalue")
     else:
         # Single-sample mode (e.g. per-cell-line inspect runs): bare
         # TISCounts/NormTISCounts/FisherQvalue/GeneRNASeqCounts columns.

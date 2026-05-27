@@ -19,6 +19,8 @@ dependencies = [
     "pyBigWig>=0.3.22",
     "requests>=2.31.0",
     "pyyaml>=6.0",
+    "tmtools>=0.3.0",
+    "biotite>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -26,6 +28,7 @@ dev = [
     "pytest>=8.0.0",
     "ruff>=0.4.0",
     "pytest-cov>=5.0.0",
+    "openpyxl>=3.1",
 ]
 gpu = [
     "torch>=2.0.0",

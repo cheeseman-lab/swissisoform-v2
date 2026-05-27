@@ -53,8 +53,8 @@ class TestGeneRefModule:
             ann = site.isoform_annotations["generef"]
             if site.gene_name == "TESTGENE_POS":
                 assert ann["uniprot_id"] == "P12345"
-                assert ann["depmap_mean_effect"] == -0.42
-                assert ann["omim_phenotypes"] == "Syndrome X"
+                assert ann["uniprot_function"] == "Transcription factor"
+                assert ann["subcellular_location"] == "Nucleus"
 
     def test_unmatched_gene_gets_none(self, synthetic_tis, config):
         """Sites whose gene is NOT in gene_annotations get None for all keys."""
@@ -88,7 +88,6 @@ class TestGeneRefModule:
             assert ann["uniprot_id"] is not None, (
                 f"Expected non-None uniprot_id for {site.gene_name}"
             )
-            assert ann["depmap_mean_effect"] is not None
 
     def test_module_scope_is_gene(self):
         """SCOPE must be 'G' for gene-level module."""
@@ -110,7 +109,3 @@ class TestGeneRefModule:
                 assert ann["uniprot_id"] == "P99999"
                 assert ann["uniprot_function"] is None
                 assert ann["subcellular_location"] is None
-                assert ann["hpa_protein_class"] is None
-                assert ann["hpa_subcellular_location"] is None
-                assert ann["depmap_mean_effect"] is None
-                assert ann["omim_phenotypes"] is None

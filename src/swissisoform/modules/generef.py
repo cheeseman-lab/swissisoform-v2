@@ -1,8 +1,10 @@
 """Gene Reference module — external database annotations per gene.
 
-Annotates each TIS site with reference information (UniProt, HPA, DepMap, OMIM)
-looked up by gene name. The caller is responsible for loading reference data;
-this module simply maps gene names to pre-loaded annotation dicts.
+Annotates each gene with UniProt reference fields (accession, function,
+subcellular location) looked up by gene name. The caller loads the reference
+data (see scripts/setup/fetch_generef.py); this module maps gene names to the
+pre-loaded annotation dicts. HPA / DepMap / OMIM are a future extension pending
+their data sources.
 """
 
 from __future__ import annotations
@@ -13,14 +15,13 @@ from swissisoform.config import PipelineConfig
 from swissisoform.models import Gene, TranslationInitiationSite
 
 # Annotation keys produced by this module (without the MODULE_NAME prefix).
+# Scoped to the fields we can reliably populate from a no-auth source
+# (UniProt REST). HPA / DepMap / OMIM are future fields pending their data
+# infra — adding them here without data would emit blank columns.
 _ANNOTATION_KEYS: list[str] = [
     "uniprot_id",
     "uniprot_function",
     "subcellular_location",
-    "hpa_protein_class",
-    "hpa_subcellular_location",
-    "depmap_mean_effect",
-    "omim_phenotypes",
 ]
 
 

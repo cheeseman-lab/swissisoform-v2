@@ -61,7 +61,11 @@ def _hits_overlapping(
         return []
     subset: list[dict[str, Any]] = []
     for hit in hits:
+        # Most positional modules use "pos"/"end"; clinical hits are point
+        # variants keyed by "protein_pos" (no "end"). Accept both.
         pos = hit.get("pos")
+        if pos is None:
+            pos = hit.get("protein_pos")
         hit_end = hit.get("end", pos + 1 if pos is not None else None)
         if pos is None or hit_end is None:
             continue

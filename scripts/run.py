@@ -54,6 +54,7 @@ from swissisoform.modules.clinical import ClinicalModule
 from swissisoform.modules.conservation import ConservationModule
 from swissisoform.modules.conservation_frame import ConservationFrameModule
 from swissisoform.modules.core_identity import CoreIdentityModule
+from swissisoform.modules.generef import GeneRefModule
 from swissisoform.modules.initiation_context import InitiationContextModule
 from swissisoform.modules.interproscan import InterProScanModule, precompute_interproscan
 from swissisoform.modules.localization import LocalizationModule, precompute_deeploc
@@ -103,6 +104,7 @@ COMBINED_PARQUET = OUT / "filtered" / "all_samples_combined.parquet"
 GNOMAD_DB = DATA / "gnomad" / "gnomad_v4.1_exome.parquet"
 CLINVAR_DB = DATA / "clinvar" / "variant_summary.parquet"
 COSMIC_DB = DATA / "cosmic" / "cosmic_variants.parquet"
+GENEREF_JSON = DATA / "generef" / "generef.json"
 PHYLOP_BW = DATA / "zoonomia" / "cactus241way.phyloP.bw"
 PHASTCONS_BW = DATA / "zoonomia" / "hg38.phastCons100way.bw"
 HAL_FILE = DATA / "zoonomia" / "241-mammalian-2020v2.hal"
@@ -139,6 +141,7 @@ ALL_SITE_MODULES = [
     "core_identity", "initiation_context", "conservation", "conservation_frame",
     "variant_intersection", "plm_vep", "structure",
 ]
+ALL_GENE_MODULES = ["generef"]
 
 
 # ── Configuration ────────────────────────────────────────────────────────
@@ -431,6 +434,15 @@ def run_precompute(genes, all_proteins: list[str], skip: set[str]) -> dict:
     return preds
 
 
+def _load_generef() -> dict[str, dict] | None:
+    """Load the UniProt gene-reference table written by scripts/setup/fetch_generef.py."""
+    import json
+
+    if GENEREF_JSON.exists():
+        return json.loads(GENEREF_JSON.read_text())
+    return None
+
+
 def build_pipeline(cfg, preds, ref, genes, skip: set[str]) -> AnnotationPipeline:
     """Build the annotation pipeline, omitting modules in `skip`."""
     validator = ConsequenceValidator(cds_df=ref.cds_df, genome_fasta=str(GENOME))
@@ -478,7 +490,17 @@ def build_pipeline(cfg, preds, ref, genes, skip: set[str]) -> AnnotationPipeline
     if "structure" not in skip:
         site_mods.append(StructureModule(cfg))
 
-    return AnnotationPipeline(protein_modules=protein_mods, site_modules=site_mods)
+    gene_mods = []
+    if "generef" not in skip:
+        generef_data = _load_generef()
+        if generef_data:
+            gene_mods.append(GeneRefModule(cfg, gene_annotations=generef_data))
+        else:
+            logger.info("generef: %s missing — skipping gene-level reference", GENEREF_JSON)
+
+    return AnnotationPipeline(
+        protein_modules=protein_mods, site_modules=site_mods, gene_modules=gene_mods
+    )
 
 
 # ── Spot check ───────────────────────────────────────────────────────────
@@ -675,10 +697,11 @@ def main(argv: list[str] | None = None) -> int:
     skip = {m.strip() for m in args.skip_modules.split(",") if m.strip()}
     if args.no_gpu:
         skip |= {"plm_vep", "structure"}
-    unknown = skip - set(ALL_PROTEIN_MODULES) - set(ALL_SITE_MODULES)
+    known_modules = set(ALL_PROTEIN_MODULES) | set(ALL_SITE_MODULES) | set(ALL_GENE_MODULES)
+    unknown = skip - known_modules
     if unknown:
         logger.error("Unknown module(s) in --skip-modules: %s", sorted(unknown))
-        logger.error("Available: %s", sorted(set(ALL_PROTEIN_MODULES) | set(ALL_SITE_MODULES)))
+        logger.error("Available: %s", sorted(known_modules))
         return 2
     if skip:
         logger.info("Skipping modules: %s", sorted(skip))

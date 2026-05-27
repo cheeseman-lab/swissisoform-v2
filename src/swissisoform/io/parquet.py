@@ -239,6 +239,14 @@ def paired_tis_dataframe(genes: list[Gene]) -> pd.DataFrame:
     for gene in genes:
         canonical_cols = _flatten_annotations("canonical", gene.canonical_annotations)
         canonical_len = len(gene.canonical_protein.rstrip("*"))
+        # Gene-level reference annotations (e.g. generef) repeat on every TIS row.
+        gene_annot_cols: dict[str, Any] = {}
+        for annot_key, annot_val in gene.gene_annotations.items():
+            if isinstance(annot_val, dict):
+                for sub_key, sub_val in annot_val.items():
+                    gene_annot_cols[f"{annot_key}_{sub_key}"] = sub_val
+            else:
+                gene_annot_cols[annot_key] = annot_val
         for site in gene.tis_sites:
             diff = site.diff_region
             row: dict[str, Any] = {
@@ -271,6 +279,7 @@ def paired_tis_dataframe(genes: list[Gene]) -> pd.DataFrame:
                 row[f"expr_{cell_line}_cpm"] = expr.cpm
                 row[f"expr_{cell_line}_p_value"] = expr.p_value
                 row[f"expr_{cell_line}_initiation_efficiency"] = expr.initiation_efficiency
+            row.update(gene_annot_cols)
             row.update(canonical_cols)
             row.update(_flatten_annotations("isoform", site.isoform_annotations))
             row.update(_flatten_annotations("diff", site.diff_annotations))
