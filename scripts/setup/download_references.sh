@@ -7,7 +7,7 @@
 # Extracts gzipped files and verifies completion.
 #
 # Usage:
-#   scripts/download_references.sh [--force]
+#   scripts/setup/download_references.sh [--force]
 #
 # Options:
 #   --force    Re-download files even if they already exist
@@ -16,7 +16,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+REPO_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 REFERENCE_DIR="${REPO_ROOT}/data/reference"
 GENCODE_FTP="https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_49"
 

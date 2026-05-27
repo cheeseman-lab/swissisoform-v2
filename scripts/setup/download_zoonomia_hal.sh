@@ -5,7 +5,7 @@
 # swissisoform.modules.conservation_frame. The HAL is large
 # (~200-600 GB); only download if you actually plan to run Path 1/2.
 #
-# Usage: bash scripts/download_zoonomia_hal.sh [dest_dir]
+# Usage: bash scripts/setup/download_zoonomia_hal.sh [dest_dir]
 #
 # Defaults to data/reference/zoonomia/. Skips the download if the file
 # already exists. Writes a sidecar .provenance.txt next to the HAL so

@@ -4,7 +4,7 @@ Performs in-silico tryptic digestion of isoform proteins to identify unique pept
 optionally cross-referencing with pre-computed PepQuery2 validation results.
 
 ``precompute_pepquery`` runs the PepQuery2 standalone jar (staged by
-``scripts/setup_databases.py pepquery`` into
+``scripts/setup/setup_databases.py pepquery`` into
 ``data/reference/pepquery/pepquery-2.0.2/pepquery-2.0.2.jar``) over a
 batch of candidate peptides via ``java -jar``.  MS/MS spectra come from
 PepQueryDB on demand via the ``-b`` flag — no local spectral index.
@@ -393,7 +393,7 @@ def precompute_pepquery(
             isoform sequences.  Use ``swissprot:human`` for canonical
             peptides only.
         jar_path: Path to ``pepquery-2.0.2.jar``.  Defaults to the
-            location staged by ``scripts/setup_databases.py pepquery``
+            location staged by ``scripts/setup/setup_databases.py pepquery``
             (``data/reference/pepquery/pepquery-2.0.2/``).
         java_bin: ``java`` binary (>= 11).  Defaults to system PATH.
         cache_dir: Optional ``data/cache/pepquery/`` for result JSON.
@@ -442,7 +442,7 @@ def precompute_pepquery(
     if not jar.exists():
         logger.warning(
             "precompute_pepquery: jar not found at %s — run "
-            "`python scripts/setup_databases.py pepquery` first",
+            "`python scripts/setup/setup_databases.py pepquery` first",
             jar,
         )
         return {}

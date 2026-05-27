@@ -14,7 +14,7 @@ SIF="${REPO_ROOT}/data/reference/zoonomia/singularity/cactus.sif"
 
 if [[ ! -f "${SIF}" ]]; then
     echo "cactus.sif not found at ${SIF}" >&2
-    echo "Run: python scripts/setup_databases.py hal" >&2
+    echo "Run: python scripts/setup/setup_databases.py hal" >&2
     exit 127
 fi
 

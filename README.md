@@ -18,19 +18,19 @@ conda activate swissisoform-v2
 uv pip install -e ".[dev]"
 
 # 2. Download reference data (GENCODE FASTA/GTF + Ribo-TISH inputs)
-bash scripts/download_references.sh
+bash scripts/setup/download_references.sh
 
 # 3. Build reference databases (one-shot, from primary sources)
 #    Each target is idempotent and writes a provenance sidecar
 #    (_setup.json) next to its artifact.
-python scripts/setup_databases.py diamond      # ~5 min
-python scripts/setup_databases.py clinvar      # ~2 min
-python scripts/setup_databases.py cosmic       # ~30 min (requires .env creds)
-python scripts/setup_databases.py deeploc      # ~10 min (conda env + weights)
-python scripts/setup_databases.py gnomad       # ~4-6 h (heavy — ~90 M variants)
+python scripts/setup/setup_databases.py diamond      # ~5 min
+python scripts/setup/setup_databases.py clinvar      # ~2 min
+python scripts/setup/setup_databases.py cosmic       # ~30 min (requires .env creds)
+python scripts/setup/setup_databases.py deeploc      # ~10 min (conda env + weights)
+python scripts/setup/setup_databases.py gnomad       # ~4-6 h (heavy — ~90 M variants)
 
 # 4. Run the 5-gene E2E smoke test (HeLa, writes paired parquet)
-python scripts/inspect_e2e.py
+python scripts/run.py --preset 5gene
 
 # 5. Run tests (unit + integration; ~30–60 s end to end)
 pytest
@@ -97,7 +97,7 @@ definitions. Every module must:
 3. Never drop sites — `len(output) == len(input)`.
 4. Use `None` for values it genuinely cannot compute (never silent defaults).
 
-## Reference databases (built by `scripts/setup_databases.py`)
+## Reference databases (built by `scripts/setup/setup_databases.py`)
 
 Every artifact sits under `data/reference/<db>/` next to a `_setup.json`
 provenance sidecar that records `source_url`, `version`, `fetched_at`, and
@@ -105,7 +105,7 @@ any per-build stats.
 
 | Target | Artifact | Source | Notes |
 |--------|----------|--------|-------|
-| `gencode` | `data/reference/gencode.v49.*` | GENCODE FTP | Delegates to `scripts/download_references.sh`. Includes primary assembly FASTA + annotation GTF + pc_translations FASTA. |
+| `gencode` | `data/reference/gencode.v49.*` | GENCODE FTP | Delegates to `scripts/setup/download_references.sh`. Includes primary assembly FASTA + annotation GTF + pc_translations FASTA. |
 | `diamond` | `data/reference/diamond/swissprot.dmnd` | UniProt reviewed FASTA | Built via `diamond makedb`. Used by `ConservationModule`. |
 | `clinvar` | `data/reference/clinvar/variant_summary.parquet` | NCBI `variant_summary.txt.gz` | Filter pushdown via PyArrow in `ClinicalModule`. **Reader uses `ReferenceAlleleVCF` / `AlternateAlleleVCF` / `PositionVCF` columns** — these are genomic +strand oriented. The title-parse fallback (HGVSc `c.XXX>YYY`) returns transcript-direction bases and would mis-validate minus-strand genes. |
 | `cosmic` | `data/reference/cosmic/cosmic_variants.parquet/` (**directory** of per-VCF parquets) | Sanger COSMIC v102 GRCh38 | Requires authenticated download. Credentials via `.env` (`COSMIC_EMAIL`, `COSMIC_PASSWORD`) or CLI flags. NonCoding VCF has >100 M rows so parsing streams to a per-VCF parquet; the reader (`pyarrow.dataset`) handles the dir transparently. |
@@ -122,7 +122,7 @@ any per-build stats.
    COSMIC_PASSWORD=...
    ```
 
-3. `python scripts/setup_databases.py cosmic` will auto-load the `.env`.
+3. `python scripts/setup/setup_databases.py cosmic` will auto-load the `.env`.
 
 ### gnomAD — memory-safe build
 
@@ -190,11 +190,13 @@ src/swissisoform/
   modules/             # The 9 annotation modules + base protocols
 
 scripts/
-  download_references.sh     # GENCODE FASTA/GTF (one-shot wget)
-  setup_databases.py         # Idempotent DB orchestrator (diamond/clinvar/cosmic/gnomad/deeploc)
-  run_upstream_all.py        # Drive run_sample across all 6 cell lines
-  run_e2e_all.py             # 5-gene pipeline smoke (combine-first, dedup, annotate)
-  inspect_e2e.py             # 5-gene diagnostic walkthrough + paired parquet output
+  run.py                     # Unified E2E driver (--preset 5gene / --all / --genes / --isoforms)
+  inspect_e2e.py             # Thin wrapper → run.py --preset 5gene (muscle memory)
+  run_e2e_all.py             # Thin wrapper → run.py --all (muscle memory)
+  setup/
+    download_references.sh   # GENCODE FASTA/GTF (one-shot wget)
+    setup_databases.py       # Idempotent DB orchestrator (diamond/clinvar/cosmic/gnomad/deeploc)
+    download_zoonomia_*.sh   # Zoonomia PhyloP/PhastCons BigWigs + 241-mammal HAL
 
 tests/                       # pytest — 368 tests (unit + integration)
 data/reference/              # gitignored — primary-source reference DBs

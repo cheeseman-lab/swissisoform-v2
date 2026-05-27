@@ -9,14 +9,14 @@
 #SBATCH --output=logs/zoonomia_hal_%j.out
 #SBATCH --error=logs/zoonomia_hal_%j.err
 
-# Slurm wrapper around scripts/download_zoonomia_hal.sh. The HAL is
+# Slurm wrapper around scripts/setup/download_zoonomia_hal.sh. The HAL is
 # 200-600 GB; a single curl can take many hours, so we run it inside a
 # long-lived Slurm job rather than a head-node shell that would die on
 # logout.
 #
 # Usage (from repo root):
 #   mkdir -p logs
-#   sbatch scripts/download_zoonomia_hal.sbatch
+#   sbatch scripts/setup/download_zoonomia_hal.sbatch
 #
 # Optional first arg overrides the destination directory. Defaults to the
 # shell script's own default (data/reference/zoonomia/).
@@ -30,7 +30,7 @@ DEST_DIR="${1:-data/reference/zoonomia}"
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] starting Zoonomia HAL download on $(hostname)"
 echo "                            → $DEST_DIR"
 
-bash scripts/download_zoonomia_hal.sh "$DEST_DIR"
+bash scripts/setup/download_zoonomia_hal.sh "$DEST_DIR"
 
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] finished. Size:"
 du -h "$DEST_DIR"/*.hal 2>/dev/null || true

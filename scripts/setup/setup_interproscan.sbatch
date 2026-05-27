@@ -21,4 +21,4 @@ export NXF_HOME="$PWD/.nextflow"
 export NXF_SINGULARITY_CACHEDIR="$PWD/.singularity_cache"
 mkdir -p "$NXF_HOME" "$NXF_SINGULARITY_CACHEDIR"
 
-python scripts/setup_databases.py interproscan
+python scripts/setup/setup_databases.py interproscan

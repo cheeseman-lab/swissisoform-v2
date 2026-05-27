@@ -14,7 +14,7 @@ is what scores F4 (targeting/signal change).
 
 SignalP 6.0 is distributed as a pip-installable academic-license
 tarball from DTU, installed into a dedicated ``swissisoform-v2-signalp``
-conda env (see ``scripts/setup_databases.py signalp``). This module
+conda env (see ``scripts/setup/setup_databases.py signalp``). This module
 gracefully no-ops when the env is missing.
 """
 
@@ -84,7 +84,7 @@ def precompute_signalp(
     if conda_env not in env_list.stdout:
         logger.warning(
             "precompute_signalp: conda env %r not found — run "
-            "`python scripts/setup_databases.py signalp` first.  Returning empty.",
+            "`python scripts/setup/setup_databases.py signalp` first.  Returning empty.",
             conda_env,
         )
         return {}

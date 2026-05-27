@@ -15,7 +15,7 @@ with description.
 InterProScan 6 is a Nextflow pipeline that orchestrates member-DB
 containers (HMMER, Pfam, SMART, ...) under a single entry point.
 Databases auto-download on first run into a shared ``--datadir`` that
-we pre-warm via ``scripts/setup_databases.py interproscan``.  The
+we pre-warm via ``scripts/setup/setup_databases.py interproscan``.  The
 module gracefully no-ops when Nextflow / datadir aren't set up.
 """
 
@@ -39,7 +39,7 @@ def _protein_hash(protein: str) -> str:
     return hashlib.sha1(seq.encode("ascii"), usedforsecurity=False).hexdigest()
 
 
-# Default install location used by scripts/setup_databases.py interproscan.
+# Default install location used by scripts/setup/setup_databases.py interproscan.
 DEFAULT_INTERPROSCAN_DIR = (
     Path(__file__).resolve().parents[3] / "data" / "reference" / "interproscan"
 )
@@ -242,7 +242,7 @@ def precompute_interproscan(
     if not datadir.exists():
         logger.warning(
             "precompute_interproscan: datadir missing at %s — run "
-            "`python scripts/setup_databases.py interproscan` first.  Returning empty.",
+            "`python scripts/setup/setup_databases.py interproscan` first.  Returning empty.",
             datadir,
         )
         return {}

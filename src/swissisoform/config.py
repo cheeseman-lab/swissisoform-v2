@@ -41,7 +41,7 @@ class ConservationConfig:
     The active conservation module is BigWig-lookup-based (Zoonomia 241-mammal
     PhyloP / PhastCons tracks — see ``docs/reviews/conservation_module_spec.md``).
     Point ``phylop_bigwig`` and ``phastcons_bigwig`` at the files written by
-    ``scripts/download_zoonomia_bigwigs.sh``.
+    ``scripts/setup/download_zoonomia_bigwigs.sh``.
 
     The homology-search fields (``diamond_db``, ``tblastn_db``) feed the dormant
     ``conservation_homology`` module kept for reference.  They are not wired
@@ -170,13 +170,13 @@ class ClinicalConfig:
         gnomad_api_url: gnomAD GraphQL API endpoint (fallback when
             ``gnomad_db`` is None).
         gnomad_db: Path to local gnomAD bulk parquet built by
-            ``scripts/setup_databases.py gnomad``.  When set, the
+            ``scripts/setup/setup_databases.py gnomad``.  When set, the
             fetcher reads from disk instead of calling the API.
         clinvar_email: Email for NCBI E-utilities authentication
             (fallback when ``clinvar_db`` is None).
         clinvar_api_key: API key for NCBI E-utilities (fallback only).
         clinvar_db: Path to local ClinVar parquet built by
-            ``scripts/setup_databases.py clinvar``.
+            ``scripts/setup/setup_databases.py clinvar``.
         cosmic_db: Path to local COSMIC parquet.
         fetch_timeout: HTTP timeout (fallback paths only).
         max_retries: Max retry attempts (fallback paths only).

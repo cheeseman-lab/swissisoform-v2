@@ -50,7 +50,7 @@ load predict_all.txt + GTF
 | `Gencode_v49_GRCh38.primary_assembly.genome.fa` | smaffa (replaced the chr3-only dev FASTA) | Imputation — start-codon trinucleotides |
 
 **Scripts:**
-- `scripts/run_upstream_all.py` — drives the manifest end-to-end, produces `data/output/filtered/{sample}_TIS_filtered.csv` for all 6 cell lines.
+- `scripts/run.py --all` — drives the manifest end-to-end, produces `data/output/filtered/{sample}_TIS_filtered.csv` for all 6 cell lines. (Unified driver; the old `run_upstream_all.py` is folded into it.)
 
 **Explicit: Ribo-TISH itself is the long-term swappable piece.** This upstream port locks us in to coTISja's filter + imputation contract, not to Ribo-TISH. Any future TIS caller can produce the same filtered-DataFrame schema and feed the rest of the pipeline unchanged.
 
@@ -159,7 +159,7 @@ Cactus alignment (Christmas et al. 2023).  Rationale in
   first-class fields; `diamond_db` / `tblastn_db` kept as dormant.
 - CLI: `--diamond-db` replaced by `--phylop-bigwig` / `--phastcons-bigwig`.
   Homology precompute path removed (BigWig random access is cheap).
-- `scripts/download_zoonomia_bigwigs.sh` — idempotent fetch of the two
+- `scripts/setup/download_zoonomia_bigwigs.sh` — idempotent fetch of the two
   tracks (~13 GB total) from UCSC into `data/reference/zoonomia/`.
 - Path 1/2 from the spec (primate + mammalian MAF frame-intactness) —
   scaffolded 2026-04-21 (see below); active once the HAL download lands.
@@ -186,7 +186,7 @@ HAL-dependent path emits `status="not_run"` until the download lands.
   `no_alignment` / `ok`.
 - `ConservationConfig` gains `hal_path`, `hal_ref_genome`,
   `hal2maf_binary`, `primate_species`, `mammalian_species`.
-- `scripts/download_zoonomia_hal.sh` — resumable curl with provenance
+- `scripts/setup/download_zoonomia_hal.sh` — resumable curl with provenance
   sidecar; 200-600 GB, run on demand.
 - Phylogenetic depth: `conservation_frame/tree.py` parses the HAL's own
   species tree (via `halStats --tree`, with `hal_tree_newick` config
@@ -272,7 +272,7 @@ Raw Ribo-TISH predict files in `data/reference/` (gitignored, 6 cell lines):
 - `HeLa_TIS_predict_all.txt`, `K562_TIS_predict_all.txt`, `U2OS_TIS_predict_all.txt`
 - `RPE1_Async_TIS_predict_all.txt`, `RPE1_Que_TIS_predict_all.txt`, `RPE1_Sen_TIS_predict_all.txt`
 
-Reference genome (download with `bash scripts/download_references.sh`):
+Reference genome (download with `bash scripts/setup/download_references.sh`):
 - `GRCh38.primary_assembly.genome.fa`, `gencode.v49.pc_translations.fa`, GTF
 
 ## Development

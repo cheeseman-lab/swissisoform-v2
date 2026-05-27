@@ -554,7 +554,7 @@ class TestAnnotation:
         if not non_none_preds:
             pytest.skip(
                 "SignalP returned no predictions — env not installed.  Run "
-                "`python scripts/setup_databases.py signalp` to enable this test."
+                "`python scripts/setup/setup_databases.py signalp` to enable this test."
             )
         valid = {"OTHER", "SP", "LIPO", "TAT", "TATLIPO", "PILIN"}
         assert set(non_none_preds) <= valid, (
@@ -587,7 +587,7 @@ class TestAnnotation:
         if not non_none_preds:
             pytest.skip(
                 "TargetP returned no predictions — binary not extracted.  Run "
-                "`python scripts/setup_databases.py targetp` to enable this test."
+                "`python scripts/setup/setup_databases.py targetp` to enable this test."
             )
         valid = {"noTP", "SP", "mTP", "cTP", "luTP"}
         assert set(non_none_preds) <= valid, (
@@ -624,7 +624,7 @@ class TestAnnotation:
         if total_hits == 0:
             pytest.skip(
                 "InterProScan returned no hits — datadir not populated.  Run "
-                "`sbatch scripts/setup_interproscan.sbatch` to enable this test."
+                "`sbatch scripts/setup/setup_interproscan.sbatch` to enable this test."
             )
         # Every hit must carry coordinate + db + signature metadata
         for gene in annotated_genes:

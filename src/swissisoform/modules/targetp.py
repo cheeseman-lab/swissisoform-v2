@@ -16,7 +16,7 @@ mitochondrial-presequence gain/loss in the extension region.
 
 TargetP 2.0 is a **self-contained native Go binary** distributed as an
 academic-license tarball from DTU.  It is *not* a Python package; no
-conda env is needed.  ``scripts/setup_databases.py targetp`` extracts
+conda env is needed.  ``scripts/setup/setup_databases.py targetp`` extracts
 the tarball to ``data/reference/targetp/targetp-2.0/`` and verifies the
 binary runs.  This module subprocesses to that binary directly, setting
 ``LD_LIBRARY_PATH`` to the bundled TensorFlow libs.  If the install
@@ -42,7 +42,7 @@ def _protein_hash(protein: str) -> str:
     return hashlib.sha1(seq.encode("ascii"), usedforsecurity=False).hexdigest()
 
 
-# Default install location used by scripts/setup_databases.py targetp.
+# Default install location used by scripts/setup/setup_databases.py targetp.
 # Callers can override via ``install_dir`` below.
 DEFAULT_TARGETP_DIR = (
     Path(__file__).resolve().parents[3] / "data" / "reference" / "targetp" / "targetp-2.0"
@@ -86,7 +86,7 @@ def precompute_targetp(
     if not targetp_bin.exists():
         logger.warning(
             "precompute_targetp: binary not found at %s — run "
-            "`python scripts/setup_databases.py targetp` first.  Returning empty.",
+            "`python scripts/setup/setup_databases.py targetp` first.  Returning empty.",
             targetp_bin,
         )
         return {}

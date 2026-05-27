@@ -11,7 +11,7 @@ expensive annotation modules depend on:
                (clinical module, ClinVar source)
     cosmic   — manual raw TSV prereq → standardized parquet
                (clinical module, COSMIC source)
-    gencode  — delegates to scripts/download_references.sh
+    gencode  — delegates to scripts/setup/download_references.sh
 
 Each subcommand writes:
     data/reference/<db>/<artifact>
@@ -21,9 +21,9 @@ By default, subcommands skip work if the artifact already exists. Pass
 ``--refresh`` to force re-download + re-build.
 
 Usage:
-    python scripts/setup_databases.py all
-    python scripts/setup_databases.py diamond
-    python scripts/setup_databases.py clinvar --refresh
+    python scripts/setup/setup_databases.py all
+    python scripts/setup/setup_databases.py diamond
+    python scripts/setup/setup_databases.py clinvar --refresh
 """
 
 from __future__ import annotations
@@ -60,8 +60,8 @@ def _load_dotenv(path: Path) -> None:
             os.environ[key] = val
 
 
-# Load .env from repo root (one level up from scripts/) before any subcmd.
-_load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+# Load .env from repo root (two levels up from scripts/setup/) before any subcmd.
+_load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 from typing import Any
 
 logging.basicConfig(
@@ -70,7 +70,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("setup_databases")
 
-ROOT = Path(__file__).parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 REF = ROOT / "data" / "reference"
 
 # ---------------------------------------------------------------------------

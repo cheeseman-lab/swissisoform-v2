@@ -42,7 +42,7 @@ def precompute_deeploc(
 
     DeepLoc 2.1 only ships as a Python 3.8-pinned tarball, so we run it
     in an isolated conda env (``swissisoform-v2-deeploc``) set up by
-    ``scripts/setup_databases.py deeploc``.  This function shells out to
+    ``scripts/setup/setup_databases.py deeploc``.  This function shells out to
     ``conda run -n <env> deeploc2 -f input.fa -m <model> -d <device>
     -o <outdir>`` and parses the resulting CSV.
 
@@ -77,7 +77,7 @@ def precompute_deeploc(
     if conda_env not in env_list.stdout:
         logger.warning(
             "precompute_deeploc: conda env %r not found — run "
-            "`python scripts/setup_databases.py deeploc` first.  Returning empty.",
+            "`python scripts/setup/setup_databases.py deeploc` first.  Returning empty.",
             conda_env,
         )
         return {}

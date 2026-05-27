@@ -118,11 +118,11 @@ class VariantFetcher:
             clinvar_email: NCBI E-utilities email (used only when *clinvar_db* is None).
             clinvar_api_key: NCBI E-utilities API key (used only when *clinvar_db* is None).
             cosmic_db: Path to the standardized COSMIC parquet built by
-                ``scripts/setup_databases.py cosmic``.
+                ``scripts/setup/setup_databases.py cosmic``.
             gnomad_db: Path to the gene-indexed gnomAD parquet built by
-                ``scripts/setup_databases.py gnomad``.
+                ``scripts/setup/setup_databases.py gnomad``.
             clinvar_db: Path to the ClinVar variant_summary parquet
-                built by ``scripts/setup_databases.py clinvar``.
+                built by ``scripts/setup/setup_databases.py clinvar``.
             timeout: HTTP timeout in seconds.
             max_retries: Max HTTP retry attempts.
             retry_delay: Base delay between retries in seconds.

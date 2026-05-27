@@ -1,9 +1,8 @@
 """Unit tests for PepQuery2 precompute helpers (pure logic only).
 
-The actual ``pepquery`` subprocess is not exercised here — that's what
-``scripts/benchmark_pepquery.py`` is for.  These tests cover the three
-pure helpers: peptide collection, cache key stability, and output
-parsing.
+The actual ``pepquery`` subprocess is not exercised here.  These tests
+cover the three pure helpers: peptide collection, cache key stability,
+and output parsing.
 """
 
 from __future__ import annotations
