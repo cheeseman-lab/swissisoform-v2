@@ -27,8 +27,8 @@ python scripts/run.py --genes TP53 EIF4G1 MYC --run-name my_run
 # Genes from a file (one HGNC symbol per line, '#' comments ok)
 python scripts/run.py --gene-list genes.txt
 
-# A curated set of specific isoforms — a named preset (presets/manual12.toml)
-python scripts/run.py --preset manual12
+# A curated set of specific isoforms — a named preset (presets/cheeseman12.toml)
+python scripts/run.py --preset cheeseman12
 
 # …or an ad-hoc isoform file (parquet/CSV with Tid, GenomePos, StartCodon)
 python scripts/run.py --isoforms picks.csv --run-name my_isoforms
@@ -43,7 +43,7 @@ python scripts/run.py --genes TP53 --skip-modules clinical,conservation
 
 | Mode | Flag | Selects |
 |------|------|---------|
-| Preset | `--preset <name>` | A named run from `presets/<name>.toml` — currently `5gene` (HeLa diagnostic) and `manual12` (12 reviewer-picked isoforms) |
+| Preset | `--preset <name>` | A named run from `presets/<name>.toml` — currently `5gene` (HeLa diagnostic) and `cheeseman12` (12 reviewer-picked isoforms) |
 | Genes | `--genes SYM …` | Named HGNC symbols |
 | Gene list | `--gene-list FILE` | One symbol per line |
 | Isoforms | `--isoforms FILE` | Ad-hoc TIS picks (parquet/CSV with `Tid`,`GenomePos`,`StartCodon`) |
@@ -284,7 +284,7 @@ scripts/
   setup/                    # download_references.sh, download_zoonomia_*, setup_databases.py, setup_interproscan.sbatch
   bin/                      # hal2maf, halStats Singularity shims
 
-presets/                     # named runs (auto-discovered *.toml): 5gene, manual12, …
+presets/                     # named runs (auto-discovered *.toml): 5gene, cheeseman12, …
 tests/                       # pytest — unit + real-genome 5-gene integration
 data/reference/              # gitignored — primary-source reference DBs
 data/output/                 # gitignored except the checked-in 5gene_e2e/all_paired.parquet fixture

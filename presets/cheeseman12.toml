@@ -2,7 +2,7 @@
 # 6-cell-line catalog. Each pick's (tid, genome_pos, start_codon) is matched
 # against the combined catalog to pull its sequence; the canonical Annotated
 # rows for these genes are kept automatically. Runs multi-sample.
-run_name = "manual_12gene"
+run_name = "cheeseman_12gene"
 min_cell_lines = 1
 
 [[isoforms]]
