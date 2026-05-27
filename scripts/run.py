@@ -32,6 +32,7 @@ import argparse
 import logging
 import sys
 import time
+import tomllib
 from pathlib import Path
 
 import pandas as pd
@@ -111,15 +112,24 @@ HALSTATS_BIN = ROOT / "scripts" / "bin" / "halStats"
 
 ALL_CELL_LINES = ["HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"]
 
-# Presets — named gene sets that map to common runs
-PRESETS = {
-    "5gene": {
-        "genes": ["TP53", "EIF4G1", "VEGFA", "CTNND1", "MYC"],
-        "cell_lines": ["HeLa"],
-        "run_name": "5gene_e2e",
-        "min_cell_lines": 1,
-    },
-}
+# Presets — auto-discovered from presets/*.toml at the repo root. Each TOML is a
+# self-contained named run: either `genes = [...]` (+ optional cell_lines) or an
+# inline `[[isoforms]]` array of {gene, tid, genome_pos, start_codon} picks, plus
+# run_name / min_cell_lines. Drop a new .toml in presets/ to add a named run.
+PRESETS_DIR = ROOT / "presets"
+
+
+def load_presets() -> dict[str, dict]:
+    """Load every presets/*.toml into {name: spec}; the preset name is the stem."""
+    presets: dict[str, dict] = {}
+    if PRESETS_DIR.is_dir():
+        for f in sorted(PRESETS_DIR.glob("*.toml")):
+            with open(f, "rb") as fh:
+                presets[f.stem] = tomllib.load(fh)
+    return presets
+
+
+PRESETS = load_presets()
 
 ALL_PROTEIN_MODULES = [
     "biophysics", "motifs", "massspec", "clinical",
@@ -243,24 +253,29 @@ def load_combined(
     return combined
 
 
-def restrict_to_isoforms(
-    df: pd.DataFrame, isoform_file: Path,
-) -> tuple[pd.DataFrame, list[str]]:
-    """Restrict to specific TIS picks from an isoform parquet/CSV.
+def load_isoform_picks(source: Path | str | list[dict]) -> pd.DataFrame:
+    """Normalize isoform picks from a parquet/CSV path or inline preset entries.
 
-    The isoform file must have these join keys (Tyler/manual format):
-      - SwissIso_Tid (or Tid)
-      - SwissIso_GenomePos (or GenomePos)
-      - SwissIso_StartCodon (or StartCodon)
-
-    Returns (filtered_df, gene_names).  The filter keeps:
-      - All Annotated rows for the relevant genes (canonical references)
-      - The specific picked TIS rows
+    Inline entries (a preset TOML's ``[[isoforms]]`` array) are dicts with
+    ``gene`` / ``tid`` / ``genome_pos`` / ``start_codon``.  File sources may use
+    the SwissIso_* column names.  Both are normalized to the join keys
+    ``Tid`` / ``GenomePos`` / ``StartCodon`` (plus ``Symbol``).
     """
-    if isoform_file.suffix == ".parquet":
-        isos = pd.read_parquet(isoform_file)
+    if isinstance(source, (str, Path)):
+        p = Path(source)
+        isos = pd.read_parquet(p) if p.suffix == ".parquet" else pd.read_csv(p)
     else:
-        isos = pd.read_csv(isoform_file)
+        isos = pd.DataFrame(
+            [
+                {
+                    "Symbol": e.get("gene"),
+                    "Tid": e["tid"],
+                    "GenomePos": e["genome_pos"],
+                    "StartCodon": e["start_codon"],
+                }
+                for e in source
+            ]
+        )
 
     rename_map = {
         "SwissIso_Tid": "Tid",
@@ -272,25 +287,40 @@ def restrict_to_isoforms(
         if old in isos.columns and new not in isos.columns:
             isos = isos.rename(columns={old: new})
 
-    required = {"Tid", "GenomePos", "StartCodon"}
-    missing = required - set(isos.columns)
+    missing = {"Tid", "GenomePos", "StartCodon"} - set(isos.columns)
     if missing:
         raise ValueError(
-            f"Isoform file {isoform_file} missing required columns: {sorted(missing)}. "
-            f"Expected: Tid, GenomePos, StartCodon (or SwissIso_* variants)."
+            f"Isoform picks missing required columns: {sorted(missing)}. Expected "
+            f"Tid, GenomePos, StartCodon (or SwissIso_* / inline tid, genome_pos, "
+            f"start_codon)."
         )
+    return isos
 
-    if "Symbol" in isos.columns:
-        gene_names = sorted(isos["Symbol"].unique())
+
+def restrict_to_isoforms(
+    df: pd.DataFrame, isos: pd.DataFrame,
+) -> tuple[pd.DataFrame, list[str]]:
+    """Restrict the combined catalog to specific TIS picks.
+
+    ``isos`` is a normalized picks frame from :func:`load_isoform_picks`.
+
+    Returns (filtered_df, gene_names).  The filter keeps:
+      - All Annotated rows for the relevant genes (canonical references)
+      - The specific picked TIS rows
+    """
+    required = ["Tid", "GenomePos", "StartCodon"]
+
+    if "Symbol" in isos.columns and isos["Symbol"].notna().any():
+        gene_names = sorted(isos["Symbol"].dropna().unique())
     else:
-        merged = df.merge(isos[list(required)], on=list(required), how="inner")
+        merged = df.merge(isos[required], on=required, how="inner")
         gene_names = sorted(merged["Symbol"].unique())
 
     gene_mask = df["Symbol"].isin(gene_names)
     annotated_mask = gene_mask & (df["RecatTISType"] == "Annotated")
 
-    iso_keys = isos[list(required)].drop_duplicates()
-    picked = df.merge(iso_keys, on=list(required), how="left", indicator=True)
+    iso_keys = isos[required].drop_duplicates()
+    picked = df.merge(iso_keys, on=required, how="left", indicator=True)
     picked_mask = (picked["_merge"] == "both").to_numpy()
 
     final_mask = annotated_mask.to_numpy() | picked_mask
@@ -306,7 +336,7 @@ def restrict_to_isoforms(
     )
     if n_picked_matched < n_isos_requested:
         logger.warning(
-            "%d of %d isoforms in the picks file did not match the combined catalog",
+            "%d of %d requested isoforms did not match the combined catalog",
             n_isos_requested - n_picked_matched, n_isos_requested,
         )
 
@@ -510,7 +540,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         epilog=__doc__,
     )
     mode = p.add_mutually_exclusive_group()
-    mode.add_argument("--preset", choices=sorted(PRESETS), help="Named gene set + sample config")
+    mode.add_argument(
+        "--preset", choices=sorted(PRESETS),
+        help="Named run from presets/<name>.toml (auto-discovered)",
+    )
     mode.add_argument("--genes", nargs="+", help="Gene symbols to analyze")
     mode.add_argument("--gene-list", type=Path, help="File with one gene symbol per line")
     mode.add_argument(
@@ -575,7 +608,18 @@ def resolve_gene_selection(
     restricted_df: pre-filtered combined df (when --isoforms is used), else None.
     """
     if args.preset:
-        return PRESETS[args.preset]["genes"], None
+        spec = PRESETS[args.preset]
+        if "isoforms" in spec:
+            if combined is None:
+                raise RuntimeError(
+                    f"preset {args.preset!r} selects isoforms but no combined "
+                    "catalog is loaded (isoform presets run multi-sample)"
+                )
+            restricted, gene_names = restrict_to_isoforms(
+                combined, load_isoform_picks(spec["isoforms"]),
+            )
+            return gene_names, restricted
+        return spec["genes"], None
     if args.genes:
         return args.genes, None
     if args.gene_list:
@@ -589,13 +633,17 @@ def resolve_gene_selection(
             raise RuntimeError(
                 "--isoforms requires multi-sample mode (combined parquet must exist)"
             )
-        restricted, gene_names = restrict_to_isoforms(combined, args.isoforms)
+        restricted, gene_names = restrict_to_isoforms(
+            combined, load_isoform_picks(args.isoforms),
+        )
         return gene_names, restricted
     if args.all:
         return None, None
-    logger.info("No input mode specified; defaulting to --preset 5gene")
-    args.preset = "5gene"
-    return PRESETS["5gene"]["genes"], None
+    if "5gene" in PRESETS:
+        logger.info("No input mode specified; defaulting to --preset 5gene")
+        args.preset = "5gene"
+        return PRESETS["5gene"]["genes"], None
+    raise RuntimeError("No input mode specified and no '5gene' preset available")
 
 
 def derive_run_name(args: argparse.Namespace, gene_names: list[str] | None) -> str:
@@ -603,7 +651,7 @@ def derive_run_name(args: argparse.Namespace, gene_names: list[str] | None) -> s
     if args.run_name:
         return args.run_name
     if args.preset:
-        return PRESETS[args.preset]["run_name"]
+        return PRESETS[args.preset].get("run_name", args.preset)
     if args.all:
         return "all_samples"
     if args.isoforms:
@@ -630,17 +678,24 @@ def main(argv: list[str] | None = None) -> int:
     if skip:
         logger.info("Skipping modules: %s", sorted(skip))
 
-    single_sample = args.single_sample or (
-        args.preset and len(PRESETS[args.preset]["cell_lines"]) == 1
-    )
+    preset = PRESETS[args.preset] if args.preset else None
+    preset_is_isoform = preset is not None and "isoforms" in preset
+
     cell_lines = [cl.strip() for cl in args.cell_lines.split(",") if cl.strip()]
-    if args.preset:
-        cell_lines = PRESETS[args.preset]["cell_lines"]
+    if preset is not None and "cell_lines" in preset:
+        cell_lines = preset["cell_lines"]
+    elif preset_is_isoform:
+        cell_lines = ALL_CELL_LINES
+
+    # Isoform presets must run multi-sample (they restrict the combined catalog).
+    single_sample = not preset_is_isoform and (
+        args.single_sample or (preset is not None and len(cell_lines) == 1)
+    )
 
     if args.min_cell_lines is not None:
         min_cl = args.min_cell_lines
-    elif args.preset:
-        min_cl = PRESETS[args.preset]["min_cell_lines"]
+    elif preset is not None and "min_cell_lines" in preset:
+        min_cl = preset["min_cell_lines"]
     else:
         min_cl = 1 if single_sample else 3
 

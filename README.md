@@ -27,9 +27,11 @@ python scripts/run.py --genes TP53 EIF4G1 MYC --run-name my_run
 # Genes from a file (one HGNC symbol per line, '#' comments ok)
 python scripts/run.py --gene-list genes.txt
 
-# A specific set of isoforms (join keys: Tid, GenomePos, StartCodon)
-python scripts/run.py --isoforms data/output/filtered/manual_combined.parquet \
-    --run-name 12gene_isoforms
+# A curated set of specific isoforms — a named preset (presets/manual12.toml)
+python scripts/run.py --preset manual12
+
+# …or an ad-hoc isoform file (parquet/CSV with Tid, GenomePos, StartCodon)
+python scripts/run.py --isoforms picks.csv --run-name my_isoforms
 
 # The full catalog (every gene, all cell lines)
 python scripts/run.py --all --run-name full_catalog
@@ -41,11 +43,17 @@ python scripts/run.py --genes TP53 --skip-modules clinical,conservation
 
 | Mode | Flag | Selects |
 |------|------|---------|
-| Preset | `--preset 5gene` | TP53, EIF4G1, VEGFA, CTNND1, MYC (HeLa only) |
+| Preset | `--preset <name>` | A named run from `presets/<name>.toml` — currently `5gene` (HeLa diagnostic) and `manual12` (12 reviewer-picked isoforms) |
 | Genes | `--genes SYM …` | Named HGNC symbols |
 | Gene list | `--gene-list FILE` | One symbol per line |
-| Isoforms | `--isoforms FILE` | Specific TIS picks (parquet/CSV with `Tid`,`GenomePos`,`StartCodon`) |
+| Isoforms | `--isoforms FILE` | Ad-hoc TIS picks (parquet/CSV with `Tid`,`GenomePos`,`StartCodon`) |
 | Catalog | `--all` | Every gene |
+
+**Presets** are self-contained TOML files in `presets/` (auto-discovered — drop
+a new `.toml` to add a named run). Each lists either `genes = [...]` or an inline
+`[[isoforms]]` array of `{gene, tid, genome_pos, start_codon}` picks, plus
+`run_name` / `min_cell_lines` / optional `cell_lines`. No external pick files —
+the isoforms live in the preset.
 
 Other flags: `--cell-lines HeLa,K562,…` (default all 6), `--single-sample`,
 `--min-cell-lines N`, `--rebuild-combined` (force-rebuild the cached filtered
@@ -276,6 +284,7 @@ scripts/
   setup/                    # download_references.sh, download_zoonomia_*, setup_databases.py, setup_interproscan.sbatch
   bin/                      # hal2maf, halStats Singularity shims
 
+presets/                     # named runs (auto-discovered *.toml): 5gene, manual12, …
 tests/                       # pytest — unit + real-genome 5-gene integration
 data/reference/              # gitignored — primary-source reference DBs
 data/output/                 # gitignored except the checked-in 5gene_e2e/all_paired.parquet fixture

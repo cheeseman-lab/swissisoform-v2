@@ -1,0 +1,8 @@
+# 5-gene diagnostic set (HeLa single-sample) — the SwissIsoform v2 end-to-end
+# smoke test. Covers minus-strand multi-ORF (TP53), many-exon / extreme length
+# range (EIF4G1), known biology (VEGFA), all ORF types (CTNND1), and a
+# CUG-initiated N-terminal extension (MYC).
+run_name = "5gene_e2e"
+cell_lines = ["HeLa"]
+min_cell_lines = 1
+genes = ["TP53", "EIF4G1", "VEGFA", "CTNND1", "MYC"]

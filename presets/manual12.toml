@@ -1,0 +1,138 @@
+# 12 reviewer-picked alternative isoforms (extensions + truncations) across the
+# 6-cell-line catalog. Each pick's (tid, genome_pos, start_codon) is matched
+# against the combined catalog to pull its sequence; the canonical Annotated
+# rows for these genes are kept automatically. Runs multi-sample.
+run_name = "manual_12gene"
+min_cell_lines = 1
+
+[[isoforms]]
+gene = "CBX1"
+tid = "ENST00000225603.9"
+genome_pos = "chr17:48071434-48101353:-"
+start_codon = "CTG"  # Extended
+
+[[isoforms]]
+gene = "CBX1"
+tid = "ENST00000225603.9"
+genome_pos = "chr17:48071434-48101392:-"
+start_codon = "GTG"  # Extended
+
+[[isoforms]]
+gene = "CDC34"
+tid = "ENST00000215574.9"
+genome_pos = "chr19:531766-541552:+"
+start_codon = "CTG"  # Extended
+
+[[isoforms]]
+gene = "CDKN1A"
+tid = "ENST00000244741.10"
+genome_pos = "chr6:36678767-36685800:+"
+start_codon = "ATT"  # Extended
+
+[[isoforms]]
+gene = "CDKN1A"
+tid = "ENST00000405375.5"
+genome_pos = "chr6:36678767-36685800:+"
+start_codon = "ATT"  # Extended
+
+[[isoforms]]
+gene = "CSNK2A2"
+tid = "ENST00000262506.8"
+genome_pos = "chr16:58164070-58197883:-"
+start_codon = "CTG"  # Extended
+
+[[isoforms]]
+gene = "EIF2B1"
+tid = "ENST00000424014.7"
+genome_pos = "chr12:123621755-123633644:-"
+start_codon = "CTG"  # Extended
+
+[[isoforms]]
+gene = "FZR1"
+tid = "ENST00000441788.7"
+genome_pos = "chr19:3506331-3534836:+"
+start_codon = "ATA"  # Extended
+
+[[isoforms]]
+gene = "FZR1"
+tid = "ENST00000441788.7"
+genome_pos = "chr19:3522962-3534836:+"
+start_codon = "TTG"  # Extended
+
+[[isoforms]]
+gene = "MAD2L1"
+tid = "ENST00000296509.11"
+genome_pos = "chr4:120060117-120066818:-"
+start_codon = "ACG"  # Extended
+
+[[isoforms]]
+gene = "MAD2L1"
+tid = "ENST00000296509.11"
+genome_pos = "chr4:120060117-120065801:-"
+start_codon = "ATT"  # Truncated
+
+[[isoforms]]
+gene = "MAD2L1"
+tid = "ENST00000296509.11"
+genome_pos = "chr4:120060117-120066740:-"
+start_codon = "CTG"  # Extended
+
+[[isoforms]]
+gene = "MAD2L1"
+tid = "ENST00000296509.11"
+genome_pos = "chr4:120060117-120066779:-"
+start_codon = "CTG"  # Extended
+
+[[isoforms]]
+gene = "MAD2L1"
+tid = "ENST00000296509.11"
+genome_pos = "chr4:120060117-120066788:-"
+start_codon = "CTG"  # Extended
+
+[[isoforms]]
+gene = "MAD2L1"
+tid = "ENST00000296509.11"
+genome_pos = "chr4:120060117-120066803:-"
+start_codon = "GTG"  # Extended
+
+[[isoforms]]
+gene = "MAD2L1"
+tid = "ENST00000296509.11"
+genome_pos = "chr4:120060117-120066797:-"
+start_codon = "TTG"  # Extended
+
+[[isoforms]]
+gene = "SRSF2"
+tid = "ENST00000392485.2"
+genome_pos = "chr17:76736160-76737265:-"
+start_codon = "GTG"  # Extended
+
+[[isoforms]]
+gene = "TRIP13"
+tid = "ENST00000166345.8"
+genome_pos = "chr5:892938-917103:+"
+start_codon = "CTG"  # Extended
+
+[[isoforms]]
+gene = "TRIP13"
+tid = "ENST00000166345.8"
+genome_pos = "chr5:892926-917103:+"
+start_codon = "GTG"  # Extended
+
+[[isoforms]]
+gene = "TRNT1"
+tid = "ENST00000434583.5"
+genome_pos = "chr3:3129127-3148154:+"
+start_codon = "ATG"  # Truncated
+
+[[isoforms]]
+gene = "UBE2D2"
+tid = "ENST00000398733.8"
+genome_pos = "chr5:139561698-139626801:+"
+start_codon = "ATC"  # Extended
+
+[[isoforms]]
+gene = "UBE2M"
+tid = "ENST00000253023.8"
+genome_pos = "chr19:58556088-58558576:-"
+start_codon = "ACG"  # Extended
