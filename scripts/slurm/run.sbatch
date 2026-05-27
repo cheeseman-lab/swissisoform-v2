@@ -43,7 +43,8 @@ export NXF_HOME="$PWD/.nextflow"
 export NXF_SINGULARITY_CACHEDIR="$PWD/.singularity_cache"
 
 RUN_ARGS=("$@")
-FASTA="data/cache/proteins.fa"
+# Per-job FASTA so concurrent orchestrator runs never clobber one shared file.
+FASTA="data/cache/run_${SLURM_JOB_ID:-local}/proteins.fa"
 
 # GPU caches are needed unless the run disables both GPU modules — either via
 # --no-gpu or via --skip-modules listing both plm_vep and structure.
@@ -55,8 +56,8 @@ elif [[ " ${RUN_ARGS[*]} " == *"--skip-modules"* \
     skip_gpu=1
 fi
 
-echo "[$(date -u +%FT%TZ)] Stage A — emit proteins.fa for: ${RUN_ARGS[*]:-<defaults>}"
-python scripts/run.py "${RUN_ARGS[@]}" --emit-fasta
+echo "[$(date -u +%FT%TZ)] Stage A — emit $FASTA for: ${RUN_ARGS[*]:-<defaults>}"
+python scripts/run.py "${RUN_ARGS[@]}" --fasta-out "$FASTA" --emit-fasta
 
 if (( skip_gpu )); then
     echo "[$(date -u +%FT%TZ)] Stage B — skipped (GPU modules disabled)"
@@ -90,5 +91,5 @@ else
 fi
 
 echo "[$(date -u +%FT%TZ)] Stage C — full annotation pipeline"
-python scripts/run.py "${RUN_ARGS[@]}"
+python scripts/run.py "${RUN_ARGS[@]}" --fasta-out "$FASTA"
 echo "[$(date -u +%FT%TZ)] done."

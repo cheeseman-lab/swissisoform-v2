@@ -590,9 +590,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument(
         "--emit-fasta", action="store_true",
-        help="Write data/cache/proteins.fa for the selected genes and exit, "
-             "before precompute/annotation (seeds the GPU jobs run_plm_embed / "
-             "run_fold without a full run)",
+        help="Write the proteins FASTA for the selected genes and exit, before "
+             "precompute/annotation (seeds the GPU jobs run_plm_embed / run_fold "
+             "without a full run)",
+    )
+    p.add_argument(
+        "--fasta-out", type=Path, default=ROOT / "data" / "cache" / "proteins.fa",
+        help="Path for the deduped proteins FASTA (default data/cache/proteins.fa); "
+             "set per-run so concurrent runs don't clobber each other",
     )
 
     return p.parse_args(argv)
@@ -745,12 +750,12 @@ def main(argv: list[str] | None = None) -> int:
     cfg = build_config(min_cell_lines=min_cl)
     logger.info("Stage 5: precompute (skip=%s)", sorted(skip) or "none")
     all_proteins = collect_all_proteins(genes)
-    n_written = write_proteins_fasta(all_proteins, ROOT / "data" / "cache" / "proteins.fa")
-    logger.info("proteins.fa: %d unique sequences", n_written)
+    n_written = write_proteins_fasta(all_proteins, args.fasta_out)
+    logger.info("proteins.fa: %d unique sequences -> %s", n_written, args.fasta_out)
     if args.emit_fasta:
         logger.info(
-            "--emit-fasta: wrote proteins.fa (%d seqs); stopping before precompute/annotate",
-            n_written,
+            "--emit-fasta: wrote %d seqs to %s; stopping before precompute/annotate",
+            n_written, args.fasta_out,
         )
         return 0
     preds = run_precompute(genes, all_proteins, skip)
