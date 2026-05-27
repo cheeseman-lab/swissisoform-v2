@@ -15,9 +15,9 @@
 # data/cache/plm_esm2/ keyed by sha1(stop-stripped, uppercased seq).
 #
 # Usage:
-#   sbatch scripts/run_plm_embed.sbatch <fasta_path>
+#   sbatch scripts/slurm/run_plm_embed.sbatch <fasta_path>
 # Or, with default = E2E proteins from data/cache/proteins.fa:
-#   sbatch scripts/run_plm_embed.sbatch
+#   sbatch scripts/slurm/run_plm_embed.sbatch
 
 set -euo pipefail
 
@@ -32,6 +32,10 @@ else
 fi
 
 FASTA="${1:-data/cache/proteins.fa}"
+if [[ ! -f "$FASTA" ]]; then
+    echo "FASTA not found: $FASTA  (run: python scripts/run.py <mode> --emit-fasta)" >&2
+    exit 1
+fi
 
 # Cache torch/HF weights inside the repo (HOME quota is small on shared HPC).
 export TORCH_HOME="$PWD/.torch_cache"

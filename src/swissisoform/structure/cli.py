@@ -1,6 +1,6 @@
 """CLI entrypoint: precompute Boltz-2 / Chai-1 structures for a FASTA.
 
-Invoked from ``scripts/run_fold.sbatch`` on a GPU node. Reads a FASTA,
+Invoked from ``scripts/slurm/run_fold.sbatch`` on a GPU node. Reads a FASTA,
 dedupes by sequence hash, runs the chosen backend, writes per-protein
 cache directories under ``data/cache/structure/<backend>/<hash>/``.
 """

@@ -1,6 +1,6 @@
 """SwissIsoform v2 — unified end-to-end pipeline driver.
 
-Single entry point that replaces inspect_e2e.py and run_e2e_all.py.
+Single unified entry point for the SwissIsoform v2 pipeline.
 Runs the full annotation + comparison + scoring pipeline on an
 arbitrary gene subset, isoform subset, or the full catalog.
 
@@ -555,6 +555,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--no-spot-check-limit", action="store_true",
         help="Print every TIS in the spot check (default caps at 5 per gene)",
     )
+    p.add_argument(
+        "--emit-fasta", action="store_true",
+        help="Write data/cache/proteins.fa for the selected genes and exit, "
+             "before precompute/annotation (seeds the GPU jobs run_plm_embed / "
+             "run_fold without a full run)",
+    )
 
     return p.parse_args(argv)
 
@@ -686,6 +692,12 @@ def main(argv: list[str] | None = None) -> int:
     all_proteins = collect_all_proteins(genes)
     n_written = write_proteins_fasta(all_proteins, ROOT / "data" / "cache" / "proteins.fa")
     logger.info("proteins.fa: %d unique sequences", n_written)
+    if args.emit_fasta:
+        logger.info(
+            "--emit-fasta: wrote proteins.fa (%d seqs); stopping before precompute/annotate",
+            n_written,
+        )
+        return 0
     preds = run_precompute(genes, all_proteins, skip)
     logger.info(
         "Precompute done: deeploc=%d signalp=%d targetp=%d ips=%d plm=%d struct=%d",

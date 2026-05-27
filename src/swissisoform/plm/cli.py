@@ -1,6 +1,6 @@
 """CLI entrypoint: precompute PLM embeddings + LLR for a FASTA of proteins.
 
-Invoked from ``scripts/run_plm_embed.sbatch`` on a GPU node. Reads a
+Invoked from ``scripts/slurm/run_plm_embed.sbatch`` on a GPU node. Reads a
 FASTA, dedupes by sequence hash, runs ESM-2 inline, and writes per-
 protein ``.npz`` cache files under ``data/cache/plm_esm2/``.
 """

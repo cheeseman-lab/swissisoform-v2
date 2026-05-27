@@ -7,7 +7,7 @@ shared-region RMSD, and extension-to-canonical-body contact count.
 
 Activates F1 (structured extension) when
 ``plddt_diffregion_mean > 70``. Pure lookup + numpy at pipeline runtime;
-GPU folding happens out-of-band via ``scripts/run_fold.sbatch``.
+GPU folding happens out-of-band via ``scripts/slurm/run_fold.sbatch``.
 """
 
 from __future__ import annotations

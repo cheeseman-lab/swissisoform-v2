@@ -6,7 +6,7 @@ isoform-unique region (extended N-terminus for Extended/uORFs, removed
 N-terminus for Truncations). Strand-aware, intron-aware.
 
 Usage:
-    python scripts/export_alt_regions_bed.py [--genes ...] [--out PATH]
+    python scripts/analysis/export_alt_regions_bed.py [--genes ...] [--out PATH]
 
 Output columns (UCSC BED12):
   chrom, chromStart, chromEnd, name, score, strand,

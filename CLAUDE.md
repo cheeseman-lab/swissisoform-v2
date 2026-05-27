@@ -28,7 +28,7 @@ load predict_all.txt + GTF
 
 **Multi-cell-line design decision:** upstream runs per cell line, independently. The pipeline writes one `{sample}_TIS_filtered.csv` per sample. **No cross-sample merging at this layer.** Cross-cell-line comparison is a *downstream* concern (assembly → annotation → comparator → `merging.py`). This matches smaffa's design and decouples filtering from differential analysis.
 
-**Audit:** `tests/test_smaffa_audit.py` compares our HeLa output row-for-row against `data/reference/smaffa_filtered_audit/HeLa_TIS_filtered.csv`. All 5 test genes pass (ours ⊆ smaffa; difference is exactly the uncanonical drop).
+**Audit (validated then retired 2026-05-26):** `tests/test_smaffa_audit.py` compared our HeLa output row-for-row against `data/reference/smaffa_filtered_audit/` (ours ⊆ smaffa; difference = the uncanonical drop). Final run: 8 passed. The test + the 38M reference were then removed — re-derivable from smaffa source (`/lab/barcheese01/smaffa/coTISja/`) if ever needed.
 
 **Imputation behaviour on HeLa:**
 
@@ -45,7 +45,6 @@ load predict_all.txt + GTF
 |---|---|---|
 | `ribotish_sample_manifest.csv` + `ribotish_replicate_manifest.csv` | smaffa (rewritten with relative paths) | 6-cell-line sample → predict file + RNA-seq replicates |
 | `rnaseq_counts/*_htseqcount.txt` (12) | `/lab/barcheese01/aTIS_data/counts/` | TIS-condition HTSeq counts for RPM normalization |
-| `smaffa_filtered_audit/*_TIS_filtered.csv` (6) | smaffa | Regression reference — we must match this |
 | `gencode.v49.pc_translations.fa` | smaffa | Imputation — AASeq/AALen per transcript |
 | `Gencode_v49_GRCh38.primary_assembly.genome.fa` | smaffa (replaced the chr3-only dev FASTA) | Imputation — start-codon trinucleotides |
 
@@ -128,7 +127,7 @@ All 9 modules implemented. Data model supports symmetric canonical/isoform annot
 | 5. CLI | `__main__.py` entry point | **Done** |
 | 6. Evidence scoring | Dual-axis E1–E7 / F1–F6 scoring framework | Pending |
 | 7. Functional / Structure / VEP stubs | Precompute+lookup modules (InterProScan, Chai-1, AlphaMissense) returning None until data exists | Pending |
-| 4g. PLM VEP (ESM-2 LLR) | `PLMVEPModule` (SiteModule) + `swissisoform.plm.embed` cache (`<hash>.npz`, on-disk). Masked-marginal LLR per residue, unique vs shared region enrichment using `diff_region` coords (canonical-space for truncations, isoform-space otherwise). Precompute via `scripts/run_plm_embed.sbatch` (ESM-2 650M, A6000). InterPLM SAE feature path stubbed (cache stashes layer-18 embeddings) — feature module is a follow-up. | **Done (2026-04-28)** |
+| 4g. PLM VEP (ESM-2 LLR) | `PLMVEPModule` (SiteModule) + `swissisoform.plm.embed` cache (`<hash>.npz`, on-disk). Masked-marginal LLR per residue, unique vs shared region enrichment using `diff_region` coords (canonical-space for truncations, isoform-space otherwise). Precompute via `scripts/slurm/run_plm_embed.sbatch` (ESM-2 650M, A6000). InterPLM SAE feature path stubbed (cache stashes layer-18 embeddings) — feature module is a follow-up. | **Done (2026-04-28)** |
 | 8. Full end-to-end | All modules on real data, all 6 cell lines | Pending |
 
 ### End-to-End Test Genes (5-gene diagnostic set)

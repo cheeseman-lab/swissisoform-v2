@@ -24,5 +24,5 @@ echo "Java: $($JAVA_CMD -version 2>&1 | head -1)"
 export NXF_HOME="$PWD/.nextflow"
 export NXF_SINGULARITY_CACHEDIR="$PWD/.singularity_cache"
 
-python scripts/inspect_e2e.py
+python scripts/run.py --preset 5gene
 

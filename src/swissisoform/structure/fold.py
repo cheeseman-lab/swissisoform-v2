@@ -218,7 +218,7 @@ def precompute_fold(
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "precompute_fold[%s]: backend import failed (%s); "
-                    "skipping %d uncached proteins. Run scripts/run_fold.sbatch.",
+                    "skipping %d uncached proteins. Run scripts/slurm/run_fold.sbatch.",
                     backend,
                     exc,
                     len(runnable),

@@ -24,8 +24,9 @@ data/output/*
 !data/output/5gene_e2e/
 data/output/5gene_e2e/*
 !data/output/5gene_e2e/all_paired.parquet
-# Slurm job logs — transient, not source
-logs/
+# Slurm job logs — transient; keep the dir (sbatch --output needs it) via .gitkeep
+logs/*
+!logs/.gitkeep
 # Runtime caches (PepQuery2 validated-peptide JSON, etc.)
 data/cache/
 # Tempdirs from precompute_* when a run exits without cleanup

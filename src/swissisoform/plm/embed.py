@@ -228,7 +228,7 @@ def precompute_plm_esm2(
         dtype: Inference precision.
         inline: If True, run any uncached proteins inline (requires torch +
             transformers). If False, skip uncached entries silently — useful
-            when the GPU job is run separately via ``scripts/run_plm_embed.sbatch``.
+            when the GPU job is run separately via ``scripts/slurm/run_plm_embed.sbatch``.
         skip_missing: When True, returns only proteins with a cache file.
             When False, missing entries get ``None`` values.
 
@@ -281,7 +281,7 @@ def precompute_plm_esm2(
         except Exception as exc:  # noqa: BLE001 — graceful fallback when GPU stack absent
             logger.warning(
                 "precompute_plm_esm2: could not load %s (%s); skipping inline compute. "
-                "Run scripts/run_plm_embed.sbatch to populate the cache offline.",
+                "Run scripts/slurm/run_plm_embed.sbatch to populate the cache offline.",
                 model_id,
                 exc,
             )

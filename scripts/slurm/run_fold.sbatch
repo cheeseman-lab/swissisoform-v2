@@ -15,7 +15,7 @@
 # data/cache/structure/<backend>/<hash>/{model.cif, confidence.json, metrics.json}.
 #
 # Usage:
-#   sbatch scripts/run_fold.sbatch <fasta_path> [boltz|chai]
+#   sbatch scripts/slurm/run_fold.sbatch <fasta_path> [boltz|chai]
 # Defaults: data/cache/proteins.fa, backend=boltz.
 
 set -euo pipefail
@@ -35,6 +35,10 @@ fi
 
 FASTA="${1:-data/cache/proteins.fa}"
 BACKEND="${2:-boltz}"
+if [[ ! -f "$FASTA" ]]; then
+    echo "FASTA not found: $FASTA  (run: python scripts/run.py <mode> --emit-fasta)" >&2
+    exit 1
+fi
 
 # Cache torch/HF weights inside the repo (HOME quota is small on shared HPC).
 export TORCH_HOME="$PWD/.torch_cache"
