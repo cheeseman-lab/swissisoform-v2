@@ -32,6 +32,23 @@ DEFAULT_INTERPLM_LAYER = 18  # SAE-trained layer (Elana/InterPLM-esm2-650m)
 DEFAULT_CACHE_DIR = Path(__file__).resolve().parents[3] / "data" / "cache" / "plm_esm2"
 PLM_CONDA_ENV = "swissisoform-v2-plm"
 
+# Fixed column order for the per-position masked-marginal distribution stored as
+# ``aa_logprobs`` (L, 20). Allele-specific variant effect is then a pure cache
+# lookup: ``aa_logprobs[pos, AA_TO_COL[alt]] - aa_logprobs[pos, AA_TO_COL[ref]]``.
+STANDARD_AA = "ACDEFGHIKLMNPQRSTVWY"
+AA_TO_COL: dict[str, int] = {aa: i for i, aa in enumerate(STANDARD_AA)}
+
+
+def aa_column(aa: str | None) -> int | None:
+    """Return the ``aa_logprobs`` column for a one-letter residue, or ``None``.
+
+    ``None`` for empty input or non-standard residues (``X``, ``U``, ``*``,
+    multi-character indels) — those have no masked-marginal column.
+    """
+    if not aa or len(aa) != 1:
+        return None
+    return AA_TO_COL.get(aa.upper())
+
 
 def protein_hash(protein: str) -> str:
     """Stable hash of a protein sequence (stop codon stripped, uppercased)."""
@@ -58,6 +75,8 @@ def load_cache(h: str, cache_dir: Path | str = DEFAULT_CACHE_DIR) -> dict[str, A
         out: dict[str, Any] = {}
         if "llr" in npz.files:
             out["llr"] = npz["llr"]
+        if "aa_logprobs" in npz.files:
+            out["aa_logprobs"] = npz["aa_logprobs"]
         if "embedding" in npz.files:
             out["embedding"] = npz["embedding"]
         if "embedding_layer18" in npz.files:
@@ -70,6 +89,7 @@ def _save_cache(
     cache_dir: Path,
     *,
     llr: Any,
+    aa_logprobs: Any | None = None,
     embedding: Any | None = None,
     embedding_layer18: Any | None = None,
 ) -> None:
@@ -77,6 +97,8 @@ def _save_cache(
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {"llr": np.asarray(llr, dtype=np.float32)}
+    if aa_logprobs is not None:
+        payload["aa_logprobs"] = np.asarray(aa_logprobs, dtype=np.float32)
     if embedding is not None:
         payload["embedding"] = np.asarray(embedding, dtype=np.float16)
     if embedding_layer18 is not None:
@@ -123,6 +145,7 @@ def _esm2_forward_one(
     if L == 0:
         return {
             "llr": np.zeros(0, dtype=np.float32),
+            "aa_logprobs": np.zeros((0, len(STANDARD_AA)), dtype=np.float32),
             "embedding": np.zeros((0, model.config.hidden_size), dtype=np.float16),
             "embedding_layer18": np.zeros((0, model.config.hidden_size), dtype=np.float16),
         }
@@ -153,9 +176,16 @@ def _esm2_forward_one(
         base[i, i + 1] = mask_token_id
     mask_batch_attn = attention_mask.expand(L, -1)
 
+    # Token ids of the 20 standard AAs, in STANDARD_AA column order, so we can
+    # gather the full per-position substitution distribution in one index_select.
+    aa_token_ids = torch.tensor(
+        [tokenizer.convert_tokens_to_ids(aa) for aa in STANDARD_AA], device=device
+    )
+
     # Run in chunks to fit GPU memory.
     chunk = 16
     llr = np.zeros(L, dtype=np.float32)
+    aa_logprobs = np.zeros((L, len(STANDARD_AA)), dtype=np.float32)
     for start in range(0, L, chunk):
         stop = min(start + chunk, L)
         with torch.no_grad():
@@ -172,15 +202,19 @@ def _esm2_forward_one(
                 "Loaded model does not expose `logits`; load with AutoModelForMaskedLM "
                 "to compute masked marginals."
             )
-        # Per-row, position (start+k+1) is the masked one; gather log-prob of wt.
+        # Per-row, position (start+k+1) is the masked one. Gather log-prob of the
+        # wild-type token (llr) and the full 20-AA distribution (aa_logprobs).
         log_probs = torch.log_softmax(logits, dim=-1)
+        aa_lp = log_probs.index_select(-1, aa_token_ids)  # (B, L+2, 20)
         for k in range(stop - start):
             i = start + k
             wt_id = input_ids[0, i + 1].item()
             llr[i] = float(log_probs[k, i + 1, wt_id].item())
+            aa_logprobs[i] = aa_lp[k, i + 1, :].float().cpu().numpy()
 
     return {
         "llr": llr,
+        "aa_logprobs": aa_logprobs,
         "embedding": embeddings.get(DEFAULT_LAYER),
         "embedding_layer18": embeddings.get(DEFAULT_INTERPLM_LAYER),
     }
@@ -216,6 +250,7 @@ def precompute_plm_esm2(
     dtype: str = "float16",
     inline: bool = True,
     skip_missing: bool = True,
+    require_aa_logprobs: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Run (or load cached) ESM-2 embeddings + LLR for a batch of proteins.
 
@@ -231,6 +266,10 @@ def precompute_plm_esm2(
             when the GPU job is run separately via ``scripts/slurm/run_plm_embed.sbatch``.
         skip_missing: When True, returns only proteins with a cache file.
             When False, missing entries get ``None`` values.
+        require_aa_logprobs: When True, a cache file lacking the per-position
+            ``aa_logprobs`` distribution is treated as missing and recomputed.
+            Lets the GPU re-run backfill the allele-specific distribution into
+            legacy caches that only carried the wild-type ``llr``.
 
     Returns:
         ``{protein_hash: {"llr": np.ndarray, "embedding": np.ndarray | None,
@@ -262,7 +301,7 @@ def precompute_plm_esm2(
     missing: list[tuple[str, str]] = []
     for h, seq in hash_to_seq.items():
         cached = load_cache(h, cache_dir)
-        if cached is not None:
+        if cached is not None and not (require_aa_logprobs and "aa_logprobs" not in cached):
             result[h] = cached
         else:
             missing.append((h, seq))
@@ -304,6 +343,7 @@ def precompute_plm_esm2(
                     h,
                     cache_dir,
                     llr=payload["llr"],
+                    aa_logprobs=payload.get("aa_logprobs"),
                     embedding=payload.get("embedding"),
                     embedding_layer18=payload.get("embedding_layer18"),
                 )

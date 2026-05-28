@@ -177,8 +177,17 @@ class ConservationFrameModule:
             return self._empty_result(status="no_skeleton")
 
         from swissisoform.coords import interval_difference
+        from swissisoform.models import ORFType
 
-        unique = interval_difference(site.orf_exons, site.canonical_orf_exons)
+        # ORF-type-aware unique region. Truncations lose canonical N-terminal
+        # sequence, so their unique region is ``canonical \ isoform`` (the
+        # lost intervals), not the empty ``isoform \ canonical`` direction.
+        if site.orf_type == ORFType.TRUNCATED:
+            unique = interval_difference(site.canonical_orf_exons, site.orf_exons)
+            unique_space = "canonical"
+        else:
+            unique = interval_difference(site.orf_exons, site.canonical_orf_exons)
+            unique_space = "isoform"
         if not unique:
             return self._empty_result(status="no_unique_region")
 
@@ -200,26 +209,50 @@ class ConservationFrameModule:
         primate_deepest = self._deepest_intact(primate_results)
         mammalian_deepest = self._deepest_intact(mammalian_results)
 
+        # ``start_codon_conserved`` reports conservation of the first codon of
+        # the unique region. For extensions/uORFs/altORFs that IS the TIS's
+        # alt-start codon, so the metric is semantically "alt-start codon
+        # conserved across orthologs". For TRUNCATIONS the unique region is
+        # canonical \ isoform — its first codon is the CANONICAL Met (always
+        # ATG in hg38), not the isoform's alt-start. The metric would then
+        # measure canonical-Met conservation, which is a different question
+        # from "alt-start conserved" and would mislead a reader who took the
+        # column name at face value. Emit None for truncations with an
+        # explicit reason in the summary.
+        if site.orf_type == ORFType.TRUNCATED:
+            primate_start = None
+            mammalian_start = None
+            start_codon_note = (
+                "not_applicable_truncation: unique region starts at the "
+                "canonical Met, not the isoform alt-start"
+            )
+        else:
+            primate_start = primate_agg["start_codon_conserved"]
+            mammalian_start = mammalian_agg["start_codon_conserved"]
+            start_codon_note = None
+
         return {
             "primate_n_species_aligned": primate_agg["n_species_aligned"],
             "primate_n_species_intact_frame": primate_agg["n_species_intact_frame"],
             "primate_frac_intact": primate_agg["frac_intact"],
-            "primate_start_codon_conserved": primate_agg["start_codon_conserved"],
+            "primate_start_codon_conserved": primate_start,
             "primate_mean_pident": primate_agg["mean_pident"],
             "primate_deepest_species": primate_deepest[0],
             "primate_max_depth": primate_deepest[1],
             "mammalian_n_species_aligned": mammalian_agg["n_species_aligned"],
             "mammalian_n_species_intact_frame": mammalian_agg["n_species_intact_frame"],
             "mammalian_frac_intact": mammalian_agg["frac_intact"],
-            "mammalian_start_codon_conserved": mammalian_agg["start_codon_conserved"],
+            "mammalian_start_codon_conserved": mammalian_start,
             "mammalian_mean_pident": mammalian_agg["mean_pident"],
             "mammalian_deepest_species": mammalian_deepest[0],
             "mammalian_max_depth": mammalian_deepest[1],
             "summary": {
                 "status": "ok",
+                "unique_space": unique_space,
                 "unique_region_nt": sum(e - s for s, e in unique),
                 "hal_path": str(self._hal_path),
                 "tree_loaded": bool(self._depth_map),
+                "start_codon_note": start_codon_note,
             },
         }
 

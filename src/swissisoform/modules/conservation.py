@@ -246,15 +246,30 @@ class ConservationModule:
         phastcons_status = "ok" if self._phastcons_bw is not None else "not_run"
 
         # ── Region metrics (unique vs shared) from Layer-2 ORF exons ──────
-        # Unique region = isoform ORF exons minus canonical ORF exons.
-        # Shared region = intersection of the two.
+        # Unique region is ORF-type-aware: extensions/uORFs/altORFs contribute
+        # new sequence (isoform_orf \ canonical_orf); truncations *lose* sequence
+        # so their unique region is canonical_orf \ isoform_orf. Without this
+        # split, truncations would always show unique_region_nt == 0 and the
+        # lost canonical N-terminus would silently get no conservation signal.
+        from swissisoform.models import ORFType
         region_status: str
+        unique_space: str
         if not site.orf_exons or not site.canonical_orf_exons:
             unique_intervals: list[tuple[int, int]] = []
             shared_intervals: list[tuple[int, int]] = []
             region_status = "no_skeleton"
+            unique_space = "none"
         else:
-            unique_intervals = interval_difference(site.orf_exons, site.canonical_orf_exons)
+            if site.orf_type == ORFType.TRUNCATED:
+                unique_intervals = interval_difference(
+                    site.canonical_orf_exons, site.orf_exons
+                )
+                unique_space = "canonical"
+            else:
+                unique_intervals = interval_difference(
+                    site.orf_exons, site.canonical_orf_exons
+                )
+                unique_space = "isoform"
             shared_intervals = interval_intersection(site.orf_exons, site.canonical_orf_exons)
             region_status = "ok"
 
@@ -285,6 +300,7 @@ class ConservationModule:
                 "phylop_status": phylop_status,
                 "phastcons_status": phastcons_status,
                 "region_status": region_status,
+                "unique_space": unique_space,
                 "unique_region_nt": interval_length(unique_intervals),
                 "shared_region_nt": interval_length(shared_intervals),
                 "phylop_bigwig": str(self._phylop_path) if self._phylop_path else None,

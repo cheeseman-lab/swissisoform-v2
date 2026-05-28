@@ -115,6 +115,28 @@ class TestAnalyzeSpecies:
         assert res.start_codon_conserved is False
         assert res.start_codon == "CTG"
 
+    def test_alt_start_codon_conserved(self):
+        """Alt-start (CTG, GTG, …) in ref and ortholog → start_codon_conserved=True.
+
+        This is the contract that the ATG-only hardcode previously violated:
+        a CTG-initiated TIS whose ortholog also carries CTG at the same
+        position is "start codon conserved" — the metric should compare to
+        the human reference's actual first codon, not to a hardcoded ATG.
+        """
+        ref = "CTGAAACCC"  # leucine start (Ribo-TISH near-cognate)
+        tgt = "CTGAAACCC"
+        res = analyze_species("foo", ref, tgt)
+        assert res.start_codon_conserved is True
+        assert res.start_codon == "CTG"
+
+    def test_alt_start_codon_not_conserved(self):
+        """Ref CTG / ortholog ATG → not conserved (different codon)."""
+        ref = "CTGAAACCC"
+        tgt = "ATGAAACCC"
+        res = analyze_species("foo", ref, tgt)
+        assert res.start_codon_conserved is False
+        assert res.start_codon == "ATG"
+
     def test_frameshift_deletion(self):
         # Single-base deletion in target → frameshift
         ref = "ATGAAACCCGGGTAA"

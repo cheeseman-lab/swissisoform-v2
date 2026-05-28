@@ -1409,6 +1409,71 @@ def setup_interproscan(refresh: bool = False) -> None:
 
 
 # ---------------------------------------------------------------------------
+# AlphaMissense hg38 — per-variant calibrated missense pathogenicity
+# ---------------------------------------------------------------------------
+
+ALPHAMISSENSE_DIR = REF / "alphamissense"
+ALPHAMISSENSE_GZ = ALPHAMISSENSE_DIR / "AlphaMissense_hg38.tsv.gz"
+ALPHAMISSENSE_TBI = ALPHAMISSENSE_DIR / "AlphaMissense_hg38.tsv.gz.tbi"
+ALPHAMISSENSE_URL = "https://storage.googleapis.com/dm_alphamissense/AlphaMissense_hg38.tsv.gz"
+
+
+def setup_alphamissense(refresh: bool = False) -> None:
+    """Download + tabix-index the AlphaMissense hg38 precomputed-scores table.
+
+    The published file (~640 MB) is already BGZF-compressed and sorted by
+    ``(CHROM, POS)``, so it can be tabix-indexed in place. Columns are
+    ``CHROM POS REF ALT genome uniprot_id transcript_id protein_variant
+    am_pathogenicity am_class`` with a ``#``-prefixed header.
+    :class:`swissisoform.clinical.alphamissense.AlphaMissenseLookup` reads it
+    by genomic ``(chrom, pos, ref, alt)``.
+
+    Licence: CC BY-NC-SA 4.0 (DeepMind) — research use.
+
+    Idempotent: skips when the ``.tbi`` already exists unless ``refresh``.
+    """
+    ALPHAMISSENSE_DIR.mkdir(parents=True, exist_ok=True)
+
+    if ALPHAMISSENSE_TBI.exists() and not refresh:
+        logger.info("alphamissense: %s already indexed — skipping", ALPHAMISSENSE_GZ)
+        return
+
+    if not ALPHAMISSENSE_GZ.exists() or refresh:
+        logger.info("alphamissense: downloading %s", ALPHAMISSENSE_URL)
+        partial = ALPHAMISSENSE_GZ.with_suffix(ALPHAMISSENSE_GZ.suffix + ".partial")
+        subprocess.run(
+            ["curl", "--fail", "--location", "--retry", "3",
+             "--output", str(partial), ALPHAMISSENSE_URL],
+            check=True,
+        )
+        partial.rename(ALPHAMISSENSE_GZ)
+
+    if shutil.which("tabix") is None:
+        raise RuntimeError("alphamissense: 'tabix' not on PATH — install htslib/tabix first")
+
+    logger.info("alphamissense: tabix-indexing %s", ALPHAMISSENSE_GZ)
+    run(["tabix", "-s", "1", "-b", "2", "-e", "2", "-c", "#", str(ALPHAMISSENSE_GZ)])
+
+    # Smoke-test: a known likely_pathogenic SNV must resolve.
+    import pysam
+
+    with pysam.TabixFile(str(ALPHAMISSENSE_GZ)) as tbx:
+        hits = [ln.split("\t") for ln in tbx.fetch("chr1", 69102, 69103)]
+    if not hits:
+        raise RuntimeError("alphamissense: index built but smoke-test query returned nothing")
+    logger.info("alphamissense: smoke-test ok (%d rows at chr1:69103)", len(hits))
+
+    write_sidecar(
+        ALPHAMISSENSE_DIR,
+        source_url=ALPHAMISSENSE_URL,
+        version="AlphaMissense_hg38 (Cheng et al. 2023)",
+        artifact=ALPHAMISSENSE_GZ,
+        extra={"index": str(ALPHAMISSENSE_TBI.relative_to(ROOT)), "licence": "CC BY-NC-SA 4.0"},
+    )
+    logger.info("alphamissense: indexed + sidecar written")
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -1417,6 +1482,7 @@ _HANDLERS: dict[str, Any] = {
     "clinvar": setup_clinvar,
     "gnomad": setup_gnomad,
     "cosmic": setup_cosmic,
+    "alphamissense": setup_alphamissense,
     "deeploc": setup_deeploc,
     "pepquery": setup_pepquery,
     "hal": setup_hal,
@@ -1450,7 +1516,10 @@ def main() -> int:
         # gnomAD is the long pole (~6+ hours for all chromosomes) — placed
         # last so lighter DBs finish first and are available for
         # downstream work.
-        targets = ["gencode", "diamond", "clinvar", "cosmic", "deeploc", "hal", "gnomad"]
+        targets = [
+            "gencode", "diamond", "clinvar", "cosmic", "alphamissense",
+            "deeploc", "hal", "gnomad",
+        ]
     else:
         targets = [args.target]
 

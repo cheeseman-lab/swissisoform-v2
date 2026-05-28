@@ -218,9 +218,16 @@ def _fraction_in_lcr(seq: str, window: int = 12, threshold: float = 2.2) -> floa
     return round(sum(in_lcr) / n, 4)
 
 
-def _aa_diversity(seq: str) -> int:
-    """Number of distinct amino acid types."""
-    return len(set(seq))
+def _aa_diversity(seq: str, window: int = 20) -> int:
+    """Distinct amino-acid types in the N-terminal *window* residues.
+
+    Counted over the first ``window`` residues from the sequence's relative
+    start (residue 0 is the translation-initiation site), so the metric
+    reflects N-terminal composition near the start codon and keeps real
+    dynamic range. A whole-protein distinct-AA count saturates at 20 for
+    any protein longer than ~100 aa, carrying no signal.
+    """
+    return len(set(seq[:window]))
 
 
 def _longest_homopolymer(seq: str) -> int:

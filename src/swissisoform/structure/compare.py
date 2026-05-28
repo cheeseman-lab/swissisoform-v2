@@ -59,8 +59,11 @@ def compare_confidence(
     """Compute pLDDT-derived comparison metrics.
 
     Args:
-        canonical_plddt: Per-residue pLDDT (0-100) over the canonical protein.
-        isoform_plddt: Per-residue pLDDT (0-100) over the isoform protein.
+        canonical_plddt: Per-residue pLDDT over the canonical protein. Scale
+            matches the upstream backend — Boltz-2 emits 0-1 (the default in
+            this pipeline); AlphaFold-style backends emit 0-100. Returned
+            means inherit the input scale.
+        isoform_plddt: Per-residue pLDDT over the isoform protein, same scale.
         diff_isoform_start: 0-based half-open diff-region start in isoform coords.
         diff_isoform_end: 0-based half-open diff-region end in isoform coords.
         diff_canonical_start: 0-based half-open diff-region start in canonical coords.
@@ -200,11 +203,15 @@ def compare_structures(
         contact_distance: Cα-Cα distance threshold (Å) for contacts.
 
     Returns:
-        Dict with ``tm_score``, ``rmsd_shared``, ``extension_contacts``.
+        Dict with ``tm_score``, ``rmsd_global``, ``extension_contacts``. The
+        ``rmsd_global`` is the tm-align global alignment RMSD over BOTH
+        proteins, not a strict shared-residue-only RMSD (the alignment spans
+        residues in both that aligned, including non-shared positions). Named
+        ``_global`` to keep the semantics honest.
     """
     out: dict[str, Any] = {
         "tm_score": None,
-        "rmsd_shared": None,
+        "rmsd_global": None,
         "extension_contacts": None,
     }
     if canonical_cif is None or isoform_cif is None:
@@ -232,7 +239,7 @@ def compare_structures(
         # tmtools returns tm_norm_chain1, tm_norm_chain2 — average per Zhang.
         tm = (float(ali.tm_norm_chain1) + float(ali.tm_norm_chain2)) / 2.0
         out["tm_score"] = tm
-        out["rmsd_shared"] = float(ali.rmsd)
+        out["rmsd_global"] = float(ali.rmsd)
     except Exception as exc:  # noqa: BLE001
         logger.debug("tm_align failed: %s", exc)
 

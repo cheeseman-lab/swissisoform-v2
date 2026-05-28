@@ -67,7 +67,8 @@ class TestBasicIntersection:
         assert out["hits"][1]["in_isoform_shared"] is True
         assert out["summary"]["status"] == "ok"
 
-    def test_hit_outside_isoform(self):
+    def test_hit_outside_isoform_is_dropped(self):
+        """Variants outside both coding regions are dropped (n_dropped_outside_coding++)."""
         mod = VariantIntersectionModule()
         site = _site(
             orf_exons=[(1000, 1030)],
@@ -75,9 +76,11 @@ class TestBasicIntersection:
             hits=[_hit(2000)],
         )
         out = mod.annotate_site(site)
+        assert out["n_total"] == 0
         assert out["n_in_unique_region"] == 0
         assert out["n_in_shared_region"] == 0
-        assert out["hits"][0]["in_isoform"] is False
+        assert out["n_dropped_outside_coding"] == 1
+        assert out["hits"] == []
 
     def test_pathogenic_tallied_in_unique(self):
         mod = VariantIntersectionModule()
@@ -128,8 +131,14 @@ class TestMissingInputs:
         assert out["summary"]["status"] == "ok"
 
 
-class TestDoesntMutateClinical:
-    def test_original_hits_unchanged(self):
+class TestClinicalHitsShareAugmented:
+    def test_clinical_hits_now_carry_augmentation(self):
+        """Per-TIS contract: clinical['hits'] points at the augmented list.
+
+        The comparator's positional subset reads in_isoform_unique +
+        isoform_protein_pos from there, so it doesn't need to know about
+        variant_intersection's own annotation.
+        """
         mod = VariantIntersectionModule()
         hit = _hit(910)
         site = _site(
@@ -137,10 +146,11 @@ class TestDoesntMutateClinical:
             canonical_orf_exons=[],
             hits=[hit],
         )
-        mod.annotate_site(site)
-        # The original clinical hit dict should not have been tagged.
-        original = site.isoform_annotations["clinical"]["hits"][0]
-        assert "in_isoform_unique" not in original
+        out = mod.annotate_site(site)
+        augmented = site.isoform_annotations["clinical"]["hits"][0]
+        assert augmented["in_isoform_unique"] is True
+        # And the variant_intersection annotation references the same data.
+        assert out["hits"][0]["in_isoform_unique"] is True
 
 
 class TestMetadata:

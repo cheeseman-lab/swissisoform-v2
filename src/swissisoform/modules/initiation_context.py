@@ -132,7 +132,7 @@ class InitiationContextModule:
         "initiation_context_kozak_hamming_major",
         "initiation_context_kozak_hamming_partial",
         "initiation_context_kozak_hamming_full",
-        "initiation_context_utr5_gc_content",
+        "initiation_context_kozak_window_gc_content",
     ]
     SCOPE: str = "C"
 
@@ -195,7 +195,7 @@ class InitiationContextModule:
             "kozak_hamming_major": major,
             "kozak_hamming_partial": partial,
             "kozak_hamming_full": full,
-            "utr5_gc_content": gc,
+            "kozak_window_gc_content": gc,
         }
 
     def run(self, tis_sites: list[TranslationInitiationSite]) -> list[TranslationInitiationSite]:

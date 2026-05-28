@@ -104,10 +104,15 @@ class TestClinicalModule:
     """Tests for ClinicalModule."""
 
     def test_annotate_with_cache(self, clinical_module: ClinicalModule) -> None:
-        """Variants with protein_pos are returned; intron variant filtered out."""
+        """All raw variants returned (protein_pos=None ones included).
+
+        The per-TIS variant_intersection pass re-validates non-canonical-CDS
+        variants in the isoform reading frame, so clinical no longer filters.
+        """
         result = clinical_module.annotate("FAKE_PROTEIN", "TESTGENE_POS")
-        # 4 raw variants, but one has protein_pos=None -> 3 hits
-        assert len(result["hits"]) == 3
+        # 4 raw variants — protein_pos=None is NOT filtered out; the per-TIS
+        # variant_intersection pass re-validates them in the isoform frame.
+        assert len(result["hits"]) == 4
 
     def test_annotate_no_cache_returns_empty(
         self, clinical_module_no_cache: ClinicalModule
@@ -124,14 +129,17 @@ class TestClinicalModule:
         assert result["summary"]["total_variants"] == 0
 
     def test_summary_counts(self, clinical_module: ClinicalModule) -> None:
-        """Verify total_variants, by_source, by_consequence counts."""
+        """Verify total_variants, by_source, by_consequence counts over all raw variants."""
         result = clinical_module.annotate("", "TESTGENE_POS")
         summary = result["summary"]
-        assert summary["total_variants"] == 3
-        assert summary["by_source"] == {"gnomAD": 2, "ClinVar": 1}
+        # All 4 raw variants are counted, including the intron variant that
+        # the canonical-CDS validator could not protein-map.
+        assert summary["total_variants"] == 4
+        assert summary["by_source"] == {"gnomAD": 3, "ClinVar": 1}
         assert summary["by_consequence"] == {
             "missense_variant": 2,
             "synonymous_variant": 1,
+            "intron_variant": 1,
         }
 
     def test_summary_pathogenic_count(self, clinical_module: ClinicalModule) -> None:
@@ -146,11 +154,15 @@ class TestClinicalModule:
         for hit in result["hits"]:
             assert required_keys.issubset(hit.keys())
 
-    def test_intron_variant_filtered(self, clinical_module: ClinicalModule) -> None:
-        """Variant with protein_pos=None is excluded from hits."""
+    def test_intron_variant_retained_with_null_canonical_pos(
+        self, clinical_module: ClinicalModule
+    ) -> None:
+        """Non-CDS variant retained (protein_pos=None) for isoform-frame re-call."""
         result = clinical_module.annotate("", "TESTGENE_POS")
-        for hit in result["hits"]:
-            assert hit["protein_pos"] is not None
+        intron = next((h for h in result["hits"] if h["variant_id"] == "1-900-T-C"), None)
+        assert intron is not None
+        assert intron["protein_pos"] is None
+        assert intron["consequence"] == "intron_variant"
 
     def test_annotate_by_key(self, clinical_module: ClinicalModule) -> None:
         """annotate_by_key returns same result as annotate with empty protein."""

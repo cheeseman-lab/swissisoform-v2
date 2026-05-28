@@ -57,17 +57,30 @@ class PairedComparison:
 
         Returns:
             Dict with 'unique', 'shared', 'ratio', and 'enriched' keys.
-            Ratio is inf when shared_value is zero and unique_value is nonzero.
+
+        ``enriched`` is only a meaningful "unique > shared" boolean for
+        non-negative metrics (counts, fractions, lengths, magnitudes). For
+        metrics that can cross zero (gravy hydropathy, Top-IDP disorder), a
+        ratio doesn't preserve the sign-relationship — e.g. unique=+0.2 /
+        shared=-0.3 yields a negative ratio that is neither "depleted" nor
+        "enriched". In those cases ``enriched`` is ``None`` (and ``ratio``
+        is still emitted as a number for the curious, just not flagged).
         """
         if shared_value == 0:
             ratio = math.inf if unique_value != 0 else 0.0
         else:
             ratio = unique_value / shared_value
+        # Sign-aware: only call it "enriched" when both inputs are non-negative
+        # AND the shared denominator is non-zero (no inf comparisons).
+        if unique_value < 0 or shared_value <= 0:
+            enriched: bool | None = None
+        else:
+            enriched = ratio > 1.0
         return {
             "unique": unique_value,
             "shared": shared_value,
             "ratio": ratio,
-            "enriched": ratio > 1.0,
+            "enriched": enriched,
         }
 
     @staticmethod
@@ -77,10 +90,10 @@ class PairedComparison:
         Args:
             canonical_metrics: Dict with at least optional 'plddt' key.
             isoform_metrics: Dict with optional 'plddt', 'tm_score',
-                'rmsd_shared', 'extension_contacts' keys.
+                'rmsd_global', 'extension_contacts' keys.
 
         Returns:
-            Dict with 'plddt_delta', 'tm_score', 'rmsd_shared',
+            Dict with 'plddt_delta', 'tm_score', 'rmsd_global',
             'extension_contacts'.
         """
         canonical_plddt = canonical_metrics.get("plddt", 0)
@@ -88,6 +101,6 @@ class PairedComparison:
         return {
             "plddt_delta": isoform_plddt - canonical_plddt,
             "tm_score": isoform_metrics.get("tm_score"),
-            "rmsd_shared": isoform_metrics.get("rmsd_shared"),
+            "rmsd_global": isoform_metrics.get("rmsd_global"),
             "extension_contacts": isoform_metrics.get("extension_contacts", 0),
         }

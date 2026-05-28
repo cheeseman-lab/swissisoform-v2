@@ -219,6 +219,26 @@ def _flatten_annotations(prefix: str, annotations: dict[str, dict[str, Any]]) ->
     return out
 
 
+def _diff_location(diff: Any) -> tuple[int | None, int | None, str | None]:
+    """Collapse a DifferentialRegion to a single (start, end, space) triple.
+
+    The unique region exists in exactly one protein coordinate space per ORF
+    type: extensions/uORFs carry isoform-space coords, truncations carry
+    canonical-space coords. This returns whichever pair is populated plus the
+    space label (``"isoform"`` / ``"canonical"``), or ``(None, None, None)``
+    when there is no differential region (Annotated). Downstream consumers read
+    ``site.diff_region`` directly and branch on ORF type; this is purely the
+    serialized, always-populated view for the paired DataFrame.
+    """
+    if diff is None:
+        return None, None, None
+    if diff.isoform_start is not None:
+        return diff.isoform_start, diff.isoform_end, "isoform"
+    if diff.canonical_start is not None:
+        return diff.canonical_start, diff.canonical_end, "canonical"
+    return None, None, None
+
+
 def paired_tis_dataframe(genes: list[Gene]) -> pd.DataFrame:
     """One row per TIS with paired canonical + isoform annotations.
 
@@ -249,6 +269,15 @@ def paired_tis_dataframe(genes: list[Gene]) -> pd.DataFrame:
                 gene_annot_cols[annot_key] = annot_val
         for site in gene.tis_sites:
             diff = site.diff_region
+            diff_start, diff_end, diff_space = _diff_location(diff)
+            # Per-Tid canonical can differ from gene-level (the assembly layer
+            # picks each TIS's canonical from its own transcript's Annotated row;
+            # gene.canonical_protein is the gene-level representative). When
+            # they differ, cmp_*_length-family deltas (computed against
+            # gene-level) and diff_*_length (computed against per-Tid) describe
+            # different reference proteins in the same row — surface this so
+            # consumers can detect it instead of being silently inconsistent.
+            per_tid_len = len(site.canonical_protein.rstrip("*"))
             row: dict[str, Any] = {
                 "gene_name": gene.gene_name,
                 "gene_id": gene.gene_id,
@@ -259,16 +288,17 @@ def paired_tis_dataframe(genes: list[Gene]) -> pd.DataFrame:
                 "position": site.position,
                 "strand": site.strand,
                 "start_codon": site.start_codon,
+                "canonical_per_tid_length": per_tid_len,
+                "canonical_per_tid_differs_from_gene": per_tid_len != canonical_len,
                 "orf_type": site.orf_type.value,
                 "aa_len": site.aa_len,
                 "canonical_len": canonical_len,
                 "isoform_len": len(site.isoform_protein.rstrip("*")),
                 "differential_sequence": diff.sequence if diff else "",
                 "diff_region_confidence": diff.confidence if diff else "exact",
-                "diff_isoform_start": diff.isoform_start if diff else None,
-                "diff_isoform_end": diff.isoform_end if diff else None,
-                "diff_canonical_start": diff.canonical_start if diff else None,
-                "diff_canonical_end": diff.canonical_end if diff else None,
+                "diff_start": diff_start,
+                "diff_end": diff_end,
+                "diff_space": diff_space,
                 "kozak_context": site.kozak_context,
                 "tis_pvalue": site.tis_pvalue,
                 "ribo_pvalue": site.ribo_pvalue,

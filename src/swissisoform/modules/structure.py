@@ -5,9 +5,11 @@ SiteModule that looks up cached Boltz-2 / Chai-1 fold results for both
 and (when ``tmtools`` + ``biotite`` are available) computes TM-score,
 shared-region RMSD, and extension-to-canonical-body contact count.
 
-Activates F1 (structured extension) when
-``plddt_diffregion_mean > 70``. Pure lookup + numpy at pipeline runtime;
-GPU folding happens out-of-band via ``scripts/slurm/run_fold.sbatch``.
+Activates F1 (structured extension) when ``plddt_diffregion_mean`` exceeds
+``ScoringConfig.f1_plddt_threshold`` (default 0.70 on Boltz-2's 0-1 scale;
+AlphaFold-style backends emit 0-100 and would use 70.0). Pure lookup + numpy
+at pipeline runtime; GPU folding happens out-of-band via
+``scripts/slurm/run_fold.sbatch``.
 """
 
 from __future__ import annotations
@@ -42,7 +44,7 @@ class StructureModule:
         "structure_plddt_diffregion_std",
         "structure_plddt_delta_shared",
         "structure_tm_score",
-        "structure_rmsd_shared",
+        "structure_rmsd_global",
         "structure_extension_contacts",
     ]
     SCOPE: str = "C"
@@ -81,7 +83,7 @@ class StructureModule:
             "plddt_diffregion_std": None,
             "plddt_delta_shared": None,
             "tm_score": None,
-            "rmsd_shared": None,
+            "rmsd_global": None,
             "extension_contacts": None,
         }
 

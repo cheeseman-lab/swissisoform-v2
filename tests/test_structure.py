@@ -225,7 +225,7 @@ class TestStructureModule:
                 "plddt_diffregion_std",
                 "plddt_delta_shared",
                 "tm_score",
-                "rmsd_shared",
+                "rmsd_global",
                 "extension_contacts",
             ]:
                 assert k in keys
@@ -239,5 +239,5 @@ class TestStructuralMetricsLazy:
 
         out = compare_structures(None, None)
         assert out["tm_score"] is None
-        assert out["rmsd_shared"] is None
+        assert out["rmsd_global"] is None
         assert out["extension_contacts"] is None

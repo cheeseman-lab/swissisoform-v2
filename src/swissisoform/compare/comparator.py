@@ -49,23 +49,38 @@ _POSITIONAL_KEYS = {"hits", "summary"}
 
 
 def _hits_overlapping(
-    hits: list[dict[str, Any]], start: int | None, end: int | None
+    hits: list[dict[str, Any]],
+    start: int | None,
+    end: int | None,
+    *,
+    pos_keys: tuple[str, ...] = ("pos", "protein_pos"),
 ) -> list[dict[str, Any]]:
     """Return hits whose [pos, end) interval overlaps [start, end).
 
-    A hit is kept when ``pos < end`` AND ``hit_end > start``.  Hits
-    missing a positional field (e.g. gene-level summary rows) are
-    conservatively dropped from the subset.
+    A hit is kept when ``pos < end`` AND ``hit_end > start``.  Hits missing a
+    positional field (e.g. gene-level summary rows) are conservatively
+    dropped from the subset.
+
+    ``pos_keys`` controls which fields are tried (in order) to locate the
+    hit's start position. Default ``("pos", "protein_pos")`` matches
+    interproscan/motifs (``pos`` is isoform-frame when scanning the isoform
+    protein) and clinical's canonical-frame ``protein_pos``. For
+    isoform-space subsetting of clinical hits, callers pass
+    ``("pos", "isoform_protein_pos")`` so the variant_intersection-written
+    isoform-frame position is used instead of the canonical one — fixes the
+    frame mismatch that previously counted canonical-body variants as
+    extension hits.
     """
     if start is None or end is None or start >= end:
         return []
     subset: list[dict[str, Any]] = []
     for hit in hits:
-        # Most positional modules use "pos"/"end"; clinical hits are point
-        # variants keyed by "protein_pos" (no "end"). Accept both.
-        pos = hit.get("pos")
-        if pos is None:
-            pos = hit.get("protein_pos")
+        pos = None
+        for key in pos_keys:
+            v = hit.get(key)
+            if v is not None:
+                pos = v
+                break
         hit_end = hit.get("end", pos + 1 if pos is not None else None)
         if pos is None or hit_end is None:
             continue
@@ -263,10 +278,19 @@ class Comparator:
                 return subset, "canonical"
             return [], "canonical"
 
-        # Extension / uORF / altORF: diff in isoform coords → filter isoform hits
+        # Extension / uORF / altORF: diff in isoform coords → filter isoform hits.
+        # Hits computed on the isoform protein (motifs/massspec/interproscan)
+        # carry their position as ``pos`` (already isoform-frame). Clinical
+        # hits don't have ``pos`` — their canonical-frame ``protein_pos`` is
+        # incommensurable with isoform-space diff coords, so we fall through to
+        # ``isoform_protein_pos`` (written by VariantIntersectionModule's
+        # per-TIS reading-frame revalidation) which IS isoform-frame.
         if diff_region.isoform_start is not None and diff_region.isoform_end is not None:
             subset = _hits_overlapping(
-                isoform_hits, diff_region.isoform_start, diff_region.isoform_end
+                isoform_hits,
+                diff_region.isoform_start,
+                diff_region.isoform_end,
+                pos_keys=("pos", "isoform_protein_pos"),
             )
             return subset, "isoform"
 

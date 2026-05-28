@@ -53,6 +53,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--dtype", default="float16")
+    parser.add_argument(
+        "--no-require-aa-logprobs",
+        dest="require_aa_logprobs",
+        action="store_false",
+        help="Accept legacy caches lacking the per-position aa_logprobs distribution "
+        "instead of recomputing them.",
+    )
+    parser.set_defaults(require_aa_logprobs=True)
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -75,6 +83,7 @@ def main(argv: list[str] | None = None) -> int:
         device=args.device,
         dtype=args.dtype,
         inline=True,
+        require_aa_logprobs=args.require_aa_logprobs,
     )
     print(f"Wrote {len(res)} cache entries to {args.cache_dir}")
     return 0

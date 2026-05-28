@@ -184,3 +184,35 @@ class TestMassSpecModule:
         result1 = module.annotate(protein)
         result2 = module.annotate(protein)
         assert result1 == result2
+
+    def test_pepquery_run_true_when_queried_but_zero_validated(self, config):
+        """A gene whose peptides PepQuery queried but didn't validate must show
+        ``pepquery_run=True, validated_peptides=0`` — not pepquery_run=False.
+
+        Pre-fix, ``_regroup_by_gene`` skipped genes with no validated peptides,
+        so MassSpecModule couldn't tell "queried + no MS evidence" from "never
+        queried" — and E6 returned None instead of False for TRNT1 / CDC34 /
+        SRSF2.
+        """
+        from swissisoform.modules.massspec import _regroup_by_gene
+        peptide_to_genes = {
+            "PEPONE": {"GENE_A"},
+            "PEPTWO": {"GENE_A", "GENE_B"},
+            "PEPTHREE": {"GENE_C"},  # GENE_C queried but PepQuery doesn't validate it
+        }
+        validated = {"PEPONE", "PEPTWO"}  # GENE_A and GENE_B get hits; GENE_C does not
+        out = _regroup_by_gene(validated, peptide_to_genes)
+        assert set(out.keys()) == {"GENE_A", "GENE_B", "GENE_C"}, (
+            "every queried gene must appear in the output, including ones with "
+            "zero validated peptides"
+        )
+        assert out["GENE_C"] == set(), "queried-but-unvalidated gene has empty set"
+        assert out["GENE_A"] == {"PEPONE", "PEPTWO"}
+        assert out["GENE_B"] == {"PEPTWO"}
+
+        # And downstream: MassSpecModule on GENE_C now correctly reports
+        # pepquery_run=True (it ran) + validated_peptides=0 (found nothing).
+        module = MassSpecModule(config, validated_peptides=out)
+        result = module.annotate("MAAAAAALLLLLLLRKKKKKKKR*", gene_name="GENE_C")
+        assert result["summary"]["pepquery_run"] is True
+        assert result["summary"]["validated_peptides"] == 0

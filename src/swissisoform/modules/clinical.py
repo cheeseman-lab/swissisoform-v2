@@ -206,13 +206,15 @@ class ClinicalModule:
     ) -> dict[str, Any]:
         """Annotate a protein with clinical variant data.
 
-        Looks up variants for the given gene in the variant cache, filters to
-        those with protein-space positions, and builds a summary.
+        Returns every variant fetched/cached for the gene, including those
+        that don't map to the canonical CDS (``protein_pos is None``). Those
+        variants may still be coding in an isoform's reading frame — the
+        per-TIS pass in :class:`VariantIntersectionModule` re-validates them
+        against each isoform's ``orf_exons`` and writes ``isoform_protein_pos``
+        / ``isoform_aa_ref`` / ``isoform_aa_alt`` onto the same hit dicts.
 
         When *gene_name* is empty, this returns an empty result AND logs a
-        warning — an empty gene_name is almost always a wiring bug (e.g. the
-        pipeline forgot to pass gene context), not a legitimate "no variants"
-        case.
+        warning — an empty gene_name is almost always a wiring bug.
 
         Args:
             protein: Protein sequence (unused in cache-lookup mode, but part
@@ -222,8 +224,9 @@ class ClinicalModule:
                 fetch variants from external APIs inline.
 
         Returns:
-            Dict with 'hits' (list of variant dicts with protein_pos != None)
-            and 'summary' (counts by source, consequence, pathogenic).
+            Dict with ``hits`` (all fetched variants for the gene) and
+            ``summary`` (counts by source, consequence, pathogenic; built over
+            all hits regardless of protein_pos mapping).
         """
         if not gene_name:
             logger.warning(
@@ -248,12 +251,13 @@ class ClinicalModule:
         if not raw_variants:
             return {"hits": [], "summary": dict(_EMPTY_SUMMARY)}
 
-        # Filter to variants that map to protein space
-        hits = [v for v in raw_variants if v.get("protein_pos") is not None]
-
+        # No protein_pos filter: keep all raw variants so the per-TIS
+        # variant_intersection pass can re-validate non-canonical-CDS variants
+        # against each isoform's orf_exons (the extension/altORF unique region
+        # is 5'UTR-of-canonical and would otherwise be silently dropped).
         return {
-            "hits": hits,
-            "summary": _build_summary(hits),
+            "hits": list(raw_variants),
+            "summary": _build_summary(raw_variants),
         }
 
     def annotate_by_key(self, gene_name: str) -> dict[str, Any]:

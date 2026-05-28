@@ -2,7 +2,9 @@
 
 Per-species checks:
 
-- start codon conserved (first reference codon is ATG in target)
+- start codon conserved (target's first codon matches the human reference's
+  first codon — works for both ATG canonical starts and near-cognate alt-starts
+  like CTG/GTG/TTG)
 - frame intact (no insertion or deletion runs with length not divisible by 3,
   and no premature in-frame stop)
 - premature stop (any in-frame stop before the last reference codon)
@@ -193,8 +195,17 @@ def analyze_species(
 
     coverage = len(target_nongap) / len(ref_ungapped) if ref_ungapped else None
 
+    # "Start codon conserved" = the ortholog's first codon at this position
+    # matches the human reference's first codon. Hardcoding ATG was wrong:
+    # for alt-start TIS (CTG/GTG/TTG/ACG/...) the human ref isn't ATG either,
+    # so an "ATG-only" test reported conservation=0 even when the ortholog
+    # carried the same near-cognate. Compare to the actual reference trinucleotide.
+    ref_start = ref_seq[:3].replace("-", "").upper() if ref_seq else ""
     start_codon = target_projected[:3].upper() if len(target_projected) >= 3 else None
-    start_conserved = start_codon == "ATG" if start_codon is not None else None
+    if start_codon is None or len(ref_start) < 3 or "-" in start_codon:
+        start_conserved = None
+    else:
+        start_conserved = start_codon == ref_start
 
     frameshifts = _count_frameshifts(ref_seq, target_seq)
 

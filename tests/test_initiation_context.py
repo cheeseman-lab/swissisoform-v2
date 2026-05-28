@@ -147,7 +147,7 @@ class TestInitiationContextModule:
         site.kozak_context = "GGGCCCAAATTT"
         result = InitiationContextModule(config).run([site])
         ann = result[0].isoform_annotations["initiation_context"]
-        assert ann["utr5_gc_content"] == pytest.approx(0.5)
+        assert ann["kozak_window_gc_content"] == pytest.approx(0.5)
 
 
 # ---------------------------------------------------------------------------

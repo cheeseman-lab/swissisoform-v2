@@ -357,13 +357,14 @@ class TestClinicalModuleFetch:
     def test_annotate_with_fetch_if_missing_no_validator(
         self, mock_post: MagicMock, mock_get: MagicMock
     ) -> None:
-        """Without a ConsequenceValidator, fetched variants have protein_pos=None
-        and annotate() filters them out.
+        """Without a ConsequenceValidator, fetched variants have protein_pos=None.
 
-        This is the correct, honest behavior: the fetcher cannot know the
-        isoform-frame protein position from HGVSp alone (HGVSp is canonical-
-        frame), so without a validator we refuse to claim positions. The
-        raw variants are still cached for when a validator is attached.
+        Updated contract (per the isoform-frame mutation-calling fix):
+        clinical.annotate() now returns ALL raw variants — including those
+        with protein_pos=None — so the per-TIS variant_intersection pass can
+        re-call them against each isoform's reading frame. So total_variants
+        reports the raw count (4), and every hit's canonical-frame
+        ``protein_pos`` is honestly ``None`` since no validator ran.
         """
         mock_post.return_value = _mock_response(MOCK_GNOMAD_RESPONSE)
         mock_get.side_effect = [
@@ -373,14 +374,16 @@ class TestClinicalModuleFetch:
         mod = ClinicalModule(PipelineConfig())
 
         result = mod.annotate("", gene_name="TP53", fetch_if_missing=True)
-        # All variants filtered out because protein_pos is None without validator
-        assert result["summary"]["total_variants"] == 0
-        assert result["hits"] == []
+        # All 4 raw variants returned (clinical no longer drops protein_pos=None).
+        assert result["summary"]["total_variants"] == 4
+        assert len(result["hits"]) == 4
+        # And every hit has protein_pos=None (no canonical-CDS mapping without a validator).
+        for h in result["hits"]:
+            assert h["protein_pos"] is None
 
-        # But raw variants ARE cached (4 total: 2 gnomAD + 2 ClinVar)
+        # Raw variants also visible in the cache (same 4).
         assert "TP53" in mod.variant_cache
         assert len(mod.variant_cache["TP53"]) == 4
-        # And all have protein_pos=None (honest output)
         for v in mod.variant_cache["TP53"]:
             assert v["protein_pos"] is None
         # The canonical-frame hints are preserved in metadata

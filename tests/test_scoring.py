@@ -270,21 +270,41 @@ class TestF3DomainChange:
         """No IPS annotation → None (status=no_data)."""
         assert _f3_domain_change(_site(), ScoringConfig()).value is None
 
-    def test_hits_in_diff(self):
+    def test_hit_starting_in_diff_fires(self):
+        """A hit whose pos is INSIDE the diff window counts as a domain gain."""
+        from swissisoform.models import DifferentialRegion
         site = _site()
-        site.isoform_annotations["interproscan"] = {
-            "summary": {"status": "ok"},
+        site.diff_region = DifferentialRegion(isoform_start=0, isoform_end=10, sequence="X" * 10)
+        site.isoform_annotations["interproscan"] = {"summary": {"status": "ok"}}
+        site.comparison["interproscan"] = {
+            "hits_in_diff_region": [{"pos": 3, "end": 7, "name": "PF_test"}],
+            "hits_source_pane": "isoform",
         }
-        site.comparison["interproscan"] = {"n_hits_in_diff_region": 2}
         res = _f3_domain_change(site, ScoringConfig())
         assert res.value is True
 
-    def test_no_hits_in_diff(self):
+    def test_boundary_spill_does_not_fire(self):
+        """Body domain overlapping diff by 1 aa (pos OUTSIDE diff) → False, not True."""
+        from swissisoform.models import DifferentialRegion
         site = _site()
-        site.isoform_annotations["interproscan"] = {
-            "summary": {"status": "ok"},
+        site.diff_region = DifferentialRegion(isoform_start=0, isoform_end=10, sequence="X" * 10)
+        site.isoform_annotations["interproscan"] = {"summary": {"status": "ok"}}
+        # Domain starts at 9 (still inside diff: 0..10) — should fire.
+        # But a hit starting at 11 (outside) yet ending at 13 (overlapping by 0) would NOT fire.
+        # Use a clear "body domain that overlaps boundary": pos=10, end=50 → starts AT/past end.
+        site.comparison["interproscan"] = {
+            "hits_in_diff_region": [{"pos": 10, "end": 50, "name": "PF_body_spill"}],
+            "hits_source_pane": "isoform",
         }
-        site.comparison["interproscan"] = {"n_hits_in_diff_region": 0}
+        res = _f3_domain_change(site, ScoringConfig())
+        assert res.value is False
+
+    def test_no_hits_at_all(self):
+        from swissisoform.models import DifferentialRegion
+        site = _site()
+        site.diff_region = DifferentialRegion(isoform_start=0, isoform_end=10, sequence="X" * 10)
+        site.isoform_annotations["interproscan"] = {"summary": {"status": "ok"}}
+        site.comparison["interproscan"] = {"hits_in_diff_region": [], "hits_source_pane": "isoform"}
         res = _f3_domain_change(site, ScoringConfig())
         assert res.value is False
 
@@ -316,83 +336,73 @@ class TestF4TargetingChange:
 
 class TestF5PathogenicVariantEnrichment:
     def test_no_data(self):
-        """Empty site → None (variant_intersection not run)."""
+        """Empty site → None (varianteffect not run)."""
         res = _f5_pathogenic_variant_enrichment(_site(), ScoringConfig())
         assert res.value is None
-        assert "variant_intersection not run" in res.reason
+        assert "varianteffect not run" in res.reason
 
-    def test_no_plm(self):
+    def test_no_scorable_in_unique(self):
+        """varianteffect ran but no scorable variant in the unique region → None."""
         site = _site()
-        site.isoform_annotations["variant_intersection"] = {
+        site.isoform_annotations["varianteffect"] = {
             "summary": {"status": "ok"},
-            "n_pathogenic_in_unique_region": 1,
+            "n_scorable_in_unique": 0,
+            "n_damaging_in_unique": 0,
         }
         res = _f5_pathogenic_variant_enrichment(site, ScoringConfig())
         assert res.value is None
-        assert "plm_vep" in res.reason
+        assert "no scorable" in res.reason
 
-    def test_pathogenic_and_constrained(self):
-        """≥1 pathogenic variant + unique LLR more constrained by ≥delta → True."""
-        cfg = ScoringConfig(f5_plm_unique_vs_shared_delta=0.5)
+    def test_damaging_enrichment_true(self):
+        """≥ f5_min damaging variants among scorable unique-region variants → True."""
         site = _site()
-        site.isoform_annotations["variant_intersection"] = {
+        site.isoform_annotations["varianteffect"] = {
             "summary": {"status": "ok"},
-            "n_pathogenic_in_unique_region": 2,
+            "n_scorable_in_unique": 3,
+            "n_damaging_in_unique": 2,
+            "n_am_pathogenic_in_unique": 1,
+            "mean_delta_llr_unique": -8.4,
         }
-        site.isoform_annotations["plm_vep"] = {
-            "summary": {"status": "ok"},
-            "mean_llr_unique_region": -3.0,
-            "mean_llr_shared_region": -2.0,  # margin = 1.0 ≥ 0.5
-        }
-        res = _f5_pathogenic_variant_enrichment(site, cfg)
+        res = _f5_pathogenic_variant_enrichment(site, ScoringConfig())
         assert res.value is True
 
-    def test_pathogenic_but_not_constrained(self):
-        """≥1 pathogenic but unique LLR margin below delta → False."""
-        cfg = ScoringConfig(f5_plm_unique_vs_shared_delta=0.5)
+    def test_scorable_but_not_damaging(self):
+        """Scorable variants exist but none damaging → False."""
         site = _site()
-        site.isoform_annotations["variant_intersection"] = {
+        site.isoform_annotations["varianteffect"] = {
             "summary": {"status": "ok"},
-            "n_pathogenic_in_unique_region": 2,
+            "n_scorable_in_unique": 4,
+            "n_damaging_in_unique": 0,
+            "n_am_pathogenic_in_unique": 0,
+            "mean_delta_llr_unique": -1.2,
         }
-        site.isoform_annotations["plm_vep"] = {
-            "summary": {"status": "ok"},
-            "mean_llr_unique_region": -2.2,
-            "mean_llr_shared_region": -2.0,  # margin = 0.2 < 0.5
-        }
-        res = _f5_pathogenic_variant_enrichment(site, cfg)
+        res = _f5_pathogenic_variant_enrichment(site, ScoringConfig())
         assert res.value is False
 
-    def test_constrained_but_no_pathogenic(self):
-        cfg = ScoringConfig(f5_plm_unique_vs_shared_delta=0.5)
+    def test_threshold_respected(self):
+        """f5_min_pathogenic_in_unique gates how many damaging variants are needed."""
         site = _site()
-        site.isoform_annotations["variant_intersection"] = {
+        site.isoform_annotations["varianteffect"] = {
             "summary": {"status": "ok"},
-            "n_pathogenic_in_unique_region": 0,
+            "n_scorable_in_unique": 3,
+            "n_damaging_in_unique": 1,
+            "n_am_pathogenic_in_unique": 1,
+            "mean_delta_llr_unique": -7.9,
         }
-        site.isoform_annotations["plm_vep"] = {
-            "summary": {"status": "ok"},
-            "mean_llr_unique_region": -3.0,
-            "mean_llr_shared_region": -2.0,
-        }
-        res = _f5_pathogenic_variant_enrichment(site, cfg)
-        assert res.value is False
+        assert _f5_pathogenic_variant_enrichment(site, ScoringConfig()).value is True
+        strict = ScoringConfig(f5_min_pathogenic_in_unique=2)
+        assert _f5_pathogenic_variant_enrichment(site, strict).value is False
 
-    def test_nan_llr_excluded(self):
-        cfg = ScoringConfig()
+    def test_non_numeric_counts_none(self):
         site = _site()
-        site.isoform_annotations["variant_intersection"] = {
+        site.isoform_annotations["varianteffect"] = {
             "summary": {"status": "ok"},
-            "n_pathogenic_in_unique_region": 1,
+            "n_scorable_in_unique": "oops",
+            "n_damaging_in_unique": 1,
         }
-        site.isoform_annotations["plm_vep"] = {
-            "summary": {"status": "ok"},
-            "mean_llr_unique_region": float("nan"),
-            "mean_llr_shared_region": -2.0,
-        }
-        res = _f5_pathogenic_variant_enrichment(site, cfg)
+        res = _f5_pathogenic_variant_enrichment(site, ScoringConfig())
         assert res.value is None
-        assert "NaN" in res.reason
+        assert "not numeric" in res.reason
 
 
 class TestF6ClinicalVariantOverlap:

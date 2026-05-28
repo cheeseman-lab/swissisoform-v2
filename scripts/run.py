@@ -70,6 +70,7 @@ from swissisoform.modules.signalp import SignalPModule, precompute_signalp
 from swissisoform.modules.structure import StructureModule
 from swissisoform.modules.targetp import TargetPModule, precompute_targetp
 from swissisoform.modules.variant_intersection import VariantIntersectionModule
+from swissisoform.modules.varianteffect import VariantEffectModule
 from swissisoform.pipeline import AnnotationPipeline, UpstreamReference, run_sample
 
 logging.basicConfig(
@@ -104,6 +105,7 @@ COMBINED_PARQUET = OUT / "filtered" / "all_samples_combined.parquet"
 GNOMAD_DB = DATA / "gnomad" / "gnomad_v4.1_exome.parquet"
 CLINVAR_DB = DATA / "clinvar" / "variant_summary.parquet"
 COSMIC_DB = DATA / "cosmic" / "cosmic_variants.parquet"
+ALPHAMISSENSE_DB = DATA / "alphamissense" / "AlphaMissense_hg38.tsv.gz"
 GENEREF_JSON = DATA / "generef" / "generef.json"
 PHYLOP_BW = DATA / "zoonomia" / "cactus241way.phyloP.bw"
 PHASTCONS_BW = DATA / "zoonomia" / "hg38.phastCons100way.bw"
@@ -139,7 +141,7 @@ ALL_PROTEIN_MODULES = [
 ]
 ALL_SITE_MODULES = [
     "core_identity", "initiation_context", "conservation", "conservation_frame",
-    "variant_intersection", "plm_vep", "structure",
+    "variant_intersection", "plm_vep", "varianteffect", "structure",
 ]
 ALL_GENE_MODULES = ["generef"]
 
@@ -160,6 +162,7 @@ def build_config(min_cell_lines: int = 3) -> PipelineConfig:
         gnomad_db=GNOMAD_DB if GNOMAD_DB.exists() else None,
         clinvar_db=CLINVAR_DB if CLINVAR_DB.exists() else None,
         cosmic_db=COSMIC_DB if COSMIC_DB.exists() else None,
+        alphamissense_db=ALPHAMISSENSE_DB if ALPHAMISSENSE_DB.exists() else None,
     )
     cfg.conservation = ConservationConfig(
         phylop_bigwig=PHYLOP_BW if PHYLOP_BW.exists() else None,
@@ -484,9 +487,16 @@ def build_pipeline(cfg, preds, ref, genes, skip: set[str]) -> AnnotationPipeline
     if "conservation_frame" not in skip:
         site_mods.append(ConservationFrameModule(cfg))
     if "variant_intersection" not in skip:
-        site_mods.append(VariantIntersectionModule())
+        site_mods.append(VariantIntersectionModule(validator=validator))
     if "plm_vep" not in skip:
         site_mods.append(PLMVEPModule(cfg))
+    if "varianteffect" not in skip:
+        site_mods.append(
+            VariantEffectModule(
+                cfg,
+                alphamissense_db=cfg.clinical.alphamissense_db if cfg.clinical else None,
+            )
+        )
     if "structure" not in skip:
         site_mods.append(StructureModule(cfg))
 

@@ -15,9 +15,9 @@ driven by missing data apart from one driven by genuine non-evidence.
 
 Criteria that depend on modules whose caches are not yet populated
 (structure, PLM VEP) return ``None`` at evaluation time based on the
-annotation status.  F5 (VEP-based pathogenic enrichment) remains
-stubbed pending the intersection logic between PLM LLR scores and
-clinical variant positions.
+annotation status.  F5 scores per-variant damaging-effect evidence
+(ESM-2 ΔLLR + AlphaMissense) over the isoform-unique region, read from
+``varianteffect`` (built by ``VariantEffectModule``).
 
 Criteria
 --------
@@ -39,7 +39,8 @@ Functional impact:
     F2 Localization change (``comparison['localization']``)
     F3 Domain gain / loss (``comparison['interproscan']``)
     F4 Targeting change (``comparison['signalp']`` / ``comparison['targetp']``)
-    F5 Pathogenic variant enrichment (ESM1b) — stubbed (``vep`` not wired)
+    F5 Predicted-damaging variant enrichment in the unique region
+       (per-variant ESM-2 ΔLLR + AlphaMissense; ``varianteffect``)
     F6 Clinical variant overlap in unique region
        (``variant_intersection``)
 """
@@ -169,7 +170,15 @@ def _e3_phylop_coding_selection(
 def _e4_multi_cell_line(
     site: TranslationInitiationSite, cfg: ScoringConfig
 ) -> CriterionResult:
-    """E4: TIS detected in at least ``min_cell_lines`` cell lines."""
+    """E4: TIS detected in at least ``min_cell_lines`` cell lines.
+
+    Sensitivity note: with ``cfg.min_cell_lines == 1`` (used by single-sample
+    diagnostic presets) this criterion is degenerate — every TIS in the
+    dataset is detected in ≥1 cell line by construction, so E4 returns True
+    universally and contributes a constant +1 to every existence score. For
+    multi-sample / production runs raise it to 2-3 (the default is 3) so it
+    actually discriminates.
+    """
     n = len(site.expression)
     passed = n >= cfg.min_cell_lines
     return CriterionResult(
@@ -312,24 +321,24 @@ def _f2_localization_change(
 def _f3_domain_change(
     site: TranslationInitiationSite, cfg: ScoringConfig  # noqa: ARG001
 ) -> CriterionResult:
-    """F3: domain gain/loss, fires when an InterProScan hit lies inside the diff region.
+    """F3: domain gain/loss — fires when an InterProScan hit *starts in* the diff region.
 
-    The comparator's positional subset logic writes ``n_hits_in_diff_region``
-    per module onto ``site.comparison[module]``.  For extensions this
-    counts domain hits gained in the isoform's unique extension; for
-    truncations it counts domain hits lost from the canonical's removed
-    region.
+    The comparator's positional subset emits every domain whose interval
+    *overlaps* the diff region; for long domains a 1–2 aa boundary touch
+    counts as overlap, which would call a body domain a "domain gain in
+    the extension." This criterion tightens the rule to: the hit's
+    ``pos`` (its start residue) must fall inside the diff window. For
+    extensions the diff window is ``[diff_isoform_start, diff_isoform_end)``
+    in isoform-frame; for truncations it's ``[diff_canonical_start,
+    diff_canonical_end)`` in canonical-frame. The comparator's
+    ``hits_source_pane`` field tells us which side we're looking at.
 
     Returns ``None`` when:
 
     - the comparator data is missing (precompute not run), or
     - the IPS annotation's ``summary.status`` is not ``ok`` (precompute
-      run but the scan didn't actually complete — e.g. Nextflow combine
-      step failed).  In that case ``n_hits_in_diff_region`` would be
-      ``0`` and look like a measurement, but isn't one.
+      run but the scan didn't actually complete).
     """
-    # Guard: if the IPS scan itself didn't produce data, n_hits_in_diff_region
-    # will be 0 by construction — not a measurement. Surface as None.
     ips_ann = _annotation(site, "interproscan")
     if ips_ann is not None:
         status = ips_ann.get("summary", {}).get("status", "ok")
@@ -343,15 +352,41 @@ def _f3_domain_change(
         return CriterionResult(
             "F3_domain_change", None, "interproscan comparison missing"
         )
-    n = cmp.get("n_hits_in_diff_region")
-    if n is None:
+    hits = cmp.get("hits_in_diff_region")
+    if not isinstance(hits, list):
         return CriterionResult(
-            "F3_domain_change", None, "n_hits_in_diff_region unavailable"
+            "F3_domain_change", None, "hits_in_diff_region unavailable"
         )
+
+    dr = site.diff_region
+    pane = cmp.get("hits_source_pane")
+    if dr is None or pane is None:
+        return CriterionResult(
+            "F3_domain_change", None, "diff_region or source pane unavailable"
+        )
+    if pane == "isoform":
+        start, end = dr.isoform_start, dr.isoform_end
+    elif pane == "canonical":
+        start, end = dr.canonical_start, dr.canonical_end
+    else:
+        return CriterionResult(
+            "F3_domain_change", None, f"unknown hits_source_pane={pane!r}"
+        )
+    if start is None or end is None:
+        return CriterionResult(
+            "F3_domain_change", None, "diff coords missing for the source pane"
+        )
+
+    n_starting = sum(
+        1
+        for h in hits
+        if isinstance(h.get("pos"), int) and start <= h["pos"] < end
+    )
     return CriterionResult(
         "F3_domain_change",
-        n > 0,
-        f"n_interproscan_hits_in_diff_region={n}",
+        n_starting > 0,
+        f"n_interproscan_hits_starting_in_diff_region={n_starting} "
+        f"(of {len(hits)} overlapping)",
     )
 
 
@@ -397,90 +432,62 @@ def _f4_targeting_change(
 def _f5_pathogenic_variant_enrichment(
     site: TranslationInitiationSite, cfg: ScoringConfig
 ) -> CriterionResult:
-    """F5: pathogenic-variant pressure on a PLM-constrained unique region.
+    """F5: predicted-damaging variant enrichment in the isoform-unique region.
 
-    Combines two signals:
+    Scores per-variant, not on region means. Reads ``varianteffect`` (built by
+    ``VariantEffectModule``), which attaches two complementary predictors to
+    every clinical variant in the unique region:
 
-    1. ``variant_intersection`` — at least ``cfg.f5_min_pathogenic_in_unique``
-       pathogenic variants fall in the isoform-unique region.
-    2. ``plm_vep`` — the unique region's ESM-2 LLR is at least
-       ``cfg.f5_plm_unique_vs_shared_delta`` more constrained (more
-       negative) than the shared region, i.e. selection pressure on the
-       new residues themselves is at least as strong as on the canonical
-       baseline.
+    - ESM-2 masked-marginal ΔLLR = ``logP(alt) − logP(wt)`` at the variant's
+      residue, and
+    - AlphaMissense calibrated missense pathogenicity.
 
-    Returns ``None`` when either upstream module didn't produce data
-    (status not ``ok``, or required fields missing).
+    A variant counts as damaging when AlphaMissense calls it
+    ``likely_pathogenic`` **or** its ΔLLR ≤ ``cfg.f5_llr_damaging_threshold``.
+
+    Returns:
+        ``None`` when ``varianteffect`` didn't run or no scorable (missense,
+        predictor-available) variant falls in the unique region — there is
+        nothing to evaluate. ``True`` when at least
+        ``cfg.f5_min_pathogenic_in_unique`` such variants are damaging,
+        ``False`` when scorable variants exist but too few are damaging.
     """
-    vi = _annotation(site, "variant_intersection")
-    if not _status_ok(vi):
+    ve = _annotation(site, "varianteffect")
+    if not _status_ok(ve):
         return CriterionResult(
-            "F5_pathogenic_variant_enrichment", None, "variant_intersection not run"
+            "F5_pathogenic_variant_enrichment", None, "varianteffect not run"
         )
 
-    plm = _annotation(site, "plm_vep")
-    if not _status_ok(plm):
-        return CriterionResult(
-            "F5_pathogenic_variant_enrichment", None, "plm_vep not run"
-        )
-
-    n_path_unique_raw = vi.get("n_pathogenic_in_unique_region") if vi else None
-    if n_path_unique_raw is None:
-        return CriterionResult(
-            "F5_pathogenic_variant_enrichment",
-            None,
-            "n_pathogenic_in_unique_region unavailable",
-        )
+    n_scorable_raw = ve.get("n_scorable_in_unique") if ve else None
+    n_damaging_raw = ve.get("n_damaging_in_unique") if ve else None
     try:
-        n_path_unique = int(n_path_unique_raw)
+        n_scorable = int(n_scorable_raw) if n_scorable_raw is not None else 0
+        n_damaging = int(n_damaging_raw) if n_damaging_raw is not None else 0
     except (TypeError, ValueError):
         return CriterionResult(
             "F5_pathogenic_variant_enrichment",
             None,
-            f"n_pathogenic_in_unique_region not numeric ({n_path_unique_raw!r})",
+            f"varianteffect counts not numeric ({n_scorable_raw!r}, {n_damaging_raw!r})",
         )
 
-    llr_unique_raw = plm.get("mean_llr_unique_region") if plm else None
-    llr_shared_raw = plm.get("mean_llr_shared_region") if plm else None
-    if llr_unique_raw is None or llr_shared_raw is None:
+    if n_scorable == 0:
         return CriterionResult(
             "F5_pathogenic_variant_enrichment",
             None,
-            "plm_vep llr fields unavailable",
-        )
-    try:
-        llr_unique = float(llr_unique_raw)
-        llr_shared = float(llr_shared_raw)
-    except (TypeError, ValueError):
-        return CriterionResult(
-            "F5_pathogenic_variant_enrichment",
-            None,
-            f"plm_vep llr fields not numeric ({llr_unique_raw!r}, {llr_shared_raw!r})",
-        )
-    # NaN sentinel — float(‘nan’) compares False to everything
-    if not (llr_unique == llr_unique and llr_shared == llr_shared):
-        return CriterionResult(
-            "F5_pathogenic_variant_enrichment",
-            None,
-            "plm_vep llr fields are NaN",
+            "no scorable missense variants in unique region",
         )
 
-    has_pathogenic = n_path_unique >= cfg.f5_min_pathogenic_in_unique
-    # LLR is more negative when more constrained. Require
-    # ``llr_unique <= llr_shared - delta``. The default delta=0 captures
-    # "unique region is at least as constrained as shared" — deliberately
-    # permissive for the initial rollout. Tighten f5_plm_unique_vs_shared_delta
-    # in ScoringConfig (e.g. 0.5–1.0) to demand strict enrichment.
-    plm_more_constrained = llr_unique <= llr_shared - cfg.f5_plm_unique_vs_shared_delta
-
-    passed = bool(has_pathogenic and plm_more_constrained)
+    passed = n_damaging >= cfg.f5_min_pathogenic_in_unique
+    n_am_path = ve.get("n_am_pathogenic_in_unique")
+    mean_delta = ve.get("mean_delta_llr_unique")
+    mean_delta_str = f"{mean_delta:.2f}" if isinstance(mean_delta, (int, float)) else "n/a"
     return CriterionResult(
         "F5_pathogenic_variant_enrichment",
         passed,
         (
-            f"n_path_unique={n_path_unique} (≥{cfg.f5_min_pathogenic_in_unique}); "
-            f"llr_unique={llr_unique:.3f} vs llr_shared={llr_shared:.3f} "
-            f"(delta_min={cfg.f5_plm_unique_vs_shared_delta})"
+            f"n_damaging={n_damaging}/{n_scorable} in unique "
+            f"(≥{cfg.f5_min_pathogenic_in_unique}); "
+            f"n_am_pathogenic={n_am_path}; mean_ΔLLR={mean_delta_str}"
         ),
     )
 

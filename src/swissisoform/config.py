@@ -149,17 +149,15 @@ class ScoringConfig:
     # matches whatever the structure backend emits: Boltz-2 emits 0–1
     # (so use 0.70); AlphaFold-style backends emit 0–100 (use 70.0).
     f1_plddt_threshold: float = 0.70
-    # F5: minimum pathogenic variants in the unique region to consider
-    # the criterion at all (avoids scoring on isolated singletons).
+    # F5: minimum predicted-damaging variants in the isoform-unique region to
+    # call the criterion True. Damaging = AlphaMissense likely_pathogenic OR
+    # ESM-2 ΔLLR ≤ f5_llr_damaging_threshold (per-variant evidence from
+    # VariantEffectModule). Avoids scoring on isolated singletons.
     f5_min_pathogenic_in_unique: int = 1
-    # F5: require the PLM LLR over the unique region to be at least this
-    # much more constrained (i.e. more negative) than the shared region.
-    # 0.0 means "unique ≤ shared" suffices.
-    # F5: minimum LLR margin by which the unique region must be more
-    # constrained (more negative) than the shared region. 0.0 = "any
-    # constraint"; 0.5 demands a real enrichment and matches the
-    # production threshold we settled on after the 5-gene polish run.
-    f5_plm_unique_vs_shared_delta: float = 0.5
+    # F5: ESM-2 masked-marginal ΔLLR = logP(alt) − logP(wt) cutoff below which
+    # a substitution counts as damaging. −7.5 matches the threshold used for
+    # the analogous LLR in Brandes et al. (2023).
+    f5_llr_damaging_threshold: float = -7.5
 
 
 @dataclass
@@ -178,6 +176,11 @@ class ClinicalConfig:
         clinvar_db: Path to local ClinVar parquet built by
             ``scripts/setup/setup_databases.py clinvar``.
         cosmic_db: Path to local COSMIC parquet.
+        alphamissense_db: Path to the tabix-indexed AlphaMissense hg38 table
+            (``AlphaMissense_hg38.tsv.gz`` + ``.tbi``) built by
+            ``scripts/setup/setup_databases.py alphamissense``. Drives the
+            per-variant calibrated missense pathogenicity in
+            ``VariantEffectModule``.
         fetch_timeout: HTTP timeout (fallback paths only).
         max_retries: Max retry attempts (fallback paths only).
         retry_delay: Base delay for exponential backoff (fallback only).
@@ -189,6 +192,7 @@ class ClinicalConfig:
     clinvar_api_key: str = ""
     clinvar_db: Path | None = None
     cosmic_db: Path | None = None
+    alphamissense_db: Path | None = None
     fetch_timeout: int = 30
     max_retries: int = 3
     retry_delay: float = 1.0

@@ -529,11 +529,25 @@ def precompute_pepquery(
 def _regroup_by_gene(
     validated: set[str], peptide_to_genes: dict[str, set[str]]
 ) -> dict[str, set[str]]:
-    """Map ``validated`` peptide set back to ``{gene: {peptide, ...}}``."""
+    """Map ``validated`` peptide set back to ``{gene: {peptide, ...}}``.
+
+    Every gene that had peptides submitted to PepQuery2 is present in the
+    output — with an empty set if none of its peptides matched a confident
+    spectrum. This lets :class:`MassSpecModule` distinguish "PepQuery ran but
+    found no MS evidence" (the gene IS in the dict, validated count is 0)
+    from "PepQuery never queried this gene" (the gene is NOT in the dict).
+    Without this guarantee, queried-but-unvalidated genes look identical to
+    unqueried ones and E6 incorrectly reports ``None`` instead of ``False``.
+    """
     out: dict[str, set[str]] = {}
+    # Initialize every queried gene with an empty set so it shows up in the
+    # output even when PepQuery validated zero of its peptides.
+    for genes in peptide_to_genes.values():
+        for gene in genes:
+            out.setdefault(gene, set())
     for pep in validated:
         for gene in peptide_to_genes.get(pep, ()):
-            out.setdefault(gene, set()).add(pep)
+            out[gene].add(pep)
     return out
 
 
