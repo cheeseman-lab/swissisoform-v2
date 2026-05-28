@@ -1,0 +1,165 @@
+/* SwissIsoform v2 site styling — Tailwind handles layout; this file
+   carries the things Tailwind can't (or shouldn't) express inline:
+   evidence-grid cells, ORF-type chip colors, line-clamp helpers. */
+
+/* ----- Evidence grid cells ------------------------------------------- */
+
+.ev-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem 0.25rem;
+  border-radius: 0.25rem;
+  font-size: 11px;
+  line-height: 1.1;
+  text-align: center;
+  cursor: help;
+  border: 1px solid transparent;
+  transition: filter 0.1s;
+}
+
+.ev-cell:hover {
+  filter: brightness(0.95);
+}
+
+.ev-cell .ev-label {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.ev-cell .ev-state {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  margin-top: 1px;
+}
+
+.ev-true {
+  background: #dcfce7;
+  color: #14532d;
+  border-color: #86efac;
+}
+
+.ev-false {
+  background: #fee2e2;
+  color: #7f1d1d;
+  border-color: #fca5a5;
+}
+
+.ev-none {
+  background: #f1f5f9;
+  color: #475569;
+  border-color: #e2e8f0;
+}
+
+/* ----- ORF-type chips ------------------------------------------------- */
+
+.orf-chip {
+  border: 1px solid currentColor;
+  background: white;
+}
+
+.orf-extended    { color: #1e40af; background: #dbeafe; border-color: #93c5fd; }
+.orf-truncated   { color: #9a3412; background: #ffedd5; border-color: #fdba74; }
+.orf-uorf        { color: #6b21a8; background: #f3e8ff; border-color: #d8b4fe; }
+.orf-internal    { color: #115e59; background: #ccfbf1; border-color: #5eead4; }
+.orf-novel       { color: #831843; background: #fce7f3; border-color: #f9a8d4; }
+.orf-annotated   { color: #1f2937; background: #e5e7eb; border-color: #d1d5db; }
+
+/* ----- Line clamp (used on gene cards) ------------------------------- */
+
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ----- Mol* viewer frame --------------------------------------------- */
+
+.molstar-frame {
+  border: 1px solid #e2e8f0;
+  border-radius: 0.375rem;
+  overflow: hidden;
+  background: #0f172a;
+}
+
+/* ── V2 isoform page ── */
+
+.iso-shell { max-width: 1100px; margin: 0 auto; padding: 16px; }
+.iso-head h1 { margin-bottom: 0; }
+.iso-head .subtitle { color: #666; margin-top: 4px; }
+.iso-head .meta { font-size: 14px; color: #444; }
+
+.pinned-graphs {
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 12px;
+  margin: 16px 0;
+  background: #fafbfc;
+}
+.pinned-graphs .plotly-graph { width: 100%; min-height: 320px; margin-top: 8px; }
+.overlay-toggles { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; }
+.overlay-toggles label { display: inline-flex; align-items: center; gap: 6px; color: #444; }
+
+.synthesis {
+  border-left: 4px solid #2563eb;
+  padding: 8px 16px;
+  background: #f8faff;
+  margin: 16px 0;
+}
+.syn-headline { margin: 4px 0 8px; }
+.syn-narrative { line-height: 1.55; }
+.syn-findings { margin: 8px 0; padding-left: 22px; }
+.syn-caveats { color: #666; font-size: 13px; }
+
+.tab-strip {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #ddd;
+  margin-top: 24px;
+  overflow-x: auto;
+}
+.tab-strip .tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  padding: 8px 14px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #444;
+  white-space: nowrap;
+}
+.tab-strip .tab[aria-selected="true"] {
+  background: #fff;
+  border-color: #ddd;
+  color: #000;
+  font-weight: 600;
+  border-radius: 6px 6px 0 0;
+}
+
+.tab-body { padding: 16px 4px; }
+.reading-pass-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.reading-pass-block {
+  border: 1px solid #e7e7e7;
+  border-radius: 6px;
+  padding: 10px 14px;
+  background: #fff;
+}
+.reading-pass-block h3 { margin: 0 0 6px; font-size: 14px; color: #555; }
+.rp-headline { margin: 4px 0; }
+.rp-summary { line-height: 1.5; color: #222; }
+.rp-meta { font-size: 12px; color: #777; margin-top: 8px; }
+
+.empty { color: #888; font-style: italic; }
+.placeholder { color: #999; font-style: italic; padding: 8px 0; }
+.crumbs { font-size: 13px; color: #666; margin-bottom: 8px; }
+.crumbs a { color: #2563eb; text-decoration: none; }
+.crumb-current { color: #000; font-weight: 600; }
