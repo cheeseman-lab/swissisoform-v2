@@ -207,6 +207,9 @@ def _build_isoform(row: pd.Series) -> dict[str, Any]:
         "scoring": _build_scoring(row),
         "key_metrics": _build_key_metrics(row),
         "pathogenic_variants_in_unique": _build_pathogenic_in_unique(row),
+        # V2: raw columns the modality slicer reaches into; kept under _raw so
+        # the existing per-gene JSON files surface identical user-facing keys.
+        "_raw": {col: _to_native(row[col]) for col in row.index},
     }
 
 
@@ -406,6 +409,141 @@ def main() -> None:
     if args.variants_long_out is not None:
         n = write_variants_long(args.parquet, args.variants_long_out)
         print(f"Wrote {n} variant rows → {args.variants_long_out}")
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# V2 modality slicer — turns a full isoform record into the slim shape the
+# reading-pass LLM consumes. Pure function; no I/O.
+# ──────────────────────────────────────────────────────────────────────────
+
+MODALITY_CRITERIA: dict[str, dict[str, list[str]]] = {
+    "cell_lines": {
+        "existence": ["E3_expression_significance", "E4_expression_replicates"],
+        "functional": [],
+    },
+    "conservation": {
+        "existence": ["E1_primate_frame_conservation", "E2_mammalian_frame_conservation"],
+        "functional": [],
+    },
+    "variants": {
+        "existence": ["E5_clinical_variants_exist"],
+        "functional": ["F5_pathogenic_variant_enrichment"],
+    },
+    "mass_spec": {
+        "existence": ["E6_mass_spec"],
+        "functional": [],
+    },
+    "structure": {
+        "existence": [],
+        "functional": ["F1_pLDDT_diff_region", "F2_structural_divergence"],
+    },
+    "domains_motifs": {
+        "existence": [],
+        "functional": ["F3_domain_gain_loss", "F6_initiation_context"],
+    },
+    "localization": {
+        "existence": [],
+        "functional": ["F4_localization_change"],
+    },
+}
+
+# Modality → list of raw parquet column prefixes whose values feed the LLM as evidence.
+# We match by prefix so renames within a module don't break the slicer immediately.
+MODALITY_RAW_PREFIXES: dict[str, tuple[str, ...]] = {
+    "cell_lines": ("expr_", "ribo_pvalue", "fisher_qvalue", "tis_pvalue"),
+    "conservation": (
+        "isoform_conservation_phylop_",
+        "isoform_conservation_phastcons_",
+        "isoform_conservation_frame_",
+    ),
+    "variants": (
+        "isoform_variant_intersection_n_",
+        "isoform_varianteffect_n_",
+        "isoform_varianteffect_mean_",
+    ),
+    "mass_spec": ("isoform_massspec_validated_", "isoform_massspec_n_"),
+    "structure": ("isoform_structure_", "cmp_structure_"),
+    "domains_motifs": ("isoform_interproscan_n_", "isoform_motifs_n_", "cmp_interproscan_n_"),
+    "localization": ("canonical_localization_", "isoform_localization_", "cmp_localization_"),
+}
+
+
+def _pick_criteria(scoring: dict[str, Any], names: list[str]) -> list[dict[str, Any]]:
+    criteria = (scoring or {}).get("criteria") or {}
+    out: list[dict[str, Any]] = []
+    for name in names:
+        entry = criteria.get(name)
+        if entry is None:
+            continue
+        out.append(
+            {
+                "name": name,
+                "value": entry.get("value"),
+                "reason": entry.get("reason"),
+            }
+        )
+    return out
+
+
+def _pick_raw(raw: dict[str, Any], prefixes: tuple[str, ...]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for k, v in (raw or {}).items():
+        if any(k.startswith(p) or k == p for p in prefixes):
+            out[k] = v
+    return out
+
+
+def slice_modality(isoform_record: dict[str, Any], modality: str, *, axis: str) -> dict[str, Any]:
+    """Build the per-(isoform, modality, axis) LLM input record.
+
+    Args:
+        isoform_record: A full per-isoform record (one entry from
+            ``build_gene_record(...)["isoforms"]``) with an additional
+            ``"_raw"`` dict mirroring the parquet row.
+        modality: One of ``MODALITY_CRITERIA``.
+        axis: ``"existence"`` or ``"functional"``.
+
+    Returns:
+        A slim dict carrying isoform identity + the cited criteria for this
+        axis + the modality-relevant raw evidence + per-variant data for the
+        variants modality. ``axis_unavailable`` is True when the modality has
+        no criteria on the requested axis.
+    """
+    if modality not in MODALITY_CRITERIA:
+        raise KeyError(f"Unknown modality: {modality!r}")
+    if axis not in ("existence", "functional"):
+        raise ValueError(f"axis must be existence|functional, got {axis!r}")
+
+    iso_block = {
+        "tis_id": isoform_record.get("tis_id"),
+        "gene_name": (isoform_record.get("gene") or {}).get("name"),
+        "orf_type": isoform_record.get("orf_type"),
+        "differential_sequence": isoform_record.get("differential_sequence"),
+        "diff_space": isoform_record.get("diff_space"),
+        "isoform_length_aa": isoform_record.get("isoform_length_aa"),
+        "canonical_length_aa": isoform_record.get("canonical_length_aa"),
+    }
+
+    names = MODALITY_CRITERIA[modality][axis]
+    criteria = _pick_criteria(isoform_record.get("scoring") or {}, names)
+    evidence = _pick_raw(isoform_record.get("_raw") or {}, MODALITY_RAW_PREFIXES[modality])
+
+    # Variants modality also gets the pathogenic list, regardless of axis.
+    if modality == "variants":
+        evidence["pathogenic_variants_in_unique"] = list(
+            isoform_record.get("pathogenic_variants_in_unique") or []
+        )
+
+    out: dict[str, Any] = {
+        "modality": modality,
+        "axis": axis,
+        "isoform": iso_block,
+        "criteria": criteria,
+        "evidence": evidence,
+    }
+    if not names:
+        out["axis_unavailable"] = True
+    return out
 
 
 if __name__ == "__main__":
