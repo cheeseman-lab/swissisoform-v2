@@ -1,0 +1,143 @@
+"""Smoke tests for the SwissIsoform v2 Flask viewer.
+
+Requires the cheeseman_12gene parquet to be visible at
+``website/data/all_paired.parquet`` (either real file or a symlink — the
+website README documents the layout). Tests skip cleanly if it isn't there.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+WEBSITE_SRC = REPO_ROOT / "website" / "src"
+WEBSITE_DATA = REPO_ROOT / "website" / "data"
+
+
+@pytest.fixture(scope="module")
+def client():
+    """Spin up the Flask test client pointed at website/data."""
+    if not (WEBSITE_DATA / "all_paired.parquet").exists():
+        pytest.skip("website/data/all_paired.parquet not present — populate per README")
+
+    # Make the website package importable without installing it.
+    if str(WEBSITE_SRC) not in sys.path:
+        sys.path.insert(0, str(WEBSITE_SRC))
+
+    os.environ["SWISSISOFORM_DATA_DIR"] = str(WEBSITE_DATA)
+
+    # Reset any cached load so the env var actually takes effect this run.
+    from swissisoform_site import data as data_mod
+
+    data_mod.load_all.cache_clear()
+    data_mod._structure_index.cache_clear()
+
+    from swissisoform_site.app import app
+
+    app.testing = True
+    return app.test_client()
+
+
+def test_healthz(client):
+    r = client.get("/healthz")
+    assert r.status_code == 200
+    assert r.get_json() == {"ok": True}
+
+
+def test_index_lists_a_known_gene(client):
+    r = client.get("/")
+    assert r.status_code == 200
+    body = r.data.decode()
+    assert "TRNT1" in body
+
+
+def test_gene_page_has_orf_chip(client):
+    r = client.get("/genes/TRNT1")
+    assert r.status_code == 200
+    body = r.data.decode()
+    assert "TRNT1" in body
+    # ORF-type chip class lands in the markup as `orf-<type>`.
+    assert "orf-truncated" in body or "orf-extended" in body or "orf-uorf" in body
+
+
+def test_gene_page_404(client):
+    r = client.get("/genes/nonexistent_gene_zzz")
+    assert r.status_code == 404
+
+
+def test_api_data_json(client):
+    r = client.get("/api/data.json")
+    assert r.status_code == 200
+    payload = json.loads(r.data)
+    # The cheeseman_12gene parquet ships with 12 genes.
+    assert len(payload) == 12
+    for gene in [
+        "CBX1",
+        "CDC34",
+        "CDKN1A",
+        "CSNK2A2",
+        "EIF2B1",
+        "FZR1",
+        "MAD2L1",
+        "SRSF2",
+        "TRIP13",
+        "TRNT1",
+        "UBE2D2",
+        "UBE2M",
+    ]:
+        assert gene in payload, f"missing gene in /api/data.json: {gene}"
+        rec = payload[gene]
+        assert "isoforms" in rec
+        assert isinstance(rec["isoforms"], list)
+
+
+def test_slugify_filter():
+    """The slugify Jinja filter must scrub ``:`` and ``.`` from tis_ids."""
+    if str(WEBSITE_SRC) not in sys.path:
+        sys.path.insert(0, str(WEBSITE_SRC))
+    from swissisoform_site.app import app
+
+    with app.app_context():
+        slug = app.jinja_env.filters["slugify"]("chr3:3129127:+:ATG:ENST00000434583.5")
+    assert ":" not in slug
+    assert "." not in slug
+    assert slug  # non-empty
+
+
+def test_transcript_skeleton_loaded_for_known_transcript():
+    """load_transcript_skeletons reads the V2 parquet and returns dict-by-transcript_id."""
+    from pathlib import Path
+
+    if str(WEBSITE_SRC) not in sys.path:
+        sys.path.insert(0, str(WEBSITE_SRC))
+    from swissisoform_site.data import load_transcript_skeletons
+
+    skel_path = Path("data/output/cheeseman_12gene/transcript_skeletons.parquet")
+    if not skel_path.exists():
+        pytest.skip("skeleton parquet not present")
+    sk = load_transcript_skeletons(skel_path)
+    assert len(sk) > 0
+    sample = next(iter(sk.values()))
+    assert sample.chrom.startswith("chr")
+    assert sample.strand in ("+", "-")
+    assert len(sample.exons) >= 1
+
+
+def test_llm_modality_for_isoform_returns_none_when_missing(tmp_path):
+    """llm_modality_for_isoform tolerates a missing JSON file."""
+    if str(WEBSITE_SRC) not in sys.path:
+        sys.path.insert(0, str(WEBSITE_SRC))
+    from swissisoform_site.data import llm_modality_for_isoform
+
+    out = llm_modality_for_isoform(
+        llm_dir=tmp_path,
+        tis_slug="chr1-100-ATG-ENST_A",
+        modality="variants",
+        axis="existence",
+    )
+    assert out is None
