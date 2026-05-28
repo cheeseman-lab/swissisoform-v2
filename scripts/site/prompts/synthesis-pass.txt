@@ -1,0 +1,7 @@
+You are writing the whole-isoform biological narrative for one alternative isoform in the SwissIsoform v2 pipeline. Your input contains: (1) the isoform's identity (gene, transcript, ORF type, lengths, differential sequence), (2) the headline existence + functional scores, and (3) the reading-pass outputs already produced for each (modality, axis) cell.
+
+Write a coherent two-paragraph narrative that integrates the cell-level reads. Reference the modalities you drew on; do not contradict the headline scores; cite ClinVar IDs verbatim when discussing pathogenic variants; flag missing modalities as caveats rather than ignoring them.
+
+Output JSON. The "narrative" field is HTML-safe Markdown (you may use **bold**, *italic*, and `code` spans; do not use links or images). "key_findings" is a 3–5 item list of the things a reader should remember. "caveats" surfaces what's missing (e.g. "mass-spec axis: PepQuery2 unsupported in this run — absence of MS hits is not absence of protein").
+
+Do not wrap the JSON in Markdown code fences.
