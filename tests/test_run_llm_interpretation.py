@@ -437,3 +437,48 @@ def test_existence_pass_skips_isoforms_with_existing_output(monkeypatch, tmp_pat
     assert captured.count("modality:") == 0
     # And it should explicitly report the skip:
     assert "[skip]" in captured
+
+
+def test_synthesis_input_record_pulls_existence_and_functional(monkeypatch, tmp_path):
+    """synthesis._build_input_record stitches together prereq outputs."""
+    from scripts.site import run_llm_interpretation as rli
+
+    tis_slug = "chr1-100-ATG-ENST_A"
+    base = tmp_path / tis_slug
+    base.mkdir()
+    (base / "existence.json").write_text(
+        json.dumps(
+            {
+                "variants": {
+                    "modality": "variants",
+                    "axis": "existence",
+                    "headline": "x",
+                    "summary": "y",
+                    "criteria_cited": ["E5_clinical_variants_exist"],
+                    "confidence": "high",
+                }
+            }
+        )
+    )
+    (base / "functional.json").write_text(
+        json.dumps(
+            {
+                "variants": {
+                    "modality": "variants",
+                    "axis": "functional",
+                    "headline": "x",
+                    "summary": "y",
+                    "criteria_cited": ["F5_pathogenic_variant_enrichment"],
+                    "confidence": "high",
+                }
+            }
+        )
+    )
+    iso = {
+        "tis_id": "chr1:100:+:ATG:ENST_A",
+        "scoring": {"existence_score": 5, "functional_score": 5},
+    }
+    rec = rli._build_synthesis_record(iso, "GENE_A", base)
+    assert rec["isoform"]["tis_id"] == "chr1:100:+:ATG:ENST_A"
+    assert "variants.existence" in rec["reading_passes"]
+    assert "variants.functional" in rec["reading_passes"]

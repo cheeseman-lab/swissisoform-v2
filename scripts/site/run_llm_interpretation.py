@@ -687,8 +687,79 @@ def _run_modality_pass(
     return 0 if n_ok == n_calls else 1
 
 
+def _build_synthesis_record(isoform: dict, gene_name: str, isoform_out_dir: Path) -> dict:
+    """Build the synthesis-pass input from disk-cached existence + functional outputs."""
+    reading_passes: dict[str, Any] = {}
+    for pass_name in ("existence", "functional"):
+        pp = isoform_out_dir / f"{pass_name}.json"
+        if not pp.exists():
+            continue
+        payload = json.loads(pp.read_text(encoding="utf-8"))
+        for modality, body in payload.items():
+            reading_passes[f"{modality}.{pass_name}"] = body
+    return {
+        "isoform": {
+            "tis_id": isoform.get("tis_id"),
+            "gene_name": gene_name,
+            "orf_type": isoform.get("orf_type"),
+            "differential_sequence": isoform.get("differential_sequence"),
+            "diff_space": isoform.get("diff_space"),
+            "isoform_length_aa": isoform.get("isoform_length_aa"),
+            "canonical_length_aa": isoform.get("canonical_length_aa"),
+        },
+        "scoring": isoform.get("scoring") or {},
+        "key_metrics": isoform.get("key_metrics") or {},
+        "reading_passes": reading_passes,
+    }
+
+
 def _run_synthesis_pass(records, spec, args, system_prompt, output_schema) -> int:
-    raise NotImplementedError("synthesis pass dispatcher is added in Task 7")
+    api_key = os.environ.get("ANTHROPIC_API_KEY") if not args.dry_run else "dry"
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY is not set. Export it or pass --dry-run.")
+
+    args.out.mkdir(parents=True, exist_ok=True)
+    n_ok = 0
+    n_calls = 0
+    for gene_name, gene_record in records.items():
+        for iso in gene_record.get("isoforms", []) or []:
+            tis_slug = _tis_slug(iso.get("tis_id"))
+            iso_dir = args.out / tis_slug
+            out_path = iso_dir / "synthesis.json"
+            # Idempotency: skip if output exists and not forced (matches the
+            # hoisted check in _run_modality_pass).
+            if out_path.exists() and not args.force:
+                if args.dry_run:
+                    print(f"[skip] {gene_name} {tis_slug}: synthesis.json exists")
+                continue
+            synthesis_record = _build_synthesis_record(iso, gene_name, iso_dir)
+            prompt = build_prompt(synthesis_record, system_prompt, output_schema)
+            n_calls += 1
+            if args.dry_run:
+                print(
+                    f"[{n_calls}] {gene_name} {tis_slug} synthesis input chars: {len(prompt.user)}"
+                )
+                continue
+            try:
+                response_text = call_llm(
+                    prompt,
+                    model=args.model,
+                    temperature=args.temperature,
+                    max_tokens=args.max_tokens,
+                    api_key=api_key,
+                )
+                payload = parse_response(response_text)
+                iso_dir.mkdir(parents=True, exist_ok=True)
+                out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
+                n_ok += 1
+                print(f"[{n_calls}] {tis_slug} OK")
+            except Exception as e:
+                print(f"[{n_calls}] {tis_slug} FAIL: {e}", file=sys.stderr)
+
+    if args.dry_run:
+        return 0
+    print(f"synthesis: {n_ok}/{n_calls} successful")
+    return 0 if n_ok == n_calls else 1
 
 
 if __name__ == "__main__":
