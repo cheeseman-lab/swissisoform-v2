@@ -524,21 +524,28 @@ MODALITIES_FOR_PAGE = [
 
 
 def _isoform_view(iso, gene):
-    """Adapter — turns an Isoform + GeneRecord into the dict the V2 template uses."""
+    """Adapter — turns an Isoform + GeneRecord into the dict the V2 template uses.
+
+    The V1 Isoform dataclass uses ``isoform_len`` / ``canonical_len`` and stashes
+    high_confidence flags in ``raw`` (the parquet row). The V2 template wants
+    ``isoform_length_aa`` / ``canonical_length_aa`` and explicit
+    ``*_high_confidence`` fields, so we translate here.
+    """
+    raw = getattr(iso, "raw", None) or {}
     return {
         "tis_id": iso.tis_id,
         "transcript_id": getattr(iso, "transcript_id", None),
         "gene_name": gene.name,
         "uniprot_id": getattr(gene, "uniprot_id", None),
         "orf_type": getattr(iso, "orf_type", None),
-        "isoform_length_aa": getattr(iso, "isoform_length_aa", None),
-        "canonical_length_aa": getattr(iso, "canonical_length_aa", None),
+        "isoform_length_aa": getattr(iso, "isoform_len", None),
+        "canonical_length_aa": getattr(iso, "canonical_len", None),
         "existence_score": getattr(iso, "existence_score", None),
         "existence_evaluable": getattr(iso, "existence_evaluable", None),
-        "existence_high_confidence": getattr(iso, "existence_high_confidence", None),
+        "existence_high_confidence": raw.get("isoform_scoring_existence_high_confidence"),
         "functional_score": getattr(iso, "functional_score", None),
         "functional_evaluable": getattr(iso, "functional_evaluable", None),
-        "functional_high_confidence": getattr(iso, "functional_high_confidence", None),
+        "functional_high_confidence": raw.get("isoform_scoring_functional_high_confidence"),
     }
 
 

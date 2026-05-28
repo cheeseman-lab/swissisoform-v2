@@ -11,6 +11,7 @@ import logging
 import math
 import os
 import re
+import types
 from pathlib import Path
 from typing import Any
 
@@ -27,11 +28,19 @@ from swissisoform_site.data import (
     FUNCTIONAL_CRITERIA,
     MODALITIES_FOR_PAGE,
     Isoform,
+    _isoform_view,
     data_dir,
     llm_for_isoform,
+    llm_modality_for_isoform,
+    llm_synthesis_for_isoform,
     load_all,
+    load_transcript_skeletons,
     tis_slug,
 )
+from swissisoform_site.plots import build_protein_figure, build_transcript_figure
+
+# Cell line samples used by the transcript figure's bottom panel.
+_CELL_LINE_SAMPLES = ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -147,6 +156,56 @@ def create_app() -> Flask:
             all_genes=sorted(genes.keys()),
         )
 
+    @app.get("/genes/<gene_name>/isoforms/<tis_slug_str>")
+    def isoform_page(gene_name: str, tis_slug_str: str) -> Any:
+        """Render the V2 per-isoform page.
+
+        Wires data + plot figure dicts + LLM JSONs into ``isoform.html``.
+        Returns 404 on unknown gene or tis_slug.
+        """
+        genes = load_all()
+        gene = genes.get(gene_name) or genes.get(gene_name.upper())
+        if gene is None:
+            abort(404)
+        iso = next(
+            (i for i in gene.isoforms if tis_slug(i.tis_id) == tis_slug_str),
+            None,
+        )
+        if iso is None:
+            abort(404)
+
+        data_dir_path = data_dir()
+        skeletons = load_transcript_skeletons(data_dir_path / "transcript_skeletons.parquet")
+        skeleton = skeletons.get(iso.transcript_id) if iso.transcript_id else None
+
+        llm_dir = data_dir_path / "llm"
+        synthesis = llm_synthesis_for_isoform(llm_dir=llm_dir, tis_slug=tis_slug_str)
+        llm_existence: dict[str, dict | None] = {}
+        llm_functional: dict[str, dict | None] = {}
+        for m in MODALITIES_FOR_PAGE:
+            llm_existence[m["key"]] = llm_modality_for_isoform(
+                llm_dir=llm_dir, tis_slug=tis_slug_str, modality=m["key"], axis="existence"
+            )
+            llm_functional[m["key"]] = llm_modality_for_isoform(
+                llm_dir=llm_dir, tis_slug=tis_slug_str, modality=m["key"], axis="functional"
+            )
+
+        transcript_fig = build_transcript_figure(
+            _make_transcript_adapter(iso, gene), skeleton, overlays={}
+        )
+        protein_fig = build_protein_figure(_make_protein_adapter(iso), overlays={})
+
+        return render_template(
+            "isoform.html",
+            isoform=_isoform_view(iso, gene),
+            modalities=MODALITIES_FOR_PAGE,
+            llm_existence=llm_existence,
+            llm_functional=llm_functional,
+            synthesis=synthesis,
+            transcript_figure_json=json.dumps(transcript_fig),
+            protein_figure_json=json.dumps(protein_fig),
+        )
+
     @app.get("/api/data.json")
     def api_data() -> Any:
         """Dump every gene record + its LLM blob as a single JSON document.
@@ -188,6 +247,138 @@ def create_app() -> Flask:
     _log_llm_coverage(load_all(), data_dir() / "llm", MODALITIES_FOR_PAGE)
 
     return app
+
+
+def _make_transcript_adapter(iso: Isoform, gene: Any) -> types.SimpleNamespace:
+    """Convert a V1 ``Isoform`` into the duck-typed input ``build_transcript_figure`` expects.
+
+    Pulls all sibling TIS on the same transcript and their per-cell-line
+    initiation-efficiency bars (log2-transformed, finite-only).
+    """
+    siblings = [s for s in gene.isoforms if s.transcript_id == iso.transcript_id]
+    all_tis = [
+        {"tis_id": s.tis_id, "genomic_pos": s.position, "orf_type": s.orf_type} for s in siblings
+    ]
+    cell_line_bars: dict[str, dict[str, float]] = {}
+    for s in siblings:
+        s_raw = getattr(s, "raw", None) or {}
+        bars: dict[str, float] = {}
+        for sample in _CELL_LINE_SAMPLES:
+            v = s_raw.get(f"expr_{sample}_initiation_efficiency")
+            if v is None:
+                continue
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(v) or v <= 0:
+                continue
+            bars[sample] = math.log2(v)
+        if bars:
+            cell_line_bars[s.tis_id] = bars
+    return types.SimpleNamespace(
+        focal_tis_id=iso.tis_id,
+        tis_id=iso.tis_id,
+        transcript_id=iso.transcript_id,
+        all_tis_on_transcript=all_tis,
+        cell_line_bars=cell_line_bars,
+    )
+
+
+def _make_protein_adapter(iso: Isoform) -> types.SimpleNamespace:
+    """Convert a V1 ``Isoform`` into the duck-typed input ``build_protein_figure`` expects.
+
+    Variants come from ``iso.pathogenic_variants`` (already filtered to the
+    unique region). Domains and motifs come from raw parquet columns and
+    degrade to empty lists if the shape is unfamiliar.
+    """
+    raw = getattr(iso, "raw", None) or {}
+
+    domains: list[dict[str, Any]] = []
+    # ``raw`` values can be numpy arrays — their truthiness is ambiguous so we
+    # check ``is None`` explicitly instead of ``or []``.
+    ips_hits = raw.get("isoform_interproscan_hits")
+    if ips_hits is None:
+        ips_hits = []
+    try:
+        for h in list(ips_hits)[:30]:
+            if not isinstance(h, dict):
+                continue
+            start = h.get("start", h.get("pos"))
+            end = h.get("end")
+            if start is None or end is None:
+                continue
+            domains.append(
+                {
+                    "name": (
+                        h.get("name")
+                        or h.get("interpro_description")
+                        or h.get("description")
+                        or h.get("db")
+                        or "domain"
+                    ),
+                    "start": int(start),
+                    "end": int(end),
+                }
+            )
+    except (TypeError, ValueError):
+        domains = []
+
+    motifs: list[dict[str, Any]] = []
+    motif_hits = raw.get("isoform_motifs_hits")
+    if motif_hits is None:
+        motif_hits = []
+    try:
+        for m in list(motif_hits)[:30]:
+            if not isinstance(m, dict):
+                continue
+            start = m.get("start", m.get("pos"))
+            if start is None:
+                continue
+            end = m.get("end", start)
+            motifs.append(
+                {
+                    "name": m.get("name", "motif"),
+                    "start": int(start),
+                    "end": int(end),
+                }
+            )
+    except (TypeError, ValueError):
+        motifs = []
+
+    variants: list[dict[str, Any]] = []
+    for v in getattr(iso, "pathogenic_variants", []) or []:
+        if not isinstance(v, dict):
+            continue
+        pos = v.get("protein_pos")
+        if pos is None:
+            pos = v.get("isoform_protein_pos")
+        if pos is None:
+            continue
+        try:
+            pos_int = int(float(pos))
+        except (TypeError, ValueError):
+            continue
+        variants.append(
+            {
+                "variant_id": v.get("variant_id") or v.get("id") or "?",
+                "protein_pos": pos_int,
+                "hgvsp": v.get("hgvsp"),
+                "clinical_significance": v.get("clinical_significance"),
+            }
+        )
+
+    return types.SimpleNamespace(
+        tis_id=iso.tis_id,
+        orf_type=iso.orf_type,
+        diff_space=getattr(iso, "diff_space", None),
+        differential_sequence=getattr(iso, "differential_sequence", "") or "",
+        isoform_length_aa=getattr(iso, "isoform_len", 0) or 0,
+        canonical_length_aa=getattr(iso, "canonical_len", 0) or 0,
+        variants_in_unique=variants,
+        domains=domains,
+        motifs=motifs,
+    )
 
 
 def _isoform_to_dict(iso: Isoform) -> dict[str, Any]:

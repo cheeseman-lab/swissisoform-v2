@@ -141,3 +141,40 @@ def test_llm_modality_for_isoform_returns_none_when_missing(tmp_path):
         axis="existence",
     )
     assert out is None
+
+
+# --------------------------------------------------------------------------- #
+# V2 isoform route (/genes/<gene>/isoforms/<tis_slug>)
+# --------------------------------------------------------------------------- #
+
+
+def test_isoform_route_returns_200_for_known_tis(client):
+    """The V2 route renders for every (gene, tis_id) in the parquet."""
+    import pandas as pd
+    from swissisoform_site.data import tis_slug as make_slug
+
+    df = pd.read_parquet(WEBSITE_DATA / "all_paired.parquet", columns=["gene_name", "tis_id"])
+    row = df.iloc[0]
+    r = client.get(f"/genes/{row['gene_name']}/isoforms/{make_slug(row['tis_id'])}")
+    assert r.status_code == 200
+
+
+def test_isoform_route_returns_404_for_unknown_tis(client):
+    """An unknown tis_slug under a known gene 404s."""
+    r = client.get("/genes/TRNT1/isoforms/not-a-real-slug")
+    assert r.status_code == 404
+
+
+def test_isoform_page_contains_graphs_and_synthesis_block(client):
+    """The rendered V2 page exposes the Plotly graph divs and the Synthesis block."""
+    import pandas as pd
+    from swissisoform_site.data import tis_slug as make_slug
+
+    df = pd.read_parquet(WEBSITE_DATA / "all_paired.parquet", columns=["gene_name", "tis_id"])
+    row = df.iloc[0]
+    r = client.get(f"/genes/{row['gene_name']}/isoforms/{make_slug(row['tis_id'])}")
+    assert r.status_code == 200
+    body = r.data
+    assert b"graph-transcript" in body
+    assert b"graph-protein" in body
+    assert b"Synthesis" in body
