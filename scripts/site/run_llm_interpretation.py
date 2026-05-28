@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -519,9 +520,10 @@ def main(argv: list[str] | None = None) -> int:
     if spec.requires_prereq:
         missing = _check_prereqs(records, args.out, spec.requires_prereq)
         if missing:
+            hint = "; then ".join(f"--pass {p}" for p in spec.requires_prereq)
             print(
                 f"{spec.name}: missing prereq outputs for {len(missing)} isoform(s); "
-                f"run --pass {' --pass '.join(spec.requires_prereq)} first.",
+                f"run {hint} first.",
                 file=sys.stderr,
             )
             return 2
@@ -605,8 +607,6 @@ def _run_default_pass(records, spec, args, system_prompt, output_schema) -> int:
 
 def _tis_slug(tis_id: str | None) -> str:
     """URL-safe form of tis_id (matches website slugify filter)."""
-    import re
-
     return re.sub(r"[:.]+", "-", tis_id or "unknown")
 
 
@@ -640,6 +640,15 @@ def _run_modality_pass(
     for gene_name, gene_record in records.items():
         for iso in gene_record.get("isoforms", []) or []:
             tis_slug = _tis_slug(iso.get("tis_id"))
+            out_filename = spec.output_filename_template.format(tis_slug=tis_slug)
+            out_path = args.out / out_filename
+            # Idempotency: skip the entire isoform if its output already exists
+            # (and not in --force). This applies in both real and dry-run modes —
+            # dry-run prints already-exist skips so the user can audit them.
+            if out_path.exists() and not args.force:
+                if args.dry_run:
+                    print(f"[skip] {gene_name} {tis_slug}: {out_path.name} exists")
+                continue
             out_dir = args.out / tis_slug
             out_dir.mkdir(parents=True, exist_ok=True)
             results: dict[str, Any] = {}
@@ -667,12 +676,8 @@ def _run_modality_pass(
                     print(f"[{n_calls}] {modality} FAIL: {e}", file=sys.stderr)
                     results[modality] = {"error": str(e)}
 
-            out_filename = spec.output_filename_template.format(tis_slug=tis_slug)
-            out_path = args.out / out_filename
             out_path.parent.mkdir(parents=True, exist_ok=True)
             if args.dry_run:
-                continue
-            if out_path.exists() and not args.force:
                 continue
             out_path.write_text(json.dumps(results, indent=2, ensure_ascii=False))
 

@@ -383,3 +383,57 @@ def test_synthesis_pass_refuses_without_prereqs(monkeypatch, tmp_path):
         ]
     )
     assert rc != 0  # missing existence / functional outputs
+
+
+def test_existence_pass_skips_isoforms_with_existing_output(monkeypatch, tmp_path, capsys):
+    """Re-running existence without --force is a no-op for isoforms that already have output."""
+    from scripts.site import run_llm_interpretation as rli
+
+    records_dir = tmp_path / "records"
+    records_dir.mkdir()
+    (records_dir / "GENE_A.json").write_text(
+        json.dumps(
+            {
+                "gene": {"name": "GENE_A"},
+                "isoforms": [
+                    {
+                        "tis_id": "chr1:100:+:ATG:ENST_A",
+                        "orf_type": "truncated",
+                        "differential_sequence": "M",
+                        "diff_space": "canonical",
+                        "isoform_length_aa": 50,
+                        "canonical_length_aa": 60,
+                        "alt_start_codon": "ATG",
+                        "kozak_context": "AAAA",
+                        "scoring": {"criteria": {}},
+                        "key_metrics": {},
+                        "pathogenic_variants_in_unique": [],
+                        "_raw": {},
+                    }
+                ],
+            }
+        )
+    )
+    out_dir = tmp_path / "out"
+    tis_slug = rli._tis_slug("chr1:100:+:ATG:ENST_A")
+    (out_dir / tis_slug).mkdir(parents=True)
+    (out_dir / tis_slug / "existence.json").write_text("{}")
+
+    rc = rli.main(
+        [
+            "--records",
+            str(records_dir),
+            "--out",
+            str(out_dir),
+            "--pass",
+            "existence",
+            "--dry-run",
+        ]
+    )
+    captured = capsys.readouterr().out
+    assert rc == 0
+    # With output present and --force absent, dry-run should NOT emit any
+    # "modality:" lines for this isoform — it skips entirely.
+    assert captured.count("modality:") == 0
+    # And it should explicitly report the skip:
+    assert "[skip]" in captured
