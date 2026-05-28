@@ -414,20 +414,33 @@ def main() -> None:
 # ──────────────────────────────────────────────────────────────────────────
 # V2 modality slicer — turns a full isoform record into the slim shape the
 # reading-pass LLM consumes. Pure function; no I/O.
+#
+# Criterion names come from `src/swissisoform/modules/scoring.py`
+# (EXISTENCE_CRITERIA = E1..E6, FUNCTIONAL_CRITERIA = F1..F6). Axis is strict:
+# E* lives on the existence axis, F* on the functional axis. The "variants"
+# modality is a special case — both F5_pathogenic_variant_enrichment and
+# F6_clinical_variant_overlap are functional, so its existence axis is empty.
 # ──────────────────────────────────────────────────────────────────────────
 
 MODALITY_CRITERIA: dict[str, dict[str, list[str]]] = {
     "cell_lines": {
-        "existence": ["E3_expression_significance", "E4_expression_replicates"],
+        "existence": ["E4_multi_cell_line", "E5_initiation_efficiency"],
         "functional": [],
     },
     "conservation": {
-        "existence": ["E1_primate_frame_conservation", "E2_mammalian_frame_conservation"],
+        "existence": [
+            "E1_primate_conservation",
+            "E2_mammalian_conservation",
+            "E3_phylop_coding_selection",
+        ],
         "functional": [],
     },
     "variants": {
-        "existence": ["E5_clinical_variants_exist"],
-        "functional": ["F5_pathogenic_variant_enrichment"],
+        "existence": [],
+        "functional": [
+            "F5_pathogenic_variant_enrichment",
+            "F6_clinical_variant_overlap",
+        ],
     },
     "mass_spec": {
         "existence": ["E6_mass_spec"],
@@ -435,15 +448,15 @@ MODALITY_CRITERIA: dict[str, dict[str, list[str]]] = {
     },
     "structure": {
         "existence": [],
-        "functional": ["F1_pLDDT_diff_region", "F2_structural_divergence"],
+        "functional": ["F1_structured_extension"],
     },
     "domains_motifs": {
         "existence": [],
-        "functional": ["F3_domain_gain_loss", "F6_initiation_context"],
+        "functional": ["F3_domain_change"],
     },
     "localization": {
         "existence": [],
-        "functional": ["F4_localization_change"],
+        "functional": ["F2_localization_change", "F4_targeting_change"],
     },
 }
 
@@ -461,9 +474,14 @@ MODALITY_RAW_PREFIXES: dict[str, tuple[str, ...]] = {
         "isoform_varianteffect_n_",
         "isoform_varianteffect_mean_",
     ),
-    "mass_spec": ("isoform_massspec_validated_", "isoform_massspec_n_"),
+    "mass_spec": ("isoform_massspec_", "cmp_massspec_"),
     "structure": ("isoform_structure_", "cmp_structure_"),
-    "domains_motifs": ("isoform_interproscan_n_", "isoform_motifs_n_", "cmp_interproscan_n_"),
+    "domains_motifs": (
+        "isoform_interproscan_",
+        "isoform_motifs_",
+        "cmp_interproscan_",
+        "cmp_motifs_",
+    ),
     "localization": ("canonical_localization_", "isoform_localization_", "cmp_localization_"),
 }
 
@@ -488,7 +506,7 @@ def _pick_criteria(scoring: dict[str, Any], names: list[str]) -> list[dict[str, 
 def _pick_raw(raw: dict[str, Any], prefixes: tuple[str, ...]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for k, v in (raw or {}).items():
-        if any(k.startswith(p) or k == p for p in prefixes):
+        if any(k.startswith(p) for p in prefixes):
             out[k] = v
     return out
 
