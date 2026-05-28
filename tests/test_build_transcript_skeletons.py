@@ -70,3 +70,59 @@ def test_unknown_transcript_id_is_silently_skipped(tmp_path: Path) -> None:
     gtf = _make_synthetic_gtf(tmp_path)
     skeletons = bts.build_skeletons(gtf, transcript_ids={"ENST_MISSING.1"})
     assert skeletons == {}
+
+
+def _make_minus_strand_gtf(tmp_path: Path) -> Path:
+    """Tiny GTF with one minus-strand transcript, 2 exons, one CDS."""
+    attrs = 'transcript_id "ENST_B.1"; gene_name "GENE_B";'
+    rows = [
+        ("exon", 1001, 1200),
+        ("exon", 1401, 1600),
+        ("CDS", 1051, 1200),
+        ("CDS", 1401, 1500),
+    ]
+    lines = [f"chr2\tHAVANA\t{f}\t{s}\t{e}\t.\t-\t.\t{attrs}" for f, s, e in rows]
+    gtf = tmp_path / "synthetic_minus.gtf"
+    gtf.write_text("\n".join(lines) + "\n")
+    return gtf
+
+
+def test_minus_strand_exons_are_plus_strand_sorted(tmp_path: Path) -> None:
+    gtf = _make_minus_strand_gtf(tmp_path)
+    sk = bts.build_skeletons(gtf, transcript_ids={"ENST_B.1"})["ENST_B.1"]
+    assert sk["strand"] == "-"
+    # Even on minus strand, exons are stored in plus-strand-sorted half-open form.
+    assert sk["exons"] == [(1000, 1200), (1400, 1600)]
+
+
+def test_multi_transcript_gtf_only_returns_requested(tmp_path: Path) -> None:
+    """Two transcripts present in GTF; only one is requested."""
+    gtf = tmp_path / "two.gtf"
+    gtf.write_text(
+        "\n".join(
+            [
+                'chr1\tHAVANA\texon\t101\t200\t.\t+\t.\ttranscript_id "WANTED.1"; gene_name "GA";',
+                'chr1\tHAVANA\texon\t301\t400\t.\t+\t.\ttranscript_id "WANTED.1"; gene_name "GA";',
+                'chr1\tHAVANA\texon\t101\t200\t.\t+\t.\ttranscript_id "DROPPED.1"; gene_name "GB";',
+                'chr1\tHAVANA\texon\t501\t600\t.\t+\t.\ttranscript_id "DROPPED.1"; gene_name "GB";',
+            ]
+        )
+        + "\n"
+    )
+    sk = bts.build_skeletons(gtf, transcript_ids={"WANTED.1"})
+    assert set(sk) == {"WANTED.1"}
+    assert sk["WANTED.1"]["exons"] == [(100, 200), (300, 400)]
+
+
+def test_length_aa_uses_spliced_cds(tmp_path: Path) -> None:
+    """length_aa is the spliced CDS / 3, not the genomic span / 3.
+
+    Synthetic GTF: exons 101-300, 401-600, 701-900; CDS 201-600 + 701-800.
+    Spliced CDS = (300-200) + (600-400) + (800-700) = 400 nt → 133 aa.
+    Genomic span = 800 - 200 = 600 → would be 200 aa (the bug).
+    """
+    gtf = _make_synthetic_gtf(tmp_path)
+    out = tmp_path / "skeletons.parquet"
+    bts.write_skeletons_parquet(gtf, transcript_ids={"ENST_A.1"}, out_path=out)
+    df = pd.read_parquet(out)
+    assert df.iloc[0]["length_aa"] == 133

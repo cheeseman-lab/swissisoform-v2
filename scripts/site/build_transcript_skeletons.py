@@ -59,6 +59,11 @@ def build_skeletons(gtf_path: Path, transcript_ids: Iterable[str]) -> dict[str, 
                     "cds_end": None,
                 },
             )
+            if entry["chrom"] != chrom or entry["strand"] != strand:
+                raise ValueError(
+                    f"Transcript {tx_id!r} has inconsistent chrom/strand across GTF rows: "
+                    f"existing {entry['chrom']}/{entry['strand']} vs new {chrom}/{strand}"
+                )
             # Coordinate conversion: GTF is 1-based inclusive → 0-based half-open.
             s, e = int(start) - 1, int(end)
             if feature == "exon":
@@ -81,9 +86,14 @@ def write_skeletons_parquet(gtf_path: Path, transcript_ids: Iterable[str], out_p
         length_nt = sum(e - s for s, e in entry["exons"])
         cds_start = entry["cds_start"]
         cds_end = entry["cds_end"]
-        length_aa = (
-            (cds_end - cds_start) // 3 if (cds_start is not None and cds_end is not None) else None
-        )
+        # length_aa is the spliced CDS / 3 — sum exon ∩ [cds_start, cds_end), NOT the
+        # genomic span (cds_end - cds_start), which would include intronic nucleotides
+        # and overstates length by 1-2 orders of magnitude on multi-exon transcripts.
+        if cds_start is not None and cds_end is not None:
+            cds_nt = sum(max(0, min(e, cds_end) - max(s, cds_start)) for s, e in entry["exons"])
+            length_aa = cds_nt // 3 if cds_nt > 0 else None
+        else:
+            length_aa = None
         rows.append(
             {
                 "transcript_id": tx_id,
@@ -116,6 +126,19 @@ def main() -> None:
     )
     parser.add_argument("--out", required=True, type=Path, help="Output parquet path.")
     args = parser.parse_args()
+
+    if not args.gtf.exists():
+        raise SystemExit(f"GTF not found: {args.gtf}")
+    if not args.parquet.exists():
+        raise SystemExit(f"Parquet not found: {args.parquet}")
+    import pyarrow.parquet as pq
+
+    schema_names = pq.read_schema(args.parquet).names
+    if "transcript_id" not in schema_names:
+        raise SystemExit(
+            f"Parquet at {args.parquet} has no 'transcript_id' column "
+            f"(found: {schema_names[:5]}{'...' if len(schema_names) > 5 else ''})"
+        )
 
     df = pd.read_parquet(args.parquet, columns=["transcript_id"])
     transcript_ids = set(df["transcript_id"].dropna().astype(str).tolist())
