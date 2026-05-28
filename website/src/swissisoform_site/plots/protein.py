@@ -49,7 +49,6 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
         }
 
     traces: list[dict[str, Any]] = []
-    shapes: list[dict[str, Any]] = []
 
     # Diff region shaded span
     traces.append(_shaded_span(1, diff_len, _DIFF_FILL, "diff region"))
@@ -70,7 +69,8 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
         }
     )
 
-    # Variant lollipops
+    # Variant lollipops — each variant gets a stem trace + a head trace; both named
+    # with the "variant " prefix so they toggle together via Plotly.restyle by name.
     if overlays.get("variants", True):
         for v in getattr(isoform, "variants_in_unique", []) or []:
             pos = v.get("protein_pos")
@@ -79,15 +79,26 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
             sig = (v.get("clinical_significance") or "").lower()
             is_path = "pathogenic" in sig
             color = _LOLLIPOP_COLOR_PATHOGENIC if is_path else _LOLLIPOP_COLOR_OTHER
-            tooltip = (
-                f"{v.get('variant_id', '?')}<br>"
-                f"{v.get('hgvsp', '')}<br>"
-                f"{v.get('clinical_significance', '')}"
-            )
+            vid = v.get("variant_id", "?")
+            tooltip = f"{vid}<br>{v.get('hgvsp', '')}<br>{v.get('clinical_significance', '')}"
+            # Stem: 2-point line trace, no markers — toggles with the head.
             traces.append(
                 {
                     "type": "scatter",
-                    "name": f"variant {v.get('variant_id', '?')}",
+                    "name": f"variant {vid} stem",
+                    "mode": "lines",
+                    "x": [pos, pos],
+                    "y": [0.5, 1.2],
+                    "line": {"color": color, "width": 1.5},
+                    "hoverinfo": "skip",
+                    "showlegend": False,
+                }
+            )
+            # Head: single-point marker, carries the hover tooltip.
+            traces.append(
+                {
+                    "type": "scatter",
+                    "name": f"variant {vid}",
                     "mode": "markers",
                     "x": [pos],
                     "y": [1.2],
@@ -95,17 +106,6 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
                     "hovertext": [tooltip],
                     "hoverinfo": "text",
                     "showlegend": False,
-                }
-            )
-            # Lollipop stem drawn as a layout shape so it doesn't pollute trace x arrays.
-            shapes.append(
-                {
-                    "type": "line",
-                    "x0": pos,
-                    "x1": pos,
-                    "y0": 0.5,
-                    "y1": 1.2,
-                    "line": {"color": color, "width": 1.5},
                 }
             )
 
@@ -162,7 +162,6 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
             },
             "height": 320,
             "margin": {"l": 50, "r": 20, "t": 50, "b": 40},
-            "shapes": shapes,
         },
     }
 

@@ -54,9 +54,41 @@ def test_diff_region_span_uses_canonical_length_for_truncation():
 
 def test_variants_drawn_as_lollipops_at_protein_positions():
     fig = pplot.build_protein_figure(_iso(), overlays={"variants": True})
-    variant_traces = [t for t in fig["data"] if t.get("name", "").startswith("variant")]
-    xs = sorted(x for t in variant_traces for x in t["x"])
+    # The head trace (single-point marker) is named "variant <id>" without the " stem" suffix.
+    head_traces = [
+        t
+        for t in fig["data"]
+        if t.get("name", "").startswith("variant") and " stem" not in t.get("name", "")
+    ]
+    xs = sorted(x for t in head_traces for x in t["x"])
     assert xs == [10, 24]
+
+
+def test_variants_overlay_off_hides_both_heads_and_stems():
+    """When variants overlay is off, neither stem nor head traces should appear."""
+    fig = pplot.build_protein_figure(_iso(), overlays={"variants": False})
+    variant_named = [t for t in fig["data"] if t.get("name", "").startswith("variant")]
+    assert variant_named == []
+
+
+def test_variant_stems_share_prefix_with_heads_for_toggle_compat():
+    """Stems and heads must share the 'variant ' name prefix so Task 13's JS toggles both."""
+    fig = pplot.build_protein_figure(_iso(), overlays={"variants": True})
+    variant_traces = [t for t in fig["data"] if t.get("name", "").startswith("variant ")]
+    head_count = sum(1 for t in variant_traces if " stem" not in t["name"])
+    stem_count = sum(1 for t in variant_traces if " stem" in t["name"])
+    # 2 variants in fixture → 2 heads + 2 stems = 4 traces, balanced.
+    assert head_count == 2
+    assert stem_count == 2
+
+
+def test_no_protein_length_returns_empty_figure_with_caption():
+    iso = _iso(iso_len=0, can_len=0)
+    fig = pplot.build_protein_figure(iso, overlays={})
+    assert fig["data"] == []
+    # The annotation text contains "length" somewhere.
+    annotations = fig.get("layout", {}).get("annotations", [])
+    assert any("length" in a.get("text", "").lower() for a in annotations)
 
 
 def test_domains_drawn_as_rectangles_in_separate_track():
