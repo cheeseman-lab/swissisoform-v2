@@ -20,7 +20,7 @@ def _two_row_parquet(tmp_path: Path) -> Path:
                         "variant_id": "ClinVar:1",
                         "source": "ClinVar",
                         "chrom": "chr1",
-                        "pos": 110,
+                        "genomic_pos": 110,
                         "ref": "G",
                         "alt": "A",
                         "hgvsp": "p.Leu1fs",
@@ -35,7 +35,7 @@ def _two_row_parquet(tmp_path: Path) -> Path:
                         "variant_id": "gnomAD:chr1-115-G-T",
                         "source": "gnomAD",
                         "chrom": "chr1",
-                        "pos": 115,
+                        "genomic_pos": 115,
                         "ref": "G",
                         "alt": "T",
                         "hgvsp": None,
@@ -108,7 +108,7 @@ def test_variants_long_schema_columns(tmp_path: Path) -> None:
         "variant_id",
         "source",
         "chrom",
-        "pos",
+        "genomic_pos",
         "ref",
         "alt",
         "hgvsp",
@@ -135,3 +135,54 @@ def test_variants_long_isoform_with_no_variants_yields_zero_rows(tmp_path: Path)
     df = pd.read_parquet(out)
     # GENE_B / chr2 had no variants — must not appear.
     assert (df["tis_id"] == "chr2:200:+:CTG:ENST_B").sum() == 0
+
+
+def test_effect_damaging_is_nullable_bool_dtype(tmp_path: Path) -> None:
+    """When the effect entry is missing, effect_damaging is NaN, not False."""
+    df = pd.DataFrame(
+        [
+            {
+                "tis_id": "chr1:1:+:ATG:T",
+                "gene_name": "G",
+                "isoform_variant_intersection_hits": [
+                    {
+                        "variant_id": "V1",
+                        "source": "gnomAD",
+                        "genomic_pos": 1,
+                        "ref": "A",
+                        "alt": "T",
+                    },
+                ],
+                "isoform_varianteffect_hits": [],
+            }
+        ]
+    )
+    src = tmp_path / "no_effects.parquet"
+    df.to_parquet(src, index=False)
+    out = tmp_path / "long.parquet"
+    ber.write_variants_long(src, out)
+    long_df = pd.read_parquet(out)
+    # nullable boolean — None is preserved, not coerced to False.
+    assert pd.isna(long_df["effect_damaging"].iloc[0])
+    assert str(long_df["effect_damaging"].dtype) == "boolean"
+
+
+def test_variants_long_real_parquet_smoke() -> None:
+    """Smoke test against the real cheeseman_12gene parquet if it's present."""
+    real = Path("data/output/cheeseman_12gene/all_paired.parquet")
+    if not real.exists():
+        pytest.skip("real parquet not present in this environment")
+    import tempfile
+
+    with tempfile.TemporaryDirectory(dir=".") as td:
+        out = Path(td) / "variants_long.parquet"
+        n = ber.write_variants_long(real, out)
+        assert n > 0
+        df = pd.read_parquet(out)
+        # genomic_pos must NOT be 100% null (the bug Critical #1 caught).
+        assert df["genomic_pos"].notna().sum() > 0
+        # variant_id and tis_id must always be present.
+        assert df["variant_id"].notna().all()
+        assert df["tis_id"].notna().all()
+        # effect_damaging must be nullable bool.
+        assert str(df["effect_damaging"].dtype) == "boolean"

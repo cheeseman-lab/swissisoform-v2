@@ -254,7 +254,7 @@ _VARIANTS_LONG_BASE_COLS = (
     "variant_id",
     "source",
     "chrom",
-    "pos",
+    "genomic_pos",
     "ref",
     "alt",
     "hgvsp",
@@ -282,6 +282,9 @@ def write_variants_long(parquet_path: Path, out_path: Path) -> int:
     Emits one row per ``(tis_id, variant_id)`` pair. Effect columns are joined
     on ``variant_id`` within each isoform; variants without an effect entry
     have null effect columns. Returns the number of rows written.
+
+    Effect rows with no matching intersection hit are dropped — the table is keyed
+    by intersection hits, not by effects.
     """
     df = pd.read_parquet(
         parquet_path,
@@ -318,8 +321,11 @@ def write_variants_long(parquet_path: Path, out_path: Path) -> int:
                 record[c] = _to_native(eff.get(c))
             rows.append(record)
 
+    out_df = pd.DataFrame(rows)
+    if "effect_damaging" in out_df.columns:
+        out_df["effect_damaging"] = out_df["effect_damaging"].astype("boolean")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rows).to_parquet(out_path, index=False)
+    out_df.to_parquet(out_path, index=False)
     return len(rows)
 
 
