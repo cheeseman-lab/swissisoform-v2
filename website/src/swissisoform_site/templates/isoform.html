@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}{{ isoform.gene_name }} · {{ isoform.tis_id }} · SwissIsoform V2{% endblock %}
+
+{% block content %}
+<main class="iso-shell">
+  <nav class="crumbs">
+    <a href="/">Index</a> /
+    <a href="/genes/{{ isoform.gene_name }}">{{ isoform.gene_name }}</a> /
+    <span class="crumb-current">{{ isoform.tis_id|slugify }}</span>
+  </nav>
+
+  <header class="iso-head">
+    <h1>{{ isoform.gene_name }} · {{ isoform.transcript_id or 'transcript?' }}</h1>
+    <p class="subtitle">
+      {{ isoform.tis_id }} · {{ (isoform.orf_type or '?')|upper }} ·
+      {{ isoform.isoform_length_aa or '?' }} aa
+      (canonical: {{ isoform.canonical_length_aa or '?' }} aa)
+    </p>
+    <p class="meta">
+      {% if isoform.uniprot_id %}
+        <a href="https://www.uniprot.org/uniprotkb/{{ isoform.uniprot_id }}/entry" target="_blank">
+          {{ isoform.uniprot_id }}
+        </a> ·
+      {% endif %}
+      E {{ isoform.existence_score if isoform.existence_score is not none else '?' }}/{{ isoform.existence_evaluable or '?' }}
+      {% if isoform.existence_high_confidence %}hc{% endif %}
+      · F {{ isoform.functional_score if isoform.functional_score is not none else '?' }}/{{ isoform.functional_evaluable or '?' }}
+      {% if isoform.functional_high_confidence %}hc{% endif %}
+    </p>
+  </header>
+
+  <!-- Pinned graphs -->
+  <section class="pinned-graphs">
+    <div class="overlay-toggles">
+      <label><input type="checkbox" data-overlay="variants" checked> variants</label>
+      <label><input type="checkbox" data-overlay="domains" checked> domains</label>
+      <label><input type="checkbox" data-overlay="motifs" checked> motifs</label>
+      <label><input type="checkbox" data-overlay="phylop"> phyloP</label>
+    </div>
+    <div id="graph-transcript" class="plotly-graph"></div>
+    <div id="graph-protein" class="plotly-graph"></div>
+  </section>
+
+  <!-- Synthesis narrative (open by default) -->
+  <section class="synthesis">
+    <h2>Synthesis</h2>
+    {% if synthesis %}
+    <p class="syn-headline"><strong>{{ synthesis.headline }}</strong></p>
+    <div class="syn-narrative">{{ synthesis.narrative_html or synthesis.narrative or '' | safe }}</div>
+    {% if synthesis.key_findings %}
+    <ul class="syn-findings">
+      {% for f in synthesis.key_findings %}<li>{{ f }}</li>{% endfor %}
+    </ul>
+    {% endif %}
+    {% if synthesis.caveats %}
+    <p class="syn-caveats"><em>{{ synthesis.caveats }}</em></p>
+    {% endif %}
+    {% else %}
+    <p class="empty">LLM synthesis not yet generated for this isoform.</p>
+    {% endif %}
+  </section>
+
+  <!-- Modality tabs -->
+  <nav class="tab-strip" role="tablist">
+    {% for m in modalities %}
+    <button class="tab" role="tab" data-tab="{{ m.key }}"
+            {% if loop.first %}aria-selected="true"{% endif %}>
+      {{ m.label }}
+    </button>
+    {% endfor %}
+  </nav>
+
+  <section class="tab-bodies">
+    {% for m in modalities %}
+    <div class="tab-body" data-tab-body="{{ m.key }}"
+         {% if not loop.first %}hidden{% endif %}>
+      <div class="reading-pass-grid">
+        <div class="reading-pass-block">
+          <h3>Existence read</h3>
+          {% set ex = llm_existence.get(m.key) %}
+          {% if ex %}
+            <p class="rp-headline"><strong>{{ ex.headline }}</strong></p>
+            <p class="rp-summary">{{ ex.summary }}</p>
+            <p class="rp-meta">{{ ex.criteria_cited|join(', ') }} · confidence: {{ ex.confidence }}</p>
+          {% elif m.has_existence %}
+            <p class="empty">Reading-pass summary not yet generated for this modality.</p>
+          {% else %}
+            <p class="empty">Existence axis: not applicable for this modality.</p>
+          {% endif %}
+        </div>
+        <div class="reading-pass-block">
+          <h3>Functional read</h3>
+          {% set fn = llm_functional.get(m.key) %}
+          {% if fn %}
+            <p class="rp-headline"><strong>{{ fn.headline }}</strong></p>
+            <p class="rp-summary">{{ fn.summary }}</p>
+            <p class="rp-meta">{{ fn.criteria_cited|join(', ') }} · confidence: {{ fn.confidence }}</p>
+          {% elif m.has_functional %}
+            <p class="empty">Reading-pass summary not yet generated for this modality.</p>
+          {% else %}
+            <p class="empty">Functional axis: not applicable for this modality.</p>
+          {% endif %}
+        </div>
+      </div>
+      <div class="raw-evidence">
+        {% include "_tab_" + m.key + ".html" ignore missing %}
+      </div>
+    </div>
+    {% endfor %}
+  </section>
+</main>
+
+<script>
+  const TRANSCRIPT_FIG = {{ transcript_figure_json|safe }};
+  const PROTEIN_FIG    = {{ protein_figure_json|safe }};
+  Plotly.newPlot("graph-transcript", TRANSCRIPT_FIG.data, TRANSCRIPT_FIG.layout, {responsive: true});
+  Plotly.newPlot("graph-protein",    PROTEIN_FIG.data,    PROTEIN_FIG.layout,    {responsive: true});
+</script>
+<script src="{{ url_for('static', filename='js/isoform_page.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}SwissIsoform v2{% endblock %}</title>
+  <meta name="description" content="{% block description %}SwissIsoform v2 — alternative protein isoforms from translation initiation sequencing, with evidence-axis scoring and per-isoform interpretation.{% endblock %}">
+
+  <!-- Tailwind CDN (no build step — fine for an internal viewer). -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Mol* viewer (CDN). -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/molstar@4/build/viewer/molstar.css">
+  <script src="https://cdn.jsdelivr.net/npm/molstar@4/build/viewer/molstar.js"></script>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/site.css') }}">
+
+  {% block head_extra %}{% endblock %}
+</head>
+<body class="bg-slate-50 text-slate-900 antialiased">
+
+  <header class="border-b border-slate-200 bg-white">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center gap-6">
+      <a href="{{ url_for('index') }}" class="flex items-baseline gap-2 hover:opacity-80">
+        <span class="font-semibold text-lg tracking-tight">SwissIsoform</span>
+        <span class="text-xs text-slate-500 font-mono">v2</span>
+      </a>
+
+      {% if all_genes %}
+      <nav class="ml-auto">
+        <label class="sr-only" for="gene-jump">Jump to gene</label>
+        <select
+          id="gene-jump"
+          class="text-sm border border-slate-300 rounded px-2 py-1 bg-white hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+          onchange="if(this.value) window.location.href = this.value;">
+          <option value="">Jump to gene…</option>
+          {% for g in all_genes %}
+            <option value="{{ url_for('gene_page', gene_name=g) }}">{{ g }}</option>
+          {% endfor %}
+        </select>
+      </nav>
+      {% endif %}
+
+      <nav class="ml-auto flex items-center gap-4 text-sm">
+        <a href="{{ url_for('index') }}" class="text-slate-600 hover:text-slate-900">Genes</a>
+        <a href="{{ url_for('api_data') }}" class="text-slate-600 hover:text-slate-900">JSON</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="max-w-6xl mx-auto px-4 py-6">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="border-t border-slate-200 mt-12 py-6">
+    <div class="max-w-6xl mx-auto px-4 text-xs text-slate-500 flex items-center justify-between">
+      <span>SwissIsoform v2 — alternative protein isoform annotation</span>
+      <a href="https://github.com/cheeseman-lab" target="_blank" rel="noopener" class="hover:text-slate-700">cheeseman-lab</a>
+    </div>
+  </footer>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>
