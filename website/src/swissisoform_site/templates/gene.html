@@ -1,0 +1,286 @@
+{% extends "base.html" %}
+{% block title %}{{ gene.name }} — SwissIsoform v2{% endblock %}
+{% block description %}{{ gene.name }} alternative isoforms — evidence axes, conservation, structure, variants, interpretation.{% endblock %}
+
+{% block content %}
+
+<nav class="text-xs text-slate-500 mb-3">
+  <a href="{{ url_for('index') }}" class="hover:text-slate-700">Genes</a>
+  <span class="mx-1">/</span>
+  <span class="text-slate-700">{{ gene.name }}</span>
+</nav>
+
+<header class="mb-6">
+  <div class="flex items-baseline gap-3 flex-wrap">
+    <h1 class="text-3xl font-semibold tracking-tight">{{ gene.name }}</h1>
+    {% if gene.uniprot_id %}
+      <a href="{{ gene.uniprot_url }}" target="_blank" rel="noopener"
+         class="text-sm font-mono text-indigo-600 hover:underline">UniProt {{ gene.uniprot_id }} ↗</a>
+    {% endif %}
+    <span class="text-sm text-slate-500">
+      {{ gene.isoforms|length }} alternative TIS · canonical {{ gene.canonical_len }} aa
+    </span>
+  </div>
+
+  {% if gene.function %}
+  <p class="mt-2 text-sm text-slate-700 max-w-3xl">{{ gene.function }}</p>
+  {% endif %}
+
+  {% if gene.location %}
+  <p class="mt-2 text-xs">
+    <span class="text-slate-500">Subcellular location:</span>
+    <span class="ml-1 inline-block px-2 py-0.5 bg-slate-100 rounded text-slate-700">{{ gene.location }}</span>
+  </p>
+  {% endif %}
+
+  {% if gene.llm and gene.llm.gene_summary %}
+  <aside class="mt-4 p-3 border border-indigo-100 bg-indigo-50/50 rounded text-sm text-slate-800 max-w-3xl">
+    {{ gene.llm.gene_summary }}
+  </aside>
+  {% endif %}
+</header>
+
+<!-- Isoform sections -->
+{% for iso in gene.isoforms %}
+{% set slug = iso.tis_id|slugify %}
+<section id="iso-{{ slug }}" class="mb-10 bg-white border border-slate-200 rounded-lg p-5">
+
+  <!-- Compact identity row -->
+  <div class="flex items-baseline justify-between flex-wrap gap-3 mb-3">
+    <div class="flex items-baseline gap-3 flex-wrap">
+      <h2 class="text-lg font-semibold">
+        <span class="orf-chip orf-{{ iso.orf_type }} text-xs px-2 py-0.5 rounded uppercase tracking-wide font-medium align-middle">{{ iso.orf_type }}</span>
+        <span class="ml-2">{{ iso.aa_len }} aa</span>
+      </h2>
+      <span class="text-xs text-slate-500">vs canonical {{ iso.canonical_len }} aa</span>
+    </div>
+    <span class="text-[11px] font-mono text-slate-500">{{ iso.tis_id }}</span>
+  </div>
+
+  <div class="text-xs text-slate-600 font-mono mb-2">
+    {{ iso.chrom }}:{{ iso.position }} {{ iso.strand }} · start {{ iso.start_codon }}
+    {% if iso.kozak_context %} · Kozak <span class="bg-slate-100 px-1 rounded">{{ iso.kozak_context }}</span>{% endif %}
+  </div>
+
+  {% if iso.differential_sequence %}
+  <div class="text-[11px] mb-4">
+    <span class="text-slate-500 uppercase tracking-wide">Differential sequence ({{ iso.diff_space }})</span>
+    <pre class="mt-1 p-2 bg-slate-50 border border-slate-200 rounded font-mono text-[11px] overflow-x-auto break-all whitespace-pre-wrap leading-snug">{{ iso.differential_sequence }}</pre>
+  </div>
+  {% endif %}
+
+  <!-- LLM narrative (per-isoform) -->
+  {% set llm = isoform_llm.get(iso.tis_id) %}
+  <div class="mb-5">
+    <h3 class="text-xs uppercase tracking-wide text-slate-500 mb-1">Interpretation</h3>
+    {% if llm %}
+      {% if llm.summary %}<p class="text-sm text-slate-800">{{ llm.summary }}</p>{% endif %}
+      {% if llm.narrative %}<p class="mt-2 text-sm text-slate-700">{{ llm.narrative }}</p>{% endif %}
+      {% if llm.interpretation %}
+        <p class="mt-2 text-sm text-slate-700">{{ llm.interpretation }}</p>
+      {% endif %}
+      {% if not llm.summary and not llm.narrative and not llm.interpretation %}
+        {# Fall back to dumping the whole blob compactly if the schema doesn't match #}
+        <pre class="text-xs bg-slate-50 border border-slate-200 rounded p-2 overflow-x-auto">{{ llm|tojson(indent=2) }}</pre>
+      {% endif %}
+    {% else %}
+      <p class="text-sm text-slate-400 italic">LLM interpretation not yet generated for this isoform.</p>
+    {% endif %}
+  </div>
+
+  <!-- Evidence grid: E1-E6 row above, F1-F6 row below -->
+  <div class="mb-5">
+    <h3 class="text-xs uppercase tracking-wide text-slate-500 mb-2">
+      Evidence
+      <span class="font-normal normal-case ml-1 text-slate-400">
+        existence {{ iso.existence_score }}/{{ iso.existence_evaluable }} ·
+        functional {{ iso.functional_score }}/{{ iso.functional_evaluable }}
+      </span>
+    </h3>
+    <div class="grid grid-cols-6 gap-1.5">
+      {% for key, label, full in existence_criteria %}
+        {% set val = iso.criteria.get(key) %}
+        {% set reason = iso.reasons.get(key, '') %}
+        <div class="ev-cell ev-{% if val is true %}true{% elif val is false %}false{% else %}none{% endif %}"
+             title="{{ full }} — {{ reason }}">
+          <div class="ev-label">{{ label }}</div>
+          <div class="ev-state">{% if val is true %}✓{% elif val is false %}✗{% else %}–{% endif %}</div>
+        </div>
+      {% endfor %}
+      {% for key, label, full in functional_criteria %}
+        {% set val = iso.criteria.get(key) %}
+        {% set reason = iso.reasons.get(key, '') %}
+        <div class="ev-cell ev-{% if val is true %}true{% elif val is false %}false{% else %}none{% endif %}"
+             title="{{ full }} — {{ reason }}">
+          <div class="ev-label">{{ label }}</div>
+          <div class="ev-state">{% if val is true %}✓{% elif val is false %}✗{% else %}–{% endif %}</div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Key metrics table -->
+  <div class="mb-5">
+    <h3 class="text-xs uppercase tracking-wide text-slate-500 mb-2">Key metrics</h3>
+    <table class="w-full text-xs border-collapse">
+      <tbody class="divide-y divide-slate-100">
+        <tr>
+          <td class="py-1.5 pr-3 text-slate-500 w-1/3">Localization</td>
+          <td class="py-1.5 font-mono">
+            {{ iso.localization_canonical or '—' }} →
+            <span class="{% if iso.localization_changed %}text-amber-600 font-semibold{% else %}text-slate-700{% endif %}">{{ iso.localization_isoform or '—' }}</span>
+            {% if iso.localization_changed %}<span class="ml-2 text-[10px] bg-amber-100 text-amber-800 px-1 rounded">changed</span>{% endif %}
+          </td>
+        </tr>
+        <tr>
+          <td class="py-1.5 pr-3 text-slate-500">PhyloP unique / shared</td>
+          <td class="py-1.5 font-mono">
+            {% if iso.phylop_unique is not none %}{{ "%.2f"|format(iso.phylop_unique) }}{% else %}—{% endif %} /
+            {% if iso.phylop_shared is not none %}{{ "%.2f"|format(iso.phylop_shared) }}{% else %}—{% endif %}
+            {% if iso.phylop_enrichment is not none %}
+              <span class="ml-2 text-slate-400">enrichment {{ "%.2f"|format(iso.phylop_enrichment) }}×</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <td class="py-1.5 pr-3 text-slate-500">pLDDT isoform / diff region</td>
+          <td class="py-1.5 font-mono">
+            {% if iso.plddt_isoform is not none %}{{ "%.2f"|format(iso.plddt_isoform) }}{% else %}—{% endif %} /
+            {% if iso.plddt_diffregion is not none %}{{ "%.2f"|format(iso.plddt_diffregion) }}{% else %}—{% endif %}
+          </td>
+        </tr>
+        <tr>
+          <td class="py-1.5 pr-3 text-slate-500">TM-score / RMSD</td>
+          <td class="py-1.5 font-mono">
+            {% if iso.tm_score is not none %}{{ "%.3f"|format(iso.tm_score) }}{% else %}—{% endif %} /
+            {% if iso.rmsd_global is not none %}{{ "%.2f"|format(iso.rmsd_global) }} Å{% else %}—{% endif %}
+          </td>
+        </tr>
+        <tr>
+          <td class="py-1.5 pr-3 text-slate-500">Variants (total / pathogenic in unique)</td>
+          <td class="py-1.5 font-mono">
+            {{ iso.n_variants_total if iso.n_variants_total is not none else '—' }} /
+            <span class="{% if iso.n_variants_pathogenic_unique %}text-rose-600 font-semibold{% endif %}">{{ iso.n_variants_pathogenic_unique if iso.n_variants_pathogenic_unique is not none else '—' }}</span>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Pathogenic variants in unique region -->
+  {% if iso.pathogenic_variants %}
+  <div class="mb-5">
+    <h3 class="text-xs uppercase tracking-wide text-slate-500 mb-2">
+      Pathogenic / likely-pathogenic variants in unique region ({{ iso.pathogenic_variants|length }})
+    </h3>
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs border-collapse">
+        <thead>
+          <tr class="text-left border-b border-slate-200 text-slate-500">
+            <th class="py-1.5 pr-3 font-normal">Variant</th>
+            <th class="py-1.5 pr-3 font-normal">AA change</th>
+            <th class="py-1.5 pr-3 font-normal">Consequence</th>
+            <th class="py-1.5 pr-3 font-normal">Significance</th>
+            <th class="py-1.5 pr-3 font-normal">Source</th>
+            <th class="py-1.5 pr-3 font-normal">Link</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          {% for v in iso.pathogenic_variants %}
+          <tr>
+            <td class="py-1.5 pr-3 font-mono">{{ v.variant_id or '—' }}</td>
+            <td class="py-1.5 pr-3 font-mono">
+              {% if v.aa_ref or v.aa_alt %}{{ v.aa_ref or '?' }}{{ v.protein_pos|int if v.protein_pos is not none else '?' }}{{ v.aa_alt or '?' }}{% else %}—{% endif %}
+            </td>
+            <td class="py-1.5 pr-3">{{ v.consequence or '—' }}</td>
+            <td class="py-1.5 pr-3">{{ v.clinical_significance or '—' }}</td>
+            <td class="py-1.5 pr-3">{{ v.source or '—' }}</td>
+            <td class="py-1.5 pr-3">
+              {% set meta = v.metadata or {} %}
+              {% set rs = meta.rs_id %}
+              {% set cvid = meta.hgvsp_canonical_hint or v.clinvar_id %}
+              {% if v.source == 'ClinVar' and cvid %}
+                <a href="https://www.ncbi.nlm.nih.gov/clinvar/variation/{{ cvid|int }}/" target="_blank" rel="noopener" class="text-indigo-600 hover:underline">ClinVar ↗</a>
+              {% elif rs %}
+                <a href="https://www.ncbi.nlm.nih.gov/snp/{{ rs }}/" target="_blank" rel="noopener" class="text-indigo-600 hover:underline">{{ rs }} ↗</a>
+              {% else %}—{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Mol* structure viewer -->
+  <div>
+    <h3 class="text-xs uppercase tracking-wide text-slate-500 mb-2">Structure</h3>
+    {% if iso.isoform_cif %}
+      <div id="molstar-{{ slug }}" class="molstar-frame" style="width:100%;height:480px;position:relative;"></div>
+      <div class="mt-2 text-[11px] text-slate-500">
+        Showing isoform AlphaFold/Boltz model. Highlighted residues {{ iso.diff_start + 1 }}–{{ iso.diff_end }} are
+        {% if iso.diff_space == 'isoform' %}the unique region (extension){% else %}the canonical region lost in this truncation — not visible on the isoform structure{% endif %}.
+        <a href="{{ url_for('structures', filename=iso.isoform_cif) }}" class="ml-1 text-indigo-600 hover:underline">download .cif ↗</a>
+      </div>
+      <script>
+        (function() {
+          if (typeof molstar === 'undefined') {
+            document.getElementById('molstar-{{ slug }}').innerHTML =
+              '<div class="p-4 text-xs text-slate-500">Mol* failed to load from CDN.</div>';
+            return;
+          }
+          window.swissisoformMolstar = window.swissisoformMolstar || {};
+          molstar.Viewer.create('molstar-{{ slug }}', {
+            layoutIsExpanded: false,
+            layoutShowControls: false,
+            layoutShowRemoteState: false,
+            layoutShowSequence: true,
+            layoutShowLog: false,
+            layoutShowLeftPanel: false,
+            viewportShowExpand: true,
+            viewportShowSelectionMode: false,
+            viewportShowAnimation: false,
+            pdbProvider: 'rcsb',
+            emdbProvider: 'rcsb'
+          }).then(function(viewer) {
+            window.swissisoformMolstar['{{ slug }}'] = viewer;
+            return viewer.loadStructureFromUrl(
+              {{ url_for('structures', filename=iso.isoform_cif)|tojson }},
+              'mmcif'
+            ).then(function() {
+              if (window.swissisoformHighlight) {
+                window.swissisoformHighlight(viewer,
+                  {{ (iso.diff_start + 1)|int }},
+                  {{ iso.diff_end|int }},
+                  {{ (iso.diff_space == 'isoform')|tojson }}
+                );
+              }
+            });
+          }).catch(function(err) {
+            console.error('molstar load failed', err);
+            document.getElementById('molstar-{{ slug }}').innerHTML =
+              '<div class="p-4 text-xs text-rose-600">Failed to load structure: ' + err.message + '</div>';
+          });
+        })();
+      </script>
+    {% else %}
+      <div class="p-4 border border-dashed border-slate-200 rounded text-xs text-slate-500 text-center">
+        Structure not available for this isoform.
+      </div>
+    {% endif %}
+  </div>
+
+  <a class="iso-detail-link inline-block mt-3 text-sm text-blue-600 hover:underline"
+     href="/genes/{{ gene.name }}/isoforms/{{ slug }}">
+    → View interactive evidence
+  </a>
+
+</section>
+{% endfor %}
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/molstar_setup.js') }}"></script>
+{% endblock %}
