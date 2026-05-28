@@ -462,6 +462,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Overwrite existing outputs in --out.",
     )
     parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument(
+        "--pass",
+        dest="pass_name",
+        default="default",
+        choices=sorted(PASS_REGISTRY),
+        help="Which LLM pass to run (default = V1 single-pass).",
+    )
     return parser
 
 
@@ -494,11 +501,62 @@ def _print_dry_run(gene: str, prompt: Prompt, model: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns process exit code."""
     args = _build_parser().parse_args(argv)
+    spec = PASS_REGISTRY[args.pass_name]
 
-    system_prompt = load_system_prompt()
-    output_schema = load_output_schema()
+    # V1 default-pass reads SYSTEM_PROMPT_PATH / OUTPUT_SCHEMA_PATH directly so tests
+    # that monkeypatch those constants keep working bit-identically. Other passes
+    # resolve their files relative to SYSTEM_PROMPT_PATH.parent (the prompts dir).
+    if spec.name == "default":
+        system_prompt = load_system_prompt()
+        output_schema = load_output_schema()
+    else:
+        prompts_root = SYSTEM_PROMPT_PATH.parent  # scripts/site/prompts/
+        system_prompt = load_system_prompt(prompts_root / spec.system_prompt_filename)
+        output_schema = load_output_schema(prompts_root / spec.output_schema_filename)
+
     records = _load_records_with_synthetic_fallback(args.records, args.gene, args.dry_run)
 
+    if spec.requires_prereq:
+        missing = _check_prereqs(records, args.out, spec.requires_prereq)
+        if missing:
+            print(
+                f"{spec.name}: missing prereq outputs for {len(missing)} isoform(s); "
+                f"run --pass {' --pass '.join(spec.requires_prereq)} first.",
+                file=sys.stderr,
+            )
+            return 2
+
+    if spec.iterates_modalities:
+        # build_evidence_records lives next to this script. When run as a file
+        # (python scripts/site/run_llm_interpretation.py), the scripts/ package
+        # isn't on sys.path; under pytest it is. Support both.
+        try:
+            from scripts.site.build_evidence_records import (
+                MODALITY_CRITERIA,
+                slice_modality,
+            )
+        except ModuleNotFoundError:
+            sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+            from scripts.site.build_evidence_records import (
+                MODALITY_CRITERIA,
+                slice_modality,
+            )
+
+        modalities = sorted(MODALITY_CRITERIA)
+        axis = spec.name  # "existence" or "functional"
+        return _run_modality_pass(
+            records, modalities, axis, spec, args, system_prompt, output_schema, slice_modality
+        )
+
+    if spec.name == "synthesis":
+        return _run_synthesis_pass(records, spec, args, system_prompt, output_schema)
+
+    # spec.name == "default" — V1 single-pass behavior
+    return _run_default_pass(records, spec, args, system_prompt, output_schema)
+
+
+def _run_default_pass(records, spec, args, system_prompt, output_schema) -> int:
+    """V1 single-pass per-gene loop. Preserved bit-identically from V1 main."""
     if args.dry_run:
         for gene_name, record in records.items():
             prompt = build_prompt(record, system_prompt, output_schema)
@@ -543,6 +601,89 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print()
     return 0
+
+
+def _tis_slug(tis_id: str | None) -> str:
+    """URL-safe form of tis_id (matches website slugify filter)."""
+    import re
+
+    return re.sub(r"[:.]+", "-", tis_id or "unknown")
+
+
+def _check_prereqs(records, out_dir: Path, prereqs: tuple[str, ...]) -> list[str]:
+    """Return tis_slugs missing any prereq output file."""
+    missing: list[str] = []
+    for _, gene_record in records.items():
+        for iso in gene_record.get("isoforms", []) or []:
+            tis_slug = _tis_slug(iso.get("tis_id"))
+            for prereq in prereqs:
+                pp = out_dir / tis_slug / f"{prereq}.json"
+                if not pp.exists():
+                    missing.append(tis_slug)
+                    break
+    return missing
+
+
+def _run_modality_pass(
+    records, modalities, axis, spec, args, system_prompt, output_schema, slice_modality
+) -> int:
+    """Per-(isoform, modality) dispatch loop for existence + functional passes."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY") if not args.dry_run else "dry"
+    if not api_key:
+        raise RuntimeError(
+            "ANTHROPIC_API_KEY is not set. Export it before running, or pass --dry-run."
+        )
+
+    args.out.mkdir(parents=True, exist_ok=True)
+    n_calls = 0
+    n_ok = 0
+    for gene_name, gene_record in records.items():
+        for iso in gene_record.get("isoforms", []) or []:
+            tis_slug = _tis_slug(iso.get("tis_id"))
+            out_dir = args.out / tis_slug
+            out_dir.mkdir(parents=True, exist_ok=True)
+            results: dict[str, Any] = {}
+            for modality in modalities:
+                modality_record = slice_modality(
+                    {**iso, "gene": {"name": gene_name}}, modality, axis=axis
+                )
+                prompt = build_prompt(modality_record, system_prompt, output_schema)
+                n_calls += 1
+                if args.dry_run:
+                    print(f"[{n_calls}] {gene_name} {tis_slug} modality: {modality} axis: {axis}")
+                    continue
+                try:
+                    response_text = call_llm(
+                        prompt,
+                        model=args.model,
+                        temperature=args.temperature,
+                        max_tokens=args.max_tokens,
+                        api_key=api_key,
+                    )
+                    payload = parse_response(response_text)
+                    results[modality] = payload
+                    n_ok += 1
+                except Exception as e:
+                    print(f"[{n_calls}] {modality} FAIL: {e}", file=sys.stderr)
+                    results[modality] = {"error": str(e)}
+
+            out_filename = spec.output_filename_template.format(tis_slug=tis_slug)
+            out_path = args.out / out_filename
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            if args.dry_run:
+                continue
+            if out_path.exists() and not args.force:
+                continue
+            out_path.write_text(json.dumps(results, indent=2, ensure_ascii=False))
+
+    if args.dry_run:
+        return 0
+    print(f"{spec.name}: {n_ok}/{n_calls} successful")
+    return 0 if n_ok == n_calls else 1
+
+
+def _run_synthesis_pass(records, spec, args, system_prompt, output_schema) -> int:
+    raise NotImplementedError("synthesis pass dispatcher is added in Task 7")
 
 
 if __name__ == "__main__":

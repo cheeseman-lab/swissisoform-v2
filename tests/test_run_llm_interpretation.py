@@ -295,3 +295,91 @@ def test_pass_default_uses_v1_system_prompt(mod):
     spec = mod.PASS_REGISTRY["default"]
     assert spec.system_prompt_filename == "system.txt"
     assert spec.output_filename_template == "{gene}.json"
+
+
+# ── Existence + synthesis pass dispatch ───────────────────────────────────
+
+
+def test_existence_pass_dry_run_emits_one_call_per_modality(monkeypatch, tmp_path, capsys):
+    """Existence pass iterates over 7 modalities × N isoforms."""
+    from scripts.site import run_llm_interpretation as rli
+
+    records_dir = tmp_path / "records"
+    records_dir.mkdir()
+    (records_dir / "GENE_A.json").write_text(
+        json.dumps(
+            {
+                "gene": {
+                    "name": "GENE_A",
+                    "uniprot_id": None,
+                    "function": None,
+                    "subcellular_location": None,
+                },
+                "isoforms": [
+                    {
+                        "tis_id": "chr1:100:+:ATG:ENST_A",
+                        "orf_type": "truncated",
+                        "differential_sequence": "M",
+                        "diff_space": "canonical",
+                        "isoform_length_aa": 50,
+                        "canonical_length_aa": 60,
+                        "alt_start_codon": "ATG",
+                        "kozak_context": "AAAA",
+                        "scoring": {"criteria": {}},
+                        "key_metrics": {},
+                        "pathogenic_variants_in_unique": [],
+                        "_raw": {},
+                    }
+                ],
+            }
+        )
+    )
+    out_dir = tmp_path / "out"
+    rc = rli.main(
+        [
+            "--records",
+            str(records_dir),
+            "--out",
+            str(out_dir),
+            "--pass",
+            "existence",
+            "--dry-run",
+        ]
+    )
+    captured = capsys.readouterr().out
+    assert rc == 0
+    # 7 modalities × 1 isoform = 7 dry-run prints (modality marker per block).
+    assert captured.count("modality:") == 7
+
+
+def test_synthesis_pass_refuses_without_prereqs(monkeypatch, tmp_path):
+    from scripts.site import run_llm_interpretation as rli
+
+    records_dir = tmp_path / "records"
+    records_dir.mkdir()
+    (records_dir / "GENE_A.json").write_text(
+        json.dumps(
+            {
+                "gene": {"name": "GENE_A"},
+                "isoforms": [
+                    {
+                        "tis_id": "chr1:100:+:ATG:ENST_A",
+                        "scoring": {"existence_score": 5, "functional_score": 5},
+                    }
+                ],
+            }
+        )
+    )
+    out_dir = tmp_path / "out"
+    rc = rli.main(
+        [
+            "--records",
+            str(records_dir),
+            "--out",
+            str(out_dir),
+            "--pass",
+            "synthesis",
+            "--dry-run",
+        ]
+    )
+    assert rc != 0  # missing existence / functional outputs
