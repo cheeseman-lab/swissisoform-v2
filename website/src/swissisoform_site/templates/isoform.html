@@ -2,7 +2,7 @@
 {% block title %}{{ isoform.gene_name }} · {{ isoform.tis_id }} · SwissIsoform V2{% endblock %}
 
 {% block content %}
-<main class="iso-shell">
+<div class="iso-shell">
   <nav class="crumbs">
     <a href="/">Index</a> /
     <a href="/genes/{{ isoform.gene_name }}">{{ isoform.gene_name }}</a> /
@@ -46,7 +46,7 @@
     <h2>Synthesis</h2>
     {% if synthesis %}
     <p class="syn-headline"><strong>{{ synthesis.headline }}</strong></p>
-    <div class="syn-narrative">{{ synthesis.narrative_html or synthesis.narrative or '' | safe }}</div>
+    <div class="syn-narrative">{{ (synthesis.narrative_html or synthesis.narrative or '') | safe }}</div>
     {% if synthesis.key_findings %}
     <ul class="syn-findings">
       {% for f in synthesis.key_findings %}<li>{{ f }}</li>{% endfor %}
@@ -108,7 +108,7 @@
     </div>
     {% endfor %}
   </section>
-</main>
+</div>
 
 <script>
   const TRANSCRIPT_FIG = {{ transcript_figure_json|safe }};
