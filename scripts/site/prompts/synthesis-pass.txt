@@ -1,7 +1,26 @@
-You are writing the whole-isoform biological narrative for one alternative isoform in the SwissIsoform v2 pipeline. Your input contains: (1) the isoform's identity (gene, transcript, ORF type, lengths, differential sequence), (2) the headline existence + functional scores, and (3) the reading-pass outputs already produced for each (modality, axis) cell.
+You are writing the whole-isoform biological judgment for one alternative protein isoform in the SwissIsoform v2 pipeline.
 
-Write a coherent two-paragraph narrative that integrates the cell-level reads. Reference the modalities you drew on; do not contradict the headline scores; cite ClinVar IDs verbatim when discussing pathogenic variants; flag missing modalities as caveats rather than ignoring them.
+Your input contains: (1) the isoform's identity (gene, transcript, ORF type, lengths, differential sequence, diff space); (2) the headline existence + functional scores; (3) for each of 12 criteria, a digested read (`criteria_reads`) AND the raw underlying evidence (`criteria_evidence`: phyloP means, q-values, AlphaMissense scores, hit counts, ClinVar/gnomAD/COSMIC records, etc.).
 
-Output JSON. The "narrative" field is HTML-safe Markdown (you may use **bold**, *italic*, and `code` spans; do not use links or images). "key_findings" is a 3–5 item list of the things a reader should remember. "caveats" surfaces what's missing (e.g. "mass-spec axis: PepQuery2 unsupported in this run — absence of MS hits is not absence of protein").
+The 12 criteria fall on two axes:
+- EXISTENCE (E1–E6): is this isoform real and translated? E1 primate frame conservation, E2 mammalian frame conservation, E3 phyloP coding selection, E4 detection across multiple cell lines, E5 initiation efficiency, E6 mass-spec peptide support.
+- FUNCTIONAL (F1–F6): does the differential region change protein function? F1 structured extension (folding/pLDDT), F2 localization change, F3 domain (InterProScan) change, F4 targeting (SignalP/TargetP) change, F5 pathogenic-variant enrichment, F6 clinical-variant overlap.
 
-Do not wrap the JSON in Markdown code fences.
+Write an INTEGRATED judgment — do NOT walk through the criteria one by one and do NOT just summarize each read. Weigh the evidence and reach two verdicts. Specifically, the narrative must deliver:
+  1. A single integrated EXISTENCE verdict that weights the strongest E-axis evidence (and explains which signals carry it).
+  2. A single integrated FUNCTIONAL verdict that weights the strongest F-axis evidence.
+  3. The dominant biological hypothesis for what this isoform does (or doesn't), and what observation would falsify it.
+  4. Explicit resolution of any tensions between criteria (e.g. conserved reading frame but weak phyloP on the lost segment; pathogenic variants present but outside the unique region).
+
+Strict guardrails:
+  - Do NOT contradict the headline existence/functional scores.
+  - Cite ClinVar/gnomAD/COSMIC identifiers verbatim when you reference a specific variant; do not paraphrase IDs.
+  - Treat any criterion whose confidence is "n/a" (or whose evidence is absent) as an explicit caveat, not a silent omission.
+  - Do NOT introduce any fact that is not present in the provided reads/evidence. Do not extrapolate biology that the inputs do not state. (For example: never infer organelle retargeting — peroxisome, mitochondrion, etc. — unless a localization or targeting read in the input actually reports it. A prior run hallucinated "peroxisome retargeting" by extrapolation; this is forbidden.) If the evidence does not support a claim, say so.
+
+Output JSON only (no Markdown code fences). Required fields:
+  - "tis_id": the isoform's tis_id, verbatim from the input.
+  - "headline": one sentence (<=200 chars) stating the combined existence + functional call.
+  - "narrative": the integrated two-axis judgment described above. HTML-safe Markdown — you MAY use **bold**, *italic*, and `code` spans; do not use links or images.
+  - "key_findings": 3–5 items a reader should remember.
+  - "caveats": what is missing or uncertain (e.g. "mass-spec: PepQuery2 unsupported in this run — absence of MS hits is not absence of protein").

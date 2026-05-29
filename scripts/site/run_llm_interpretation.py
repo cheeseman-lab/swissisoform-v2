@@ -672,11 +672,29 @@ def _run_criterion_pass(records, spec, args, system_prompt, output_schema) -> in
 
 
 def _build_synthesis_record(isoform: dict, gene_name: str, isoform_out_dir: Path) -> dict:
-    """Build the synthesis-pass input from the disk-cached criteria.json output."""
+    """Build the synthesis-pass input from the disk-cached criteria.json output.
+
+    Carries both the digested per-criterion reads (``criteria_reads``) and the
+    raw underlying evidence (``criteria_evidence``, one ``slice_criterion``
+    payload per criterion) so the model can weigh actual numbers, not just
+    headlines.
+    """
+    try:
+        from scripts.site.build_evidence_records import CRITERIA, slice_criterion
+    except ModuleNotFoundError:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+        from scripts.site.build_evidence_records import CRITERIA, slice_criterion
+
     criteria_reads: dict[str, Any] = {}
     pp = isoform_out_dir / "criteria.json"
     if pp.exists():
         criteria_reads = json.loads(pp.read_text(encoding="utf-8"))
+
+    iso_with_gene = {**isoform, "gene": {"name": gene_name}}
+    criteria_evidence: dict[str, Any] = {
+        cid: slice_criterion(iso_with_gene, cid) for cid in CRITERIA
+    }
+
     return {
         "isoform": {
             "tis_id": isoform.get("tis_id"),
@@ -690,6 +708,7 @@ def _build_synthesis_record(isoform: dict, gene_name: str, isoform_out_dir: Path
         "scoring": isoform.get("scoring") or {},
         "key_metrics": isoform.get("key_metrics") or {},
         "criteria_reads": criteria_reads,
+        "criteria_evidence": criteria_evidence,
     }
 
 
