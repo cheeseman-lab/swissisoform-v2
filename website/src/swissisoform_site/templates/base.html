@@ -6,8 +6,8 @@
   <title>{% block title %}SwissIsoform v2{% endblock %}</title>
   <meta name="description" content="{% block description %}SwissIsoform v2 — alternative protein isoforms from translation initiation sequencing, with evidence-axis scoring and per-isoform interpretation.{% endblock %}">
 
-  <!-- Tailwind CDN (no build step — fine for an internal viewer). -->
-  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Tailwind precompiled to static CSS (see website/tailwind.input.css). -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.css') }}">
 
   <!-- Plotly basic bundle (scatter/bar/pie only — covers all our figures), deferred. -->
   <script defer src="https://cdn.plot.ly/plotly-basic-2.35.2.min.js" charset="utf-8"></script>
