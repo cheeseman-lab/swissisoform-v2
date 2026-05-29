@@ -116,6 +116,7 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+.protein-caption { font-size: 12px; color: #64748b; line-height: 1.45; margin: 0 0 8px; }
 .iso-panel .plotly-graph { width: 100%; min-height: 280px; }
 .iso-panel-folding .folding-placeholder { min-height: 280px; display: flex; align-items: center; justify-content: center; }
 /* Dual Mol* lives below the two graph rows; its inner ``.folding-grid``

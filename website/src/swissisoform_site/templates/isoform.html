@@ -39,6 +39,12 @@
     </div>
     <div class="iso-panel iso-panel-protein">
       <h2 class="iso-panel-h">Protein</h2>
+      <p class="protein-caption">
+        {% if isoform.orf_type == 'extended' %}Isoform is the canonical protein plus a {{ diff_end }}-aa N-terminal extension (green).
+        {% elif isoform.orf_type == 'truncated' %}Isoform loses the first {{ diff_end }} aa of the canonical N-terminus (red).
+        {% else %}Differential region highlighted.{% endif %}
+        Lollipops = ClinVar/gnomAD/COSMIC variants (red = pathogenic); green boxes = InterPro domains; purple = motifs.
+      </p>
       <div id="graph-protein" class="plotly-graph"></div>
     </div>
     <div class="iso-panel iso-panel-folding iso-folding-row">

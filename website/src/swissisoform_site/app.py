@@ -310,9 +310,10 @@ def _make_transcript_adapter(iso: Isoform, gene: Any) -> types.SimpleNamespace:
 def _make_protein_adapter(iso: Isoform) -> types.SimpleNamespace:
     """Convert a V1 ``Isoform`` into the duck-typed input ``build_protein_figure`` expects.
 
-    Variants come from ``iso.pathogenic_variants`` (already filtered to the
-    unique region). Domains and motifs come from raw parquet columns and
-    degrade to empty lists if the shape is unfamiliar.
+    Variants come from ``iso.variants_in_unique`` (all clinical hits in the
+    unique region, any significance — the figure colours them). Domains and
+    motifs come from raw parquet columns and degrade to empty lists if the
+    shape is unfamiliar.
     """
     raw = getattr(iso, "raw", None) or {}
 
@@ -369,12 +370,12 @@ def _make_protein_adapter(iso: Isoform) -> types.SimpleNamespace:
         motifs = []
 
     variants: list[dict[str, Any]] = []
-    for v in getattr(iso, "pathogenic_variants", []) or []:
+    for v in getattr(iso, "variants_in_unique", []) or []:
         if not isinstance(v, dict):
             continue
-        pos = v.get("protein_pos")
+        pos = v.get("isoform_protein_pos")
         if pos is None:
-            pos = v.get("isoform_protein_pos")
+            pos = v.get("protein_pos")
         if pos is None:
             continue
         try:
@@ -384,9 +385,10 @@ def _make_protein_adapter(iso: Isoform) -> types.SimpleNamespace:
         variants.append(
             {
                 "variant_id": v.get("variant_id") or v.get("id") or "?",
-                "protein_pos": pos_int,
+                "isoform_protein_pos": pos_int,
                 "hgvsp": v.get("hgvsp"),
                 "clinical_significance": v.get("clinical_significance"),
+                "source": v.get("source"),
             }
         )
 
@@ -395,8 +397,10 @@ def _make_protein_adapter(iso: Isoform) -> types.SimpleNamespace:
         orf_type=iso.orf_type,
         diff_space=getattr(iso, "diff_space", None),
         differential_sequence=getattr(iso, "differential_sequence", "") or "",
-        isoform_length_aa=getattr(iso, "isoform_len", 0) or 0,
-        canonical_length_aa=getattr(iso, "canonical_len", 0) or 0,
+        isoform_len=getattr(iso, "isoform_len", 0) or 0,
+        canonical_len=getattr(iso, "canonical_len", 0) or 0,
+        diff_start=getattr(iso, "diff_start", 0) or 0,
+        diff_end=getattr(iso, "diff_end", 0) or 0,
         variants_in_unique=variants,
         domains=domains,
         motifs=motifs,

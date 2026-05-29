@@ -94,6 +94,8 @@ class Isoform:
     # Structure lookup
     isoform_cif: str | None
     canonical_cif: str | None
+    # All clinical variants in the isoform-unique region (any significance)
+    variants_in_unique: list[dict[str, Any]] = field(default_factory=list)
     # Raw row (kept for /api/data.json)
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -302,11 +304,11 @@ def _build_isoform(row: pd.Series, struct_index: dict[tuple[str, str], str]) -> 
     # Pathogenic variants in the unique region — pull from the clinical hits
     # rather than the variant-intersection module so we get hgvsp + source.
     variants_all = _to_record_list(row.get("isoform_clinical_hits"))
+    variants_in_unique = [v for v in variants_all if v.get("in_isoform_unique")]
     pathogenic = [
         v
-        for v in variants_all
-        if v.get("in_isoform_unique")
-        and (v.get("clinical_significance") or "").lower().startswith(("pathogenic", "likely"))
+        for v in variants_in_unique
+        if (v.get("clinical_significance") or "").lower().startswith(("pathogenic", "likely"))
     ]
 
     isoform_cif = _lookup_isoform_cif(struct_index, gene, tis_id)
@@ -349,6 +351,7 @@ def _build_isoform(row: pd.Series, struct_index: dict[tuple[str, str], str]) -> 
             row.get("isoform_variant_intersection_n_pathogenic_in_unique_region")
         ),
         pathogenic_variants=pathogenic,
+        variants_in_unique=variants_in_unique,
         isoform_cif=isoform_cif,
         canonical_cif=canonical_cif,
         raw=_clean_nan({k: row[k] for k in row.index if not k.startswith("cmp_biophysics_")}),
