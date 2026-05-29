@@ -1,4 +1,4 @@
-{# Single superimposed Mol* folding viewer — canonical + isoform in one canvas.
+{# Side-by-side Mol* folding viewers — canonical | isoform.
 
    Context vars expected (set by isoform_page view):
      - canonical_cif   : filename in /structures/ (or None)
@@ -9,54 +9,62 @@
      - canonical_length_aa : int | None
      - isoform_length_aa   : int | None
 
-   Both structures load into ONE viewer and are superposed on their shared
-   core. The canonical is grey; the differential region (residues lost in a
-   truncation, or added in an extension) is rendered red in the 3D cartoon on
-   whichever structure physically contains it. The on-page legend names the
-   colors + the 1-based residue range.
+   Each structure renders in its own viewer, coloured by Boltz pLDDT confidence
+   (blue = high, orange/red = low). Side-by-side (rather than overlaid) so the
+   reader can judge whether the *shared* region folds the same — an N-terminal
+   truncation/extension need not leave the rest of the fold unchanged. The
+   differential region's sequence location is shown in the 2D protein track
+   above and named in the caption here.
 #}
 {% set diff_lo_1based = (diff_start or 0) + 1 %}
 {% set diff_hi_1based = diff_end if diff_end is not none else 0 %}
-{% set diff_on_canonical = (diff_space == 'canonical') %}
 {% set has_diff = (diff_hi_1based|int) > 0 %}
 {% set hi_lo_label = (diff_lo_1based|string) ~ '–' ~ (diff_hi_1based|int|string) %}
 
-<div id="folding-panel">
-  <div id="folding-viewer" class="molstar-viewer-single"></div>
-  <div id="folding-legend" class="folding-legend">
-    <span><span class="swatch grey"></span> Shared core</span>
-    {% if has_diff %}
-    <span><span class="swatch red"></span> Differential region (residues {{ hi_lo_label }})</span>
+<div id="folding-panel" class="folding-grid">
+  <div class="folding-half">
+    <div class="folding-title">Canonical{% if canonical_length_aa %} ({{ canonical_length_aa }} aa){% endif %}</div>
+    {% if canonical_cif %}
+    <div id="folding-viewer-canonical" class="molstar-viewer-mini"></div>
+    {% else %}
+    <div class="molstar-viewer-mini molstar-empty">Canonical structure not predicted</div>
     {% endif %}
   </div>
+  <div class="folding-half">
+    <div class="folding-title">Isoform{% if isoform_length_aa %} ({{ isoform_length_aa }} aa){% endif %}</div>
+    {% if isoform_cif %}
+    <div id="folding-viewer-isoform" class="molstar-viewer-mini"></div>
+    {% else %}
+    <div class="molstar-viewer-mini molstar-empty">Isoform structure not predicted</div>
+    {% endif %}
+  </div>
+</div>
+<div class="folding-legend">
+  <span>Coloured by Boltz pLDDT confidence (blue = high, orange/red = low).</span>
+  {% if has_diff %}
+  <span>Differential region: residues {{ hi_lo_label }} ({{ 'lost from canonical' if diff_space == 'canonical' else 'added in isoform' }}) — see the protein track above.</span>
+  {% endif %}
 </div>
 
 <script>
 (function() {
-  var HIGHLIGHT_LO       = {{ diff_lo_1based|int }};
-  var HIGHLIGHT_HI       = {{ diff_hi_1based|int }};
-  var DIFF_ON_CANONICAL  = {{ diff_on_canonical|tojson }};
-  var CANONICAL_LEN      = {{ (canonical_length_aa or 0)|int }};
-  var ISOFORM_LEN        = {{ (isoform_length_aa or 0)|int }};
+  var CANONICAL_URL = {{ (url_for('structures', filename=canonical_cif) if canonical_cif else '')|tojson }};
+  var ISOFORM_URL   = {{ (url_for('structures', filename=isoform_cif) if isoform_cif else '')|tojson }};
 
   function loadFoldingViewers() {
     if (typeof molstar === 'undefined') {
-      var el = document.getElementById('folding-viewer');
-      if (el) el.innerHTML = '<div class="molstar-fallback">Mol* failed to load from CDN.</div>';
+      ['folding-viewer-canonical', 'folding-viewer-isoform'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.innerHTML = '<div class="molstar-fallback">Mol* failed to load from CDN.</div>';
+      });
       return;
     }
-    window.swissisoformSuperposed({
-      el: document.getElementById('folding-viewer'),
-      canonicalUrl: {{ (url_for('structures', filename=canonical_cif) if canonical_cif else '')|tojson }},
-      isoformUrl: {{ (url_for('structures', filename=isoform_cif) if isoform_cif else '')|tojson }},
-      diffLo: HIGHLIGHT_LO,
-      diffHi: HIGHLIGHT_HI,
-      diffOnCanonical: DIFF_ON_CANONICAL
-    });
+    if (CANONICAL_URL) window.swissisoformViewer('folding-viewer-canonical', CANONICAL_URL);
+    if (ISOFORM_URL) window.swissisoformViewer('folding-viewer-isoform', ISOFORM_URL);
   }
 
-  // Defer the ~300 KB CIF fetch + WebGL init until the folding panel scrolls
-  // into view; Mol* itself is loaded deferred, so wait for it before starting.
+  // Defer the CIF fetch + WebGL init until the folding panel scrolls into view;
+  // Mol* itself is loaded deferred, so wait for it before starting.
   var panel = document.getElementById('folding-panel');
   if (!panel) { loadFoldingViewers(); return; }
   var started = false;

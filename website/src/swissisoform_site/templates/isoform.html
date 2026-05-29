@@ -49,9 +49,7 @@
     </div>
     <div class="iso-panel iso-panel-folding iso-folding-row">
       <h2 class="iso-panel-h">Folding</h2>
-      <div id="folding-panel">
-        {% include "_folding_panel.html" %}
-      </div>
+      {% include "_folding_panel.html" %}
     </div>
   </section>
 
@@ -131,5 +129,6 @@
     else { var t = setInterval(function () { if (window.Plotly) { clearInterval(t); swissRenderPlots(); } }, 30); }
   }); }
 </script>
+<script src="{{ url_for('static', filename='js/molstar_setup.js') }}"></script>
 <script src="{{ url_for('static', filename='js/isoform_page.js') }}"></script>
 {% endblock %}
