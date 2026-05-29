@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from markupsafe import escape
 
 logger = logging.getLogger(__name__)
 
@@ -467,15 +468,33 @@ def load_transcript_skeletons(path: Path) -> dict[str, TranscriptSkeleton]:
     return out
 
 
+def _markdown_to_html(text: str) -> str:
+    """Convert the tiny markdown subset our LLM emits to safe HTML.
+
+    Escapes first (XSS-safe), then applies bold/italic/code and paragraphs.
+    """
+    if not text:
+        return ""
+    safe = str(escape(text))
+    safe = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", safe)
+    safe = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<em>\1</em>", safe)
+    safe = re.sub(r"`(.+?)`", r"<code>\1</code>", safe)
+    paras = [p.strip().replace("\n", "<br>") for p in safe.split("\n\n") if p.strip()]
+    return "".join(f"<p>{p}</p>" for p in paras)
+
+
 def llm_synthesis_for_isoform(*, llm_dir: Path, tis_slug: str) -> dict | None:
     """Return the per-isoform synthesis JSON, or None if missing."""
     p = Path(llm_dir) / tis_slug / "synthesis.json"
     if not p.exists():
         return None
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        data = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return None
+    if data.get("narrative"):
+        data["narrative_html"] = _markdown_to_html(data["narrative"])
+    return data
 
 
 def tis_slug(tis_id: str) -> str:

@@ -152,6 +152,20 @@ def test_llm_criterion_for_isoform_returns_none_when_missing(tmp_path):
     assert out is None
 
 
+def test_synthesis_narrative_html_converts_markdown():
+    """_markdown_to_html converts the tiny markdown subset, escape-first."""
+    if str(WEBSITE_SRC) not in sys.path:
+        sys.path.insert(0, str(WEBSITE_SRC))
+    from swissisoform_site.data import _markdown_to_html
+
+    out = _markdown_to_html("**Bold** and *em* and `code`.\n\npara two")
+    assert "<strong>Bold</strong>" in out
+    assert "<em>em</em>" in out
+    assert "<code>code</code>" in out
+    assert "<p>" in out
+    assert "**" not in out
+
+
 # --------------------------------------------------------------------------- #
 # V2 isoform route (/genes/<gene>/isoforms/<tis_slug>)
 # --------------------------------------------------------------------------- #
