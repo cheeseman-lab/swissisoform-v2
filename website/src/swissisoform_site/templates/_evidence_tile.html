@@ -55,7 +55,14 @@
           {% for h in sl.hits[:20] %}
             <li>
               {% if h.variant_id %}
-                {{ h.variant_id }}{% if h.hgvsp %} · {{ h.hgvsp }}{% endif %}{% if h.clinical_significance %} · {{ h.clinical_significance }}{% endif %}
+                {% set h_aa_ref = h.isoform_aa_ref if h.isoform_aa_ref is not none else h.aa_ref %}
+                {% set h_aa_alt = h.isoform_aa_alt if h.isoform_aa_alt is not none else h.aa_alt %}
+                {% set h_url = variant_url(h.variant_id, h.source, (h.metadata.rs_id if h.metadata else none)) %}
+                {% if h.source %}<span class="var-badge var-badge-{{ h.source|lower }}">{{ h.source }}</span> {% endif %}
+                {% if h_url %}<a href="{{ h_url }}" target="_blank" rel="noopener">{{ h.variant_id }}</a>{% else %}{{ h.variant_id }}{% endif %}
+                {% if h_aa_ref or h_aa_alt %} · {{ h_aa_ref or '?' }}→{{ h_aa_alt or '?' }}{% endif %}
+                {% if h.clinical_significance %} · {{ h.clinical_significance }}{% endif %}
+                {% if h.allele_frequency is not none %} · AF {{ '%.1e'|format(h.allele_frequency|float) }}{% endif %}
               {% elif h.peptide %}
                 {{ h.peptide }} ({{ h.length or h.peptide|length }} aa, pos {{ h.pos }}–{{ h.end }})
               {% elif h.name or h.description %}

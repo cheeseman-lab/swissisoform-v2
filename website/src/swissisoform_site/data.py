@@ -483,6 +483,42 @@ def tis_slug(tis_id: str) -> str:
     return re.sub(r"[:.]+", "-", tis_id or "unknown")
 
 
+def variant_url(variant_id: str, source: str, rs_id: str | None = None) -> str | None:
+    """Best-effort external link for a variant given its id + source."""
+    if not variant_id:
+        return None
+    src = (source or "").lower()
+    if "clinvar" in src and ":" in variant_id:
+        return f"https://www.ncbi.nlm.nih.gov/clinvar/variation/{variant_id.split(':')[-1]}/"
+    if "gnomad" in src:
+        # variant_id already looks like chr17-48071438-G-C
+        slug = variant_id.replace("chr", "").replace("-", "-")
+        return f"https://gnomad.broadinstitute.org/variant/{slug}"
+    if "cosmic" in src:
+        return f"https://cancer.sanger.ac.uk/cosmic/search?q={variant_id.split(':')[-1]}"
+    if rs_id:
+        return f"https://www.ncbi.nlm.nih.gov/snp/{rs_id}"
+    return None
+
+
+@lru_cache(maxsize=1)
+def _variants_long_df(path: Path) -> pd.DataFrame:
+    """Read variants_long.parquet once per worker, keyed on path."""
+    if not Path(path).exists():
+        return pd.DataFrame()
+    return pd.read_parquet(path)
+
+
+def variant_rows_for_isoform(path: Path, tis_id: str) -> list[dict[str, Any]]:
+    """Return every variant_long row for one isoform (no LLM 30-hit cap)."""
+    df = _variants_long_df(path)
+    if df.empty or "tis_id" not in df.columns:
+        return []
+    sub = df[df["tis_id"] == tis_id]
+    rows = [_clean_nan(rec) for rec in sub.to_dict(orient="records")]
+    return rows
+
+
 def _isoform_view(iso, gene):
     """Adapter — turns an Isoform + GeneRecord into the dict the V2 template uses.
 

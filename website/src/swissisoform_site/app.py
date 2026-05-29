@@ -42,6 +42,8 @@ from swissisoform_site.data import (
     load_all,
     load_transcript_skeletons,
     tis_slug,
+    variant_rows_for_isoform,
+    variant_url,
 )
 from swissisoform_site.plots import build_protein_figure, build_transcript_figure
 
@@ -106,6 +108,7 @@ def create_app() -> Flask:
     app.jinja_env.globals.update(
         CRITERIA_METRIC_LABELS=CRITERIA_METRIC_LABELS,
         format_metric=format_metric,
+        variant_url=variant_url,
     )
 
     # JSON-friendly NaN cleaner for the API endpoint
@@ -210,6 +213,8 @@ def create_app() -> Flask:
         )
         protein_fig = build_protein_figure(_make_protein_adapter(iso), overlays={})
 
+        variant_rows = variant_rows_for_isoform(data_dir_path / "variants_long.parquet", iso.tis_id)
+
         return render_template(
             "isoform.html",
             isoform=_isoform_view(iso, gene),
@@ -217,6 +222,7 @@ def create_app() -> Flask:
             criterion_slices=criterion_slices,
             criterion_llms=criterion_llms,
             synthesis=synthesis,
+            variant_rows=variant_rows,
             transcript_figure_json=json.dumps(transcript_fig),
             protein_figure_json=json.dumps(protein_fig),
             canonical_cif=iso.canonical_cif,

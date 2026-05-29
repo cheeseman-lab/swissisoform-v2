@@ -1,1 +1,54 @@
-<p class="placeholder">Raw evidence display for this modality is not implemented yet — see the reading-pass block above for the LLM interpretation.</p>
+{% if variant_rows %}
+<table class="variants-table">
+  <thead>
+    <tr>
+      <th>Pos (iso)</th>
+      <th>AA change</th>
+      <th>Consequence</th>
+      <th>Source</th>
+      <th>Clin. sig.</th>
+      <th>AF (gnomAD)</th>
+      <th>AlphaMissense</th>
+      <th>ESM-2 ΔLLR</th>
+      <th>In unique</th>
+      <th>Link</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for v in variant_rows %}
+      {% set sig = (v.clinical_significance or '')|lower %}
+      {% set is_path = 'pathogenic' in sig %}
+      {% set aa_ref = v.isoform_aa_ref if v.isoform_aa_ref is not none else v.aa_ref %}
+      {% set aa_alt = v.isoform_aa_alt if v.isoform_aa_alt is not none else v.aa_alt %}
+      {% set url = variant_url(v.variant_id, v.source, v.rs_id) %}
+      <tr class="{{ 'var-pathogenic' if is_path else '' }}">
+        <td class="var-num">
+          {% if v.isoform_protein_pos is not none %}{{ v.isoform_protein_pos|int }}{% else %}—{% endif %}
+        </td>
+        <td class="var-mono">
+          {% if aa_ref or aa_alt %}{{ aa_ref or '?' }}→{{ aa_alt or '?' }}{% else %}—{% endif %}
+        </td>
+        <td>{{ v.isoform_consequence or v.consequence or '—' }}</td>
+        <td><span class="var-badge var-badge-{{ (v.source or 'na')|lower }}">{{ v.source or '—' }}</span></td>
+        <td>{{ v.clinical_significance or '—' }}</td>
+        <td class="var-num">
+          {% if v.allele_frequency is not none %}{{ '%.2e'|format(v.allele_frequency|float) }}{% else %}—{% endif %}
+        </td>
+        <td>
+          {% if v.am_class %}{{ v.am_class }}{% if v.am_pathogenicity is not none %} ({{ '%.2f'|format(v.am_pathogenicity|float) }}){% endif %}{% else %}—{% endif %}
+        </td>
+        <td class="var-num">
+          {% if v.plm_delta_llr is not none %}{{ '%.2f'|format(v.plm_delta_llr|float) }}{% else %}—{% endif %}
+        </td>
+        <td>{% if v.in_isoform_unique %}✓{% else %}–{% endif %}</td>
+        <td>
+          {% if url %}<a href="{{ url }}" target="_blank" rel="noopener">{{ v.variant_id }}</a>{% else %}{{ v.variant_id or '—' }}{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="var-count">{{ variant_rows|length }} variant{{ '' if variant_rows|length == 1 else 's' }} over this isoform's coding region.</p>
+{% else %}
+<p class="empty">No clinical variants intersect this isoform's coding region.</p>
+{% endif %}
