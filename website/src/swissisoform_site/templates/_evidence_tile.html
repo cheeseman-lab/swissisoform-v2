@@ -1,5 +1,5 @@
 <div class="evidence-tile axis-{{ c.axis }}" data-criterion="{{ c.id }}" title="{{ sl.reason or '' }}">
-  <button class="tile-head" type="button" aria-expanded="false">
+  <button class="tile-head" type="button" aria-haspopup="dialog">
     <span class="tile-id">{{ c.id.split('_')[0] }}</span>
     <span class="tile-label">{{ c.label }}</span>
     <span class="tile-badge tile-badge-{{ 'true' if sl.value == true else ('false' if sl.value == false else 'none') }}">
@@ -13,7 +13,9 @@
       {{ sl.headline }}
     {% endif %}
   </div>
-  <div class="tile-body" hidden>
+  {# Body content stored as a <template> fragment — never rendered inline.
+     JS clones the contents into the evidence modal on tile click. #}
+  <template class="tile-body-template">
     {% if sl.interpretation_hint %}
       <p class="tile-hint">
         <span class="tile-hint-icon">i</span>
@@ -66,5 +68,5 @@
         </ul>
       </details>
     {% endif %}
-  </div>
+  </template>
 </div>

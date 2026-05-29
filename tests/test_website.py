@@ -233,6 +233,30 @@ def test_isoform_page_renders_dual_molstar_viewers(client):
     assert b"highlighted" in body
 
 
+def test_isoform_page_has_evidence_modal_element(client):
+    """Modal <dialog> element is in the DOM (hidden until JS shows it).
+
+    Tile bodies live inside <template class="tile-body-template"> per tile;
+    the browser never renders the inline copy. JS clones the fragment into
+    the shared modal on click — tile grid stays unchanged.
+    """
+    import pandas as pd
+    from swissisoform_site.data import tis_slug as make_slug
+
+    df = pd.read_parquet(WEBSITE_DATA / "all_paired.parquet", columns=["gene_name", "tis_id"])
+    row = df.iloc[0]
+    r = client.get(f"/genes/{row['gene_name']}/isoforms/{make_slug(row['tis_id'])}")
+    assert r.status_code == 200
+    body = r.data
+    # <dialog> element present
+    assert b"evidence-modal" in body
+    assert b"<dialog" in body
+    # Tile body content kept as <template> fragments (not rendered inline).
+    assert b"tile-body-template" in body
+    # One <template> per tile (12).
+    assert body.count(b"tile-body-template") >= 12
+
+
 def test_isoform_page_truncation_marks_canonical_as_diff_side(client):
     """For a truncation (diff_space=canonical), the canonical caption flags it."""
     from swissisoform_site.data import tis_slug as make_slug

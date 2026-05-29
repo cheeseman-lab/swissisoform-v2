@@ -197,13 +197,58 @@
   color: #444;
   font-family: ui-monospace, monospace;
 }
-.tile-body {
-  padding: 14px 16px 16px;
-  border-top: 1px solid #e7e7e7;
-  background: #fafbfc;
+/* Tile body content lives in a <template>; this is belt-and-suspenders
+   in case the markup is ever rendered inline. */
+.tile-body { display: none; }
+
+/* Evidence modal lightbox — single <dialog> shared by all 12 tiles. */
+.evidence-modal {
+  max-width: 720px;
+  width: 90vw;
+  max-height: 85vh;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  padding: 0;
+  background: #fff;
+  box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04);
+  overflow: hidden;
+}
+.evidence-modal::backdrop {
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(2px);
+}
+.evidence-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb;
+}
+.evidence-modal-head h3 {
+  margin: 0;
+  font-size: 16px;
+  color: #111827;
+  font-weight: 600;
+}
+.evidence-modal-close {
+  background: transparent;
+  border: none;
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+  color: #6b7280;
+  padding: 0 4px;
+}
+.evidence-modal-close:hover { color: #111827; }
+.evidence-modal-body {
+  padding: 18px 22px 24px;
+  overflow-y: auto;
+  max-height: calc(85vh - 60px);
   font-size: 13px;
   line-height: 1.5;
 }
+
 .tile-hint {
   background: #eff6ff;
   border-left: 3px solid #2563eb;
