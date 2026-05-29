@@ -76,22 +76,38 @@ def test_missing_skeleton_returns_empty_figure_with_caption():
     assert "skeleton" in fig["layout"]["annotations"][0]["text"].lower()
 
 
-def test_xaxis_auto_zooms_to_tis_cluster():
-    """For most transcripts the TIS cluster is tight — the visible window must
-    bound the TIS positions (with padding) rather than the full skeleton span.
+def test_xaxis_window_includes_focal_tis_and_canonical_start():
+    """The visible window must frame the alternative TIS *and* the canonical
+    start codon together, clamped within the skeleton span — so the reader sees
+    where the TIS sits relative to the canonical ORF (the point of the rework).
     """
     iso = _synthetic_isoform_with_two_tis()
-    skel = _synthetic_skeleton()
+    skel = _synthetic_skeleton()  # cds_start=200 (canonical start, + strand)
     fig = tplot.build_transcript_figure(iso, skel, overlays={})
     xrange = fig["layout"]["xaxis"]["range"]
-    # Skeleton spans [100, 900]; TIS at 200 and 250.
+    # Clamped within the skeleton span [100, 900].
     assert xrange[0] >= 100
     assert xrange[1] <= 900
-    # Window must contain both TIS positions.
-    assert xrange[0] < 200
-    assert xrange[1] > 250
-    # Window must not be the entire skeleton range (the whole point of the rework).
-    assert xrange[1] - xrange[0] < 800
+    # Contains both TIS positions (200, 250).
+    assert xrange[0] <= 200
+    assert xrange[1] >= 250
+    # Contains the canonical start codon (cds_start = 200).
+    assert xrange[0] <= 200 <= xrange[1]
+
+
+def test_cell_line_bars_have_explicit_width():
+    """Bars must set an explicit width — Plotly's 1-nt default is sub-pixel on a
+    genomic axis and renders the expression panel blank.
+    """
+    iso = _synthetic_isoform_with_two_tis()
+    fig = tplot.build_transcript_figure(iso, _synthetic_skeleton(), overlays={})
+    bars = [t for t in fig["data"] if t.get("type") == "bar"]
+    assert bars
+    for b in bars:
+        w = b.get("width")
+        assert w, "bar trace must set an explicit width"
+        # width is a per-point list; every entry must be a positive number.
+        assert all(x and x > 0 for x in (w if isinstance(w, list) else [w]))
 
 
 def test_figure_uses_system_font_stack():

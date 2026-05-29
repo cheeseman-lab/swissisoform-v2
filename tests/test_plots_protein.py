@@ -1,4 +1,11 @@
-"""Tests for the protein-lollipop figure builder."""
+"""Tests for the protein-track figure builder.
+
+The V2 protein view draws two left-aligned length bars (``Canonical`` y=1.0,
+``Isoform`` y=0.5), a shaded ``Differential region``, clinical-variant
+lollipops coloured by significance (head trace named by the significance
+class, stem trace sharing its ``legendgroup``), domain boxes (``Domain
+(InterPro)``), and motif spans (``Motif``), with a horizontal legend.
+"""
 
 from __future__ import annotations
 
@@ -6,27 +13,36 @@ from types import SimpleNamespace
 
 from swissisoform_site.plots import protein as pplot
 
+# Lollipop heads/stems live at this y (see protein._ISO_Y + 0.55).
+_LOLLIPOP_Y = 1.05
+
 
 def _iso(orf_type="truncated", diff_space="canonical", iso_len=405, can_len=434):
     return SimpleNamespace(
         tis_id="chr3:3129127:+:ATG:ENST00000434583.5",
         orf_type=orf_type,
         diff_space=diff_space,
+        diff_start=0,
+        diff_end=29,  # len(differential_sequence)
         differential_sequence="MLRCLYHWHRPVLNRRWSRLCLPKQYLFT",
-        isoform_length_aa=iso_len,
-        canonical_length_aa=can_len,
+        canonical_len=can_len,
+        isoform_len=iso_len,
         variants_in_unique=[
             {
                 "variant_id": "ClinVar:1",
+                "isoform_protein_pos": 10,
                 "protein_pos": 10,
                 "hgvsp": "p.Leu13fs",
                 "clinical_significance": "Pathogenic",
+                "source": "ClinVar",
             },
             {
                 "variant_id": "ClinVar:2",
+                "isoform_protein_pos": 24,
                 "protein_pos": 24,
                 "hgvsp": "p.Gln25Ter",
                 "clinical_significance": "Pathogenic",
+                "source": "ClinVar",
             },
         ],
         domains=[
@@ -44,76 +60,126 @@ def test_figure_is_plotly_dict_with_traces():
     assert fig["data"]  # non-empty
 
 
-def test_diff_region_span_uses_canonical_length_for_truncation():
-    """For diff_space=canonical, the shaded diff spans 1..len(diff_seq) on the canonical axis."""
+def test_draws_two_named_length_bars():
+    """Canonical + isoform are separate, named length tracks (the length delta)."""
     fig = pplot.build_protein_figure(_iso(), overlays={})
-    span_traces = [t for t in fig["data"] if t.get("name") == "diff region"]
+    names = {t.get("name") for t in fig["data"]}
+    assert "Canonical" in names
+    assert "Isoform" in names
+
+
+def test_has_a_legend():
+    fig = pplot.build_protein_figure(_iso(), overlays={})
+    assert fig["layout"]["showlegend"] is True
+    assert any(t.get("showlegend") for t in fig["data"])
+
+
+def test_diff_region_span_uses_canonical_length_for_truncation():
+    """For a truncation the differential region spans 1..len(diff_seq)."""
+    fig = pplot.build_protein_figure(_iso(), overlays={})
+    span_traces = [t for t in fig["data"] if t.get("name") == "Differential region"]
     assert len(span_traces) == 1
     assert max(span_traces[0]["x"]) == 29  # len("MLRCLYHWHRPVLNRRWSRLCLPKQYLFT")
 
 
-def test_variants_drawn_as_lollipops_at_protein_positions():
-    fig = pplot.build_protein_figure(_iso(), overlays={"variants": True})
-    # The head trace (single-point marker) is named "variant <id>" without the " stem" suffix.
-    head_traces = [
+def test_extension_diff_space_is_isoform():
+    """For extensions the differential region starts at residue 1 on the isoform."""
+    fig = pplot.build_protein_figure(_iso(orf_type="extended", diff_space="isoform"), overlays={})
+    span = [t for t in fig["data"] if t.get("name") == "Differential region"][0]
+    assert min(span["x"]) == 1
+
+
+def _lollipop_heads(fig):
+    """Marker traces sitting at the lollipop y — the variant heads."""
+    return [
         t
         for t in fig["data"]
-        if t.get("name", "").startswith("variant") and " stem" not in t.get("name", "")
+        if t.get("mode") == "markers" and _LOLLIPOP_Y in (t.get("y") or [])
     ]
-    xs = sorted(x for t in head_traces for x in t["x"])
+
+
+def _lollipop_stems(fig):
+    """Line traces rising to the lollipop y — the variant stems."""
+    return [
+        t
+        for t in fig["data"]
+        if t.get("mode") == "lines" and (t.get("y") or [])[-1:] == [_LOLLIPOP_Y]
+    ]
+
+
+def test_variants_drawn_as_lollipops_at_protein_positions():
+    fig = pplot.build_protein_figure(_iso(), overlays={"variants": True})
+    xs = sorted(x for t in _lollipop_heads(fig) for x in t["x"])
     assert xs == [10, 24]
 
 
-def test_variants_overlay_off_hides_both_heads_and_stems():
-    """When variants overlay is off, neither stem nor head traces should appear."""
-    fig = pplot.build_protein_figure(_iso(), overlays={"variants": False})
-    variant_named = [t for t in fig["data"] if t.get("name", "").startswith("variant")]
-    assert variant_named == []
-
-
-def test_variant_stems_share_prefix_with_heads_for_toggle_compat():
-    """Stems and heads must share the 'variant ' name prefix so Task 13's JS toggles both."""
+def test_variant_heads_named_by_significance_class():
+    """Heads carry the significance label so the legend explains the colours."""
     fig = pplot.build_protein_figure(_iso(), overlays={"variants": True})
-    variant_traces = [t for t in fig["data"] if t.get("name", "").startswith("variant ")]
-    head_count = sum(1 for t in variant_traces if " stem" not in t["name"])
-    stem_count = sum(1 for t in variant_traces if " stem" in t["name"])
-    # 2 variants in fixture → 2 heads + 2 stems = 4 traces, balanced.
-    assert head_count == 2
-    assert stem_count == 2
+    head_names = {t.get("name") for t in _lollipop_heads(fig)}
+    assert head_names == {"Pathogenic"}
+
+
+def test_non_pathogenic_variants_also_render():
+    """VUS / benign variants render too (not only pathogenic)."""
+    iso = _iso()
+    iso.variants_in_unique = iso.variants_in_unique + [
+        {
+            "variant_id": "gnomAD:1",
+            "isoform_protein_pos": 15,
+            "clinical_significance": "Uncertain_significance",
+            "source": "gnomAD",
+        }
+    ]
+    fig = pplot.build_protein_figure(iso, overlays={"variants": True})
+    xs = sorted(x for t in _lollipop_heads(fig) for x in t["x"])
+    assert 15 in xs
+    head_names = {t.get("name") for t in _lollipop_heads(fig)}
+    assert "Uncertain" in head_names
+
+
+def test_each_variant_has_a_stem_and_a_head():
+    fig = pplot.build_protein_figure(_iso(), overlays={"variants": True})
+    assert len(_lollipop_heads(fig)) == 2
+    assert len(_lollipop_stems(fig)) == 2
+
+
+def test_variants_overlay_off_hides_lollipops():
+    fig = pplot.build_protein_figure(_iso(), overlays={"variants": False})
+    assert _lollipop_heads(fig) == []
+    assert _lollipop_stems(fig) == []
+
+
+def test_domains_drawn_as_rectangles_in_separate_track():
+    fig = pplot.build_protein_figure(_iso(), overlays={"domains": True})
+    rect_traces = [t for t in fig["data"] if t.get("name") == "Domain (InterPro)"]
+    assert len(rect_traces) == 1
+    assert min(rect_traces[0]["x"]) == 100
+    assert max(rect_traces[0]["x"]) == 380
+
+
+def test_motifs_drawn_as_spans():
+    fig = pplot.build_protein_figure(_iso(), overlays={"motifs": True})
+    motif_traces = [t for t in fig["data"] if t.get("name") == "Motif"]
+    assert len(motif_traces) == 1
+    # Span covers start..end, not a single point.
+    assert motif_traces[0]["x"] == [35, 41]
+
+
+def test_motifs_off_when_overlay_disabled():
+    fig = pplot.build_protein_figure(_iso(), overlays={"motifs": False})
+    assert [t for t in fig["data"] if t.get("name") == "Motif"] == []
 
 
 def test_no_protein_length_returns_empty_figure_with_caption():
     iso = _iso(iso_len=0, can_len=0)
     fig = pplot.build_protein_figure(iso, overlays={})
     assert fig["data"] == []
-    # The annotation text contains "length" somewhere.
     annotations = fig.get("layout", {}).get("annotations", [])
     assert any("length" in a.get("text", "").lower() for a in annotations)
 
 
-def test_domains_drawn_as_rectangles_in_separate_track():
-    fig = pplot.build_protein_figure(_iso(), overlays={"domains": True})
-    rect_traces = [t for t in fig["data"] if t.get("name", "").startswith("domain:")]
-    assert len(rect_traces) == 1
-    assert min(rect_traces[0]["x"]) == 100
-    assert max(rect_traces[0]["x"]) == 380
-
-
-def test_motifs_off_when_overlay_disabled():
-    fig = pplot.build_protein_figure(_iso(), overlays={"motifs": False})
-    motif_traces = [t for t in fig["data"] if t.get("name", "").startswith("motif:")]
-    assert motif_traces == []
-
-
-def test_extension_diff_space_is_isoform():
-    """For extensions, diff space is isoform — shaded span starts at 1 on isoform axis."""
-    fig = pplot.build_protein_figure(_iso(orf_type="extended", diff_space="isoform"), overlays={})
-    span = [t for t in fig["data"] if t.get("name") == "diff region"][0]
-    assert min(span["x"]) == 1
-
-
 def test_protein_figure_uses_system_font_stack():
-    """The protein figure should match the site's system-font aesthetic."""
     fig = pplot.build_protein_figure(_iso(), overlays={})
     font_family = fig["layout"]["font"]["family"]
     assert "sans-serif" in font_family or "Helvetica" in font_family or "Segoe" in font_family
