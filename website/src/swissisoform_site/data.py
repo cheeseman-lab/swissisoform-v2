@@ -566,3 +566,85 @@ def llm_for_isoform(gene: GeneRecord, tis_id: str) -> dict[str, Any] | None:
             if isinstance(entry, dict) and entry.get("tis_id") == tis_id:
                 return entry
     return None
+
+
+# Parallel to MODALITIES_FOR_PAGE — drives the 12-tile UI grid on the isoform page.
+CRITERIA_FOR_PAGE = [
+    {
+        "id": "E1_primate_conservation",
+        "axis": "E",
+        "label": "Primate conservation",
+        "short_label": "Primates",
+    },
+    {
+        "id": "E2_mammalian_conservation",
+        "axis": "E",
+        "label": "Mammalian conservation",
+        "short_label": "Mammals",
+    },
+    {
+        "id": "E3_phylop_coding_selection",
+        "axis": "E",
+        "label": "PhyloP coding selection",
+        "short_label": "PhyloP",
+    },
+    {
+        "id": "E4_multi_cell_line",
+        "axis": "E",
+        "label": "Multi cell line expression",
+        "short_label": "Cell lines",
+    },
+    {
+        "id": "E5_initiation_efficiency",
+        "axis": "E",
+        "label": "Initiation efficiency",
+        "short_label": "Init. eff.",
+    },
+    {"id": "E6_mass_spec", "axis": "E", "label": "Mass spec", "short_label": "MS"},
+    {
+        "id": "F1_structured_extension",
+        "axis": "F",
+        "label": "Structured extension",
+        "short_label": "Folding",
+    },
+    {
+        "id": "F2_localization_change",
+        "axis": "F",
+        "label": "Localization change",
+        "short_label": "Localization",
+    },
+    {"id": "F3_domain_change", "axis": "F", "label": "Domain change", "short_label": "Domains"},
+    {
+        "id": "F4_targeting_change",
+        "axis": "F",
+        "label": "Targeting change",
+        "short_label": "Targeting",
+    },
+    {
+        "id": "F5_pathogenic_variant_enrichment",
+        "axis": "F",
+        "label": "Pathogenic variant enrichment",
+        "short_label": "Pathogenic",
+    },
+    {
+        "id": "F6_clinical_variant_overlap",
+        "axis": "F",
+        "label": "Clinical variant overlap",
+        "short_label": "Variants",
+    },
+]
+
+
+def llm_criterion_for_isoform(*, llm_dir: Path, tis_slug: str, criterion_id: str) -> dict | None:
+    """Return one criterion LLM read from disk, or None if missing.
+
+    Reads ``<llm_dir>/<tis_slug>/criteria.json`` and indexes by criterion_id.
+    """
+    p = Path(llm_dir) / tis_slug / "criteria.json"
+    if not p.exists():
+        return None
+    try:
+        blob = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return blob.get(criterion_id)

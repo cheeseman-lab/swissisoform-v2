@@ -564,5 +564,296 @@ def slice_modality(isoform_record: dict[str, Any], modality: str, *, axis: str) 
     return out
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# V2 per-criterion config — replaces MODALITY_CRITERIA. Each entry drives
+# (a) the slicer (what raw cols to pull) and (b) the UI tile (label, headline).
+# Verified against the real cheeseman_12gene parquet column schema.
+# ──────────────────────────────────────────────────────────────────────────
+
+CRITERIA: dict[str, dict[str, Any]] = {
+    "E1_primate_conservation": {
+        "axis": "E",
+        "label": "Primate conservation",
+        "short_label": "Primates",
+        "evidence_cols": [
+            "isoform_conservation_frame_primate_frac_intact",
+            "isoform_conservation_frame_primate_start_codon_conserved",
+            "isoform_conservation_frame_primate_n_species_aligned",
+            "isoform_conservation_frame_primate_n_species_intact_frame",
+            "isoform_conservation_frame_primate_mean_pident",
+            "isoform_conservation_frame_primate_deepest_species",
+            "isoform_conservation_frame_primate_max_depth",
+        ],
+        "headline_col": "isoform_conservation_frame_primate_frac_intact",
+        "interpretation_hint": (
+            "Is the alternative reading frame preserved across primates? Look at "
+            "frac_intact (fraction of aligned species with intact ORF) and "
+            "start_codon_conserved."
+        ),
+    },
+    "E2_mammalian_conservation": {
+        "axis": "E",
+        "label": "Mammalian conservation",
+        "short_label": "Mammals",
+        "evidence_cols": [
+            "isoform_conservation_frame_mammalian_frac_intact",
+            "isoform_conservation_frame_mammalian_start_codon_conserved",
+            "isoform_conservation_frame_mammalian_n_species_aligned",
+            "isoform_conservation_frame_mammalian_n_species_intact_frame",
+            "isoform_conservation_frame_mammalian_mean_pident",
+            "isoform_conservation_frame_mammalian_deepest_species",
+            "isoform_conservation_frame_mammalian_max_depth",
+        ],
+        "headline_col": "isoform_conservation_frame_mammalian_frac_intact",
+        "interpretation_hint": ("Is the alternative reading frame preserved deeper in mammals?"),
+    },
+    "E3_phylop_coding_selection": {
+        "axis": "E",
+        "label": "PhyloP coding selection",
+        "short_label": "PhyloP",
+        "evidence_cols": [
+            "isoform_conservation_phylop_at_tis",
+            "isoform_conservation_phylop_unique_region_mean",
+            "isoform_conservation_phylop_shared_region_mean",
+            "isoform_conservation_phylop_enrichment",
+            "isoform_conservation_phylop_kozak_mean",
+            "isoform_conservation_phastcons_unique_region_mean",
+            "isoform_conservation_phastcons_at_tis",
+        ],
+        "headline_col": "isoform_conservation_phylop_unique_region_mean",
+        "interpretation_hint": (
+            "Does the unique region show purifying selection by phyloP? Compare "
+            "to shared region for enrichment."
+        ),
+    },
+    "E4_multi_cell_line": {
+        "axis": "E",
+        "label": "Multi cell line expression",
+        "short_label": "Cell lines",
+        "evidence_cols": [
+            "expr_HeLa_initiation_efficiency",
+            "expr_HeLa_p_value",
+            "expr_HeLa_cpm",
+            "expr_K562_initiation_efficiency",
+            "expr_K562_p_value",
+            "expr_K562_cpm",
+            "expr_U2OS_initiation_efficiency",
+            "expr_U2OS_p_value",
+            "expr_U2OS_cpm",
+            "expr_RPE1_Async_initiation_efficiency",
+            "expr_RPE1_Async_p_value",
+            "expr_RPE1_Async_cpm",
+            "expr_RPE1_Que_initiation_efficiency",
+            "expr_RPE1_Que_p_value",
+            "expr_RPE1_Que_cpm",
+            "expr_RPE1_Sen_initiation_efficiency",
+            "expr_RPE1_Sen_p_value",
+            "expr_RPE1_Sen_cpm",
+        ],
+        "headline_col": None,  # multi-sample — UI shows a small table
+        "interpretation_hint": (
+            "Is the TIS reproducibly detected across multiple cell lines? Count "
+            "samples with significant p-values."
+        ),
+    },
+    "E5_initiation_efficiency": {
+        "axis": "E",
+        "label": "Initiation efficiency",
+        "short_label": "Init. eff.",
+        "evidence_cols": [
+            "ribo_pvalue",
+            "tis_pvalue",
+            "fisher_qvalue",
+            "expr_HeLa_initiation_efficiency",
+            "expr_K562_initiation_efficiency",
+            "expr_U2OS_initiation_efficiency",
+            "expr_RPE1_Async_initiation_efficiency",
+            "expr_RPE1_Que_initiation_efficiency",
+            "expr_RPE1_Sen_initiation_efficiency",
+        ],
+        "headline_col": "fisher_qvalue",
+        "interpretation_hint": (
+            "Is the Ribo-TISH signal strong enough that this TIS is reproducibly "
+            "initiating? Lower fisher_qvalue is better."
+        ),
+    },
+    "E6_mass_spec": {
+        "axis": "E",
+        "label": "Mass spec",
+        "short_label": "MS",
+        "evidence_cols": [
+            "isoform_massspec_summary",
+            "cmp_massspec_n_hits_in_diff_region",
+        ],
+        "evidence_hits_col": "cmp_massspec_hits_in_diff_region",
+        "headline_col": "cmp_massspec_n_hits_in_diff_region",
+        "interpretation_hint": (
+            "Are there PepQuery2 validated peptides in the isoform's unique region?"
+        ),
+    },
+    "F1_structured_extension": {
+        "axis": "F",
+        "label": "Structured extension",
+        "short_label": "Folding",
+        "evidence_cols": [
+            "isoform_structure_status",
+            "isoform_structure_plddt_canonical_mean",
+            "isoform_structure_plddt_isoform_mean",
+            "isoform_structure_plddt_diffregion_mean",
+            "isoform_structure_plddt_diffregion_std",
+            "isoform_structure_plddt_delta_shared",
+        ],
+        "headline_col": "isoform_structure_plddt_diffregion_mean",
+        "interpretation_hint": (
+            "Does the unique region fold confidently (Boltz pLDDT)? Higher "
+            "diffregion_mean means more structured."
+        ),
+    },
+    "F2_localization_change": {
+        "axis": "F",
+        "label": "Localization change",
+        "short_label": "Localization",
+        "evidence_cols": [
+            "cmp_localization_deeploc_prediction_changed",
+            "cmp_localization_deeploc_prediction_canonical",
+            "cmp_localization_deeploc_prediction_isoform",
+            "canonical_localization_deeploc_prediction",
+            "isoform_localization_deeploc_prediction",
+        ],
+        "headline_col": "cmp_localization_deeploc_prediction_changed",
+        "interpretation_hint": (
+            "Does DeepLoc predict a different subcellular location for the isoform vs canonical?"
+        ),
+    },
+    "F3_domain_change": {
+        "axis": "F",
+        "label": "Domain change",
+        "short_label": "Domains",
+        "evidence_cols": [
+            "isoform_interproscan_summary",
+            "cmp_interproscan_n_hits_in_diff_region",
+        ],
+        "evidence_hits_col": "cmp_interproscan_hits_in_diff_region",
+        "headline_col": "cmp_interproscan_n_hits_in_diff_region",
+        "interpretation_hint": ("Does the differential region overlap with InterProScan domains?"),
+    },
+    "F4_targeting_change": {
+        "axis": "F",
+        "label": "Targeting change",
+        "short_label": "Targeting",
+        "evidence_cols": [
+            "canonical_localization_deeploc_signals",
+            "isoform_localization_deeploc_signals",
+            "canonical_localization_deeploc_membrane",
+            "isoform_localization_deeploc_membrane",
+        ],
+        "headline_col": None,
+        "interpretation_hint": (
+            "Do targeting signals (NLS, signal peptide, etc.) differ between canonical and isoform?"
+        ),
+    },
+    "F5_pathogenic_variant_enrichment": {
+        "axis": "F",
+        "label": "Pathogenic variant enrichment",
+        "short_label": "Pathogenic",
+        "evidence_cols": [
+            "isoform_variant_intersection_n_pathogenic_in_unique_region",
+            "isoform_variant_intersection_n_pathogenic_in_shared_region",
+            "isoform_varianteffect_n_damaging_in_unique",
+            "isoform_varianteffect_mean_delta_llr_unique",
+            "isoform_varianteffect_mean_am_pathogenicity_unique",
+        ],
+        "evidence_hits_col": "isoform_variant_intersection_hits",
+        "headline_col": "isoform_variant_intersection_n_pathogenic_in_unique_region",
+        "interpretation_hint": (
+            "Are clinical variants enriched in the unique region "
+            "(vs shared region or genome average)?"
+        ),
+    },
+    "F6_clinical_variant_overlap": {
+        "axis": "F",
+        "label": "Clinical variant overlap",
+        "short_label": "Variants",
+        "evidence_cols": [
+            "isoform_variant_intersection_n_total",
+            "isoform_variant_intersection_n_in_unique_region",
+            "isoform_variant_intersection_n_in_shared_region",
+            "isoform_variant_intersection_n_dropped_outside_coding",
+        ],
+        "headline_col": "isoform_variant_intersection_n_in_unique_region",
+        "interpretation_hint": (
+            "How many clinical variants overlap the isoform's coding region at all?"
+        ),
+    },
+}
+
+
+def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[str, Any]:
+    """Build the per-(isoform, criterion) slice for V2 UI tiles + future LLM passes.
+
+    Args:
+        isoform_record: A full per-isoform record (one entry from
+            ``build_gene_record(...)["isoforms"]``) with the ``"_raw"`` mirror
+            of the parquet row.
+        criterion_id: One of the 12 keys in ``CRITERIA``.
+
+    Returns:
+        Dict with:
+          - ``criterion_id`` and ``axis``, ``label``, ``short_label``, ``interpretation_hint``
+          - ``isoform`` identity block (tis_id, gene_name, orf_type, etc.)
+          - ``value`` (True/False/None from isoform_scoring_criteria[criterion_id])
+          - ``reason`` (string from isoform_scoring_reasons[criterion_id])
+          - ``headline`` (the value at headline_col, or None)
+          - ``evidence`` (dict of {col_name: value} for all evidence_cols)
+          - ``hits`` (list of dicts from evidence_hits_col if present, else [])
+    """
+    if criterion_id not in CRITERIA:
+        raise KeyError(f"Unknown criterion: {criterion_id!r}")
+    cfg = CRITERIA[criterion_id]
+    raw = isoform_record.get("_raw") or {}
+    scoring = isoform_record.get("scoring") or {}
+    criteria_map = scoring.get("criteria") or {}
+    criterion_entry = criteria_map.get(criterion_id, {}) or {}
+
+    iso_block = {
+        "tis_id": isoform_record.get("tis_id"),
+        "gene_name": (isoform_record.get("gene") or {}).get("name"),
+        "orf_type": isoform_record.get("orf_type"),
+        "differential_sequence": isoform_record.get("differential_sequence"),
+        "diff_space": isoform_record.get("diff_space"),
+        "isoform_length_aa": isoform_record.get("isoform_length_aa"),
+        "canonical_length_aa": isoform_record.get("canonical_length_aa"),
+    }
+
+    evidence = {col: raw.get(col) for col in cfg["evidence_cols"]}
+    headline_col = cfg.get("headline_col")
+    headline = raw.get(headline_col) if headline_col else None
+
+    hits: list[dict[str, Any]] = []
+    hits_col = cfg.get("evidence_hits_col")
+    if hits_col:
+        raw_hits = raw.get(hits_col)
+        if raw_hits is not None:
+            try:
+                # Handle numpy arrays + lists
+                hits = [h for h in raw_hits if isinstance(h, dict)]
+            except TypeError:
+                hits = []
+
+    return {
+        "criterion_id": criterion_id,
+        "axis": cfg["axis"],
+        "label": cfg["label"],
+        "short_label": cfg["short_label"],
+        "interpretation_hint": cfg["interpretation_hint"],
+        "isoform": iso_block,
+        "value": criterion_entry.get("value"),
+        "reason": criterion_entry.get("reason"),
+        "headline": headline,
+        "evidence": evidence,
+        "hits": hits,
+    }
+
+
 if __name__ == "__main__":
     main()
