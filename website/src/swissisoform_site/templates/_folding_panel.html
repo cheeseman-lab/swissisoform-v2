@@ -73,13 +73,6 @@
 
 <script>
 (function() {
-  if (typeof molstar === 'undefined') {
-    document.querySelectorAll('.molstar-viewer-mini').forEach(function(el) {
-      el.innerHTML = '<div class="molstar-fallback">Mol* failed to load from CDN.</div>';
-    });
-    return;
-  }
-
   var HIGHLIGHT_LO       = {{ diff_lo_1based|int }};
   var HIGHLIGHT_HI       = {{ diff_hi_1based|int }};
   var DIFF_ON_CANONICAL  = {{ diff_on_canonical|tojson }};
@@ -116,17 +109,46 @@
     });
   }
 
-  {% if canonical_cif %}
-  loadViewer('molstar-canonical',
-             {{ url_for('structures', filename=canonical_cif)|tojson }},
-             DIFF_ON_CANONICAL,
-             CANONICAL_LEN);
-  {% endif %}
-  {% if isoform_cif %}
-  loadViewer('molstar-isoform',
-             {{ url_for('structures', filename=isoform_cif)|tojson }},
-             !DIFF_ON_CANONICAL,
-             ISOFORM_LEN);
-  {% endif %}
+  function loadFoldingViewers() {
+    if (typeof molstar === 'undefined') {
+      document.querySelectorAll('.molstar-viewer-mini').forEach(function(el) {
+        el.innerHTML = '<div class="molstar-fallback">Mol* failed to load from CDN.</div>';
+      });
+      return;
+    }
+    {% if canonical_cif %}
+    loadViewer('molstar-canonical',
+               {{ url_for('structures', filename=canonical_cif)|tojson }},
+               DIFF_ON_CANONICAL,
+               CANONICAL_LEN);
+    {% endif %}
+    {% if isoform_cif %}
+    loadViewer('molstar-isoform',
+               {{ url_for('structures', filename=isoform_cif)|tojson }},
+               !DIFF_ON_CANONICAL,
+               ISOFORM_LEN);
+    {% endif %}
+  }
+
+  // Defer the ~300 KB CIF fetch + WebGL init until the folding panel scrolls
+  // into view; Mol* itself is loaded deferred, so wait for it before starting.
+  var panel = document.getElementById('folding-panel');
+  if (!panel) { loadFoldingViewers(); return; }
+  var started = false;
+  function start() {
+    if (started) return;
+    if (typeof molstar === 'undefined') {
+      var t = setInterval(function () {
+        if (typeof molstar !== 'undefined') { clearInterval(t); started = true; loadFoldingViewers(); }
+      }, 30);
+      return;
+    }
+    started = true;
+    loadFoldingViewers();
+  }
+  var io = new IntersectionObserver(function (entries) {
+    if (entries.some(function (e) { return e.isIntersecting; })) { start(); io.disconnect(); }
+  }, { rootMargin: '200px' });
+  io.observe(panel);
 })();
 </script>
