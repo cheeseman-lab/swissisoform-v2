@@ -89,13 +89,17 @@ def create_app() -> Flask:
     """Build the Flask app. Factory pattern so tests can re-create cleanly."""
     app = Flask(__name__)
 
-    # Slugify filter — strips ``:`` and ``.`` from tis_ids so they're safe
-    # as DOM ids and CSS selectors.
-    _slug_re = re.compile(r"[^A-Za-z0-9_-]+")
+    # Slugify filter — must match data.py::tis_slug and the LLM dispatcher's
+    # _tis_slug so that landing-page dropdown links resolve to the right
+    # Flask route AND the right on-disk LLM output directory. Both call
+    # sites use ``re.sub(r"[:.]+", "-", ...)`` — replace ONLY ``:`` and ``.``.
+    # In particular DO NOT strip ``+`` (strand indicator on plus-strand
+    # isoforms); URLs handle literal ``+`` fine in path segments.
+    _slug_re = re.compile(r"[:.]+")
 
     @app.template_filter("slugify")
     def slugify(value: Any) -> str:
-        return _slug_re.sub("-", str(value)).strip("-")
+        return _slug_re.sub("-", str(value or "unknown"))
 
     # Surface the metric label dict + formatter so evidence-tile partials
     # can render human-readable rows without re-importing from the script.
