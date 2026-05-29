@@ -1,25 +1,25 @@
 // website/src/swissisoform_site/static/js/isoform_page.js
 //
 // V2 isoform page interaction:
-//   - Tab strip: clicking a tab unhides its body and hides the others
+//   - Evidence tiles: clicking a tile head toggles its body's hidden attribute
+//     and flips aria-expanded. Multiple tiles can be open at once.
 //   - Overlay toggles: variant/domain/motif/phyloP checkboxes restyle both
-//     plots via Plotly.restyle. Trace visibility is matched by trace name
-//     prefix ("variant ", "domain:", "motif:", "phyloP").
+//     plots via Plotly.restyle. No-op if the toggle DOM isn't present.
 
 (function () {
-  const tabs = document.querySelectorAll(".tab-strip .tab");
-  const bodies = document.querySelectorAll(".tab-body");
-  tabs.forEach((t) => {
-    t.addEventListener("click", () => {
-      tabs.forEach((x) => x.setAttribute("aria-selected", "false"));
-      bodies.forEach((b) => b.setAttribute("hidden", ""));
-      t.setAttribute("aria-selected", "true");
-      const key = t.getAttribute("data-tab");
-      const body = document.querySelector(`[data-tab-body="${key}"]`);
-      if (body) body.removeAttribute("hidden");
+  // Tile expand/collapse on click
+  document.querySelectorAll(".evidence-tile .tile-head").forEach((head) => {
+    head.addEventListener("click", () => {
+      const tile = head.closest(".evidence-tile");
+      const body = tile.querySelector(".tile-body");
+      const expanded = head.getAttribute("aria-expanded") === "true";
+      head.setAttribute("aria-expanded", expanded ? "false" : "true");
+      if (expanded) body.setAttribute("hidden", "");
+      else body.removeAttribute("hidden");
     });
   });
 
+  // Overlay toggles (no-op if .overlay-toggles is not in the DOM)
   function restyleByPrefix(divId, prefix, visible) {
     const gd = document.getElementById(divId);
     if (!gd || !gd.data) return;

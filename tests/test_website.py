@@ -238,9 +238,7 @@ def test_isoform_page_truncation_marks_canonical_as_diff_side(client):
     from swissisoform_site.data import tis_slug as make_slug
 
     # TRNT1 first isoform is a truncation in the cheeseman_12gene parquet.
-    r = client.get(
-        "/genes/TRNT1/isoforms/" + make_slug("chr3:3129127:+:ATG:ENST00000434583.5")
-    )
+    r = client.get("/genes/TRNT1/isoforms/" + make_slug("chr3:3129127:+:ATG:ENST00000434583.5"))
     assert r.status_code == 200
     body = r.data
     # The caption identifies the lost N-term on the canonical side.

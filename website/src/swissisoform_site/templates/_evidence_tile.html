@@ -1,0 +1,63 @@
+<div class="evidence-tile axis-{{ c.axis }}" data-criterion="{{ c.id }}" title="{{ sl.reason or '' }}">
+  <button class="tile-head" type="button" aria-expanded="false">
+    <span class="tile-id">{{ c.id.split('_')[0] }}</span>
+    <span class="tile-label">{{ c.label }}</span>
+    <span class="tile-badge tile-badge-{{ 'true' if sl.value == true else ('false' if sl.value == false else 'none') }}">
+      {% if sl.value == true %}✓{% elif sl.value == false %}✗{% else %}–{% endif %}
+    </span>
+  </button>
+  <div class="tile-headline">
+    {% if sl.headline is none %}
+      <span class="text-xs text-slate-400">—</span>
+    {% else %}
+      {{ sl.headline }}
+    {% endif %}
+  </div>
+  <div class="tile-body" hidden>
+    {% if llm %}
+      <div class="tile-llm">
+        <p class="rp-headline"><strong>{{ llm.headline }}</strong></p>
+        <p class="rp-summary">{{ llm.summary }}</p>
+      </div>
+    {% else %}
+      <p class="empty tile-llm-empty">Criterion LLM summary not yet generated.</p>
+    {% endif %}
+    <details class="tile-metrics" open>
+      <summary>Metrics</summary>
+      <table class="metrics-table">
+        <tbody>
+          {% for k, v in sl.evidence.items() %}
+          <tr>
+            <th>{{ k }}</th>
+            <td>
+              {% if v is none %}<span class="text-slate-400">—</span>
+              {% else %}{{ v }}
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% if sl.hits %}
+      <details class="tile-hits">
+        <summary>Hits ({{ sl.hits|length }})</summary>
+        <ul class="hits-list">
+          {% for h in sl.hits[:20] %}
+            <li>
+              {% if h.variant_id %}
+                {{ h.variant_id }}{% if h.hgvsp %} · {{ h.hgvsp }}{% endif %}{% if h.clinical_significance %} · {{ h.clinical_significance }}{% endif %}
+              {% elif h.peptide %}
+                {{ h.peptide }} ({{ h.length or h.peptide|length }} aa, pos {{ h.pos }}–{{ h.end }})
+              {% elif h.name or h.description %}
+                {{ h.name or h.description }}{% if h.start is defined and h.end is defined %} · {{ h.start }}–{{ h.end }}{% endif %}{% if h.db %} · {{ h.db }}{% endif %}
+              {% else %}
+                {{ h|tojson }}
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      </details>
+    {% endif %}
+  </div>
+</div>

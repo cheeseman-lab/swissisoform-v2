@@ -24,7 +24,6 @@ from flask import (
     send_from_directory,
     url_for,
 )
-
 from scripts.site.build_evidence_records import slice_criterion
 
 from swissisoform_site.data import (
