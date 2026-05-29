@@ -25,14 +25,17 @@ from flask import (
     url_for,
 )
 
+from scripts.site.build_evidence_records import slice_criterion
+
 from swissisoform_site.data import (
+    CRITERIA_FOR_PAGE,
     EXISTENCE_CRITERIA,
     FUNCTIONAL_CRITERIA,
     MODALITIES_FOR_PAGE,
     Isoform,
     _isoform_view,
     data_dir,
-    llm_modality_for_isoform,
+    llm_criterion_for_isoform,
     llm_synthesis_for_isoform,
     load_all,
     load_transcript_skeletons,
@@ -176,14 +179,33 @@ def create_app() -> Flask:
 
         llm_dir = data_dir_path / "llm"
         synthesis = llm_synthesis_for_isoform(llm_dir=llm_dir, tis_slug=tis_slug_str)
-        llm_existence: dict[str, dict | None] = {}
-        llm_functional: dict[str, dict | None] = {}
-        for m in MODALITIES_FOR_PAGE:
-            llm_existence[m["key"]] = llm_modality_for_isoform(
-                llm_dir=llm_dir, tis_slug=tis_slug_str, modality=m["key"], axis="existence"
-            )
-            llm_functional[m["key"]] = llm_modality_for_isoform(
-                llm_dir=llm_dir, tis_slug=tis_slug_str, modality=m["key"], axis="functional"
+
+        # Reconstruct the per-isoform record shape slice_criterion wants: a
+        # ``{"_raw": ..., "scoring": {"criteria": {name: {"value", "reason"}}}, ...}``
+        # blob derived from the V1 Isoform dataclass + parquet ``raw`` mirror.
+        combined_criteria = {
+            name: {"value": iso.criteria.get(name), "reason": iso.reasons.get(name)}
+            for name in iso.criteria
+        }
+        iso_record = {
+            "tis_id": iso.tis_id,
+            "gene": {"name": gene.name},
+            "orf_type": iso.orf_type,
+            "differential_sequence": iso.differential_sequence,
+            "diff_space": iso.diff_space,
+            "isoform_length_aa": iso.isoform_len,
+            "canonical_length_aa": iso.canonical_len,
+            "scoring": {"criteria": combined_criteria},
+            "_raw": iso.raw or {},
+        }
+
+        criterion_slices: dict[str, dict] = {}
+        criterion_llms: dict[str, dict | None] = {}
+        for c in CRITERIA_FOR_PAGE:
+            cid = c["id"]
+            criterion_slices[cid] = slice_criterion(iso_record, cid)
+            criterion_llms[cid] = llm_criterion_for_isoform(
+                llm_dir=llm_dir, tis_slug=tis_slug_str, criterion_id=cid
             )
 
         transcript_fig = build_transcript_figure(
@@ -194,12 +216,19 @@ def create_app() -> Flask:
         return render_template(
             "isoform.html",
             isoform=_isoform_view(iso, gene),
-            modalities=MODALITIES_FOR_PAGE,
-            llm_existence=llm_existence,
-            llm_functional=llm_functional,
+            criteria=CRITERIA_FOR_PAGE,
+            criterion_slices=criterion_slices,
+            criterion_llms=criterion_llms,
             synthesis=synthesis,
             transcript_figure_json=json.dumps(transcript_fig),
             protein_figure_json=json.dumps(protein_fig),
+            canonical_cif=iso.canonical_cif,
+            isoform_cif=iso.isoform_cif,
+            diff_start=iso.diff_start,
+            diff_end=iso.diff_end,
+            diff_space=iso.diff_space,
+            canonical_length_aa=iso.canonical_len,
+            isoform_length_aa=iso.isoform_len,
         )
 
     @app.get("/api/data.json")

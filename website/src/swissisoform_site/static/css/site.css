@@ -90,19 +90,33 @@
 
 .iso-shell { max-width: 1100px; margin: 0 auto; padding: 16px; }
 .iso-head h1 { margin-bottom: 0; }
-.iso-head .subtitle { color: #666; margin-top: 4px; }
-.iso-head .meta { font-size: 14px; color: #444; }
+.iso-head-line { color: #444; font-size: 14px; line-height: 1.5; }
+.iso-head-meta { color: #666; font-weight: 400; font-size: 16px; }
+.iso-head-tis { margin-top: 4px; }
 
-.pinned-graphs {
+/* 3-panel layout (transcript + protein + folding) */
+.iso-panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+  margin: 16px 0;
+}
+.iso-panel {
   border: 1px solid #ddd;
   border-radius: 6px;
   padding: 12px;
-  margin: 16px 0;
   background: #fafbfc;
 }
-.pinned-graphs .plotly-graph { width: 100%; min-height: 320px; margin-top: 8px; }
-.overlay-toggles { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; }
-.overlay-toggles label { display: inline-flex; align-items: center; gap: 6px; color: #444; }
+.iso-panel-h {
+  font-size: 13px;
+  font-weight: 600;
+  color: #555;
+  margin: 0 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.iso-panel .plotly-graph { width: 100%; min-height: 280px; }
+.iso-panel-folding .folding-placeholder { min-height: 280px; display: flex; align-items: center; justify-content: center; }
 
 .synthesis {
   border-left: 4px solid #2563eb;
@@ -115,48 +129,82 @@
 .syn-findings { margin: 8px 0; padding-left: 22px; }
 .syn-caveats { color: #666; font-size: 13px; }
 
-.tab-strip {
-  display: flex;
-  gap: 4px;
-  border-bottom: 1px solid #ddd;
-  margin-top: 24px;
-  overflow-x: auto;
-}
-.tab-strip .tab {
-  background: transparent;
-  border: 1px solid transparent;
-  border-bottom: none;
-  padding: 8px 14px;
-  cursor: pointer;
-  font-size: 14px;
-  color: #444;
-  white-space: nowrap;
-}
-.tab-strip .tab[aria-selected="true"] {
-  background: #fff;
-  border-color: #ddd;
-  color: #000;
+/* 12 evidence tiles */
+.evidence-tiles { margin-top: 24px; }
+.evidence-tiles > h2 { margin-bottom: 8px; }
+.tile-row { margin-top: 16px; }
+.tile-row-h {
+  font-size: 12px;
   font-weight: 600;
-  border-radius: 6px 6px 0 0;
+  color: #777;
+  margin: 0 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
-
-.tab-body { padding: 16px 4px; }
-.reading-pass-grid {
+.tile-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-  gap: 16px;
-  margin-bottom: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
 }
-.reading-pass-block {
-  border: 1px solid #e7e7e7;
+.evidence-tile {
+  border: 1px solid #ddd;
   border-radius: 6px;
-  padding: 10px 14px;
   background: #fff;
+  overflow: hidden;
+  transition: box-shadow 0.15s;
 }
-.reading-pass-block h3 { margin: 0 0 6px; font-size: 14px; color: #555; }
+.evidence-tile:hover { box-shadow: 0 2px 6px rgba(0,0,0,0.07); }
+.evidence-tile.axis-E { border-left: 3px solid #2563eb; }
+.evidence-tile.axis-F { border-left: 3px solid #16a34a; }
+.tile-head {
+  display: grid;
+  grid-template-columns: 32px 1fr 24px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.tile-id { font-size: 11px; font-weight: 700; color: #666; }
+.tile-label { font-size: 13px; font-weight: 500; color: #222; }
+.tile-badge {
+  font-size: 14px;
+  font-weight: 700;
+  text-align: center;
+  line-height: 1;
+}
+.tile-badge-true { color: #16a34a; }
+.tile-badge-false { color: #dc2626; }
+.tile-badge-none { color: #9ca3af; }
+.tile-headline {
+  padding: 4px 12px 10px;
+  font-size: 12px;
+  color: #444;
+  font-family: ui-monospace, monospace;
+}
+.tile-body {
+  padding: 8px 12px 12px;
+  border-top: 1px solid #eee;
+  background: #fafafa;
+  font-size: 12px;
+}
+.tile-llm-empty { color: #888; font-style: italic; }
+.tile-llm .rp-headline { margin: 0 0 4px; }
+.tile-llm .rp-summary { margin: 0 0 8px; line-height: 1.5; }
+.tile-metrics summary, .tile-hits summary { cursor: pointer; font-weight: 600; color: #555; margin-top: 8px; }
+.metrics-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 6px; }
+.metrics-table th { text-align: left; padding: 3px 6px; color: #666; font-weight: 500; font-family: ui-monospace, monospace; }
+.metrics-table td { text-align: right; padding: 3px 6px; font-family: ui-monospace, monospace; color: #222; }
+.metrics-table tr:nth-child(even) { background: #f3f4f6; }
+.hits-list { margin: 6px 0 0; padding-left: 18px; }
+.hits-list li { padding: 2px 0; font-size: 11px; }
+
 .rp-headline { margin: 4px 0; }
 .rp-summary { line-height: 1.5; color: #222; }
-.rp-meta { font-size: 12px; color: #777; margin-top: 8px; }
 
 .empty { color: #888; font-style: italic; }
 .placeholder { color: #999; font-style: italic; padding: 8px 0; }
@@ -182,3 +230,77 @@
 .iso-chip.ext { background: #dbeafe; color: #1e40af; }
 .iso-chip.trunc { background: #fee2e2; color: #991b1b; }
 .iso-chip.other { background: #f3f4f6; color: #374151; }
+
+/* ── Dual Mol* folding panel ── */
+.folding-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.folding-half {
+  border: 1px solid #e7e7e7;
+  border-radius: 6px;
+  padding: 8px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+}
+.folding-caption {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+.folding-title {
+  font-weight: 600;
+  color: #333;
+}
+.folding-diff-hint {
+  color: #666;
+  font-size: 10px;
+}
+.folding-diff-hint.diff-on {
+  color: #b91c1c;
+  font-weight: 600;
+}
+.molstar-viewer-mini {
+  width: 100%;
+  height: 260px;
+  position: relative;
+  background: #0f172a;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.molstar-fallback {
+  padding: 12px;
+  font-size: 11px;
+  color: #e2e8f0;
+  background: #1e293b;
+  text-align: center;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.molstar-fallback-error {
+  color: #fecaca;
+  background: #4c1d1d;
+}
+.residue-strip {
+  display: flex;
+  flex-wrap: nowrap;
+  height: 10px;
+  margin-top: 6px;
+  border: 1px solid #ddd;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.residue-bar {
+  flex: 1 0 1px;
+  background: #f3f4f6;
+}
+.residue-bar.diff {
+  background: #d62728;
+}
+.residue-strip-active { border-color: #d62728; }

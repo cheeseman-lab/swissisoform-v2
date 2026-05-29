@@ -5,108 +5,89 @@
 <div class="iso-shell">
   <nav class="crumbs">
     <a href="/">Index</a> /
-    <a href="/genes/{{ isoform.gene_name }}">{{ isoform.gene_name }}</a> /
-    <span class="crumb-current">{{ isoform.tis_id|slugify }}</span>
+    <span class="crumb-current">{{ isoform.gene_name }} · {{ isoform.tis_id }}</span>
   </nav>
 
   <header class="iso-head">
-    <h1>{{ isoform.gene_name }} · {{ isoform.transcript_id or 'transcript?' }}</h1>
-    <p class="subtitle">
-      {{ isoform.tis_id }} · {{ (isoform.orf_type or '?')|upper }} ·
-      {{ isoform.isoform_length_aa or '?' }} aa
-      (canonical: {{ isoform.canonical_length_aa or '?' }} aa)
-    </p>
-    <p class="meta">
+    <h1>{{ isoform.gene_name }}
+      <span class="iso-head-meta">· {{ isoform.transcript_id or 'transcript?' }}</span>
+    </h1>
+    <p class="iso-head-line">
+      <span class="orf-chip orf-{{ isoform.orf_type }}">{{ (isoform.orf_type or '?')|upper }}</span>
+      {{ isoform.isoform_length_aa or '?' }} aa (canonical {{ isoform.canonical_length_aa or '?' }} aa) ·
       {% if isoform.uniprot_id %}
-        <a href="https://www.uniprot.org/uniprotkb/{{ isoform.uniprot_id }}/entry" target="_blank">
-          {{ isoform.uniprot_id }}
-        </a> ·
+        <a href="https://www.uniprot.org/uniprotkb/{{ isoform.uniprot_id }}/entry" target="_blank" rel="noopener">UniProt {{ isoform.uniprot_id }}</a> ·
       {% endif %}
-      E {{ isoform.existence_score if isoform.existence_score is not none else '?' }}/{{ isoform.existence_evaluable or '?' }}
-      {% if isoform.existence_high_confidence %}hc{% endif %}
-      · F {{ isoform.functional_score if isoform.functional_score is not none else '?' }}/{{ isoform.functional_evaluable or '?' }}
-      {% if isoform.functional_high_confidence %}hc{% endif %}
+      <strong>E {{ isoform.existence_score if isoform.existence_score is not none else '?' }}/{{ isoform.existence_evaluable if isoform.existence_evaluable is not none else '?' }}</strong>{% if isoform.existence_high_confidence %} hc{% endif %} ·
+      <strong>F {{ isoform.functional_score if isoform.functional_score is not none else '?' }}/{{ isoform.functional_evaluable if isoform.functional_evaluable is not none else '?' }}</strong>{% if isoform.functional_high_confidence %} hc{% endif %}
     </p>
+    <p class="iso-head-tis"><span class="font-mono text-xs text-slate-500">{{ isoform.tis_id }}</span></p>
   </header>
 
-  <!-- Pinned graphs -->
-  <section class="pinned-graphs">
-    <div class="overlay-toggles">
-      <label><input type="checkbox" data-overlay="variants" checked> variants</label>
-      <label><input type="checkbox" data-overlay="domains" checked> domains</label>
-      <label><input type="checkbox" data-overlay="motifs" checked> motifs</label>
-      <label><input type="checkbox" data-overlay="phylop"> phyloP</label>
+  <!-- Pinned graph panels -->
+  <section class="iso-panels">
+    <div class="iso-panel iso-panel-transcript">
+      <h2 class="iso-panel-h">Genome / Transcript</h2>
+      <div id="graph-transcript" class="plotly-graph"></div>
     </div>
-    <div id="graph-transcript" class="plotly-graph"></div>
-    <div id="graph-protein" class="plotly-graph"></div>
+    <div class="iso-panel iso-panel-protein">
+      <h2 class="iso-panel-h">Protein</h2>
+      <div id="graph-protein" class="plotly-graph"></div>
+    </div>
+    <div class="iso-panel iso-panel-folding">
+      <h2 class="iso-panel-h">Folding</h2>
+      <div id="folding-panel">
+        {% include "_folding_panel.html" %}
+      </div>
+    </div>
   </section>
 
   <!-- Synthesis narrative (open by default) -->
   <section class="synthesis">
     <h2>Synthesis</h2>
     {% if synthesis %}
-    <p class="syn-headline"><strong>{{ synthesis.headline }}</strong></p>
-    <div class="syn-narrative">{{ (synthesis.narrative_html or synthesis.narrative or '') | safe }}</div>
-    {% if synthesis.key_findings %}
-    <ul class="syn-findings">
-      {% for f in synthesis.key_findings %}<li>{{ f }}</li>{% endfor %}
-    </ul>
-    {% endif %}
-    {% if synthesis.caveats %}
-    <p class="syn-caveats"><em>{{ synthesis.caveats }}</em></p>
-    {% endif %}
+      <p class="syn-headline"><strong>{{ synthesis.headline }}</strong></p>
+      <div class="syn-narrative">{{ (synthesis.narrative_html or synthesis.narrative or '') | safe }}</div>
+      {% if synthesis.key_findings %}
+        <ul class="syn-findings">
+          {% for f in synthesis.key_findings %}<li>{{ f }}</li>{% endfor %}
+        </ul>
+      {% endif %}
+      {% if synthesis.caveats %}
+        <p class="syn-caveats"><em>{{ synthesis.caveats }}</em></p>
+      {% endif %}
     {% else %}
-    <p class="empty">LLM synthesis not yet generated for this isoform.</p>
+      <p class="empty">LLM synthesis not yet generated for this isoform.</p>
     {% endif %}
   </section>
 
-  <!-- Modality tabs -->
-  <nav class="tab-strip" role="tablist">
-    {% for m in modalities %}
-    <button class="tab" role="tab" data-tab="{{ m.key }}"
-            {% if loop.first %}aria-selected="true"{% endif %}>
-      {{ m.label }}
-    </button>
-    {% endfor %}
-  </nav>
-
-  <section class="tab-bodies">
-    {% for m in modalities %}
-    <div class="tab-body" data-tab-body="{{ m.key }}"
-         {% if not loop.first %}hidden{% endif %}>
-      <div class="reading-pass-grid">
-        <div class="reading-pass-block">
-          <h3>Existence read</h3>
-          {% set ex = llm_existence.get(m.key) %}
-          {% if ex %}
-            <p class="rp-headline"><strong>{{ ex.headline }}</strong></p>
-            <p class="rp-summary">{{ ex.summary }}</p>
-            <p class="rp-meta">{{ ex.criteria_cited|join(', ') }} · confidence: {{ ex.confidence }}</p>
-          {% elif m.has_existence %}
-            <p class="empty">Reading-pass summary not yet generated for this modality.</p>
-          {% else %}
-            <p class="empty">Existence axis: not applicable for this modality.</p>
+  <!-- 12 evidence tiles -->
+  <section class="evidence-tiles">
+    <h2>Evidence</h2>
+    <div class="tile-row tile-row-existence">
+      <h3 class="tile-row-h">Existence (E)</h3>
+      <div class="tile-grid">
+        {% for c in criteria %}
+          {% if c.axis == 'E' %}
+            {% set sl = criterion_slices[c.id] %}
+            {% set llm = criterion_llms[c.id] %}
+            {% include '_evidence_tile.html' %}
           {% endif %}
-        </div>
-        <div class="reading-pass-block">
-          <h3>Functional read</h3>
-          {% set fn = llm_functional.get(m.key) %}
-          {% if fn %}
-            <p class="rp-headline"><strong>{{ fn.headline }}</strong></p>
-            <p class="rp-summary">{{ fn.summary }}</p>
-            <p class="rp-meta">{{ fn.criteria_cited|join(', ') }} · confidence: {{ fn.confidence }}</p>
-          {% elif m.has_functional %}
-            <p class="empty">Reading-pass summary not yet generated for this modality.</p>
-          {% else %}
-            <p class="empty">Functional axis: not applicable for this modality.</p>
-          {% endif %}
-        </div>
-      </div>
-      <div class="raw-evidence">
-        {% include "_tab_" + m.key + ".html" ignore missing %}
+        {% endfor %}
       </div>
     </div>
-    {% endfor %}
+    <div class="tile-row tile-row-functional">
+      <h3 class="tile-row-h">Functional (F)</h3>
+      <div class="tile-grid">
+        {% for c in criteria %}
+          {% if c.axis == 'F' %}
+            {% set sl = criterion_slices[c.id] %}
+            {% set llm = criterion_llms[c.id] %}
+            {% include '_evidence_tile.html' %}
+          {% endif %}
+        {% endfor %}
+      </div>
+    </div>
   </section>
 </div>
 

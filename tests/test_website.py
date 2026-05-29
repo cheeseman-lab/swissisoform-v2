@@ -188,3 +188,60 @@ def test_isoform_page_contains_graphs_and_synthesis_block(client):
     assert b"graph-transcript" in body
     assert b"graph-protein" in body
     assert b"Synthesis" in body
+    # 12-tile evidence grid replaced the 7-tab strip.
+    assert b"tab-strip" not in body
+    assert b"evidence-tile" in body
+
+
+def test_isoform_page_has_12_evidence_tiles(client):
+    """The V2 isoform page renders 12 evidence tiles (E1-E6, F1-F6) with axis classes."""
+    import pandas as pd
+    from swissisoform_site.data import tis_slug as make_slug
+
+    df = pd.read_parquet(WEBSITE_DATA / "all_paired.parquet", columns=["gene_name", "tis_id"])
+    row = df.iloc[0]
+    r = client.get(f"/genes/{row['gene_name']}/isoforms/{make_slug(row['tis_id'])}")
+    assert r.status_code == 200
+    body = r.data
+    # 12 evidence-tile class instances (one per criterion).
+    assert body.count(b"evidence-tile") >= 12
+    # Both axis classes present (E + F).
+    assert b"axis-E" in body
+    assert b"axis-F" in body
+    # Folding panel placeholder until Task D lands the dual Mol* viewer.
+    assert b"folding-panel" in body
+
+
+def test_isoform_page_renders_dual_molstar_viewers(client):
+    """The folding panel renders both Mol* viewer divs side-by-side."""
+    import pandas as pd
+    from swissisoform_site.data import tis_slug as make_slug
+
+    df = pd.read_parquet(WEBSITE_DATA / "all_paired.parquet", columns=["gene_name", "tis_id"])
+    row = df.iloc[0]
+    r = client.get(f"/genes/{row['gene_name']}/isoforms/{make_slug(row['tis_id'])}")
+    assert r.status_code == 200
+    body = r.data
+    # Both viewer divs present.
+    assert b"molstar-canonical" in body
+    assert b"molstar-isoform" in body
+    # Folding grid wrapper and per-side captions.
+    assert b"folding-grid" in body
+    assert b"Canonical" in body
+    assert b"Isoform" in body
+    # The diff-region hint is rendered on the relevant side.
+    assert b"highlighted" in body
+
+
+def test_isoform_page_truncation_marks_canonical_as_diff_side(client):
+    """For a truncation (diff_space=canonical), the canonical caption flags it."""
+    from swissisoform_site.data import tis_slug as make_slug
+
+    # TRNT1 first isoform is a truncation in the cheeseman_12gene parquet.
+    r = client.get(
+        "/genes/TRNT1/isoforms/" + make_slug("chr3:3129127:+:ATG:ENST00000434583.5")
+    )
+    assert r.status_code == 200
+    body = r.data
+    # The caption identifies the lost N-term on the canonical side.
+    assert b"Lost N-term" in body

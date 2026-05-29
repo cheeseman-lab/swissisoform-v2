@@ -1,0 +1,121 @@
+{# Dual Mol* folding viewer — canonical vs isoform side-by-side.
+
+   Context vars expected (set by isoform_page view):
+     - canonical_cif   : filename in /structures/ (or None)
+     - isoform_cif     : filename in /structures/ (or None)
+     - diff_start      : 0-based int (residue index, inclusive)
+     - diff_end        : 0-based int (residue index, exclusive)
+     - diff_space      : "canonical" | "isoform" — which structure carries the diff region
+     - canonical_length_aa : int | None
+     - isoform_length_aa   : int | None
+
+   The diff region is highlighted on the structure whose space matches
+   ``diff_space``. For truncations (diff_space=canonical) the lost N-term
+   shows red on the canonical viewer; for extensions (diff_space=isoform)
+   the gained N-term shows red on the isoform viewer.
+#}
+{% set diff_lo_1based = (diff_start or 0) + 1 %}
+{% set diff_hi_1based = diff_end if diff_end is not none else 0 %}
+{% set diff_on_canonical = (diff_space == 'canonical') %}
+
+<div class="folding-grid">
+  <div class="folding-half" data-side="canonical">
+    <div class="folding-caption">
+      <span class="folding-title">Canonical{% if canonical_length_aa %} ({{ canonical_length_aa }} aa){% endif %}</span>
+      {% if diff_on_canonical and diff_hi_1based %}
+        <span class="folding-diff-hint diff-on">Lost N-term: residues {{ diff_lo_1based }}–{{ diff_hi_1based }} highlighted</span>
+      {% else %}
+        <span class="folding-diff-hint">Reference structure</span>
+      {% endif %}
+    </div>
+    {% if canonical_cif %}
+      <div id="molstar-canonical" class="molstar-viewer-mini"></div>
+    {% else %}
+      <p class="empty">Canonical structure not predicted.</p>
+    {% endif %}
+  </div>
+
+  <div class="folding-half" data-side="isoform">
+    <div class="folding-caption">
+      <span class="folding-title">Isoform{% if isoform_length_aa %} ({{ isoform_length_aa }} aa){% endif %}</span>
+      {% if (not diff_on_canonical) and diff_hi_1based %}
+        <span class="folding-diff-hint diff-on">Gained N-term: residues {{ diff_lo_1based }}–{{ diff_hi_1based }} highlighted</span>
+      {% else %}
+        <span class="folding-diff-hint">Unchanged C-terminal region</span>
+      {% endif %}
+    </div>
+    {% if isoform_cif %}
+      <div id="molstar-isoform" class="molstar-viewer-mini"></div>
+    {% else %}
+      <p class="empty">Isoform structure not predicted.</p>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+(function() {
+  if (typeof molstar === 'undefined') {
+    document.querySelectorAll('.molstar-viewer-mini').forEach(function(el) {
+      el.innerHTML = '<div class="molstar-fallback">Mol* failed to load from CDN.</div>';
+    });
+    return;
+  }
+
+  var HIGHLIGHT_LO       = {{ diff_lo_1based|int }};
+  var HIGHLIGHT_HI       = {{ diff_hi_1based|int }};
+  var DIFF_ON_CANONICAL  = {{ diff_on_canonical|tojson }};
+  var CANONICAL_LEN      = {{ (canonical_length_aa or 0)|int }};
+  var ISOFORM_LEN        = {{ (isoform_length_aa or 0)|int }};
+
+  function loadViewer(divId, cifUrl, doHighlight, totalLen) {
+    var el = document.getElementById(divId);
+    if (!el) return;
+    return molstar.Viewer.create(divId, {
+      layoutIsExpanded: false,
+      layoutShowControls: false,
+      layoutShowRemoteState: false,
+      layoutShowSequence: false,
+      layoutShowLog: false,
+      layoutShowLeftPanel: false,
+      viewportShowExpand: true,
+      viewportShowSelectionMode: false,
+      viewportShowAnimation: false,
+      pdbProvider: 'rcsb',
+      emdbProvider: 'rcsb'
+    }).then(function(viewer) {
+      return viewer.loadStructureFromUrl(cifUrl, 'mmcif').then(function() {
+        // Always draw the HTML residue strip — it's a reliable fallback that
+        // shows the diff region even if Mol*'s 3D highlight no-ops on a given
+        // Mol* version. The strip lives below the viewer, not inside it.
+        if (window.swissisoformResidueStrip && HIGHLIGHT_HI > 0 && totalLen > 0) {
+          window.swissisoformResidueStrip(el, HIGHLIGHT_LO, HIGHLIGHT_HI, totalLen, doHighlight);
+        }
+        // Best-effort 3D highlight on the structure that carries the diff.
+        if (doHighlight && window.swissisoformHighlight && HIGHLIGHT_HI > 0) {
+          try {
+            window.swissisoformHighlight(viewer, HIGHLIGHT_LO, HIGHLIGHT_HI, true);
+          } catch (e) {
+            console.warn('molstar highlight failed on ' + divId + ':', e);
+          }
+        }
+      });
+    }).catch(function(err) {
+      console.error('molstar load failed for ' + divId + ':', err);
+      el.innerHTML = '<div class="molstar-fallback molstar-fallback-error">Failed to load structure: ' + (err && err.message ? err.message : err) + '</div>';
+    });
+  }
+
+  {% if canonical_cif %}
+  loadViewer('molstar-canonical',
+             {{ url_for('structures', filename=canonical_cif)|tojson }},
+             DIFF_ON_CANONICAL,
+             CANONICAL_LEN);
+  {% endif %}
+  {% if isoform_cif %}
+  loadViewer('molstar-isoform',
+             {{ url_for('structures', filename=isoform_cif)|tojson }},
+             !DIFF_ON_CANONICAL,
+             ISOFORM_LEN);
+  {% endif %}
+})();
+</script>
