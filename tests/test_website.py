@@ -225,8 +225,8 @@ def test_isoform_page_has_12_evidence_tiles(client):
     assert b"folding-panel" in body
 
 
-def test_isoform_page_renders_dual_molstar_viewers(client):
-    """The folding panel renders both Mol* viewer divs side-by-side."""
+def test_isoform_page_renders_single_superposed_viewer(client):
+    """The folding panel renders one superposed Mol* viewer + a color legend."""
     import pandas as pd
     from swissisoform_site.data import tis_slug as make_slug
 
@@ -235,15 +235,13 @@ def test_isoform_page_renders_dual_molstar_viewers(client):
     r = client.get(f"/genes/{row['gene_name']}/isoforms/{make_slug(row['tis_id'])}")
     assert r.status_code == 200
     body = r.data
-    # Both viewer divs present.
-    assert b"molstar-canonical" in body
-    assert b"molstar-isoform" in body
-    # Folding grid wrapper and per-side captions.
-    assert b"folding-grid" in body
-    assert b"Canonical" in body
-    assert b"Isoform" in body
-    # The diff-region hint is rendered on the relevant side.
-    assert b"highlighted" in body
+    # Single viewer + legend; the old dual divs are gone.
+    assert b"folding-viewer" in body
+    assert b"folding-legend" in body
+    assert b"molstar-canonical" not in body
+    assert b"molstar-isoform" not in body
+    # Legend names the colors (grey = shared core, red = differential region).
+    assert b"Shared core" in body
 
 
 def test_isoform_page_has_evidence_modal_element(client):
@@ -270,15 +268,14 @@ def test_isoform_page_has_evidence_modal_element(client):
     assert body.count(b"tile-body-template") >= 12
 
 
-def test_isoform_page_truncation_marks_canonical_as_diff_side(client):
-    """For a truncation (diff_space=canonical), the canonical caption flags it."""
+def test_isoform_page_truncation_marks_differential_region(client):
+    """For a truncation, the folding legend names the differential region."""
     from swissisoform_site.data import tis_slug as make_slug
 
     # TRNT1 first isoform is a truncation in the cheeseman_12gene parquet.
     r = client.get("/genes/TRNT1/isoforms/" + make_slug("chr3:3129127:+:ATG:ENST00000434583.5"))
     assert r.status_code == 200
     body = r.data
-    # The captions identify the asymmetry: canonical has the lost N-term,
-    # isoform explicitly states where it starts in canonical-space.
-    assert b"LOST in isoform" in body
-    assert b"Starts at canonical residue" in body
+    # The single viewer's legend flags the lost (differential) region by residue range.
+    assert b"folding-legend" in body
+    assert b"Differential region" in body
