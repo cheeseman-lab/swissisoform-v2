@@ -464,23 +464,6 @@ def load_transcript_skeletons(path: Path) -> dict[str, TranscriptSkeleton]:
     return out
 
 
-def llm_modality_for_isoform(
-    *, llm_dir: Path, tis_slug: str, modality: str, axis: str
-) -> dict | None:
-    """Return one modality reading-pass result from disk, or None if missing.
-
-    Reads ``<llm_dir>/<tis_slug>/{axis}.json`` and indexes by modality.
-    """
-    p = Path(llm_dir) / tis_slug / f"{axis}.json"
-    if not p.exists():
-        return None
-    try:
-        blob = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    return blob.get(modality)
-
-
 def llm_synthesis_for_isoform(*, llm_dir: Path, tis_slug: str) -> dict | None:
     """Return the per-isoform synthesis JSON, or None if missing."""
     p = Path(llm_dir) / tis_slug / "synthesis.json"
@@ -495,32 +478,6 @@ def llm_synthesis_for_isoform(*, llm_dir: Path, tis_slug: str) -> dict | None:
 def tis_slug(tis_id: str) -> str:
     """URL-safe form of a tis_id (replaces ``:`` and ``.`` with ``-``)."""
     return re.sub(r"[:.]+", "-", tis_id or "unknown")
-
-
-MODALITIES_FOR_PAGE = [
-    {"key": "cell_lines", "label": "Cell lines", "has_existence": True, "has_functional": False},
-    {
-        "key": "conservation",
-        "label": "Conservation",
-        "has_existence": True,
-        "has_functional": False,
-    },
-    {"key": "variants", "label": "Variants", "has_existence": False, "has_functional": True},
-    {"key": "mass_spec", "label": "Mass spec", "has_existence": True, "has_functional": False},
-    {"key": "structure", "label": "Structure", "has_existence": False, "has_functional": True},
-    {
-        "key": "domains_motifs",
-        "label": "Domains & motifs",
-        "has_existence": False,
-        "has_functional": True,
-    },
-    {
-        "key": "localization",
-        "label": "Localization",
-        "has_existence": False,
-        "has_functional": True,
-    },
-]
 
 
 def _isoform_view(iso, gene):
@@ -568,7 +525,7 @@ def llm_for_isoform(gene: GeneRecord, tis_id: str) -> dict[str, Any] | None:
     return None
 
 
-# Parallel to MODALITIES_FOR_PAGE — drives the 12-tile UI grid on the isoform page.
+# Drives the 12-tile UI grid on the isoform page (E1..E6, F1..F6).
 CRITERIA_FOR_PAGE = [
     {
         "id": "E1_primate_conservation",

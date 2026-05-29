@@ -285,9 +285,9 @@ def test_parse_response_strips_markdown_fence(mod):
 # ── PASS_REGISTRY (shared per-pass machinery) ─────────────────────────────
 
 
-def test_pass_registry_lists_v1_plus_three_v2_passes(mod):
-    """The PASS_REGISTRY exposes v1 (default) plus existence/functional/synthesis."""
-    assert set(mod.PASS_REGISTRY) >= {"default", "existence", "functional", "synthesis"}
+def test_pass_registry_lists_v1_plus_two_v2_passes(mod):
+    """The PASS_REGISTRY exposes v1 (default) plus criteria + synthesis."""
+    assert set(mod.PASS_REGISTRY) == {"default", "criteria", "synthesis"}
 
 
 def test_pass_default_uses_v1_system_prompt(mod):
@@ -297,43 +297,44 @@ def test_pass_default_uses_v1_system_prompt(mod):
     assert spec.output_filename_template == "{gene}.json"
 
 
-# ── Existence + synthesis pass dispatch ───────────────────────────────────
+# ── Criteria + synthesis pass dispatch ────────────────────────────────────
 
 
-def test_existence_pass_dry_run_emits_one_call_per_modality(monkeypatch, tmp_path, capsys):
-    """Existence pass iterates over 7 modalities × N isoforms."""
+def _ISO_FIXTURE_RECORD() -> dict:
+    """Synthetic per-gene evidence record exercising the criteria pass."""
+    return {
+        "gene": {
+            "name": "GENE_A",
+            "uniprot_id": None,
+            "function": None,
+            "subcellular_location": None,
+        },
+        "isoforms": [
+            {
+                "tis_id": "chr1:100:+:ATG:ENST_A",
+                "orf_type": "truncated",
+                "differential_sequence": "M",
+                "diff_space": "canonical",
+                "isoform_length_aa": 50,
+                "canonical_length_aa": 60,
+                "alt_start_codon": "ATG",
+                "kozak_context": "AAAA",
+                "scoring": {"criteria": {}},
+                "key_metrics": {},
+                "pathogenic_variants_in_unique": [],
+                "_raw": {},
+            }
+        ],
+    }
+
+
+def test_criteria_pass_dry_run_emits_one_call_per_criterion(monkeypatch, tmp_path, capsys):
+    """Criteria pass iterates over 12 criteria × N isoforms."""
     from scripts.site import run_llm_interpretation as rli
 
     records_dir = tmp_path / "records"
     records_dir.mkdir()
-    (records_dir / "GENE_A.json").write_text(
-        json.dumps(
-            {
-                "gene": {
-                    "name": "GENE_A",
-                    "uniprot_id": None,
-                    "function": None,
-                    "subcellular_location": None,
-                },
-                "isoforms": [
-                    {
-                        "tis_id": "chr1:100:+:ATG:ENST_A",
-                        "orf_type": "truncated",
-                        "differential_sequence": "M",
-                        "diff_space": "canonical",
-                        "isoform_length_aa": 50,
-                        "canonical_length_aa": 60,
-                        "alt_start_codon": "ATG",
-                        "kozak_context": "AAAA",
-                        "scoring": {"criteria": {}},
-                        "key_metrics": {},
-                        "pathogenic_variants_in_unique": [],
-                        "_raw": {},
-                    }
-                ],
-            }
-        )
-    )
+    (records_dir / "GENE_A.json").write_text(json.dumps(_ISO_FIXTURE_RECORD()))
     out_dir = tmp_path / "out"
     rc = rli.main(
         [
@@ -342,14 +343,14 @@ def test_existence_pass_dry_run_emits_one_call_per_modality(monkeypatch, tmp_pat
             "--out",
             str(out_dir),
             "--pass",
-            "existence",
+            "criteria",
             "--dry-run",
         ]
     )
     captured = capsys.readouterr().out
     assert rc == 0
-    # 7 modalities × 1 isoform = 7 dry-run prints (modality marker per block).
-    assert captured.count("modality:") == 7
+    # 12 criteria × 1 isoform = 12 dry-run "criterion:" prints.
+    assert captured.count("criterion:") == 12
 
 
 def test_synthesis_pass_refuses_without_prereqs(monkeypatch, tmp_path):
@@ -382,42 +383,21 @@ def test_synthesis_pass_refuses_without_prereqs(monkeypatch, tmp_path):
             "--dry-run",
         ]
     )
-    assert rc != 0  # missing existence / functional outputs
+    # Synthesis requires the criteria.json prereq; missing → exit code 2.
+    assert rc == 2
 
 
-def test_existence_pass_skips_isoforms_with_existing_output(monkeypatch, tmp_path, capsys):
-    """Re-running existence without --force is a no-op for isoforms that already have output."""
+def test_criteria_pass_skips_isoforms_with_existing_output(monkeypatch, tmp_path, capsys):
+    """Re-running the criteria pass without --force is a no-op for done isoforms."""
     from scripts.site import run_llm_interpretation as rli
 
     records_dir = tmp_path / "records"
     records_dir.mkdir()
-    (records_dir / "GENE_A.json").write_text(
-        json.dumps(
-            {
-                "gene": {"name": "GENE_A"},
-                "isoforms": [
-                    {
-                        "tis_id": "chr1:100:+:ATG:ENST_A",
-                        "orf_type": "truncated",
-                        "differential_sequence": "M",
-                        "diff_space": "canonical",
-                        "isoform_length_aa": 50,
-                        "canonical_length_aa": 60,
-                        "alt_start_codon": "ATG",
-                        "kozak_context": "AAAA",
-                        "scoring": {"criteria": {}},
-                        "key_metrics": {},
-                        "pathogenic_variants_in_unique": [],
-                        "_raw": {},
-                    }
-                ],
-            }
-        )
-    )
+    (records_dir / "GENE_A.json").write_text(json.dumps(_ISO_FIXTURE_RECORD()))
     out_dir = tmp_path / "out"
     tis_slug = rli._tis_slug("chr1:100:+:ATG:ENST_A")
     (out_dir / tis_slug).mkdir(parents=True)
-    (out_dir / tis_slug / "existence.json").write_text("{}")
+    (out_dir / tis_slug / "criteria.json").write_text("{}")
 
     rc = rli.main(
         [
@@ -426,59 +406,47 @@ def test_existence_pass_skips_isoforms_with_existing_output(monkeypatch, tmp_pat
             "--out",
             str(out_dir),
             "--pass",
-            "existence",
+            "criteria",
             "--dry-run",
         ]
     )
     captured = capsys.readouterr().out
     assert rc == 0
     # With output present and --force absent, dry-run should NOT emit any
-    # "modality:" lines for this isoform — it skips entirely.
-    assert captured.count("modality:") == 0
+    # "criterion:" lines for this isoform — it skips entirely.
+    assert captured.count("criterion:") == 0
     # And it should explicitly report the skip:
     assert "[skip]" in captured
 
 
-def test_synthesis_input_record_pulls_existence_and_functional(monkeypatch, tmp_path):
-    """synthesis._build_input_record stitches together prereq outputs."""
+def test_synthesis_input_record_pulls_criteria_reads(monkeypatch, tmp_path):
+    """synthesis._build_synthesis_record reads criteria.json into criteria_reads."""
     from scripts.site import run_llm_interpretation as rli
 
     tis_slug = "chr1-100-ATG-ENST_A"
     base = tmp_path / tis_slug
     base.mkdir()
-    (base / "existence.json").write_text(
-        json.dumps(
-            {
-                "variants": {
-                    "modality": "variants",
-                    "axis": "existence",
-                    "headline": "x",
-                    "summary": "y",
-                    "criteria_cited": ["E5_clinical_variants_exist"],
-                    "confidence": "high",
-                }
-            }
-        )
-    )
-    (base / "functional.json").write_text(
-        json.dumps(
-            {
-                "variants": {
-                    "modality": "variants",
-                    "axis": "functional",
-                    "headline": "x",
-                    "summary": "y",
-                    "criteria_cited": ["F5_pathogenic_variant_enrichment"],
-                    "confidence": "high",
-                }
-            }
-        )
-    )
+    criteria_payload = {
+        "E1_primate_conservation": {
+            "criterion_id": "E1_primate_conservation",
+            "headline": "primate frame intact",
+            "summary": "frac_intact=0.96",
+            "confidence": "high",
+        },
+        "F5_pathogenic_variant_enrichment": {
+            "criterion_id": "F5_pathogenic_variant_enrichment",
+            "headline": "enriched",
+            "summary": "n_damaging=2/104",
+            "confidence": "medium",
+        },
+    }
+    (base / "criteria.json").write_text(json.dumps(criteria_payload))
     iso = {
         "tis_id": "chr1:100:+:ATG:ENST_A",
         "scoring": {"existence_score": 5, "functional_score": 5},
     }
     rec = rli._build_synthesis_record(iso, "GENE_A", base)
     assert rec["isoform"]["tis_id"] == "chr1:100:+:ATG:ENST_A"
-    assert "variants.existence" in rec["reading_passes"]
-    assert "variants.functional" in rec["reading_passes"]
+    assert "E1_primate_conservation" in rec["criteria_reads"]
+    assert "F5_pathogenic_variant_enrichment" in rec["criteria_reads"]
+    assert rec["criteria_reads"]["E1_primate_conservation"]["confidence"] == "high"

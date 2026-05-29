@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CriterionRead",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["criterion_id", "headline", "summary", "confidence"],
+  "properties": {
+    "criterion_id": {"type": "string", "minLength": 1},
+    "headline": {"type": "string", "minLength": 1, "maxLength": 200},
+    "summary": {"type": "string", "minLength": 1, "maxLength": 1000},
+    "confidence": {"type": "string", "enum": ["high", "medium", "low", "n/a"]}
+  }
+}

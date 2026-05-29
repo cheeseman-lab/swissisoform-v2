@@ -138,17 +138,16 @@ def test_transcript_skeleton_loaded_for_known_transcript():
     assert len(sample.exons) >= 1
 
 
-def test_llm_modality_for_isoform_returns_none_when_missing(tmp_path):
-    """llm_modality_for_isoform tolerates a missing JSON file."""
+def test_llm_criterion_for_isoform_returns_none_when_missing(tmp_path):
+    """llm_criterion_for_isoform tolerates a missing JSON file."""
     if str(WEBSITE_SRC) not in sys.path:
         sys.path.insert(0, str(WEBSITE_SRC))
-    from swissisoform_site.data import llm_modality_for_isoform
+    from swissisoform_site.data import llm_criterion_for_isoform
 
-    out = llm_modality_for_isoform(
+    out = llm_criterion_for_isoform(
         llm_dir=tmp_path,
         tis_slug="chr1-100-ATG-ENST_A",
-        modality="variants",
-        axis="existence",
+        criterion_id="E1_primate_conservation",
     )
     assert out is None
 

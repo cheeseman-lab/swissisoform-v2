@@ -214,8 +214,8 @@ class PassSpec:
     name: str
     system_prompt_filename: str
     output_schema_filename: str
-    output_filename_template: str  # e.g. "{gene}.json", "{tis_slug}/existence.json"
-    iterates_modalities: bool = False  # True for existence + functional passes
+    output_filename_template: str  # e.g. "{gene}.json", "{tis_slug}/criteria.json"
+    iterates_criteria: bool = False  # True for the per-criterion pass
     requires_prereq: tuple[str, ...] = ()  # other pass names that must have produced output
 
 
@@ -226,26 +226,19 @@ PASS_REGISTRY: dict[str, PassSpec] = {
         output_schema_filename="output_schema.json",
         output_filename_template="{gene}.json",
     ),
-    "existence": PassSpec(
-        name="existence",
-        system_prompt_filename="existence-pass.txt",
-        output_schema_filename="output_schemas/modality_read.json",
-        output_filename_template="{tis_slug}/existence.json",
-        iterates_modalities=True,
-    ),
-    "functional": PassSpec(
-        name="functional",
-        system_prompt_filename="functional-pass.txt",
-        output_schema_filename="output_schemas/modality_read.json",
-        output_filename_template="{tis_slug}/functional.json",
-        iterates_modalities=True,
+    "criteria": PassSpec(
+        name="criteria",
+        system_prompt_filename="criterion-pass.txt",
+        output_schema_filename="output_schemas/criterion_read.json",
+        output_filename_template="{tis_slug}/criteria.json",
+        iterates_criteria=True,
     ),
     "synthesis": PassSpec(
         name="synthesis",
         system_prompt_filename="synthesis-pass.txt",
         output_schema_filename="output_schemas/synthesis.json",
         output_filename_template="{tis_slug}/synthesis.json",
-        requires_prereq=("existence", "functional"),
+        requires_prereq=("criteria",),
     ),
 }
 
@@ -520,7 +513,7 @@ def main(argv: list[str] | None = None) -> int:
     if spec.requires_prereq:
         missing = _check_prereqs(records, args.out, spec.requires_prereq)
         if missing:
-            hint = "; then ".join(f"--pass {p}" for p in spec.requires_prereq)
+            hint = ", ".join(f"--pass {p}" for p in spec.requires_prereq)
             print(
                 f"{spec.name}: missing prereq outputs for {len(missing)} isoform(s); "
                 f"run {hint} first.",
@@ -528,27 +521,8 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
 
-    if spec.iterates_modalities:
-        # build_evidence_records lives next to this script. When run as a file
-        # (python scripts/site/run_llm_interpretation.py), the scripts/ package
-        # isn't on sys.path; under pytest it is. Support both.
-        try:
-            from scripts.site.build_evidence_records import (
-                MODALITY_CRITERIA,
-                slice_modality,
-            )
-        except ModuleNotFoundError:
-            sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-            from scripts.site.build_evidence_records import (
-                MODALITY_CRITERIA,
-                slice_modality,
-            )
-
-        modalities = sorted(MODALITY_CRITERIA)
-        axis = spec.name  # "existence" or "functional"
-        return _run_modality_pass(
-            records, modalities, axis, spec, args, system_prompt, output_schema, slice_modality
-        )
+    if spec.iterates_criteria:
+        return _run_criterion_pass(records, spec, args, system_prompt, output_schema)
 
     if spec.name == "synthesis":
         return _run_synthesis_pass(records, spec, args, system_prompt, output_schema)
@@ -624,10 +598,17 @@ def _check_prereqs(records, out_dir: Path, prereqs: tuple[str, ...]) -> list[str
     return missing
 
 
-def _run_modality_pass(
-    records, modalities, axis, spec, args, system_prompt, output_schema, slice_modality
-) -> int:
-    """Per-(isoform, modality) dispatch loop for existence + functional passes."""
+def _run_criterion_pass(records, spec, args, system_prompt, output_schema) -> int:
+    """Per-(isoform, criterion) dispatch — 12 calls per isoform."""
+    # build_evidence_records lives next to this script. When run as a file
+    # (python scripts/site/run_llm_interpretation.py), the scripts/ package
+    # isn't on sys.path; under pytest it is. Support both.
+    try:
+        from scripts.site.build_evidence_records import CRITERIA, slice_criterion
+    except ModuleNotFoundError:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+        from scripts.site.build_evidence_records import CRITERIA, slice_criterion
+
     api_key = os.environ.get("ANTHROPIC_API_KEY") if not args.dry_run else "dry"
     if not api_key:
         raise RuntimeError(
@@ -635,31 +616,34 @@ def _run_modality_pass(
         )
 
     args.out.mkdir(parents=True, exist_ok=True)
+    criterion_ids = list(CRITERIA.keys())  # 12 of them, ordered E1..E6, F1..F6
     n_calls = 0
     n_ok = 0
+
     for gene_name, gene_record in records.items():
         for iso in gene_record.get("isoforms", []) or []:
-            tis_slug = _tis_slug(iso.get("tis_id"))
-            out_filename = spec.output_filename_template.format(tis_slug=tis_slug)
+            tis_slug_val = _tis_slug(iso.get("tis_id"))
+            out_filename = spec.output_filename_template.format(tis_slug=tis_slug_val)
             out_path = args.out / out_filename
             # Idempotency: skip the entire isoform if its output already exists
             # (and not in --force). This applies in both real and dry-run modes —
             # dry-run prints already-exist skips so the user can audit them.
             if out_path.exists() and not args.force:
                 if args.dry_run:
-                    print(f"[skip] {gene_name} {tis_slug}: {out_path.name} exists")
+                    print(f"[skip] {gene_name} {tis_slug_val}: {out_path.name} exists")
                 continue
-            out_dir = args.out / tis_slug
-            out_dir.mkdir(parents=True, exist_ok=True)
+
+            out_dir = args.out / tis_slug_val
+            if not args.dry_run:
+                out_dir.mkdir(parents=True, exist_ok=True)
+
             results: dict[str, Any] = {}
-            for modality in modalities:
-                modality_record = slice_modality(
-                    {**iso, "gene": {"name": gene_name}}, modality, axis=axis
-                )
-                prompt = build_prompt(modality_record, system_prompt, output_schema)
+            for cid in criterion_ids:
+                criterion_record = slice_criterion({**iso, "gene": {"name": gene_name}}, cid)
+                prompt = build_prompt(criterion_record, system_prompt, output_schema)
                 n_calls += 1
                 if args.dry_run:
-                    print(f"[{n_calls}] {gene_name} {tis_slug} modality: {modality} axis: {axis}")
+                    print(f"[{n_calls}] {gene_name} {tis_slug_val} criterion: {cid}")
                     continue
                 try:
                     response_text = call_llm(
@@ -670,15 +654,15 @@ def _run_modality_pass(
                         api_key=api_key,
                     )
                     payload = parse_response(response_text)
-                    results[modality] = payload
+                    results[cid] = payload
                     n_ok += 1
                 except Exception as e:
-                    print(f"[{n_calls}] {modality} FAIL: {e}", file=sys.stderr)
-                    results[modality] = {"error": str(e)}
+                    print(f"[{n_calls}] {cid} FAIL: {e}", file=sys.stderr)
+                    results[cid] = {"error": str(e)}
 
-            out_path.parent.mkdir(parents=True, exist_ok=True)
             if args.dry_run:
                 continue
+            out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(json.dumps(results, indent=2, ensure_ascii=False))
 
     if args.dry_run:
@@ -688,15 +672,11 @@ def _run_modality_pass(
 
 
 def _build_synthesis_record(isoform: dict, gene_name: str, isoform_out_dir: Path) -> dict:
-    """Build the synthesis-pass input from disk-cached existence + functional outputs."""
-    reading_passes: dict[str, Any] = {}
-    for pass_name in ("existence", "functional"):
-        pp = isoform_out_dir / f"{pass_name}.json"
-        if not pp.exists():
-            continue
-        payload = json.loads(pp.read_text(encoding="utf-8"))
-        for modality, body in payload.items():
-            reading_passes[f"{modality}.{pass_name}"] = body
+    """Build the synthesis-pass input from the disk-cached criteria.json output."""
+    criteria_reads: dict[str, Any] = {}
+    pp = isoform_out_dir / "criteria.json"
+    if pp.exists():
+        criteria_reads = json.loads(pp.read_text(encoding="utf-8"))
     return {
         "isoform": {
             "tis_id": isoform.get("tis_id"),
@@ -709,7 +689,7 @@ def _build_synthesis_record(isoform: dict, gene_name: str, isoform_out_dir: Path
         },
         "scoring": isoform.get("scoring") or {},
         "key_metrics": isoform.get("key_metrics") or {},
-        "reading_passes": reading_passes,
+        "criteria_reads": criteria_reads,
     }
 
 

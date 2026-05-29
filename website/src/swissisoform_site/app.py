@@ -34,7 +34,6 @@ from swissisoform_site.data import (
     CRITERIA_FOR_PAGE,
     EXISTENCE_CRITERIA,
     FUNCTIONAL_CRITERIA,
-    MODALITIES_FOR_PAGE,
     Isoform,
     _isoform_view,
     data_dir,
@@ -53,52 +52,36 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def _log_llm_coverage(genes: dict, llm_dir: Path, modalities: list) -> None:
-    """Print one summary line — easier to spot 'why are these tabs empty?' than per-request logs."""
+def _log_llm_coverage(genes: dict, llm_dir: Path) -> None:
+    """Print one summary line — easier to spot missing LLM JSONs than per-request logs."""
     log = logging.getLogger("swissisoform_site.coverage")
     n_iso = sum(len(g.isoforms) for g in genes.values())
     n_syn = 0
-    n_ex = 0
-    n_fn = 0
-    n_ex_cells = 0
-    n_fn_cells = 0
+    n_criteria_files = 0
+    n_criteria_cells = 0
     for gene in genes.values():
         for iso in gene.isoforms:
             slug = tis_slug(iso.tis_id)
             if (llm_dir / slug / "synthesis.json").exists():
                 n_syn += 1
-            ex_path = llm_dir / slug / "existence.json"
-            fn_path = llm_dir / slug / "functional.json"
-            if ex_path.exists():
-                n_ex += 1
+            crit_path = llm_dir / slug / "criteria.json"
+            if crit_path.exists():
+                n_criteria_files += 1
                 try:
-                    payload = json.loads(ex_path.read_text())
-                    n_ex_cells += sum(1 for m in modalities if m["key"] in payload)
+                    payload = json.loads(crit_path.read_text())
+                    if isinstance(payload, dict):
+                        n_criteria_cells += len(payload)
                 except Exception:
                     pass
-            if fn_path.exists():
-                n_fn += 1
-                try:
-                    payload = json.loads(fn_path.read_text())
-                    n_fn_cells += sum(1 for m in modalities if m["key"] in payload)
-                except Exception:
-                    pass
-    total_ex_slots = sum(1 for m in modalities if m["has_existence"]) * n_iso
-    total_fn_slots = sum(1 for m in modalities if m["has_functional"]) * n_iso
     log.warning(
-        "%d isoforms loaded; LLM coverage: synthesis %d/%d, existence %d/%d (%d/%d cells), "
-        "functional %d/%d (%d/%d cells)",
+        "%d isoforms loaded; LLM coverage: criteria %d/%d (%d/%d cells), synthesis %d/%d",
         n_iso,
+        n_criteria_files,
+        n_iso,
+        n_criteria_cells,
+        n_iso * 12,
         n_syn,
         n_iso,
-        n_ex,
-        n_iso,
-        n_ex_cells,
-        total_ex_slots,
-        n_fn,
-        n_iso,
-        n_fn_cells,
-        total_fn_slots,
     )
 
 
@@ -278,8 +261,8 @@ def create_app() -> Flask:
         return render_template("404.html", message=str(e)), 404
 
     # Startup coverage summary — one log line so missing LLM JSONs are obvious
-    # before any clicking through tabs.
-    _log_llm_coverage(load_all(), data_dir() / "llm", MODALITIES_FOR_PAGE)
+    # before any clicking through tiles.
+    _log_llm_coverage(load_all(), data_dir() / "llm")
 
     return app
 
