@@ -102,8 +102,15 @@
 <script>
   const TRANSCRIPT_FIG = {{ transcript_figure_json|safe }};
   const PROTEIN_FIG    = {{ protein_figure_json|safe }};
-  Plotly.newPlot("graph-transcript", TRANSCRIPT_FIG.data, TRANSCRIPT_FIG.layout, {responsive: true});
-  Plotly.newPlot("graph-protein",    PROTEIN_FIG.data,    PROTEIN_FIG.layout,    {responsive: true});
+  function swissRenderPlots() {
+    Plotly.newPlot("graph-transcript", TRANSCRIPT_FIG.data, TRANSCRIPT_FIG.layout, {responsive: true});
+    Plotly.newPlot("graph-protein",    PROTEIN_FIG.data,    PROTEIN_FIG.layout,    {responsive: true});
+  }
+  if (window.Plotly) { swissRenderPlots(); }
+  else { document.addEventListener('DOMContentLoaded', function () {
+    if (window.Plotly) swissRenderPlots();
+    else { var t = setInterval(function () { if (window.Plotly) { clearInterval(t); swissRenderPlots(); } }, 30); }
+  }); }
 </script>
 <script src="{{ url_for('static', filename='js/isoform_page.js') }}"></script>
 {% endblock %}
