@@ -14,6 +14,12 @@
     {% endif %}
   </div>
   <div class="tile-body" hidden>
+    {% if sl.interpretation_hint %}
+      <p class="tile-hint">
+        <span class="tile-hint-icon">i</span>
+        {{ sl.interpretation_hint }}
+      </p>
+    {% endif %}
     {% if llm %}
       <div class="tile-llm">
         <p class="rp-headline"><strong>{{ llm.headline }}</strong></p>
@@ -23,15 +29,16 @@
       <p class="empty tile-llm-empty">Criterion LLM summary not yet generated.</p>
     {% endif %}
     <details class="tile-metrics" open>
-      <summary>Metrics</summary>
+      <summary>Metrics ({{ sl.evidence|length }})</summary>
       <table class="metrics-table">
         <tbody>
           {% for k, v in sl.evidence.items() %}
+          {% set meta = CRITERIA_METRIC_LABELS.get(k, {}) %}
           <tr>
-            <th>{{ k }}</th>
-            <td>
+            <th>{{ meta.label if meta.label else k }}</th>
+            <td class="metric-val">
               {% if v is none %}<span class="text-slate-400">—</span>
-              {% else %}{{ v }}
+              {% else %}{{ format_metric(v, meta.format if meta.format else 'str') }}
               {% endif %}
             </td>
           </tr>

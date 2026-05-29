@@ -788,6 +788,284 @@ CRITERIA: dict[str, dict[str, Any]] = {
 }
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Human-readable metric labels + formatters for the expanded evidence tile.
+# Keys are raw parquet column names; values describe how to render them.
+# ──────────────────────────────────────────────────────────────────────────
+
+CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
+    # E1/E2 — conservation_frame primate + mammalian
+    "isoform_conservation_frame_primate_frac_intact": {
+        "label": "Fraction of primates with intact ORF",
+        "format": "percent",
+    },
+    "isoform_conservation_frame_primate_start_codon_conserved": {
+        "label": "Primates with conserved start codon",
+        "format": "percent",
+    },
+    "isoform_conservation_frame_primate_n_species_aligned": {
+        "label": "Primate species aligned",
+        "format": "int",
+    },
+    "isoform_conservation_frame_primate_n_species_intact_frame": {
+        "label": "Primate species with intact frame",
+        "format": "int",
+    },
+    "isoform_conservation_frame_primate_mean_pident": {
+        "label": "Mean % identity to primate orthologs",
+        "format": "percent",
+    },
+    "isoform_conservation_frame_primate_deepest_species": {
+        "label": "Deepest primate with intact frame",
+        "format": "str",
+    },
+    "isoform_conservation_frame_primate_max_depth": {
+        "label": "Max evolutionary depth (primates)",
+        "format": "int",
+    },
+    "isoform_conservation_frame_mammalian_frac_intact": {
+        "label": "Fraction of mammals with intact ORF",
+        "format": "percent",
+    },
+    "isoform_conservation_frame_mammalian_start_codon_conserved": {
+        "label": "Mammals with conserved start codon",
+        "format": "percent",
+    },
+    "isoform_conservation_frame_mammalian_n_species_aligned": {
+        "label": "Mammalian species aligned",
+        "format": "int",
+    },
+    "isoform_conservation_frame_mammalian_n_species_intact_frame": {
+        "label": "Mammalian species with intact frame",
+        "format": "int",
+    },
+    "isoform_conservation_frame_mammalian_mean_pident": {
+        "label": "Mean % identity to mammalian orthologs",
+        "format": "percent",
+    },
+    "isoform_conservation_frame_mammalian_deepest_species": {
+        "label": "Deepest mammal with intact frame",
+        "format": "str",
+    },
+    "isoform_conservation_frame_mammalian_max_depth": {
+        "label": "Max evolutionary depth (mammals)",
+        "format": "int",
+    },
+    # E3 — phyloP / phastCons
+    "isoform_conservation_phylop_at_tis": {
+        "label": "PhyloP score at TIS",
+        "format": "float3",
+    },
+    "isoform_conservation_phylop_unique_region_mean": {
+        "label": "PhyloP mean over unique region",
+        "format": "float3",
+    },
+    "isoform_conservation_phylop_shared_region_mean": {
+        "label": "PhyloP mean over shared region",
+        "format": "float3",
+    },
+    "isoform_conservation_phylop_enrichment": {
+        "label": "PhyloP enrichment (unique vs shared)",
+        "format": "float3",
+    },
+    "isoform_conservation_phylop_kozak_mean": {
+        "label": "PhyloP mean over Kozak window",
+        "format": "float3",
+    },
+    "isoform_conservation_phastcons_unique_region_mean": {
+        "label": "phastCons mean over unique region",
+        "format": "float3",
+    },
+    "isoform_conservation_phastcons_at_tis": {
+        "label": "phastCons at TIS",
+        "format": "float3",
+    },
+    # E5 — initiation efficiency stats
+    "ribo_pvalue": {"label": "Ribo-TISH p-value", "format": "sci"},
+    "tis_pvalue": {"label": "TIS detection p-value", "format": "sci"},
+    "fisher_qvalue": {"label": "Fisher combined q-value", "format": "sci"},
+    # E6 — mass spec
+    "isoform_massspec_summary": {"label": "PepQuery2 summary", "format": "json"},
+    "cmp_massspec_n_hits_in_diff_region": {
+        "label": "MS peptides in diff region",
+        "format": "int",
+    },
+    # F1 — structure pLDDT
+    "isoform_structure_status": {"label": "Structure prediction status", "format": "str"},
+    "isoform_structure_plddt_canonical_mean": {
+        "label": "Mean pLDDT (canonical)",
+        "format": "float3",
+    },
+    "isoform_structure_plddt_isoform_mean": {
+        "label": "Mean pLDDT (isoform)",
+        "format": "float3",
+    },
+    "isoform_structure_plddt_diffregion_mean": {
+        "label": "Mean pLDDT (differential region)",
+        "format": "float3",
+    },
+    "isoform_structure_plddt_diffregion_std": {
+        "label": "pLDDT std (differential region)",
+        "format": "float3",
+    },
+    "isoform_structure_plddt_delta_shared": {
+        "label": "Δ pLDDT (isoform vs canonical, shared region)",
+        "format": "float3",
+    },
+    # F2/F4 — localization
+    "canonical_localization_deeploc_prediction": {
+        "label": "DeepLoc prediction (canonical)",
+        "format": "str",
+    },
+    "isoform_localization_deeploc_prediction": {
+        "label": "DeepLoc prediction (isoform)",
+        "format": "str",
+    },
+    "cmp_localization_deeploc_prediction_changed": {
+        "label": "Predicted localization changes",
+        "format": "bool",
+    },
+    "cmp_localization_deeploc_prediction_canonical": {
+        "label": "Canonical prediction",
+        "format": "str",
+    },
+    "cmp_localization_deeploc_prediction_isoform": {
+        "label": "Isoform prediction",
+        "format": "str",
+    },
+    "canonical_localization_deeploc_signals": {
+        "label": "DeepLoc signals (canonical)",
+        "format": "str",
+    },
+    "isoform_localization_deeploc_signals": {
+        "label": "DeepLoc signals (isoform)",
+        "format": "str",
+    },
+    "canonical_localization_deeploc_membrane": {
+        "label": "Membrane state (canonical)",
+        "format": "str",
+    },
+    "isoform_localization_deeploc_membrane": {
+        "label": "Membrane state (isoform)",
+        "format": "str",
+    },
+    # F3 — InterProScan domains
+    "isoform_interproscan_summary": {"label": "InterProScan summary", "format": "json"},
+    "cmp_interproscan_n_hits_in_diff_region": {
+        "label": "Domains in diff region",
+        "format": "int",
+    },
+    # F5/F6 — variant intersection + variant effect
+    "isoform_variant_intersection_n_total": {
+        "label": "Total clinical variants over isoform",
+        "format": "int",
+    },
+    "isoform_variant_intersection_n_in_unique_region": {
+        "label": "Variants in unique region",
+        "format": "int",
+    },
+    "isoform_variant_intersection_n_in_shared_region": {
+        "label": "Variants in shared region",
+        "format": "int",
+    },
+    "isoform_variant_intersection_n_pathogenic_in_unique_region": {
+        "label": "Pathogenic in unique region",
+        "format": "int",
+    },
+    "isoform_variant_intersection_n_pathogenic_in_shared_region": {
+        "label": "Pathogenic in shared region",
+        "format": "int",
+    },
+    "isoform_variant_intersection_n_dropped_outside_coding": {
+        "label": "Variants dropped outside coding",
+        "format": "int",
+    },
+    "isoform_varianteffect_n_damaging_in_unique": {
+        "label": "Damaging effect predictions (AM+PLM)",
+        "format": "int",
+    },
+    "isoform_varianteffect_mean_delta_llr_unique": {
+        "label": "Mean ESM-2 ΔLLR (unique)",
+        "format": "float3",
+    },
+    "isoform_varianteffect_mean_am_pathogenicity_unique": {
+        "label": "Mean AlphaMissense pathogenicity (unique)",
+        "format": "float3",
+    },
+}
+
+# E4/E5 — per-cell-line expression columns (generated programmatically)
+for _sample in ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"):
+    _display = _sample.replace("_", " ")
+    CRITERIA_METRIC_LABELS[f"expr_{_sample}_initiation_efficiency"] = {
+        "label": f"{_display}: initiation efficiency",
+        "format": "float3",
+    }
+    CRITERIA_METRIC_LABELS[f"expr_{_sample}_p_value"] = {
+        "label": f"{_display}: p-value",
+        "format": "sci",
+    }
+    CRITERIA_METRIC_LABELS[f"expr_{_sample}_cpm"] = {
+        "label": f"{_display}: CPM",
+        "format": "float3",
+    }
+    CRITERIA_METRIC_LABELS[f"expr_{_sample}_raw_count"] = {
+        "label": f"{_display}: raw count",
+        "format": "int",
+    }
+
+
+def format_metric(value: Any, fmt: str) -> str:
+    """Format a metric value for display per a small spec of format codes.
+
+    Args:
+        value: Raw scalar value from the parquet row.
+        fmt: One of ``"percent"``, ``"int"``, ``"float3"``, ``"sci"``, ``"bool"``,
+            ``"json"``, or ``"str"`` (default).
+
+    Returns:
+        Display string. ``None`` / NaN values render as an em dash.
+    """
+    if value is None:
+        return "—"
+    try:
+        if isinstance(value, float) and math.isnan(value):
+            return "—"
+    except (TypeError, ValueError):
+        pass
+    if fmt == "percent":
+        try:
+            return f"{float(value) * 100:.1f}%"
+        except (TypeError, ValueError):
+            return str(value)
+    if fmt == "int":
+        try:
+            return f"{int(value)}"
+        except (TypeError, ValueError):
+            return str(value)
+    if fmt == "float3":
+        try:
+            return f"{float(value):.3g}"
+        except (TypeError, ValueError):
+            return str(value)
+    if fmt == "sci":
+        try:
+            return f"{float(value):.2e}"
+        except (TypeError, ValueError):
+            return str(value)
+    if fmt == "bool":
+        if isinstance(value, bool):
+            return "Yes" if value else "No"
+        return str(value)
+    if fmt == "json":
+        try:
+            s = json.dumps(value, default=str)
+        except (TypeError, ValueError):
+            s = str(value)
+        return s[:120] + ("…" if len(s) > 120 else "")
+    return str(value)
+
+
 def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[str, Any]:
     """Build the per-(isoform, criterion) slice for V2 UI tiles + future LLM passes.
 

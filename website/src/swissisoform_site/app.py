@@ -24,7 +24,11 @@ from flask import (
     send_from_directory,
     url_for,
 )
-from scripts.site.build_evidence_records import slice_criterion
+from scripts.site.build_evidence_records import (
+    CRITERIA_METRIC_LABELS,
+    format_metric,
+    slice_criterion,
+)
 
 from swissisoform_site.data import (
     CRITERIA_FOR_PAGE,
@@ -109,6 +113,13 @@ def create_app() -> Flask:
     @app.template_filter("slugify")
     def slugify(value: Any) -> str:
         return _slug_re.sub("-", str(value)).strip("-")
+
+    # Surface the metric label dict + formatter so evidence-tile partials
+    # can render human-readable rows without re-importing from the script.
+    app.jinja_env.globals.update(
+        CRITERIA_METRIC_LABELS=CRITERIA_METRIC_LABELS,
+        format_metric=format_metric,
+    )
 
     # JSON-friendly NaN cleaner for the API endpoint
     def _clean(obj: Any) -> Any:

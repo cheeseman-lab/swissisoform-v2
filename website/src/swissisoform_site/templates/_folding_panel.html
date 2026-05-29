@@ -9,21 +9,34 @@
      - canonical_length_aa : int | None
      - isoform_length_aa   : int | None
 
-   The diff region is highlighted on the structure whose space matches
-   ``diff_space``. For truncations (diff_space=canonical) the lost N-term
-   shows red on the canonical viewer; for extensions (diff_space=isoform)
-   the gained N-term shows red on the isoform viewer.
+   Asymmetry: a residue strip + 'highlighted region' caption only render on
+   the side whose structure physically contains the differential residues
+   (canonical for truncations, isoform for extensions). The other side gets
+   a short caption stating what that structure represents — no strip — so
+   the user doesn't read a duplicated strip as a duplicated diff region.
+
+   The Plan A 3D cartoon overlay (swissisoformHighlight) is no longer
+   called — the residue strip below the viewer is the single source of
+   truth for the highlighted region, and the explicit captions describe
+   the asymmetry in words.
 #}
 {% set diff_lo_1based = (diff_start or 0) + 1 %}
 {% set diff_hi_1based = diff_end if diff_end is not none else 0 %}
 {% set diff_on_canonical = (diff_space == 'canonical') %}
+{% set has_diff = (diff_hi_1based|int) > 0 %}
 
 <div class="folding-grid">
   <div class="folding-half" data-side="canonical">
     <div class="folding-caption">
       <span class="folding-title">Canonical{% if canonical_length_aa %} ({{ canonical_length_aa }} aa){% endif %}</span>
-      {% if diff_on_canonical and diff_hi_1based %}
-        <span class="folding-diff-hint diff-on">Lost N-term: residues {{ diff_lo_1based }}–{{ diff_hi_1based }} highlighted</span>
+      {% if diff_on_canonical and has_diff %}
+        <span class="folding-diff-hint diff-on">
+          N-terminal {{ diff_lo_1based }}–{{ diff_hi_1based }} LOST in isoform (highlighted below)
+        </span>
+      {% elif (not diff_on_canonical) and has_diff %}
+        <span class="folding-diff-hint">
+          N-terminal of isoform extends beyond this structure
+        </span>
       {% else %}
         <span class="folding-diff-hint">Reference structure</span>
       {% endif %}
@@ -38,8 +51,14 @@
   <div class="folding-half" data-side="isoform">
     <div class="folding-caption">
       <span class="folding-title">Isoform{% if isoform_length_aa %} ({{ isoform_length_aa }} aa){% endif %}</span>
-      {% if (not diff_on_canonical) and diff_hi_1based %}
-        <span class="folding-diff-hint diff-on">Gained N-term: residues {{ diff_lo_1based }}–{{ diff_hi_1based }} highlighted</span>
+      {% if (not diff_on_canonical) and has_diff %}
+        <span class="folding-diff-hint diff-on">
+          N-terminal {{ diff_lo_1based }}–{{ diff_hi_1based }} ADDED to canonical (highlighted below)
+        </span>
+      {% elif diff_on_canonical and has_diff and canonical_length_aa and isoform_length_aa %}
+        <span class="folding-diff-hint">
+          Starts at canonical residue {{ diff_hi_1based + 1 }}
+        </span>
       {% else %}
         <span class="folding-diff-hint">Unchanged C-terminal region</span>
       {% endif %}
@@ -67,7 +86,7 @@
   var CANONICAL_LEN      = {{ (canonical_length_aa or 0)|int }};
   var ISOFORM_LEN        = {{ (isoform_length_aa or 0)|int }};
 
-  function loadViewer(divId, cifUrl, doHighlight, totalLen) {
+  function loadViewer(divId, cifUrl, showStrip, totalLen) {
     var el = document.getElementById(divId);
     if (!el) return;
     return molstar.Viewer.create(divId, {
@@ -84,19 +103,11 @@
       emdbProvider: 'rcsb'
     }).then(function(viewer) {
       return viewer.loadStructureFromUrl(cifUrl, 'mmcif').then(function() {
-        // Always draw the HTML residue strip — it's a reliable fallback that
-        // shows the diff region even if Mol*'s 3D highlight no-ops on a given
-        // Mol* version. The strip lives below the viewer, not inside it.
-        if (window.swissisoformResidueStrip && HIGHLIGHT_HI > 0 && totalLen > 0) {
-          window.swissisoformResidueStrip(el, HIGHLIGHT_LO, HIGHLIGHT_HI, totalLen, doHighlight);
-        }
-        // Best-effort 3D highlight on the structure that carries the diff.
-        if (doHighlight && window.swissisoformHighlight && HIGHLIGHT_HI > 0) {
-          try {
-            window.swissisoformHighlight(viewer, HIGHLIGHT_LO, HIGHLIGHT_HI, true);
-          } catch (e) {
-            console.warn('molstar highlight failed on ' + divId + ':', e);
-          }
+        // Residue strip only on the side that physically has the diff
+        // region. Plan A 3D cartoon overlay is intentionally NOT called —
+        // the strip + caption are the single source of truth.
+        if (showStrip && window.swissisoformResidueStrip && HIGHLIGHT_HI > 0 && totalLen > 0) {
+          window.swissisoformResidueStrip(el, HIGHLIGHT_LO, HIGHLIGHT_HI, totalLen, true);
         }
       });
     }).catch(function(err) {

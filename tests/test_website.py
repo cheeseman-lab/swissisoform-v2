@@ -241,5 +241,7 @@ def test_isoform_page_truncation_marks_canonical_as_diff_side(client):
     r = client.get("/genes/TRNT1/isoforms/" + make_slug("chr3:3129127:+:ATG:ENST00000434583.5"))
     assert r.status_code == 200
     body = r.data
-    # The caption identifies the lost N-term on the canonical side.
-    assert b"Lost N-term" in body
+    # The captions identify the asymmetry: canonical has the lost N-term,
+    # isoform explicitly states where it starts in canonical-space.
+    assert b"LOST in isoform" in body
+    assert b"Starts at canonical residue" in body

@@ -24,7 +24,7 @@
     <p class="iso-head-tis"><span class="font-mono text-xs text-slate-500">{{ isoform.tis_id }}</span></p>
   </header>
 
-  <!-- Pinned graph panels -->
+  <!-- Pinned graph panels — three rows, vertically stacked. -->
   <section class="iso-panels">
     <div class="iso-panel iso-panel-transcript">
       <h2 class="iso-panel-h">Genome / Transcript</h2>
@@ -34,7 +34,7 @@
       <h2 class="iso-panel-h">Protein</h2>
       <div id="graph-protein" class="plotly-graph"></div>
     </div>
-    <div class="iso-panel iso-panel-folding">
+    <div class="iso-panel iso-panel-folding iso-folding-row">
       <h2 class="iso-panel-h">Folding</h2>
       <div id="folding-panel">
         {% include "_folding_panel.html" %}
