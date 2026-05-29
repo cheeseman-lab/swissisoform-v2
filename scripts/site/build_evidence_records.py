@@ -955,13 +955,38 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
     headline = raw.get(headline_col) if headline_col else None
 
     hits: list[dict[str, Any]] = []
+    n_hits_total = 0
     hits_col = cfg.get("evidence_hits_col")
     if hits_col:
         raw_hits = raw.get(hits_col)
         if raw_hits is not None:
             try:
                 # Handle numpy arrays + lists
-                hits = [h for h in raw_hits if isinstance(h, dict)]
+                all_hits = [h for h in raw_hits if isinstance(h, dict)]
+                n_hits_total = len(all_hits)
+                # Cap at MAX_HITS to keep the LLM prompt under the 200k token limit.
+                # For variant hits (F5 / F6), prefer pathogenic + damaging first so the
+                # truncated view still surfaces the clinically relevant cases.
+                MAX_HITS = 30
+                if n_hits_total > MAX_HITS:
+
+                    def _priority(h: dict[str, Any]) -> int:
+                        sig = str(h.get("clinical_significance") or "").lower()
+                        if "pathogenic" in sig and "likely" not in sig:
+                            return 0  # Pathogenic
+                        if "likely_pathogenic" in sig or "likely pathogenic" in sig:
+                            return 1
+                        if h.get("effect_damaging") is True:
+                            return 2
+                        if "uncertain" in sig:
+                            return 4
+                        if "benign" in sig:
+                            return 5
+                        return 3  # other / unknown
+
+                    hits = sorted(all_hits, key=_priority)[:MAX_HITS]
+                else:
+                    hits = all_hits
             except TypeError:
                 hits = []
 
@@ -977,6 +1002,8 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         "headline": headline,
         "evidence": evidence,
         "hits": hits,
+        "n_hits_total": n_hits_total,
+        "n_hits_shown": len(hits),
     }
 
 
