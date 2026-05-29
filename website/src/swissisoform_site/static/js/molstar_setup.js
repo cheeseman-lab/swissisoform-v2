@@ -1,25 +1,160 @@
-/* SwissIsoform v2 — Mol* helpers for the dual folding panel.
+/* SwissIsoform v2 — Mol* helpers for the single superimposed folding panel.
  *
- * Two exported window functions:
+ * Exported window functions:
+ *
+ *   window.swissisoformSuperposed(opts)
+ *     Loads canonical + isoform CIFs into ONE Mol* viewer, superposes the
+ *     isoform onto the canonical on their shared core (best-effort), colors
+ *     both grey, and overlays the differential residue range in red on
+ *     whichever structure carries it.
  *
  *   window.swissisoformHighlight(viewer, residueStart, residueEnd, isHighlightable)
  *     Best-effort 3D highlight of residues [start, end] on the loaded structure.
  *     Wraps the Mol* 4.x plugin-builder API: builds a label_seq_id range
  *     selection, adds a new representation (cartoon, uniform red) for it, and
  *     focuses the camera on the range. Silently no-ops on older / newer
- *     Mol* versions — the HTML residue strip below the viewer is the
- *     guaranteed-visible fallback.
- *
- *   window.swissisoformResidueStrip(parentEl, start, end, total, isActive)
- *     Appends a thin horizontal residue bar to ``parentEl``: ``total`` little
- *     spans (gray by default, red within [start, end] if isActive). Always
- *     visible, version-independent, also acts as a legend for the 3D viewer.
- *
- * Both functions are idempotent — calling twice with the same parent is a
- * no-op the second time.
+ *     Mol* versions.
  */
 (function () {
   if (typeof window === "undefined") return;
+
+  // ──────────────────────────────────────────────── label_seq_id range select
+  // Shared MolScript expression for residues [lo, hi] (1-based, inclusive).
+  // label_seq_id is the canonical Mol* residue numbering for mmCIF —
+  // Boltz / AlphaFold CIFs always start at 1, so [lo, hi] maps directly to the
+  // 1-based positions we get from diff_start/end.
+  function residueRangeExpression(lo, hi) {
+    var MS = molstar.MolScriptBuilder;
+    if (!MS) return null;
+    return MS.struct.generator.atomGroups({
+      "residue-test": MS.core.rel.inRange([
+        MS.struct.atomProperty.macromolecular.label_seq_id(),
+        lo,
+        hi,
+      ]),
+    });
+  }
+
+  // ──────────────────────────────────────────── single superimposed viewer
+  window.swissisoformSuperposed = async function (opts) {
+    var el = opts.el;
+    var canonicalUrl = opts.canonicalUrl;
+    var isoformUrl = opts.isoformUrl;
+    var diffLo = opts.diffLo;
+    var diffHi = opts.diffHi;
+    var diffOnCanonical = opts.diffOnCanonical;
+
+    if (!el) return;
+    if (typeof molstar === "undefined") {
+      el.innerHTML = '<div class="molstar-fallback">Mol* failed to load from CDN.</div>';
+      return;
+    }
+
+    var GREY = 0x9ca3af;
+    var RED = 0xd62728;
+
+    var viewer;
+    try {
+      viewer = await molstar.Viewer.create(el, {
+        layoutIsExpanded: false,
+        layoutShowControls: false,
+        layoutShowRemoteState: false,
+        layoutShowSequence: false,
+        layoutShowLog: false,
+        layoutShowLeftPanel: false,
+        viewportShowExpand: true,
+        viewportShowSelectionMode: false,
+        viewportShowAnimation: false,
+        pdbProvider: "rcsb",
+        emdbProvider: "rcsb",
+      });
+    } catch (e) {
+      console.error("[swissisoform] Mol* viewer create failed:", e);
+      el.innerHTML =
+        '<div class="molstar-fallback molstar-fallback-error">Failed to init viewer: ' +
+        (e && e.message ? e.message : e) +
+        "</div>";
+      return;
+    }
+
+    var plugin = viewer.plugin;
+    var sb = plugin.builders && plugin.builders.structure;
+
+    // Loads one CIF, draws a grey cartoon, and (when diffRange is given) layers
+    // a red cartoon over the differential residues. Returns the structure ref.
+    async function loadColored(url, color, diffRange) {
+      if (!url) return null;
+      try {
+        var data = await plugin.builders.data.download(
+          { url: url },
+          { state: { isGhost: false } }
+        );
+        var traj = await sb.parseTrajectory(data, "mmcif");
+        var model = await sb.createModel(traj);
+        var struct = await sb.createStructure(model);
+
+        var comp = await sb.tryCreateComponentStatic(struct, "polymer");
+        if (comp) {
+          await sb.representation.addRepresentation(comp, {
+            type: "cartoon",
+            color: "uniform",
+            colorParams: { value: color },
+          });
+        }
+
+        if (diffRange && diffRange[1] >= diffRange[0] && diffRange[1] > 0) {
+          var sel = residueRangeExpression(diffRange[0], diffRange[1]);
+          if (sel) {
+            var diffComp = await sb.tryCreateComponentFromExpression(
+              struct,
+              sel,
+              "diff-region",
+              { label: "Differential region" }
+            );
+            if (diffComp) {
+              await sb.representation.addRepresentation(diffComp, {
+                type: "cartoon",
+                color: "uniform",
+                colorParams: { value: RED },
+              });
+            }
+          }
+        }
+        return struct;
+      } catch (e) {
+        console.error("[swissisoform] structure load failed for " + url + ":", e);
+        return null;
+      }
+    }
+
+    var diffRange = [diffLo, diffHi];
+    await loadColored(canonicalUrl, GREY, diffOnCanonical ? diffRange : null);
+    await loadColored(isoformUrl, GREY, diffOnCanonical ? null : diffRange);
+
+    // Superpose isoform onto canonical on their shared core (best-effort). The
+    // two structures are the SAME protein differing only at the N-terminus, so
+    // superposition is a refinement, not a correctness requirement — if the API
+    // shape differs across Mol* builds, the catch leaves both loaded + colored.
+    try {
+      var structs = plugin.managers.structure.hierarchy.current.structures;
+      if (structs && structs.length >= 2 &&
+          plugin.managers.structure.superposition &&
+          plugin.managers.structure.superposition.superposeStructures) {
+        await plugin.managers.structure.superposition.superposeStructures([
+          structs[0].cell,
+          structs[1].cell,
+        ]);
+      }
+    } catch (e) {
+      console.warn("[swissisoform] superposition skipped:", e);
+    }
+
+    try {
+      plugin.managers.camera.reset();
+    } catch (e) {
+      // camera reset is non-critical
+    }
+  };
 
   // ────────────────────────────────────────────────────────────── 3D highlight
   window.swissisoformHighlight = function (viewer, residueStart, residueEnd, isHighlightable) {
@@ -43,16 +178,7 @@
       }
       var struct = structures[0];
 
-      // label_seq_id is the canonical Mol* residue numbering for mmCIF —
-      // Boltz / AlphaFold CIFs always start at 1, so [start, end] inclusive
-      // maps directly to the 1-based positions we get from diff_start/end.
-      var expression = MS.struct.generator.atomGroups({
-        "residue-test": MS.core.rel.inRange([
-          MS.struct.atomProperty.macromolecular.label_seq_id(),
-          residueStart,
-          residueEnd,
-        ]),
-      });
+      var expression = residueRangeExpression(residueStart, residueEnd);
 
       var builders = plugin.builders && plugin.builders.structure;
       if (!builders || !builders.representation) {
@@ -110,36 +236,5 @@
     } catch (e) {
       console.warn("[swissisoform] swissisoformHighlight threw (non-fatal):", e);
     }
-  };
-
-  // ─────────────────────────────────────────────────────── HTML residue strip
-  window.swissisoformResidueStrip = function (parentEl, start, end, total, isActive) {
-    if (!parentEl || !parentEl.parentNode) return;
-    if (!total || total <= 0) return;
-
-    // Inject after the viewer div so the strip sits below it. Re-running is a
-    // no-op.
-    var host = parentEl.parentNode;
-    if (host.querySelector(".residue-strip")) return;
-
-    var strip = document.createElement("div");
-    strip.className = "residue-strip" + (isActive ? " residue-strip-active" : "");
-    strip.setAttribute(
-      "title",
-      isActive
-        ? "Residues " + start + "–" + end + " (red) are the differential region"
-        : "No differential region on this structure"
-    );
-
-    // Cap the per-residue bar count for very long proteins — beyond ~600
-    // residues the bar slivers become single pixels anyway.
-    var step = total > 600 ? Math.ceil(total / 600) : 1;
-    for (var i = 1; i <= total; i += step) {
-      var bar = document.createElement("span");
-      bar.className = "residue-bar";
-      if (isActive && i >= start && i <= end) bar.className += " diff";
-      strip.appendChild(bar);
-    }
-    host.appendChild(strip);
   };
 })();

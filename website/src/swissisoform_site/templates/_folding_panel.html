@@ -1,4 +1,4 @@
-{# Dual Mol* folding viewer — canonical vs isoform side-by-side.
+{# Single superimposed Mol* folding viewer — canonical + isoform in one canvas.
 
    Context vars expected (set by isoform_page view):
      - canonical_cif   : filename in /structures/ (or None)
@@ -9,64 +9,24 @@
      - canonical_length_aa : int | None
      - isoform_length_aa   : int | None
 
-   Asymmetry: a residue strip + 'highlighted region' caption only render on
-   the side whose structure physically contains the differential residues
-   (canonical for truncations, isoform for extensions). The other side gets
-   a short caption stating what that structure represents — no strip — so
-   the user doesn't read a duplicated strip as a duplicated diff region.
-
-   The Plan A 3D cartoon overlay (swissisoformHighlight) is no longer
-   called — the residue strip below the viewer is the single source of
-   truth for the highlighted region, and the explicit captions describe
-   the asymmetry in words.
+   Both structures load into ONE viewer and are superposed on their shared
+   core. The canonical is grey; the differential region (residues lost in a
+   truncation, or added in an extension) is rendered red in the 3D cartoon on
+   whichever structure physically contains it. The on-page legend names the
+   colors + the 1-based residue range.
 #}
 {% set diff_lo_1based = (diff_start or 0) + 1 %}
 {% set diff_hi_1based = diff_end if diff_end is not none else 0 %}
 {% set diff_on_canonical = (diff_space == 'canonical') %}
 {% set has_diff = (diff_hi_1based|int) > 0 %}
+{% set hi_lo_label = (diff_lo_1based|string) ~ '–' ~ (diff_hi_1based|int|string) %}
 
-<div class="folding-grid">
-  <div class="folding-half" data-side="canonical">
-    <div class="folding-caption">
-      <span class="folding-title">Canonical{% if canonical_length_aa %} ({{ canonical_length_aa }} aa){% endif %}</span>
-      {% if diff_on_canonical and has_diff %}
-        <span class="folding-diff-hint diff-on">
-          N-terminal {{ diff_lo_1based }}–{{ diff_hi_1based }} LOST in isoform (highlighted below)
-        </span>
-      {% elif (not diff_on_canonical) and has_diff %}
-        <span class="folding-diff-hint">
-          N-terminal of isoform extends beyond this structure
-        </span>
-      {% else %}
-        <span class="folding-diff-hint">Reference structure</span>
-      {% endif %}
-    </div>
-    {% if canonical_cif %}
-      <div id="molstar-canonical" class="molstar-viewer-mini"></div>
-    {% else %}
-      <p class="empty">Canonical structure not predicted.</p>
-    {% endif %}
-  </div>
-
-  <div class="folding-half" data-side="isoform">
-    <div class="folding-caption">
-      <span class="folding-title">Isoform{% if isoform_length_aa %} ({{ isoform_length_aa }} aa){% endif %}</span>
-      {% if (not diff_on_canonical) and has_diff %}
-        <span class="folding-diff-hint diff-on">
-          N-terminal {{ diff_lo_1based }}–{{ diff_hi_1based }} ADDED to canonical (highlighted below)
-        </span>
-      {% elif diff_on_canonical and has_diff and canonical_length_aa and isoform_length_aa %}
-        <span class="folding-diff-hint">
-          Starts at canonical residue {{ diff_hi_1based + 1 }}
-        </span>
-      {% else %}
-        <span class="folding-diff-hint">Unchanged C-terminal region</span>
-      {% endif %}
-    </div>
-    {% if isoform_cif %}
-      <div id="molstar-isoform" class="molstar-viewer-mini"></div>
-    {% else %}
-      <p class="empty">Isoform structure not predicted.</p>
+<div id="folding-panel">
+  <div id="folding-viewer" class="molstar-viewer-single"></div>
+  <div id="folding-legend" class="folding-legend">
+    <span><span class="swatch grey"></span> Shared core</span>
+    {% if has_diff %}
+    <span><span class="swatch red"></span> Differential region (residues {{ hi_lo_label }})</span>
     {% endif %}
   </div>
 </div>
@@ -79,55 +39,20 @@
   var CANONICAL_LEN      = {{ (canonical_length_aa or 0)|int }};
   var ISOFORM_LEN        = {{ (isoform_length_aa or 0)|int }};
 
-  function loadViewer(divId, cifUrl, showStrip, totalLen) {
-    var el = document.getElementById(divId);
-    if (!el) return;
-    return molstar.Viewer.create(divId, {
-      layoutIsExpanded: false,
-      layoutShowControls: false,
-      layoutShowRemoteState: false,
-      layoutShowSequence: false,
-      layoutShowLog: false,
-      layoutShowLeftPanel: false,
-      viewportShowExpand: true,
-      viewportShowSelectionMode: false,
-      viewportShowAnimation: false,
-      pdbProvider: 'rcsb',
-      emdbProvider: 'rcsb'
-    }).then(function(viewer) {
-      return viewer.loadStructureFromUrl(cifUrl, 'mmcif').then(function() {
-        // Residue strip only on the side that physically has the diff
-        // region. Plan A 3D cartoon overlay is intentionally NOT called —
-        // the strip + caption are the single source of truth.
-        if (showStrip && window.swissisoformResidueStrip && HIGHLIGHT_HI > 0 && totalLen > 0) {
-          window.swissisoformResidueStrip(el, HIGHLIGHT_LO, HIGHLIGHT_HI, totalLen, true);
-        }
-      });
-    }).catch(function(err) {
-      console.error('molstar load failed for ' + divId + ':', err);
-      el.innerHTML = '<div class="molstar-fallback molstar-fallback-error">Failed to load structure: ' + (err && err.message ? err.message : err) + '</div>';
-    });
-  }
-
   function loadFoldingViewers() {
     if (typeof molstar === 'undefined') {
-      document.querySelectorAll('.molstar-viewer-mini').forEach(function(el) {
-        el.innerHTML = '<div class="molstar-fallback">Mol* failed to load from CDN.</div>';
-      });
+      var el = document.getElementById('folding-viewer');
+      if (el) el.innerHTML = '<div class="molstar-fallback">Mol* failed to load from CDN.</div>';
       return;
     }
-    {% if canonical_cif %}
-    loadViewer('molstar-canonical',
-               {{ url_for('structures', filename=canonical_cif)|tojson }},
-               DIFF_ON_CANONICAL,
-               CANONICAL_LEN);
-    {% endif %}
-    {% if isoform_cif %}
-    loadViewer('molstar-isoform',
-               {{ url_for('structures', filename=isoform_cif)|tojson }},
-               !DIFF_ON_CANONICAL,
-               ISOFORM_LEN);
-    {% endif %}
+    window.swissisoformSuperposed({
+      el: document.getElementById('folding-viewer'),
+      canonicalUrl: {{ (url_for('structures', filename=canonical_cif) if canonical_cif else '')|tojson }},
+      isoformUrl: {{ (url_for('structures', filename=isoform_cif) if isoform_cif else '')|tojson }},
+      diffLo: HIGHLIGHT_LO,
+      diffHi: HIGHLIGHT_HI,
+      diffOnCanonical: DIFF_ON_CANONICAL
+    });
   }
 
   // Defer the ~300 KB CIF fetch + WebGL init until the folding panel scrolls

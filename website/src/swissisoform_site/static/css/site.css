@@ -424,20 +424,29 @@
   color: #fecaca;
   background: #4c1d1d;
 }
-.residue-strip {
-  display: flex;
-  flex-wrap: nowrap;
-  height: 10px;
-  margin-top: 6px;
-  border: 1px solid #ddd;
-  border-radius: 2px;
+/* ── Single superimposed Mol* folding viewer ── */
+.molstar-viewer-single {
+  width: 100%;
+  height: 460px;
+  position: relative;
+  background: #0f172a;
+  border-radius: 4px;
   overflow: hidden;
 }
-.residue-bar {
-  flex: 1 0 1px;
-  background: #f3f4f6;
+.folding-legend {
+  display: flex;
+  gap: 1.5rem;
+  font-size: .8rem;
+  color: #475569;
+  margin-top: .5rem;
 }
-.residue-bar.diff {
-  background: #d62728;
+.folding-legend .swatch {
+  display: inline-block;
+  width: .8rem;
+  height: .8rem;
+  border-radius: 2px;
+  vertical-align: middle;
+  margin-right: .25rem;
 }
-.residue-strip-active { border-color: #d62728; }
+.folding-legend .swatch.grey { background: #9ca3af; }
+.folding-legend .swatch.red { background: #d62728; }
