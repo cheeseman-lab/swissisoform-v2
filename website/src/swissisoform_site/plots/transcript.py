@@ -150,29 +150,49 @@ def build_transcript_figure(
             }
         )
 
-    # ── Auto-zoom xaxis to the TIS cluster ──
+    # ── Canonical start codon reference marker ──
+    canon_start = cds_start if getattr(skeleton, "strand", "+") == "+" else cds_end
+    if canon_start is not None:
+        traces.append(
+            {
+                "type": "scatter",
+                "mode": "markers+text",
+                "x": [canon_start],
+                "y": [1.4],
+                "marker": {"symbol": "triangle-down", "size": 16, "color": "#111827"},
+                "text": ["canonical start"],
+                "textposition": "top center",
+                "textfont": {"size": 10, "color": "#111827"},
+                "name": "canonical start",
+                "hoverinfo": "text",
+                "hovertext": [f"Canonical start codon @ {canon_start}"],
+                "yaxis": "y2",
+                "showlegend": False,
+            }
+        )
+
+    # ── Auto-zoom xaxis to span TIS cluster + canonical start/end ──
     tis_positions = [t["genomic_pos"] for t in all_tis]
-    if tis_positions:
-        tis_min = min(tis_positions)
-        tis_max = max(tis_positions)
-        tis_span = max(tis_max - tis_min, 0)
-        pad = max(500, int(tis_span * 0.6))
-        x0 = tis_min - pad
-        x1 = tis_max + pad
-        if x1 - x0 < 1000:
-            focal_pos = next(
-                (t["genomic_pos"] for t in all_tis if t["tis_id"] == focal_tis_id),
-                tis_min,
-            )
-            x0 = focal_pos - 500
-            x1 = focal_pos + 500
-        x0 = max(x0, transcript_start)
-        x1 = min(x1, transcript_end)
+    anchors = list(tis_positions)
+    if cds_start is not None:
+        anchors.append(cds_start)
+    if cds_end is not None:
+        anchors.append(cds_end)
+    if anchors:
+        lo, hi = min(anchors), max(anchors)
+        pad = max(400, int((hi - lo) * 0.15))
+        x0, x1 = lo - pad, hi + pad
+        if x1 - x0 < 2000:
+            mid = (x0 + x1) / 2
+            x0, x1 = mid - 1000, mid + 1000
+        x0 = max(int(x0), transcript_start)
+        x1 = min(int(x1), transcript_end)
         x_range = [x0, x1]
     else:
         x_range = [transcript_start, transcript_end]
 
     # ── Cell-line bars (bottom panel) ──
+    bar_width = max((x_range[1] - x_range[0]) * 0.012, 1.0)
     cell_line_bars = getattr(isoform, "cell_line_bars", {}) or {}
     samples = sorted({s for v in cell_line_bars.values() for s in v})
 
@@ -207,6 +227,7 @@ def build_transcript_figure(
                 "name": sample,
                 "x": xs,
                 "y": ys,
+                "width": [bar_width] * len(xs),
                 "hovertext": hover,
                 "hoverinfo": "text",
                 "yaxis": "y",
