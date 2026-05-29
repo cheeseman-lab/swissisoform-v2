@@ -19,8 +19,10 @@ from flask import (
     Flask,
     abort,
     jsonify,
+    redirect,
     render_template,
     send_from_directory,
+    url_for,
 )
 
 from swissisoform_site.data import (
@@ -30,7 +32,6 @@ from swissisoform_site.data import (
     Isoform,
     _isoform_view,
     data_dir,
-    llm_for_isoform,
     llm_modality_for_isoform,
     llm_synthesis_for_isoform,
     load_all,
@@ -136,24 +137,19 @@ def create_app() -> Flask:
 
     @app.get("/genes/<gene_name>")
     def gene_page(gene_name: str) -> Any:
+        """Deprecated — V1 per-gene overview removed.
+
+        Redirects to the gene's first (sorted-by-tis_id) isoform's V2 page so
+        old bookmarks and inbound links still resolve to something useful.
+        """
         genes = load_all()
         gene = genes.get(gene_name) or genes.get(gene_name.upper())
-        if gene is None:
+        if gene is None or not gene.isoforms:
             abort(404)
-
-        # Per-isoform LLM narratives, keyed by tis_id, so the template can
-        # avoid touching the raw blob.
-        isoform_llm: dict[str, dict[str, Any] | None] = {
-            iso.tis_id: llm_for_isoform(gene, iso.tis_id) for iso in gene.isoforms
-        }
-
-        return render_template(
-            "gene.html",
-            gene=gene,
-            isoform_llm=isoform_llm,
-            existence_criteria=EXISTENCE_CRITERIA,
-            functional_criteria=FUNCTIONAL_CRITERIA,
-            all_genes=sorted(genes.keys()),
+        iso = sorted(gene.isoforms, key=lambda i: i.tis_id)[0]
+        return redirect(
+            url_for("isoform_page", gene_name=gene.name, tis_slug_str=tis_slug(iso.tis_id)),
+            code=302,
         )
 
     @app.get("/genes/<gene_name>/isoforms/<tis_slug_str>")

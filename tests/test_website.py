@@ -56,18 +56,28 @@ def test_index_lists_a_known_gene(client):
     assert "TRNT1" in body
 
 
-def test_gene_page_has_orf_chip(client):
+def test_gene_page_redirects_to_first_isoform(client):
+    """V1 /genes/<gene> is deprecated and 302s to a V2 isoform page."""
     r = client.get("/genes/TRNT1")
-    assert r.status_code == 200
-    body = r.data.decode()
-    assert "TRNT1" in body
-    # ORF-type chip class lands in the markup as `orf-<type>`.
-    assert "orf-truncated" in body or "orf-extended" in body or "orf-uorf" in body
+    assert r.status_code == 302
+    assert "/isoforms/" in r.headers["Location"]
+    assert "/genes/TRNT1/isoforms/" in r.headers["Location"]
 
 
 def test_gene_page_404(client):
     r = client.get("/genes/nonexistent_gene_zzz")
     assert r.status_code == 404
+
+
+def test_index_page_shows_isoform_dropdown(client):
+    """Landing page must render the per-gene isoform dropdown."""
+    r = client.get("/")
+    assert r.status_code == 200
+    body = r.data
+    assert b"TRNT1" in body
+    # Dropdown markup and a link into the V2 isoform route.
+    assert b"iso-dropdown" in body
+    assert b"/isoforms/chr" in body
 
 
 def test_api_data_json(client):

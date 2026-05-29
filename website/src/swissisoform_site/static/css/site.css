@@ -163,3 +163,22 @@
 .crumbs { font-size: 13px; color: #666; margin-bottom: 8px; }
 .crumbs a { color: #2563eb; text-decoration: none; }
 .crumb-current { color: #000; font-weight: 600; }
+
+/* ── Landing page isoform dropdown ── */
+.iso-dropdown { margin-top: 8px; }
+.iso-dropdown summary { cursor: pointer; list-style: none; padding: 4px 0; }
+.iso-dropdown summary::-webkit-details-marker { display: none; }
+.iso-dropdown summary::after { content: '▾'; margin-left: 6px; font-size: 11px; color: #666; }
+.iso-dropdown[open] summary::after { content: '▴'; }
+.iso-dropdown ul { list-style: none; padding-left: 8px; margin-top: 6px; border-left: 2px solid #ddd; }
+.iso-dropdown li { padding: 4px 0; }
+.iso-dropdown a { display: block; padding: 6px 8px; border-radius: 4px; font-size: 13px; color: #333; text-decoration: none; }
+.iso-dropdown a:hover { background: #f0f4ff; color: #1d4ed8; }
+.chip-orf { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; margin-right: 6px; }
+.chip-orf.chip-extended { background: #dbeafe; color: #1e40af; }
+.chip-orf.chip-truncated { background: #fee2e2; color: #991b1b; }
+.chip-orf.chip-other { background: #f3f4f6; color: #374151; }
+.iso-chip { font-size: 10px; padding: 1px 6px; border-radius: 3px; margin-right: 6px; font-weight: 600; }
+.iso-chip.ext { background: #dbeafe; color: #1e40af; }
+.iso-chip.trunc { background: #fee2e2; color: #991b1b; }
+.iso-chip.other { background: #f3f4f6; color: #374151; }

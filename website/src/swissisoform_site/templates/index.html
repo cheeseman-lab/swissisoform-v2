@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}SwissIsoform v2 — {{ n_genes }} genes{% endblock %}
+
+{% block content %}
+
+<section class="mb-8">
+  <h1 class="text-2xl font-semibold tracking-tight text-slate-900">Alternative protein isoforms</h1>
+  <p class="mt-2 text-sm text-slate-600 max-w-2xl">
+    {{ n_genes }} gene{% if n_genes != 1 %}s{% endif %} with at least one alternative translation initiation site
+    detected by Ribo-TISH. Each isoform carries a dual evidence axis — six
+    existence criteria (E1–E6) and six functional-impact criteria (F1–F6).
+  </p>
+</section>
+
+{% if not genes %}
+  <div class="rounded border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+    No data loaded. Make sure <code>SWISSISOFORM_DATA_DIR</code> points at a directory
+    containing <code>all_paired.parquet</code>.
+  </div>
+{% else %}
+
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+  {% for gene in genes %}
+
+  {% set extensions = gene.isoforms|selectattr("orf_type", "equalto", "extended")|list %}
+  {% set truncations = gene.isoforms|selectattr("orf_type", "equalto", "truncated")|list %}
+  {% set others = gene.isoforms|rejectattr("orf_type", "equalto", "extended")|rejectattr("orf_type", "equalto", "truncated")|list %}
+  {% set n_ext = extensions|length %}
+  {% set n_trunc = truncations|length %}
+  {% set n_other = others|length %}
+
+  {# Max E and F across this gene's isoforms — headline summary. #}
+  {% set e_max = namespace(score=0, eval=0) %}
+  {% set f_max = namespace(score=0, eval=0) %}
+  {% for iso in gene.isoforms %}
+    {% if iso.existence_score is not none and iso.existence_score > e_max.score %}
+      {% set e_max.score = iso.existence_score %}
+      {% set e_max.eval = iso.existence_evaluable or 0 %}
+    {% endif %}
+    {% if iso.functional_score is not none and iso.functional_score > f_max.score %}
+      {% set f_max.score = iso.functional_score %}
+      {% set f_max.eval = iso.functional_evaluable or 0 %}
+    {% endif %}
+  {% endfor %}
+
+  <div class="block bg-white border border-slate-200 rounded-lg p-4 hover:border-slate-400 hover:shadow-sm transition">
+
+    <div class="flex items-baseline justify-between mb-2">
+      <div class="flex items-baseline gap-2">
+        <span class="text-lg font-semibold tracking-tight">{{ gene.name }}</span>
+        {% if gene.uniprot_id %}
+          <a href="{{ gene.uniprot_url }}" target="_blank" rel="noopener"
+             class="text-xs text-slate-500 font-mono hover:text-blue-700">{{ gene.uniprot_id }}</a>
+        {% endif %}
+      </div>
+      <span class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
+        {{ gene.isoforms|length }} TIS
+      </span>
+    </div>
+
+    {# Headline E/F scores — max across isoforms. #}
+    <div class="flex gap-3 mb-3 text-xs font-mono text-slate-700">
+      <span><span class="text-slate-500">Best E</span> {{ e_max.score }}/{{ e_max.eval }}</span>
+      <span><span class="text-slate-500">Best F</span> {{ f_max.score }}/{{ f_max.eval }}</span>
+    </div>
+
+    {# Isoform dropdown — native <details> element, no JS. #}
+    <details class="iso-dropdown">
+      <summary>
+        {% if n_ext %}
+          <span class="chip-orf chip-extended">{{ n_ext }} extension{{ '' if n_ext == 1 else 's' }}</span>
+        {% endif %}
+        {% if n_trunc %}
+          <span class="chip-orf chip-truncated">{{ n_trunc }} truncation{{ '' if n_trunc == 1 else 's' }}</span>
+        {% endif %}
+        {% if n_other %}
+          <span class="chip-orf chip-other">{{ n_other }} other</span>
+        {% endif %}
+      </summary>
+      <ul>
+        {% for iso in extensions %}
+        <li><a href="{{ url_for('isoform_page', gene_name=gene.name, tis_slug_str=iso.tis_id|slugify) }}">
+          <span class="iso-chip ext">EXT</span>
+          {{ iso.tis_id }} · {{ iso.aa_len }} aa · E {{ iso.existence_score }}/{{ iso.existence_evaluable }} · F {{ iso.functional_score }}/{{ iso.functional_evaluable }}
+        </a></li>
+        {% endfor %}
+        {% for iso in truncations %}
+        <li><a href="{{ url_for('isoform_page', gene_name=gene.name, tis_slug_str=iso.tis_id|slugify) }}">
+          <span class="iso-chip trunc">TRUNC</span>
+          {{ iso.tis_id }} · {{ iso.aa_len }} aa · E {{ iso.existence_score }}/{{ iso.existence_evaluable }} · F {{ iso.functional_score }}/{{ iso.functional_evaluable }}
+        </a></li>
+        {% endfor %}
+        {% for iso in others %}
+        <li><a href="{{ url_for('isoform_page', gene_name=gene.name, tis_slug_str=iso.tis_id|slugify) }}">
+          <span class="iso-chip other">{{ iso.orf_type|upper }}</span>
+          {{ iso.tis_id }} · {{ iso.aa_len }} aa · E {{ iso.existence_score }}/{{ iso.existence_evaluable }} · F {{ iso.functional_score }}/{{ iso.functional_evaluable }}
+        </a></li>
+        {% endfor %}
+      </ul>
+    </details>
+
+  </div>
+  {% endfor %}
+</div>
+
+{% endif %}
+
+{% endblock %}
