@@ -110,3 +110,10 @@ def test_extension_diff_space_is_isoform():
     fig = pplot.build_protein_figure(_iso(orf_type="extended", diff_space="isoform"), overlays={})
     span = [t for t in fig["data"] if t.get("name") == "diff region"][0]
     assert min(span["x"]) == 1
+
+
+def test_protein_figure_uses_system_font_stack():
+    """The protein figure should match the site's system-font aesthetic."""
+    fig = pplot.build_protein_figure(_iso(), overlays={})
+    font_family = fig["layout"]["font"]["family"]
+    assert "sans-serif" in font_family or "Helvetica" in font_family or "Segoe" in font_family

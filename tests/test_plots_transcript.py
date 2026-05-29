@@ -74,3 +74,49 @@ def test_missing_skeleton_returns_empty_figure_with_caption():
     fig = tplot.build_transcript_figure(iso, None, overlays={})
     assert fig["data"] == []
     assert "skeleton" in fig["layout"]["annotations"][0]["text"].lower()
+
+
+def test_xaxis_auto_zooms_to_tis_cluster():
+    """For most transcripts the TIS cluster is tight — the visible window must
+    bound the TIS positions (with padding) rather than the full skeleton span.
+    """
+    iso = _synthetic_isoform_with_two_tis()
+    skel = _synthetic_skeleton()
+    fig = tplot.build_transcript_figure(iso, skel, overlays={})
+    xrange = fig["layout"]["xaxis"]["range"]
+    # Skeleton spans [100, 900]; TIS at 200 and 250.
+    assert xrange[0] >= 100
+    assert xrange[1] <= 900
+    # Window must contain both TIS positions.
+    assert xrange[0] < 200
+    assert xrange[1] > 250
+    # Window must not be the entire skeleton range (the whole point of the rework).
+    assert xrange[1] - xrange[0] < 800
+
+
+def test_figure_uses_system_font_stack():
+    iso = _synthetic_isoform_with_two_tis()
+    fig = tplot.build_transcript_figure(iso, _synthetic_skeleton(), overlays={})
+    font_family = fig["layout"]["font"]["family"]
+    assert "sans-serif" in font_family or "Helvetica" in font_family or "Segoe" in font_family
+
+
+def test_no_cell_line_bars_renders_single_panel_with_markers():
+    """If cell_line_bars is empty, the figure should still render the transcript
+    track + TIS markers cleanly (no empty bar panel).
+    """
+    iso = SimpleNamespace(
+        tis_id="chr1:250:+:ATG:ENST_A.1",
+        transcript_id="ENST_A.1",
+        all_tis_on_transcript=[
+            {"tis_id": "chr1:250:+:ATG:ENST_A.1", "genomic_pos": 250, "orf_type": "Truncated"},
+        ],
+        focal_tis_id="chr1:250:+:ATG:ENST_A.1",
+        cell_line_bars={},
+    )
+    fig = tplot.build_transcript_figure(iso, _synthetic_skeleton(), overlays={})
+    # No bar traces — only transcript / exon / TIS markers.
+    assert not [t for t in fig["data"] if t.get("type") == "bar"]
+    # Still has at least the transcript line + a TIS marker.
+    tis_markers = [t for t in fig["data"] if t.get("name", "").startswith("TIS:")]
+    assert len(tis_markers) == 1

@@ -18,6 +18,11 @@ _SHARED_FILL = "rgba(31, 119, 180, 0.10)"  # blue wash
 _LOLLIPOP_COLOR_PATHOGENIC = "#d62728"
 _LOLLIPOP_COLOR_OTHER = "#1f77b4"
 
+_FONT_FAMILY = (
+    '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
+)
+_HOVER_FONT_FAMILY = "system-ui, sans-serif"
+
 
 def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, Any]:
     """Return a Plotly figure dict for the protein view."""
@@ -35,6 +40,7 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
         return {
             "data": [],
             "layout": {
+                "font": {"family": _FONT_FAMILY, "size": 13, "color": "#1f2937"},
                 "annotations": [
                     {
                         "text": "No protein length available.",
@@ -43,8 +49,9 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
                         "y": 0.5,
                         "xref": "paper",
                         "yref": "paper",
+                        "font": {"size": 14, "color": "#666"},
                     }
-                ]
+                ],
             },
         }
 
@@ -153,15 +160,24 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
     return {
         "data": traces,
         "layout": {
-            "title": {"text": title},
-            "xaxis": {"title": "Protein residue", "range": [0, axis_len + 5]},
+            "title": {"text": title, "font": {"size": 15, "color": "#111827"}},
+            "font": {"family": _FONT_FAMILY, "size": 13, "color": "#1f2937"},
+            "hoverlabel": {"font": {"family": _HOVER_FONT_FAMILY, "size": 12}},
+            "xaxis": {
+                "title": {
+                    "text": "Protein residue",
+                    "font": {"size": 12, "color": "#4b5563"},
+                },
+                "tickfont": {"size": 11, "color": "#6b7280"},
+                "range": [0, axis_len + 5],
+            },
             "yaxis": {
                 "range": [-1.5, 1.5],
                 "showticklabels": False,
                 "zeroline": False,
             },
             "height": 320,
-            "margin": {"l": 50, "r": 20, "t": 50, "b": 40},
+            "margin": {"l": 70, "r": 30, "t": 60, "b": 50},
         },
     }
 
