@@ -267,6 +267,21 @@ _VARIANTS_LONG_BASE_COLS = (
     "isoform_protein_pos",
     "in_isoform_unique",
     "in_isoform_shared",
+    "allele_frequency",
+    "aa_ref",
+    "aa_alt",
+    "isoform_aa_ref",
+    "isoform_aa_alt",
+    "isoform_consequence",
+)
+
+# Pulled from the per-hit ``metadata`` sub-dict. ``clinvar_title`` reads
+# ``metadata.title`` — renamed so the column is self-describing.
+_VARIANTS_LONG_METADATA_COLS = (
+    ("hgvsc", "hgvsc"),
+    ("rs_id", "rs_id"),
+    ("cosmic_sample_count", "cosmic_sample_count"),
+    ("clinvar_title", "title"),
 )
 
 _VARIANTS_LONG_EFFECT_COLS = (
@@ -319,6 +334,11 @@ def write_variants_long(parquet_path: Path, out_path: Path) -> int:
             }
             for c in _VARIANTS_LONG_BASE_COLS:
                 record[c] = _to_native(hit.get(c))
+            meta = hit.get("metadata")
+            if not isinstance(meta, dict):
+                meta = {}
+            for out_col, meta_key in _VARIANTS_LONG_METADATA_COLS:
+                record[out_col] = _to_native(meta.get(meta_key))
             eff = eff_by_id.get(hit.get("variant_id")) or {}
             for c in _VARIANTS_LONG_EFFECT_COLS:
                 record[c] = _to_native(eff.get(c))
@@ -627,6 +647,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_variant_intersection_n_in_shared_region",
             "isoform_variant_intersection_n_dropped_outside_coding",
         ],
+        "evidence_hits_col": "isoform_variant_intersection_hits",
         "headline_col": "isoform_variant_intersection_n_in_unique_region",
         "interpretation_hint": (
             "How many clinical variants overlap the isoform's coding region at all?"
