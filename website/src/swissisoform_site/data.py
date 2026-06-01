@@ -656,7 +656,21 @@ def diff_evidence_for(iso) -> dict:
             ("Primate AA identity", "isoform_conservation_frame_primate_mean_pident"),
             ("Primate deepest intact", "isoform_conservation_frame_primate_deepest_species"),
             ("Primate phylo depth (MRCA)", "isoform_conservation_frame_primate_max_depth"),
+            (
+                "Primate species frame-intact",
+                "isoform_conservation_frame_primate_n_species_intact_frame",
+            ),
             ("Mammalian frame intact", "isoform_conservation_frame_mammalian_frac_intact"),
+            ("Mammalian species aligned", "isoform_conservation_frame_mammalian_n_species_aligned"),
+            (
+                "Mammalian species frame-intact",
+                "isoform_conservation_frame_mammalian_n_species_intact_frame",
+            ),
+            (
+                "Mammalian start codon conserved",
+                "isoform_conservation_frame_mammalian_start_codon_conserved",
+            ),
+            ("Mammalian AA identity", "isoform_conservation_frame_mammalian_mean_pident"),
             ("Mammalian deepest intact", "isoform_conservation_frame_mammalian_deepest_species"),
             ("Mammalian phylo depth (MRCA)", "isoform_conservation_frame_mammalian_max_depth"),
         ],
@@ -664,7 +678,9 @@ def diff_evidence_for(iso) -> dict:
             "isoform_conservation_frame_primate_frac_intact",
             "isoform_conservation_frame_mammalian_frac_intact",
             "isoform_conservation_frame_primate_mean_pident",
+            "isoform_conservation_frame_mammalian_mean_pident",
             "isoform_conservation_frame_primate_start_codon_conserved",
+            "isoform_conservation_frame_mammalian_start_codon_conserved",
         ),
     )
     if cons:
@@ -773,8 +789,11 @@ def diff_evidence_for(iso) -> dict:
                 "isoform_varianteffect_n_am_pathogenic_in_unique",
             ),
             ("Mean ΔLLR — unique-region variants", "isoform_varianteffect_mean_delta_llr_unique"),
+            ("Min ΔLLR — unique-region variants", "isoform_varianteffect_min_delta_llr_unique"),
             ("Mean AlphaMissense — unique", "isoform_varianteffect_mean_am_pathogenicity_unique"),
             ("Max AlphaMissense — unique", "isoform_varianteffect_max_am_pathogenicity_unique"),
+            ("Variants ESM-2-scored", "isoform_varianteffect_n_scored_plm"),
+            ("Variants AlphaMissense-scored", "isoform_varianteffect_n_scored_am"),
         ]
     )
     if plm:
@@ -792,6 +811,7 @@ def diff_evidence_for(iso) -> dict:
             ("InterPro domains in diff region", "cmp_interproscan_n_hits_in_diff_region"),
             ("Motifs in diff region", "cmp_motifs_n_hits_in_diff_region"),
             ("Mass-spec peptides in diff region", "cmp_massspec_n_hits_in_diff_region"),
+            ("Clinical variants in diff region", "cmp_clinical_n_hits_in_diff_region"),
         ]
     )
     func_hits = []
