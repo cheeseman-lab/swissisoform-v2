@@ -551,3 +551,11 @@
 .diff-compare tr.cmp-hot .dm-ratio { font-weight: 700; }
 .diff-conf { font-size: .72rem; color: #64748b; background: #f1f5f9; border-radius: 4px;
   padding: .05rem .4rem; margin-left: .5rem; font-family: ui-monospace, monospace; }
+
+/* variant LoF / impact flagging */
+.variants-table tr.var-lof { background: #fff7ed; }
+.impact-lof { display:inline-block; font-size:.7rem; font-weight:700; color:#fff; background:#ea580c;
+  padding:.05rem .4rem; border-radius:4px; }
+.impact-dmg { display:inline-block; font-size:.7rem; font-weight:600; color:#fff; background:#dc2626;
+  padding:.05rem .4rem; border-radius:4px; }
+.var-foot { font-size:.78rem; color:#64748b; margin:.5rem 0 0; max-width:680px; line-height:1.4; }

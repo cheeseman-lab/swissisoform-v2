@@ -8,6 +8,7 @@
       <th>Source</th>
       <th>Clin. sig.</th>
       <th>AF (gnomAD)</th>
+      <th>Impact</th>
       <th>AlphaMissense</th>
       <th>ESM-2 ΔLLR</th>
       <th>In unique</th>
@@ -18,10 +19,13 @@
     {% for v in variant_rows %}
       {% set sig = (v.clinical_significance or '')|lower %}
       {% set is_path = 'pathogenic' in sig %}
+      {% set conseq = (v.isoform_consequence or v.consequence or '')|lower %}
+      {% set is_lof = 'frameshift' in conseq or 'stop_gain' in conseq or 'stop_lost' in conseq
+                      or 'start_lost' in conseq or 'splice_donor' in conseq or 'splice_acceptor' in conseq %}
       {% set aa_ref = v.isoform_aa_ref if v.isoform_aa_ref is not none else v.aa_ref %}
       {% set aa_alt = v.isoform_aa_alt if v.isoform_aa_alt is not none else v.aa_alt %}
       {% set url = variant_url(v.variant_id, v.source, v.rs_id) %}
-      <tr class="{{ 'var-pathogenic' if is_path else '' }}">
+      <tr class="{{ 'var-pathogenic' if is_path else ('var-lof' if is_lof else '') }}">
         <td class="var-num">
           {% if v.isoform_protein_pos is not none %}{{ v.isoform_protein_pos|int }}{% else %}—{% endif %}
         </td>
@@ -33,6 +37,11 @@
         <td>{{ v.clinical_significance or '—' }}</td>
         <td class="var-num">
           {% if v.allele_frequency is not none %}{{ '%.2e'|format(v.allele_frequency|float) }}{% else %}—{% endif %}
+        </td>
+        <td>
+          {% if is_lof %}<span class="impact-lof">LoF</span>
+          {% elif v.effect_damaging %}<span class="impact-dmg">damaging</span>
+          {% else %}—{% endif %}
         </td>
         <td>
           {% if v.am_class %}{{ v.am_class }}{% if v.am_pathogenicity is not none %} ({{ '%.2f'|format(v.am_pathogenicity|float) }}){% endif %}{% else %}—{% endif %}
@@ -49,6 +58,11 @@
   </tbody>
 </table>
 <p class="var-count">{{ variant_rows|length }} variant{{ '' if variant_rows|length == 1 else 's' }} over this isoform's coding region.</p>
+<p class="var-foot">
+  <strong>LoF</strong> = frameshift / stop-gain / splice-disrupting — inherently loss-of-function,
+  flagged by consequence (AlphaMissense and ESM-2 score only missense/substitutions, so they are
+  blank here by design, not by absence of impact).
+</p>
 {% else %}
 <p class="empty">No clinical variants intersect this isoform's coding region.</p>
 {% endif %}
