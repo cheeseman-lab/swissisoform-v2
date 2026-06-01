@@ -221,12 +221,17 @@ def _reasons_dict(row_value: Any) -> dict[str, str]:
 
 
 def _to_record_list(row_value: Any) -> list[dict[str, Any]]:
-    """Variant hit arrays come back as numpy arrays of dicts; normalize to list."""
+    """Hit arrays come back as numpy arrays; normalize to a list of dict records.
+
+    Some hit columns are arrays of plain strings (e.g. peptide sequences) rather
+    than dicts — keep only the dict-shaped entries so callers never choke on a
+    str/scalar element.
+    """
     if row_value is None:
         return []
     try:
-        return [dict(x) for x in row_value if x is not None]
-    except TypeError:
+        return [dict(x) for x in row_value if isinstance(x, dict)]
+    except (TypeError, ValueError):
         return []
 
 

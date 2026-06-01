@@ -305,3 +305,20 @@ def test_diff_evidence_panel_surfaces_modalities(client):
     assert b"Differential region \xe2\x80\x94 evidence" in body  # em-dash heading
     assert b"diff-tab" in body
     assert b"Peroxisomal targeting signal" in body  # raw evidence now visible
+
+
+def test_every_isoform_page_renders_200(client):
+    """Regression guard: the diff-evidence panel must not 500 on any isoform.
+
+    (A hits column of plain strings rather than dicts crashed 11/23 pages.)
+    """
+    import swissisoform_site.data as data_mod
+    from swissisoform_site.data import tis_slug as make_slug
+
+    bad = []
+    for gname, g in data_mod.load_all().items():
+        for iso in g.isoforms:
+            r = client.get(f"/genes/{gname}/isoforms/{make_slug(iso.tis_id)}")
+            if r.status_code != 200:
+                bad.append((gname, iso.tis_id, r.status_code))
+    assert not bad, f"isoform pages returned non-200: {bad}"
