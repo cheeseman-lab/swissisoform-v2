@@ -657,39 +657,34 @@ def criterion_evidence_for(iso) -> dict:
                 out.append({"label": label, "value": val})
         return out
 
-    def cmp_rows(specs):
-        """Generic differential-vs-shared compare table from explicit key triples."""
-        out = []
-        for label, u_key, s_key, r_key in specs:
-            u = _fmt_num(g(u_key))
-            s = _fmt_num(g(s_key))
-            r = _fmt_num(g(r_key)) if r_key else None
-            if u is None and s is None:
-                continue
-            out.append(
-                {"label": label, "unique": u or "—", "shared": s or "—", "ratio": r or "—"}
-            )
-        return out
+    def compare(specs):
+        """Generic N-column compare table.
 
-    def bio_cmp_rows(feats):
+        Each spec is ``(label, [key, key, ...], hot_key?)``. A ``None`` key
+        renders ``—``. Rows where every column is missing are dropped. Pairs
+        with a ``hot_key`` flag rows for visual emphasis (enriched biophysics).
+        """
         out = []
-        for label, feat in feats:
-            u = _fmt_num(g(f"cmp_biophysics_{feat}_unique"))
-            s = _fmt_num(g(f"cmp_biophysics_{feat}_shared"))
-            r = _fmt_num(g(f"cmp_biophysics_{feat}_ratio"))
-            if u is None and s is None:
+        for spec in specs:
+            label, keys = spec[0], spec[1]
+            hot_key = spec[2] if len(spec) > 2 else None
+            vals = [_fmt_num(g(k)) if k else None for k in keys]
+            if all(v is None for v in vals):
                 continue
-            enriched = g(f"cmp_biophysics_{feat}_enriched")
             out.append(
                 {
                     "label": label,
-                    "unique": u or "—",
-                    "shared": s or "—",
-                    "ratio": r or "—",
-                    "hot": bool(enriched) if enriched is not None else False,
+                    "cols": [v if v is not None else "—" for v in vals],
+                    "hot": bool(g(hot_key)) if hot_key else False,
                 }
             )
         return out
+
+    # Per-column CSS classes for the two comparison framings. First entry styles
+    # the column *after* the row-label column.
+    DIFF_SHARED_3 = ["", "dm-shared", "dm-ratio"]  # differential | shared | enrichment
+    DIFF_SHARED_2 = ["", "dm-shared"]  # differential | shared
+    CANON_ISO = ["dm-shared", ""]  # canonical (muted) | isoform (focus)
 
     # ---- modality section builders (each → section dict or None) ----------
 
@@ -716,19 +711,23 @@ def criterion_evidence_for(iso) -> dict:
         }
 
     def sec_phylop():
-        compare = cmp_rows(
+        compare_rows = compare(
             [
                 (
                     "phyloP mean",
-                    "isoform_conservation_phylop_unique_region_mean",
-                    "isoform_conservation_phylop_shared_region_mean",
-                    "isoform_conservation_phylop_enrichment",
+                    [
+                        "isoform_conservation_phylop_unique_region_mean",
+                        "isoform_conservation_phylop_shared_region_mean",
+                        "isoform_conservation_phylop_enrichment",
+                    ],
                 ),
                 (
                     "phastCons mean",
-                    "isoform_conservation_phastcons_unique_region_mean",
-                    "isoform_conservation_phastcons_shared_region_mean",
-                    None,
+                    [
+                        "isoform_conservation_phastcons_unique_region_mean",
+                        "isoform_conservation_phastcons_shared_region_mean",
+                        None,
+                    ],
                 ),
             ]
         )
@@ -740,13 +739,14 @@ def criterion_evidence_for(iso) -> dict:
                 ("phastCons Kozak window", "isoform_conservation_phastcons_kozak_mean"),
             ]
         )
-        if not compare and not point:
+        if not compare_rows and not point:
             return None
         return {
             "title": "Per-base conservation (phyloP / phastCons)",
             "subtitle": "differential region vs shared core (enrichment = unique/shared)",
-            "cmp_headers": ["Differential", "Shared core", "Enrichment"],
-            "compare_rows": compare,
+            "cmp_headers": ["Property", "Differential", "Shared core", "Enrichment"],
+            "col_classes": DIFF_SHARED_3,
+            "compare_rows": compare_rows,
             "rows": point,
         }
 
@@ -757,7 +757,7 @@ def criterion_evidence_for(iso) -> dict:
             pval = _fmt_num(g(f"expr_{cl}_p_value"))
             if cpm is not None or pval is not None:
                 cell_rows.append(
-                    {"label": cl.replace("_", " "), "value": f"CPM {cpm or '—'} · p {pval or '—'}"}
+                    {"label": cl.replace("_", " "), "cols": [cpm or "—", pval or "—"], "hot": False}
                 )
         if not cell_rows:
             return None
@@ -765,7 +765,9 @@ def criterion_evidence_for(iso) -> dict:
         return {
             "title": "Per-cell-line usage",
             "subtitle": f"Fisher q = {q}" if q else "TIS initiation per cell line",
-            "rows": cell_rows,
+            "cmp_headers": ["Cell line", "CPM", "p-value"],
+            "col_classes": ["", ""],
+            "compare_rows": cell_rows,
         }
 
     def sec_initiation():
@@ -787,19 +789,28 @@ def criterion_evidence_for(iso) -> dict:
 
     def sec_structure():
         status = g("isoform_structure_status")
+        compare_rows = compare(
+            [
+                (
+                    "pLDDT (whole protein)",
+                    [
+                        "isoform_structure_plddt_canonical_mean",
+                        "isoform_structure_plddt_isoform_mean",
+                    ],
+                ),
+            ]
+        )
         body = rows(
             [
                 ("pLDDT — differential region", "isoform_structure_plddt_diffregion_mean"),
                 ("pLDDT std — differential region", "isoform_structure_plddt_diffregion_std"),
                 ("pLDDT Δ (diff vs shared)", "isoform_structure_plddt_delta_shared"),
-                ("pLDDT — isoform (whole)", "isoform_structure_plddt_isoform_mean"),
-                ("pLDDT — canonical (whole)", "isoform_structure_plddt_canonical_mean"),
                 ("TM-score (iso vs canonical)", "isoform_structure_tm_score"),
                 ("RMSD global (Å)", "isoform_structure_rmsd_global"),
                 ("Extension contacts", "isoform_structure_extension_contacts"),
             ]
         )
-        if not body:
+        if not compare_rows and not body:
             return None
         warn = None
         if status == "uniform_plddt":
@@ -810,50 +821,81 @@ def criterion_evidence_for(iso) -> dict:
         return {
             "title": "Structure (Boltz)",
             "subtitle": f"status: {status}" if status else None,
+            "cmp_headers": ["Region", "Canonical", "Isoform"],
+            "col_classes": CANON_ISO,
+            "compare_rows": compare_rows,
             "rows": body,
             "warn": warn,
         }
 
     def sec_biophysics():
-        compare = bio_cmp_rows(
+        feats = [
+            ("Isoelectric point (pI)", "pI"),
+            ("Hydropathy (GRAVY)", "gravy"),
+            ("Fraction charged", "fraction_charged"),
+            ("Disorder fraction", "disorder"),
+            ("Disorder-promoting", "fraction_disorder_promoting"),
+            ("Low-complexity fraction", "fraction_lcr"),
+            ("Prion-like fraction", "prionlike_fraction"),
+            ("LLPS score", "llps_score"),
+            ("π–π propensity", "pipi_propensity"),
+            ("Aromaticity", "aromaticity"),
+            ("Instability index", "instability_index"),
+            ("Shannon entropy", "shannon_entropy"),
+            ("Normalized complexity", "normalized_complexity"),
+        ]
+        compare_rows = compare(
             [
-                ("Isoelectric point (pI)", "pI"),
-                ("Hydropathy (GRAVY)", "gravy"),
-                ("Fraction charged", "fraction_charged"),
-                ("Disorder fraction", "disorder"),
-                ("Disorder-promoting", "fraction_disorder_promoting"),
-                ("Low-complexity fraction", "fraction_lcr"),
-                ("Prion-like fraction", "prionlike_fraction"),
-                ("LLPS score", "llps_score"),
-                ("π–π propensity", "pipi_propensity"),
-                ("Aromaticity", "aromaticity"),
-                ("Instability index", "instability_index"),
-                ("Shannon entropy", "shannon_entropy"),
-                ("Normalized complexity", "normalized_complexity"),
+                (
+                    label,
+                    [
+                        f"cmp_biophysics_{feat}_unique",
+                        f"cmp_biophysics_{feat}_shared",
+                        f"cmp_biophysics_{feat}_ratio",
+                    ],
+                    f"cmp_biophysics_{feat}_enriched",
+                )
+                for label, feat in feats
             ]
         )
-        if not compare:
+        if not compare_rows:
             return None
         return {
             "title": "Biophysics",
             "subtitle": "differential region vs shared core (highlighted = enriched)",
-            "cmp_headers": ["Differential", "Shared core", "Ratio"],
-            "compare_rows": compare,
+            "cmp_headers": ["Property", "Differential", "Shared core", "Ratio"],
+            "col_classes": DIFF_SHARED_3,
+            "compare_rows": compare_rows,
             "seq": getattr(iso, "differential_sequence", "") or "",
         }
 
     def sec_deeploc():
-        body = rows(
+        compare_rows = compare(
             [
-                ("DeepLoc — canonical", "cmp_localization_deeploc_prediction_canonical"),
-                ("DeepLoc — isoform", "cmp_localization_deeploc_prediction_isoform"),
-                ("DeepLoc signals — canonical", "cmp_localization_deeploc_signals_canonical"),
-                ("DeepLoc signals — isoform", "cmp_localization_deeploc_signals_isoform"),
-                ("Membrane — canonical", "cmp_localization_deeploc_membrane_canonical"),
-                ("Membrane — isoform", "cmp_localization_deeploc_membrane_isoform"),
+                (
+                    "Predicted location",
+                    [
+                        "cmp_localization_deeploc_prediction_canonical",
+                        "cmp_localization_deeploc_prediction_isoform",
+                    ],
+                ),
+                (
+                    "Sorting signals",
+                    [
+                        "cmp_localization_deeploc_signals_canonical",
+                        "cmp_localization_deeploc_signals_isoform",
+                    ],
+                ),
+                (
+                    "Membrane",
+                    [
+                        "cmp_localization_deeploc_membrane_canonical",
+                        "cmp_localization_deeploc_membrane_isoform",
+                    ],
+                ),
             ]
         )
-        if not body:
+        if not compare_rows:
             return None
         changed = (
             bool(g("cmp_localization_deeploc_signals_changed"))
@@ -863,7 +905,9 @@ def criterion_evidence_for(iso) -> dict:
         return {
             "title": "Subcellular localization (DeepLoc)",
             "subtitle": "compartment changed" if changed else "no compartment change",
-            "rows": body,
+            "cmp_headers": ["Property", "Canonical", "Isoform"],
+            "col_classes": CANON_ISO,
+            "compare_rows": compare_rows,
             "highlight": changed,
         }
 
@@ -872,21 +916,27 @@ def criterion_evidence_for(iso) -> dict:
         iso_t = _maybe_str(g("isoform_targetp_targetp_prediction"))
         can_s = _maybe_str(g("canonical_signalp_signalp_prediction"))
         iso_s = _maybe_str(g("isoform_signalp_signalp_prediction"))
-        body = rows(
+        compare_rows = compare(
             [
-                ("TargetP — canonical", "canonical_targetp_targetp_prediction"),
-                ("TargetP — isoform", "isoform_targetp_targetp_prediction"),
-                ("SignalP — canonical", "canonical_signalp_signalp_prediction"),
-                ("SignalP — isoform", "isoform_signalp_signalp_prediction"),
+                (
+                    "TargetP",
+                    ["canonical_targetp_targetp_prediction", "isoform_targetp_targetp_prediction"],
+                ),
+                (
+                    "SignalP",
+                    ["canonical_signalp_signalp_prediction", "isoform_signalp_signalp_prediction"],
+                ),
             ]
         )
-        if not body:
+        if not compare_rows:
             return None
         changed = (can_t is not None and can_t != iso_t) or (can_s is not None and can_s != iso_s)
         return {
             "title": "N-terminal targeting (SignalP / TargetP)",
             "subtitle": "targeting signal changed" if changed else "no targeting change",
-            "rows": body,
+            "cmp_headers": ["Predictor", "Canonical", "Isoform"],
+            "col_classes": CANON_ISO,
+            "compare_rows": compare_rows,
             "highlight": changed,
         }
 
@@ -937,19 +987,23 @@ def criterion_evidence_for(iso) -> dict:
         }
 
     def sec_constraint():
-        compare = cmp_rows(
+        compare_rows = compare(
             [
                 (
                     "ESM-2 mean LLR",
-                    "isoform_plm_vep_mean_llr_unique_region",
-                    "isoform_plm_vep_mean_llr_shared_region",
-                    "isoform_plm_vep_constraint_enrichment",
+                    [
+                        "isoform_plm_vep_mean_llr_unique_region",
+                        "isoform_plm_vep_mean_llr_shared_region",
+                        "isoform_plm_vep_constraint_enrichment",
+                    ],
                 ),
                 (
                     "Constrained positions",
-                    "isoform_plm_vep_n_constrained_positions_unique",
-                    "isoform_plm_vep_n_constrained_positions_shared",
-                    None,
+                    [
+                        "isoform_plm_vep_n_constrained_positions_unique",
+                        "isoform_plm_vep_n_constrained_positions_shared",
+                        None,
+                    ],
                 ),
             ]
         )
@@ -968,7 +1022,7 @@ def criterion_evidence_for(iso) -> dict:
                 ("Variants AlphaMissense-scored", "isoform_varianteffect_n_scored_am"),
             ]
         )
-        if not compare and not body:
+        if not compare_rows and not body:
             return None
         sub = (
             "ESM-2 ΔLLR + AlphaMissense (canonical frame — valid here)"
@@ -978,36 +1032,40 @@ def criterion_evidence_for(iso) -> dict:
         return {
             "title": "Sequence constraint & variant effect",
             "subtitle": sub,
-            "cmp_headers": ["Differential", "Shared core", "Enrichment"],
-            "compare_rows": compare,
+            "cmp_headers": ["Property", "Differential", "Shared core", "Enrichment"],
+            "col_classes": DIFF_SHARED_3,
+            "compare_rows": compare_rows,
             "rows": body,
         }
 
     def sec_clinical_burden():
-        compare = cmp_rows(
+        compare_rows = compare(
             [
                 (
                     "Clinical/observed variants",
-                    "isoform_variant_intersection_n_in_unique_region",
-                    "isoform_variant_intersection_n_in_shared_region",
-                    None,
+                    [
+                        "isoform_variant_intersection_n_in_unique_region",
+                        "isoform_variant_intersection_n_in_shared_region",
+                    ],
                 ),
                 (
                     "Pathogenic variants",
-                    "isoform_variant_intersection_n_pathogenic_in_unique_region",
-                    "isoform_variant_intersection_n_pathogenic_in_shared_region",
-                    None,
+                    [
+                        "isoform_variant_intersection_n_pathogenic_in_unique_region",
+                        "isoform_variant_intersection_n_pathogenic_in_shared_region",
+                    ],
                 ),
             ]
         )
         body = rows([("Clinical variants in diff region", "cmp_clinical_n_hits_in_diff_region")])
-        if not compare and not body:
+        if not compare_rows and not body:
             return None
         return {
             "title": "Clinical-variant burden",
             "subtitle": "differential region vs shared core",
-            "cmp_headers": ["Differential", "Shared core", ""],
-            "compare_rows": compare,
+            "cmp_headers": ["Variant set", "Differential", "Shared core"],
+            "col_classes": DIFF_SHARED_2,
+            "compare_rows": compare_rows,
             "rows": body,
         }
 

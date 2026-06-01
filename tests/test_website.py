@@ -300,10 +300,13 @@ def test_criterion_evidence_folds_into_score_popups(client):
         s for s in ce["F1_structured_extension"]["sections"] if s["title"] == "Biophysics"
     )
     pi = next(r for r in bio["compare_rows"] if "pI" in r["label"])
-    assert pi["unique"] != pi["shared"]
-    # MSRA's mito->peroxisome retargeting flags the DeepLoc section under F2.
+    assert pi["cols"][0] != pi["cols"][1]  # differential vs shared core
+    # F2 renders a canonical-vs-isoform table (not flat rows), and MSRA's
+    # mito->peroxisome retargeting flags it.
     loc = ce["F2_localization_change"]["sections"][0]
     assert loc["highlight"] is True
+    assert loc["cmp_headers"] == ["Property", "Canonical", "Isoform"]
+    assert loc["compare_rows"] and len(loc["compare_rows"][0]["cols"]) == 2
 
     r = client.get("/genes/MSRA/isoforms/" + make_slug("chr8:10054582:+:ATG:ENST00000317173.9"))
     assert r.status_code == 200
