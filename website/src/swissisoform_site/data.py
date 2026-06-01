@@ -564,13 +564,85 @@ def _fmt_num(v, pct=False):
     return f"{f:.3g}"
 
 
-def diff_evidence_for(iso) -> dict:
-    """Pull every piece of differential-region evidence off the parquet row into
-    display-ready, modality-grouped sections for the isoform page.
+# Plain-English "what this means" for each criterion — shown at the top of the
+# criterion modal so a reader knows how to interpret the evidence below it.
+CRITERION_ABOUT = {
+    "E1_primate_conservation": (
+        "Does the isoform-unique region keep an intact reading frame across "
+        "primates? A conserved ORF in close relatives argues the alternative "
+        "protein is real, not a sequencing or annotation artifact."
+    ),
+    "E2_mammalian_conservation": (
+        "The same reading-frame test across mammals. Frame intactness over "
+        "deeper evolutionary distance is stronger evidence the ORF is under "
+        "selection to be translated."
+    ),
+    "E3_phylop_coding_selection": (
+        "phyloP / phastCons measure per-base evolutionary constraint. Higher "
+        "conservation in the unique region than in the shared core means the "
+        "differential sequence itself is selected — evidence it does something."
+    ),
+    "E4_multi_cell_line": (
+        "Is the alternative start used in more than one cell line? Reproducible "
+        "initiation across independent samples argues against a one-off ribosome "
+        "artifact."
+    ),
+    "E5_initiation_efficiency": (
+        "How efficiently ribosomes initiate at this start (TIS) relative to "
+        "background, per cell line. Strong, reproducible initiation supports a "
+        "genuine translation event."
+    ),
+    "E6_mass_spec": (
+        "Were tryptic peptides unique to the differential region detected by "
+        "mass spec? Direct peptide evidence is the strongest proof the isoform "
+        "protein exists."
+    ),
+    "F1_structured_extension": (
+        "Does the gained/lost region fold into ordered structure (pLDDT) and "
+        "shift the protein's biophysical character (charge, hydropathy, "
+        "disorder)? Structured, biophysically distinct regions are more likely "
+        "to be functional."
+    ),
+    "F2_localization_change": (
+        "Does the predicted subcellular localization (DeepLoc) differ between "
+        "the canonical and the isoform? A re-localized protein acts in a "
+        "different cellular context."
+    ),
+    "F3_domain_change": (
+        "Do annotated InterPro domains or short linear motifs fall in the "
+        "differential region? Gaining or losing a domain changes function "
+        "directly."
+    ),
+    "F4_targeting_change": (
+        "Do N-terminal targeting signals (SignalP secretion, TargetP "
+        "mitochondrial/chloroplast) differ between canonical and isoform? "
+        "N-terminal changes most directly add or remove targeting peptides."
+    ),
+    "F5_pathogenic_variant_enrichment": (
+        "Are the variants in the differential region constrained (ESM-2 ΔLLR) "
+        "or predicted-damaging (AlphaMissense — valid only on canonical-frame "
+        "truncations) — and are any loss-of-function? Constraint plus damaging "
+        "or LoF variants imply the region matters functionally."
+    ),
+    "F6_clinical_variant_overlap": (
+        "Is there a burden of clinical (ClinVar / COSMIC) variants in the "
+        "differential region versus the shared core? Disease variants "
+        "concentrating in the unique region tie it to phenotype."
+    ),
+}
 
-    Surfaces the conservation / structure / biophysics / localization /
-    PLM-VEP / function / cell-line evidence that is computed in the pipeline but
-    otherwise only reaches the LLM narrative.
+
+def criterion_evidence_for(iso) -> dict:
+    """Per-criterion differential evidence for the 12 score modals.
+
+    Pulls the conservation / structure / biophysics / localization / PLM-VEP /
+    function / clinical evidence off the parquet row, sliced finer than a flat
+    modality grouping (primate vs mammalian frame, DeepLoc vs targeting) and
+    keyed by criterion id so each score popup hosts exactly its own evidence +
+    a plain-English descriptor.
+
+    Returns ``{criterion_id: {"about": str, "sections": [section, ...]}}`` where
+    every section is render-ready for ``_criterion_evidence.html``.
     """
     raw = getattr(iso, "raw", None) or {}
     g = raw.get
@@ -585,10 +657,21 @@ def diff_evidence_for(iso) -> dict:
                 out.append({"label": label, "value": val})
         return out
 
-    sections = []
+    def cmp_rows(specs):
+        """Generic differential-vs-shared compare table from explicit key triples."""
+        out = []
+        for label, u_key, s_key, r_key in specs:
+            u = _fmt_num(g(u_key))
+            s = _fmt_num(g(s_key))
+            r = _fmt_num(g(r_key)) if r_key else None
+            if u is None and s is None:
+                continue
+            out.append(
+                {"label": label, "unique": u or "—", "shared": s or "—", "ratio": r or "—"}
+            )
+        return out
 
-    def cmp_rows(feats):
-        """Comparative biophysics: differential (unique) region vs shared core."""
+    def bio_cmp_rows(feats):
         out = []
         for label, feat in feats:
             u = _fmt_num(g(f"cmp_biophysics_{feat}_unique"))
@@ -608,265 +691,349 @@ def diff_evidence_for(iso) -> dict:
             )
         return out
 
-    bio_compare = cmp_rows(
-        [
-            ("Isoelectric point (pI)", "pI"),
-            ("Hydropathy (GRAVY)", "gravy"),
-            ("Fraction charged", "fraction_charged"),
-            ("Disorder fraction", "disorder"),
-            ("Disorder-promoting", "fraction_disorder_promoting"),
-            ("Low-complexity fraction", "fraction_lcr"),
-            ("Prion-like fraction", "prionlike_fraction"),
-            ("LLPS score", "llps_score"),
-            ("π–π propensity", "pipi_propensity"),
-            ("Aromaticity", "aromaticity"),
-            ("Instability index", "instability_index"),
-            ("Shannon entropy", "shannon_entropy"),
-            ("Normalized complexity", "normalized_complexity"),
-        ]
-    )
-    if bio_compare:
-        sections.append(
-            {
-                "id": "biophysics",
-                "title": "Biophysics",
-                "subtitle": "differential region vs the shared core (highlighted = enriched)",
-                "compare_rows": bio_compare,
-                "seq": getattr(iso, "differential_sequence", "") or "",
-            }
+    # ---- modality section builders (each → section dict or None) ----------
+
+    def sec_frame(clade):
+        pre = f"isoform_conservation_frame_{clade}"
+        body = rows(
+            [
+                ("Frame intact (fraction of species)", f"{pre}_frac_intact"),
+                ("Species aligned", f"{pre}_n_species_aligned"),
+                ("Species frame-intact", f"{pre}_n_species_intact_frame"),
+                ("Start codon conserved", f"{pre}_start_codon_conserved"),
+                ("Mean AA identity", f"{pre}_mean_pident"),
+                ("Deepest intact species", f"{pre}_deepest_species"),
+                ("Phylo depth (MRCA)", f"{pre}_max_depth"),
+            ],
+            pct_keys=(f"{pre}_frac_intact", f"{pre}_mean_pident", f"{pre}_start_codon_conserved"),
         )
+        if not body:
+            return None
+        return {
+            "title": f"Reading-frame conservation · {clade}",
+            "subtitle": "frame intactness of the differential ORF across the clade",
+            "rows": body,
+        }
 
-    cons = rows(
-        [
-            ("phyloP at TIS codon", "isoform_conservation_phylop_at_tis"),
-            ("phyloP Kozak window", "isoform_conservation_phylop_kozak_mean"),
-            ("phyloP — unique region", "isoform_conservation_phylop_unique_region_mean"),
-            ("phyloP — shared region", "isoform_conservation_phylop_shared_region_mean"),
-            ("phyloP enrichment (unique/shared)", "isoform_conservation_phylop_enrichment"),
-            ("phastCons at TIS codon", "isoform_conservation_phastcons_at_tis"),
-            ("phastCons Kozak window", "isoform_conservation_phastcons_kozak_mean"),
-            ("phastCons — unique region", "isoform_conservation_phastcons_unique_region_mean"),
-            ("phastCons — shared region", "isoform_conservation_phastcons_shared_region_mean"),
-            ("Primate frame intact", "isoform_conservation_frame_primate_frac_intact"),
-            ("Primate species aligned", "isoform_conservation_frame_primate_n_species_aligned"),
-            (
-                "Primate start codon conserved",
-                "isoform_conservation_frame_primate_start_codon_conserved",
-            ),
-            ("Primate AA identity", "isoform_conservation_frame_primate_mean_pident"),
-            ("Primate deepest intact", "isoform_conservation_frame_primate_deepest_species"),
-            ("Primate phylo depth (MRCA)", "isoform_conservation_frame_primate_max_depth"),
-            (
-                "Primate species frame-intact",
-                "isoform_conservation_frame_primate_n_species_intact_frame",
-            ),
-            ("Mammalian frame intact", "isoform_conservation_frame_mammalian_frac_intact"),
-            ("Mammalian species aligned", "isoform_conservation_frame_mammalian_n_species_aligned"),
-            (
-                "Mammalian species frame-intact",
-                "isoform_conservation_frame_mammalian_n_species_intact_frame",
-            ),
-            (
-                "Mammalian start codon conserved",
-                "isoform_conservation_frame_mammalian_start_codon_conserved",
-            ),
-            ("Mammalian AA identity", "isoform_conservation_frame_mammalian_mean_pident"),
-            ("Mammalian deepest intact", "isoform_conservation_frame_mammalian_deepest_species"),
-            ("Mammalian phylo depth (MRCA)", "isoform_conservation_frame_mammalian_max_depth"),
-        ],
-        pct_keys=(
-            "isoform_conservation_frame_primate_frac_intact",
-            "isoform_conservation_frame_mammalian_frac_intact",
-            "isoform_conservation_frame_primate_mean_pident",
-            "isoform_conservation_frame_mammalian_mean_pident",
-            "isoform_conservation_frame_primate_start_codon_conserved",
-            "isoform_conservation_frame_mammalian_start_codon_conserved",
-        ),
-    )
-    if cons:
-        sections.append({"id": "conservation", "title": "Conservation", "rows": cons})
-
-    init = rows(
-        [
-            ("Kozak context (−9..+4)", "isoform_initiation_context_kozak_context"),
-            ("Kozak Hamming — full consensus", "isoform_initiation_context_kozak_hamming_full"),
-            ("Kozak Hamming — major positions", "isoform_initiation_context_kozak_hamming_major"),
-            ("Kozak Hamming — partial", "isoform_initiation_context_kozak_hamming_partial"),
-            ("Kozak window GC content", "isoform_initiation_context_kozak_window_gc_content"),
-        ]
-    )
-    if init:
-        sections.append(
-            {
-                "id": "initiation",
-                "title": "Initiation context",
-                "subtitle": "Kozak sequence around the alternative start",
-                "rows": init,
-            }
+    def sec_phylop():
+        compare = cmp_rows(
+            [
+                (
+                    "phyloP mean",
+                    "isoform_conservation_phylop_unique_region_mean",
+                    "isoform_conservation_phylop_shared_region_mean",
+                    "isoform_conservation_phylop_enrichment",
+                ),
+                (
+                    "phastCons mean",
+                    "isoform_conservation_phastcons_unique_region_mean",
+                    "isoform_conservation_phastcons_shared_region_mean",
+                    None,
+                ),
+            ]
         )
+        point = rows(
+            [
+                ("phyloP at TIS codon", "isoform_conservation_phylop_at_tis"),
+                ("phyloP Kozak window", "isoform_conservation_phylop_kozak_mean"),
+                ("phastCons at TIS codon", "isoform_conservation_phastcons_at_tis"),
+                ("phastCons Kozak window", "isoform_conservation_phastcons_kozak_mean"),
+            ]
+        )
+        if not compare and not point:
+            return None
+        return {
+            "title": "Per-base conservation (phyloP / phastCons)",
+            "subtitle": "differential region vs shared core (enrichment = unique/shared)",
+            "cmp_headers": ["Differential", "Shared core", "Enrichment"],
+            "compare_rows": compare,
+            "rows": point,
+        }
 
-    struct_status = g("isoform_structure_status")
-    struct = rows(
-        [
-            ("pLDDT — differential region", "isoform_structure_plddt_diffregion_mean"),
-            ("pLDDT std — differential region", "isoform_structure_plddt_diffregion_std"),
-            ("pLDDT Δ (diff vs shared)", "isoform_structure_plddt_delta_shared"),
-            ("pLDDT — isoform (whole)", "isoform_structure_plddt_isoform_mean"),
-            ("pLDDT — canonical (whole)", "isoform_structure_plddt_canonical_mean"),
-            ("TM-score (iso vs canonical, whole)", "isoform_structure_tm_score"),
-            ("RMSD global (Å, whole)", "isoform_structure_rmsd_global"),
-            ("Extension contacts", "isoform_structure_extension_contacts"),
-        ]
-    )
-    if struct:
+    def sec_cell_lines():
+        cell_rows = []
+        for cl in ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"):
+            cpm = _fmt_num(g(f"expr_{cl}_cpm"))
+            pval = _fmt_num(g(f"expr_{cl}_p_value"))
+            if cpm is not None or pval is not None:
+                cell_rows.append(
+                    {"label": cl.replace("_", " "), "value": f"CPM {cpm or '—'} · p {pval or '—'}"}
+                )
+        if not cell_rows:
+            return None
+        q = _fmt_num(g("fisher_qvalue"))
+        return {
+            "title": "Per-cell-line usage",
+            "subtitle": f"Fisher q = {q}" if q else "TIS initiation per cell line",
+            "rows": cell_rows,
+        }
+
+    def sec_initiation():
+        body = rows(
+            [
+                ("Kozak context (−9..+4)", "isoform_initiation_context_kozak_context"),
+                ("Kozak Hamming — full consensus", "isoform_initiation_context_kozak_hamming_full"),
+                ("Kozak Hamming — major positions", "isoform_initiation_context_kozak_hamming_major"),
+                ("Kozak window GC content", "isoform_initiation_context_kozak_window_gc_content"),
+            ]
+        )
+        if not body:
+            return None
+        return {
+            "title": "Initiation context",
+            "subtitle": "Kozak sequence around the alternative start",
+            "rows": body,
+        }
+
+    def sec_structure():
+        status = g("isoform_structure_status")
+        body = rows(
+            [
+                ("pLDDT — differential region", "isoform_structure_plddt_diffregion_mean"),
+                ("pLDDT std — differential region", "isoform_structure_plddt_diffregion_std"),
+                ("pLDDT Δ (diff vs shared)", "isoform_structure_plddt_delta_shared"),
+                ("pLDDT — isoform (whole)", "isoform_structure_plddt_isoform_mean"),
+                ("pLDDT — canonical (whole)", "isoform_structure_plddt_canonical_mean"),
+                ("TM-score (iso vs canonical)", "isoform_structure_tm_score"),
+                ("RMSD global (Å)", "isoform_structure_rmsd_global"),
+                ("Extension contacts", "isoform_structure_extension_contacts"),
+            ]
+        )
+        if not body:
+            return None
         warn = None
-        if struct_status == "uniform_plddt":
+        if status == "uniform_plddt":
             warn = (
                 "Structure metrics are a uniform-pLDDT placeholder for this "
                 "isoform — treat the per-residue confidence as unreliable."
             )
-        sections.append(
-            {
-                "id": "structure",
-                "title": "Structure",
-                "subtitle": f"Boltz · status: {struct_status}" if struct_status else "Boltz",
-                "rows": struct,
-                "warn": warn,
-            }
-        )
+        return {
+            "title": "Structure (Boltz)",
+            "subtitle": f"status: {status}" if status else None,
+            "rows": body,
+            "warn": warn,
+        }
 
-    loc = rows(
-        [
-            ("DeepLoc — canonical", "cmp_localization_deeploc_prediction_canonical"),
-            ("DeepLoc — isoform", "cmp_localization_deeploc_prediction_isoform"),
-            ("DeepLoc signals — canonical", "cmp_localization_deeploc_signals_canonical"),
-            ("DeepLoc signals — isoform", "cmp_localization_deeploc_signals_isoform"),
-            ("Membrane — canonical", "cmp_localization_deeploc_membrane_canonical"),
-            ("Membrane — isoform", "cmp_localization_deeploc_membrane_isoform"),
-            ("TargetP — canonical", "canonical_targetp_targetp_prediction"),
-            ("TargetP — isoform", "isoform_targetp_targetp_prediction"),
-            ("SignalP — canonical", "canonical_signalp_signalp_prediction"),
-            ("SignalP — isoform", "isoform_signalp_signalp_prediction"),
-        ]
-    )
-    if loc:
+    def sec_biophysics():
+        compare = bio_cmp_rows(
+            [
+                ("Isoelectric point (pI)", "pI"),
+                ("Hydropathy (GRAVY)", "gravy"),
+                ("Fraction charged", "fraction_charged"),
+                ("Disorder fraction", "disorder"),
+                ("Disorder-promoting", "fraction_disorder_promoting"),
+                ("Low-complexity fraction", "fraction_lcr"),
+                ("Prion-like fraction", "prionlike_fraction"),
+                ("LLPS score", "llps_score"),
+                ("π–π propensity", "pipi_propensity"),
+                ("Aromaticity", "aromaticity"),
+                ("Instability index", "instability_index"),
+                ("Shannon entropy", "shannon_entropy"),
+                ("Normalized complexity", "normalized_complexity"),
+            ]
+        )
+        if not compare:
+            return None
+        return {
+            "title": "Biophysics",
+            "subtitle": "differential region vs shared core (highlighted = enriched)",
+            "cmp_headers": ["Differential", "Shared core", "Ratio"],
+            "compare_rows": compare,
+            "seq": getattr(iso, "differential_sequence", "") or "",
+        }
+
+    def sec_deeploc():
+        body = rows(
+            [
+                ("DeepLoc — canonical", "cmp_localization_deeploc_prediction_canonical"),
+                ("DeepLoc — isoform", "cmp_localization_deeploc_prediction_isoform"),
+                ("DeepLoc signals — canonical", "cmp_localization_deeploc_signals_canonical"),
+                ("DeepLoc signals — isoform", "cmp_localization_deeploc_signals_isoform"),
+                ("Membrane — canonical", "cmp_localization_deeploc_membrane_canonical"),
+                ("Membrane — isoform", "cmp_localization_deeploc_membrane_isoform"),
+            ]
+        )
+        if not body:
+            return None
         changed = (
             bool(g("cmp_localization_deeploc_signals_changed"))
             or bool(g("cmp_localization_deeploc_prediction_changed"))
             or bool(g("cmp_localization_deeploc_membrane_changed"))
         )
-        sections.append(
-            {
-                "id": "localization",
-                "title": "Localization",
-                "subtitle": "targeting signal changed" if changed else "no compartment change",
-                "rows": loc,
-                "highlight": changed,
-            }
-        )
+        return {
+            "title": "Subcellular localization (DeepLoc)",
+            "subtitle": "compartment changed" if changed else "no compartment change",
+            "rows": body,
+            "highlight": changed,
+        }
 
-    plm = rows(
-        [
-            ("ESM-2 mean LLR — unique region", "isoform_plm_vep_mean_llr_unique_region"),
-            ("ESM-2 mean LLR — shared region", "isoform_plm_vep_mean_llr_shared_region"),
-            ("Constraint enrichment (unique/shared)", "isoform_plm_vep_constraint_enrichment"),
-            ("Constrained positions — unique", "isoform_plm_vep_n_constrained_positions_unique"),
-            ("Constrained positions — shared", "isoform_plm_vep_n_constrained_positions_shared"),
-            ("Variants in unique region", "isoform_variant_intersection_n_in_unique_region"),
-            ("Variants in shared region", "isoform_variant_intersection_n_in_shared_region"),
-            (
-                "Pathogenic in unique region",
-                "isoform_variant_intersection_n_pathogenic_in_unique_region",
-            ),
-            (
-                "Pathogenic in shared region",
-                "isoform_variant_intersection_n_pathogenic_in_shared_region",
-            ),
-            ("Scorable variants in unique region", "isoform_varianteffect_n_scorable_in_unique"),
-            ("Damaging variants in unique region", "isoform_varianteffect_n_damaging_in_unique"),
-            (
-                "AlphaMissense-pathogenic in unique",
-                "isoform_varianteffect_n_am_pathogenic_in_unique",
-            ),
-            ("Mean ΔLLR — unique-region variants", "isoform_varianteffect_mean_delta_llr_unique"),
-            ("Min ΔLLR — unique-region variants", "isoform_varianteffect_min_delta_llr_unique"),
-            ("Mean AlphaMissense — unique", "isoform_varianteffect_mean_am_pathogenicity_unique"),
-            ("Max AlphaMissense — unique", "isoform_varianteffect_max_am_pathogenicity_unique"),
-            ("Variants ESM-2-scored", "isoform_varianteffect_n_scored_plm"),
-            ("Variants AlphaMissense-scored", "isoform_varianteffect_n_scored_am"),
-        ]
-    )
-    if plm:
-        constraint_sub = (
-            "ESM-2 + AlphaMissense (canonical frame)"
+    def sec_targeting():
+        can_t = _maybe_str(g("canonical_targetp_targetp_prediction"))
+        iso_t = _maybe_str(g("isoform_targetp_targetp_prediction"))
+        can_s = _maybe_str(g("canonical_signalp_signalp_prediction"))
+        iso_s = _maybe_str(g("isoform_signalp_signalp_prediction"))
+        body = rows(
+            [
+                ("TargetP — canonical", "canonical_targetp_targetp_prediction"),
+                ("TargetP — isoform", "isoform_targetp_targetp_prediction"),
+                ("SignalP — canonical", "canonical_signalp_signalp_prediction"),
+                ("SignalP — isoform", "isoform_signalp_signalp_prediction"),
+            ]
+        )
+        if not body:
+            return None
+        changed = (can_t is not None and can_t != iso_t) or (can_s is not None and can_s != iso_s)
+        return {
+            "title": "N-terminal targeting (SignalP / TargetP)",
+            "subtitle": "targeting signal changed" if changed else "no targeting change",
+            "rows": body,
+            "highlight": changed,
+        }
+
+    def _hit_list(cols):
+        out = []
+        for col, kind in cols:
+            for h in _to_record_list(g(col)):
+                name = (
+                    h.get("name")
+                    or h.get("peptide")
+                    or h.get("match")
+                    or h.get("description")
+                    or "?"
+                )
+                pos = h.get("pos") or h.get("start")
+                end = h.get("end")
+                span = f"{pos}–{end}" if pos is not None and end is not None else ""
+                out.append({"kind": kind, "name": str(name)[:60], "span": span})
+        return out
+
+    def sec_domains_motifs():
+        body = rows(
+            [
+                ("InterPro domains in diff region", "cmp_interproscan_n_hits_in_diff_region"),
+                ("Motifs in diff region", "cmp_motifs_n_hits_in_diff_region"),
+            ]
+        )
+        hits = _hit_list(
+            [("cmp_interproscan_hits_in_diff_region", "domain"), ("cmp_motifs_hits_in_diff_region", "motif")]
+        )
+        if not body and not hits:
+            return None
+        return {
+            "title": "Domains & motifs in the differential region",
+            "rows": body,
+            "hits": hits,
+        }
+
+    def sec_massspec():
+        body = rows([("Mass-spec peptides in diff region", "cmp_massspec_n_hits_in_diff_region")])
+        hits = _hit_list([("cmp_massspec_hits_in_diff_region", "peptide")])
+        if not body and not hits:
+            return None
+        return {
+            "title": "Mass-spec peptides in the differential region",
+            "rows": body,
+            "hits": hits,
+        }
+
+    def sec_constraint():
+        compare = cmp_rows(
+            [
+                (
+                    "ESM-2 mean LLR",
+                    "isoform_plm_vep_mean_llr_unique_region",
+                    "isoform_plm_vep_mean_llr_shared_region",
+                    "isoform_plm_vep_constraint_enrichment",
+                ),
+                (
+                    "Constrained positions",
+                    "isoform_plm_vep_n_constrained_positions_unique",
+                    "isoform_plm_vep_n_constrained_positions_shared",
+                    None,
+                ),
+            ]
+        )
+        body = rows(
+            [
+                ("Scorable variants in unique region", "isoform_varianteffect_n_scorable_in_unique"),
+                ("Damaging variants in unique region", "isoform_varianteffect_n_damaging_in_unique"),
+                (
+                    "AlphaMissense-pathogenic in unique",
+                    "isoform_varianteffect_n_am_pathogenic_in_unique",
+                ),
+                ("Mean ΔLLR — unique-region variants", "isoform_varianteffect_mean_delta_llr_unique"),
+                ("Min ΔLLR — unique-region variants", "isoform_varianteffect_min_delta_llr_unique"),
+                ("Mean AlphaMissense — unique", "isoform_varianteffect_mean_am_pathogenicity_unique"),
+                ("Variants ESM-2-scored", "isoform_varianteffect_n_scored_plm"),
+                ("Variants AlphaMissense-scored", "isoform_varianteffect_n_scored_am"),
+            ]
+        )
+        if not compare and not body:
+            return None
+        sub = (
+            "ESM-2 ΔLLR + AlphaMissense (canonical frame — valid here)"
             if is_trunc
             else "ESM-2 ΔLLR (isoform frame) — AlphaMissense N/A on this non-canonical region"
         )
-        sections.append(
-            {
-                "id": "constraint",
-                "title": "Constraint",
-                "subtitle": constraint_sub,
-                "rows": plm,
-            }
-        )
+        return {
+            "title": "Sequence constraint & variant effect",
+            "subtitle": sub,
+            "cmp_headers": ["Differential", "Shared core", "Enrichment"],
+            "compare_rows": compare,
+            "rows": body,
+        }
 
-    func_rows = rows(
-        [
-            ("InterPro domains in diff region", "cmp_interproscan_n_hits_in_diff_region"),
-            ("Motifs in diff region", "cmp_motifs_n_hits_in_diff_region"),
-            ("Mass-spec peptides in diff region", "cmp_massspec_n_hits_in_diff_region"),
-            ("Clinical variants in diff region", "cmp_clinical_n_hits_in_diff_region"),
-        ]
-    )
-    func_hits = []
-    for col, kind in [
-        ("cmp_interproscan_hits_in_diff_region", "domain"),
-        ("cmp_motifs_hits_in_diff_region", "motif"),
-        ("cmp_massspec_hits_in_diff_region", "peptide"),
-    ]:
-        for h in _to_record_list(g(col)):
-            name = (
-                h.get("name") or h.get("peptide") or h.get("match") or h.get("description") or "?"
-            )
-            pos = h.get("pos") or h.get("start")
-            end = h.get("end")
-            span = f"{pos}–{end}" if pos is not None and end is not None else ""
-            func_hits.append({"kind": kind, "name": str(name)[:60], "span": span})
-    if func_rows or func_hits:
-        sections.append(
-            {
-                "id": "function",
-                "title": "Domains · Motifs · MS",
-                "rows": func_rows,
-                "hits": func_hits,
-            }
+    def sec_clinical_burden():
+        compare = cmp_rows(
+            [
+                (
+                    "Clinical/observed variants",
+                    "isoform_variant_intersection_n_in_unique_region",
+                    "isoform_variant_intersection_n_in_shared_region",
+                    None,
+                ),
+                (
+                    "Pathogenic variants",
+                    "isoform_variant_intersection_n_pathogenic_in_unique_region",
+                    "isoform_variant_intersection_n_pathogenic_in_shared_region",
+                    None,
+                ),
+            ]
         )
+        body = rows([("Clinical variants in diff region", "cmp_clinical_n_hits_in_diff_region")])
+        if not compare and not body:
+            return None
+        return {
+            "title": "Clinical-variant burden",
+            "subtitle": "differential region vs shared core",
+            "cmp_headers": ["Differential", "Shared core", ""],
+            "compare_rows": compare,
+            "rows": body,
+        }
 
-    cell_rows = []
-    for cl in ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"):
-        cpm = _fmt_num(g(f"expr_{cl}_cpm"))
-        pval = _fmt_num(g(f"expr_{cl}_p_value"))
-        if cpm is not None or pval is not None:
-            cell_rows.append(
-                {"label": cl.replace("_", " "), "value": f"CPM {cpm or '—'} · p {pval or '—'}"}
-            )
-    if cell_rows:
-        q = _fmt_num(g("fisher_qvalue"))
-        sections.append(
-            {
-                "id": "cell_lines",
-                "title": "Cell-line usage",
-                "subtitle": f"Fisher q = {q}" if q else "TIS initiation per cell line",
-                "rows": cell_rows,
-            }
-        )
-
-    return {
-        "sections": sections,
-        "is_trunc": is_trunc,
-        "confidence": _maybe_str(g("diff_region_confidence")),
+    # ---- assign sections to criteria --------------------------------------
+    assignments = {
+        "E1_primate_conservation": [sec_frame("primate")],
+        "E2_mammalian_conservation": [sec_frame("mammalian")],
+        "E3_phylop_coding_selection": [sec_phylop()],
+        "E4_multi_cell_line": [sec_cell_lines()],
+        "E5_initiation_efficiency": [sec_initiation(), sec_cell_lines()],
+        "E6_mass_spec": [sec_massspec()],
+        "F1_structured_extension": [sec_structure(), sec_biophysics()],
+        "F2_localization_change": [sec_deeploc()],
+        "F3_domain_change": [sec_domains_motifs()],
+        "F4_targeting_change": [sec_targeting()],
+        "F5_pathogenic_variant_enrichment": [sec_constraint()],
+        "F6_clinical_variant_overlap": [sec_clinical_burden()],
     }
+
+    out = {}
+    for cid, secs in assignments.items():
+        out[cid] = {
+            "about": CRITERION_ABOUT.get(cid, ""),
+            "sections": [s for s in secs if s],
+        }
+    return out
 
 
 def _isoform_view(iso, gene):

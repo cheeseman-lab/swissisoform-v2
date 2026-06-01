@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}About · SwissIsoform v2{% endblock %}
+
+{% block content %}
+<div class="about-shell">
+  <header class="about-head">
+    <h1>About SwissIsoform v2</h1>
+    <p class="about-lede">
+      SwissIsoform annotates <strong>alternative protein isoforms</strong> found by
+      translation-initiation sequencing (Ribo-TISH). Each alternative start codon
+      (TIS) produces a protein that differs from the canonical one in a defined
+      <strong>differential region</strong>; every page weighs the evidence that that
+      isoform <em>exists</em> and that it <em>does something</em>.
+    </p>
+  </header>
+
+  <!-- The differential region & the frame rule -->
+  <section class="about-sec">
+    <h2>The differential region &amp; reading frame</h2>
+    <p>
+      The differential region is the part of the isoform that is <em>not shared</em>
+      with the canonical protein. Two cases, and the distinction (<code>diff_space</code>)
+      governs which tools are valid:
+    </p>
+    <ul class="about-list">
+      <li>
+        <strong>Truncation</strong> (<code>diff_space = canonical</code>) — the isoform
+        starts <em>downstream</em>, losing the canonical N-terminus. The lost region is
+        ordinary canonical-coding sequence, so canonical-frame tools (e.g. AlphaMissense)
+        apply.
+      </li>
+      <li>
+        <strong>Extension / uORF / alt-ORF</strong> (<code>diff_space = isoform</code>) —
+        the isoform starts <em>upstream</em> or out-of-frame, so the gained region is
+        <em>not</em> in the canonical reading frame. Canonical-frame predictors are
+        meaningless here (AlphaMissense reports these positions as "intronic" / N/A);
+        only frame-aware tools (ESM-2 ΔLLR, alt-ORF consequence) apply.
+      </li>
+    </ul>
+  </section>
+
+  <!-- The two axes -->
+  <section class="about-sec">
+    <h2>Two evidence axes</h2>
+    <p>
+      Twelve criteria, six per axis. Each returns <strong>✓ (true)</strong>,
+      <strong>✗ (false)</strong>, or <strong>– (not evaluable)</strong> — a criterion
+      whose underlying data could not be computed reports "not evaluable" rather than
+      counting against the isoform. The header score is
+      <code>passed / evaluable</code>.
+    </p>
+
+    <div class="about-axes">
+      <div class="about-axis">
+        <h3 class="about-axis-h axis-E">Existence (E) — is the isoform real?</h3>
+        <dl class="about-crit">
+          {% for cid, code, label in existence_criteria %}
+          <dt><span class="about-code">{{ code }}</span> {{ label }}</dt>
+          <dd>{{ criterion_about.get(cid, "") }}</dd>
+          {% endfor %}
+        </dl>
+      </div>
+      <div class="about-axis">
+        <h3 class="about-axis-h axis-F">Functional (F) — does it do something?</h3>
+        <dl class="about-crit">
+          {% for cid, code, label in functional_criteria %}
+          <dt><span class="about-code">{{ code }}</span> {{ label }}</dt>
+          <dd>{{ criterion_about.get(cid, "") }}</dd>
+          {% endfor %}
+        </dl>
+      </div>
+    </div>
+  </section>
+
+  <!-- Metric glossary -->
+  <section class="about-sec">
+    <h2>The metrics behind the criteria</h2>
+    <dl class="about-glossary">
+      <dt>phyloP / phastCons</dt>
+      <dd>
+        Per-base evolutionary constraint from the Zoonomia 241-mammal alignment.
+        phyloP scores acceleration/conservation at single sites; phastCons scores the
+        probability a base is in a conserved element. We compare the
+        <strong>differential region</strong> against the <strong>shared core</strong> —
+        higher constraint in the unique region means it is selected.
+      </dd>
+
+      <dt>Frame conservation (primate / mammalian)</dt>
+      <dd>
+        We extract the differential ORF across primate and mammalian genomes and test
+        whether the reading frame stays intact (no frameshift, no premature stop, start
+        codon preserved). "Phylo depth (MRCA)" reports how deep the deepest still-intact
+        species sits — deeper = older selection on the ORF.
+      </dd>
+
+      <dt>Initiation efficiency &amp; Kozak context</dt>
+      <dd>
+        How strongly ribosomes initiate at the alternative start relative to background,
+        per cell line (CPM + p-value). The Kozak context (−9..+4 around the ATG) and its
+        Hamming distance to the consensus indicate whether the sequence favours
+        initiation.
+      </dd>
+
+      <dt>Mass spec</dt>
+      <dd>
+        In-silico tryptic digest of the differential region, matched against detected
+        peptides (PepQuery). A peptide unique to the isoform region is direct proof of
+        translation.
+      </dd>
+
+      <dt>pLDDT &amp; structure (Boltz)</dt>
+      <dd>
+        Per-residue model confidence (0–100) from a Boltz structure prediction. High
+        pLDDT in the differential region implies it folds into ordered structure rather
+        than disorder. We also report TM-score / RMSD between canonical and isoform
+        folds. A "uniform-pLDDT" status flags a placeholder structure — treat as
+        unreliable.
+      </dd>
+
+      <dt>DeepLoc / SignalP / TargetP</dt>
+      <dd>
+        Subcellular-localization (DeepLoc) and N-terminal targeting-signal predictors
+        (SignalP = secretion, TargetP = mitochondrial/chloroplast transit). We run them
+        on canonical <em>and</em> isoform; a changed prediction means the isoform is
+        routed differently. N-terminal changes most directly add or remove targeting
+        peptides.
+      </dd>
+
+      <dt>InterProScan domains &amp; motifs</dt>
+      <dd>
+        Annotated protein domains (InterPro) and short linear motifs that fall inside the
+        differential region. Gaining or losing a domain is a direct functional change.
+      </dd>
+
+      <dt>ESM-2 ΔLLR (sequence constraint)</dt>
+      <dd>
+        A protein language model scores how "surprised" it is by each residue (masked-
+        marginal log-likelihood ratio). Averaged over the unique vs shared region, it
+        measures constraint in the isoform's own reading frame — so it works on
+        extensions where AlphaMissense cannot.
+      </dd>
+
+      <dt>AlphaMissense <span class="about-warn-chip">canonical frame only</span></dt>
+      <dd>
+        Precomputed missense-pathogenicity for every canonical-protein amino-acid change.
+        Valid on <strong>truncations</strong> (canonical-coding lost region), but
+        <strong>N/A on extensions</strong> — those positions are not in the canonical
+        frame, so AlphaMissense has no score for them. It is also missense-only: it never
+        sees frameshift or stop-gain (loss-of-function) variants, which are assessed
+        separately.
+      </dd>
+
+      <dt>Biophysics</dt>
+      <dd>
+        Whole-region physicochemical properties of the differential vs shared sequence:
+        isoelectric point, hydropathy (GRAVY), charge, disorder, low-complexity and
+        prion-like fraction, LLPS / π–π propensity, aromaticity, instability, entropy. A
+        biophysically distinct region is more likely to confer a distinct function (e.g.
+        phase separation).
+      </dd>
+
+      <dt>Clinical variants</dt>
+      <dd>
+        ClinVar / gnomAD / COSMIC variants intersected with the differential region.
+        Burden of pathogenic variants in the unique region (vs the shared core) ties the
+        isoform to phenotype. Loss-of-function consequences (frameshift, stop-gain) are
+        clinically relevant independently of any missense pathogenicity score.
+      </dd>
+    </dl>
+  </section>
+</div>
+{% endblock %}

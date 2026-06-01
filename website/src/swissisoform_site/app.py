@@ -34,10 +34,11 @@ from swissisoform_site.data import (
     CRITERIA_FOR_PAGE,
     EXISTENCE_CRITERIA,
     FUNCTIONAL_CRITERIA,
+    CRITERION_ABOUT,
     Isoform,
     _isoform_view,
+    criterion_evidence_for,
     data_dir,
-    diff_evidence_for,
     llm_criterion_for_isoform,
     llm_synthesis_for_isoform,
     load_all,
@@ -139,6 +140,16 @@ def create_app() -> Flask:
             functional_criteria=FUNCTIONAL_CRITERIA,
         )
 
+    @app.get("/about")
+    def about() -> Any:
+        """Static glossary — the 12 evidence criteria + the metrics behind them."""
+        return render_template(
+            "about.html",
+            existence_criteria=EXISTENCE_CRITERIA,
+            functional_criteria=FUNCTIONAL_CRITERIA,
+            criterion_about=CRITERION_ABOUT,
+        )
+
     @app.get("/genes/<gene_name>")
     def gene_page(gene_name: str) -> Any:
         """Deprecated — V1 per-gene overview removed.
@@ -216,7 +227,7 @@ def create_app() -> Flask:
         return render_template(
             "isoform.html",
             isoform=_isoform_view(iso, gene),
-            diff_evidence=diff_evidence_for(iso),
+            criterion_evidence=criterion_evidence_for(iso),
             criteria=CRITERIA_FOR_PAGE,
             criterion_slices=criterion_slices,
             criterion_llms=criterion_llms,

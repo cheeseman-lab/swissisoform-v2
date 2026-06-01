@@ -281,29 +281,49 @@ def test_isoform_page_truncation_marks_differential_region(client):
     assert b"Differential region" in body
 
 
-def test_diff_evidence_panel_surfaces_modalities(client):
-    """The differential-region panel renders modality tabs with real evidence."""
-    from swissisoform_site.data import diff_evidence_for, load_all, tis_slug as make_slug
+def test_criterion_evidence_folds_into_score_popups(client):
+    """Differential evidence is keyed by criterion id and embedded per modal."""
+    from swissisoform_site.data import criterion_evidence_for, load_all, tis_slug as make_slug
 
     iso = load_all()["MSRA"].isoforms[0]
-    de = diff_evidence_for(iso)
-    ids = {s["id"] for s in de["sections"]}
-    # Conservation, structure, localization, biophysics must all be surfaced.
-    assert {"biophysics", "conservation", "structure", "localization", "initiation"}.issubset(ids)
-    bio = next(s for s in de["sections"] if s["id"] == "biophysics")
-    assert bio.get("compare_rows"), "biophysics must be comparative (unique vs shared)"
+    ce = criterion_evidence_for(iso)
+    # Every criterion has an entry with a plain-English "about" descriptor.
+    assert set(ce) >= {
+        "E1_primate_conservation",
+        "E3_phylop_coding_selection",
+        "F1_structured_extension",
+        "F2_localization_change",
+    }
+    assert ce["F2_localization_change"]["about"]
+    # F1 hosts comparative biophysics (differential vs shared, not whole-protein).
+    bio = next(
+        s for s in ce["F1_structured_extension"]["sections"] if s["title"] == "Biophysics"
+    )
     pi = next(r for r in bio["compare_rows"] if "pI" in r["label"])
-    assert pi["unique"] != pi["shared"]  # differential, not whole-protein
-    # MSRA's mito->peroxisome retargeting must be flagged on the localization section.
-    loc = next(s for s in de["sections"] if s["id"] == "localization")
-    assert loc.get("highlight") is True
+    assert pi["unique"] != pi["shared"]
+    # MSRA's mito->peroxisome retargeting flags the DeepLoc section under F2.
+    loc = ce["F2_localization_change"]["sections"][0]
+    assert loc["highlight"] is True
 
     r = client.get("/genes/MSRA/isoforms/" + make_slug("chr8:10054582:+:ATG:ENST00000317173.9"))
     assert r.status_code == 200
     body = r.data
-    assert b"Differential region \xe2\x80\x94 evidence" in body  # em-dash heading
-    assert b"diff-tab" in body
-    assert b"Peroxisomal targeting signal" in body  # raw evidence now visible
+    assert b"crit-about" in body  # the per-criterion descriptor block
+    assert b"click any tile" in body  # standalone panel dissolved into the tiles
+    assert b"Peroxisomal targeting signal" in body  # evidence still present (in modal template)
+
+
+def test_about_page_renders_glossary(client):
+    """The /about route explains the axes, criteria, and the diff_space frame rule."""
+    r = client.get("/about")
+    assert r.status_code == 200
+    body = r.data
+    assert b"About SwissIsoform" in body
+    assert b"diff_space" in body  # the frame rule is spelled out
+    assert b"AlphaMissense" in body and b"canonical frame only" in body
+    assert b"Existence (E)" in body and b"Functional (F)" in body
+    # nav link is wired on every page
+    assert b'href="/about"' in client.get("/").data
 
 
 def test_every_isoform_page_renders_200(client):

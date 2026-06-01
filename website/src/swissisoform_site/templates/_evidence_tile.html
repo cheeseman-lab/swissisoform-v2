@@ -30,7 +30,9 @@
     {% else %}
       <p class="empty tile-llm-empty">Criterion LLM summary not yet generated.</p>
     {% endif %}
-    <details class="tile-metrics" open>
+    {% set ce = criterion_evidence.get(c.id) if criterion_evidence else none %}
+    {% include "_criterion_evidence.html" %}
+    <details class="tile-metrics">
       <summary>Metrics ({{ sl.evidence|length }})</summary>
       <table class="metrics-table">
         <tbody>

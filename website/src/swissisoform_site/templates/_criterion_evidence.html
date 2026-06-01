@@ -1,0 +1,63 @@
+{# Differential-region evidence rendered INSIDE a criterion modal body.
+   Expects ``ce`` = {about, sections:[...]} from data.criterion_evidence_for.
+   Each section: {title, subtitle?, warn?, seq?, cmp_headers?, compare_rows?,
+   rows?, hits?, highlight?}. #}
+{% if ce and (ce.about or ce.sections) %}
+  <div class="crit-evidence">
+    {% if ce.about %}
+      <p class="crit-about"><span class="crit-about-icon">?</span>{{ ce.about }}</p>
+    {% endif %}
+    {% for s in ce.sections %}
+      <div class="crit-sec{% if s.highlight %} hl{% endif %}">
+        <h4 class="crit-sec-h">{{ s.title }}</h4>
+        {% if s.subtitle %}<p class="crit-sec-sub">{{ s.subtitle }}</p>{% endif %}
+        {% if s.warn %}<p class="crit-warn">⚠ {{ s.warn }}</p>{% endif %}
+
+        {% if s.compare_rows %}
+        {% set hdr = s.cmp_headers or ["Differential", "Shared core", "Ratio"] %}
+        <table class="crit-compare">
+          <thead>
+            <tr>
+              <th>Property</th><th>{{ hdr[0] }}</th><th>{{ hdr[1] }}</th>
+              {% if hdr[2] %}<th>{{ hdr[2] }}</th>{% endif %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in s.compare_rows %}
+            <tr class="{{ 'cmp-hot' if r.hot else '' }}">
+              <td class="dm-label">{{ r.label }}</td>
+              <td class="dm-val">{{ r.unique }}</td>
+              <td class="dm-val dm-shared">{{ r.shared }}</td>
+              {% if hdr[2] %}<td class="dm-val dm-ratio">{{ r.ratio }}</td>{% endif %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+
+        {% if s.rows %}
+        <table class="crit-metrics">
+          <tbody>
+            {% for r in s.rows %}
+            <tr><td class="dm-label">{{ r.label }}</td><td class="dm-val">{{ r.value }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+
+        {% if s.hits %}
+        <ul class="crit-hits">
+          {% for h in s.hits %}
+          <li><span class="diff-hit-kind diff-hit-{{ h.kind }}">{{ h.kind }}</span>
+            <span class="diff-hit-name">{{ h.name }}</span>
+            {% if h.span %}<span class="diff-hit-span">{{ h.span }}</span>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+
+        {% if s.seq %}<p class="crit-seq">{{ s.seq }}</p>{% endif %}
+      </div>
+    {% endfor %}
+  </div>
+{% endif %}
