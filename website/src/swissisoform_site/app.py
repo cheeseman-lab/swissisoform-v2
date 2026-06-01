@@ -209,9 +209,7 @@ def create_app() -> Flask:
                 llm_dir=llm_dir, tis_slug=tis_slug_str, criterion_id=cid
             )
 
-        protein_fig = build_protein_figure(
-            _make_protein_adapter(iso, gene, skeleton), overlays={}
-        )
+        protein_fig = build_protein_figure(_make_protein_adapter(iso, gene, skeleton), overlays={})
 
         variant_rows = variant_rows_for_isoform(data_dir_path / "variants_long.parquet", iso.tis_id)
 
@@ -421,40 +419,39 @@ def _make_protein_adapter(iso: Isoform, gene: Any, skeleton: Any | None) -> type
 _CELL_LINES = ["HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"]
 
 
-def _cell_line_tracks(iso: Isoform, gene: Any, skeleton: Any | None) -> tuple[list, float | None]:
+def _start_residue(iso_like: Any, r_canon: float) -> float:
+    """Residue (on the displayed axis) where ``iso_like``'s start codon sits.
+
+    Anchored to the canonical start (``r_canon``) via each isoform's own
+    ``diff_end`` — extensions start ``diff_end`` residues *before* the canonical
+    start, truncations ``diff_end`` residues *after*. This is intron-proof
+    (genomic distance ÷ 3 is not — introns between the alt TIS and the canonical
+    start inflate it wildly).
+    """
+    de = getattr(iso_like, "diff_end", 0) or 0
+    is_trunc = (getattr(iso_like, "diff_space", "") or "") == "canonical" or (
+        getattr(iso_like, "orf_type", "") == "truncated"
+    )
+    return r_canon + (de if is_trunc else -de)
+
+
+def _cell_line_tracks(iso: Isoform, gene: Any, skeleton: Any | None) -> tuple[list, float]:
     """Per-cell-line TIS initiation, mapped onto the displayed protein residue axis.
 
-    Each TIS's genomic position is converted to a residue offset from the focal
-    start (``residue = R_focal + (g - G_focal)·strand/3``), anchored so the focal
-    isoform start is residue 1 (extension) or ``diff_end+1`` (truncation). Returns
-    (tracks, canonical_start_residue) where tracks is a list of
+    Returns (tracks, canonical_start_residue) where tracks is a list of
     ``{sample, marks: [{residue, log2_ie, focal}]}`` in display order.
     """
-    g_focal = getattr(iso, "position", None)
-    if g_focal is None or skeleton is None:
-        return [], None
-    strand = getattr(skeleton, "strand", "+")
-    sign = 1 if strand == "+" else -1
-    cds_start = getattr(skeleton, "cds_start", None)
-    cds_end = getattr(skeleton, "cds_end", None)
-    canon_start_g = cds_start if strand == "+" else cds_end
-    diff_end = getattr(iso, "diff_end", 0) or 0
-    is_trunc = (getattr(iso, "diff_space", "") or "") == "canonical" or iso.orf_type == "truncated"
-    r_focal = (diff_end + 1) if is_trunc else 1
-
-    def residue(g: float) -> float:
-        return r_focal + (g - g_focal) * sign / 3.0
-
-    canon_residue = residue(canon_start_g) if canon_start_g is not None else None
+    diff_end_focal = getattr(iso, "diff_end", 0) or 0
+    focal_trunc = (
+        getattr(iso, "diff_space", "") or ""
+    ) == "canonical" or iso.orf_type == "truncated"
+    r_canon = 1.0 if focal_trunc else (diff_end_focal + 1.0)
 
     siblings = [s for s in gene.isoforms if s.transcript_id == iso.transcript_id]
     per_sample: dict[str, list] = {}
     for s in siblings:
         sraw = getattr(s, "raw", None) or {}
-        g = getattr(s, "position", None)
-        if g is None:
-            continue
-        r = residue(g)
+        r = _start_residue(s, r_canon)
         is_focal = s.tis_id == iso.tis_id
         for sample in _CELL_LINES:
             v = sraw.get(f"expr_{sample}_initiation_efficiency")
@@ -473,7 +470,7 @@ def _cell_line_tracks(iso: Isoform, gene: Any, skeleton: Any | None) -> tuple[li
                 }
             )
     tracks = [{"sample": s, "marks": per_sample[s]} for s in _CELL_LINES if s in per_sample]
-    return tracks, canon_residue
+    return tracks, r_canon
 
 
 def _isoform_to_dict(iso: Isoform) -> dict[str, Any]:

@@ -75,20 +75,30 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
         }
 
     traces: list[dict[str, Any]] = []
-
-    # ── Length bars (canonical + isoform) ──
-    traces.append(_length_bar(1, can_len or 1, _CANON_Y, _CANON_COLOR, "Canonical"))
-    traces.append(_length_bar(1, iso_len or 1, _ISO_Y, _ISO_COLOR, "Isoform"))
-
-    # ── Differential region shading on the relevant bar ──
     is_trunc = diff_space == "canonical" or orf_type == "truncated"
+
+    # ── Length bars, aligned on the SHARED region (not the N-terminus) ──
+    # The differential (unique) region occupies residues 1..diff_end on the
+    # protein that carries it; the other protein is shifted right by diff_end so
+    # the shared sequence lines up. ``feat_offset`` moves isoform-coordinate
+    # features (domains/motifs) onto the displayed axis for truncations.
+    if is_trunc:
+        canon_x0, canon_x1 = 1, (can_len or 1)
+        iso_x0, iso_x1 = diff_end + 1, diff_end + (iso_len or 1)
+        feat_offset = diff_end
+    else:
+        iso_x0, iso_x1 = 1, (iso_len or 1)
+        canon_x0, canon_x1 = diff_end + 1, diff_end + (can_len or 1)
+        feat_offset = 0
+    axis_len = max(axis_len, canon_x1, iso_x1)
+    traces.append(_length_bar(canon_x0, canon_x1, _CANON_Y, _CANON_COLOR, "Canonical"))
+    traces.append(_length_bar(iso_x0, iso_x1, _ISO_Y, _ISO_COLOR, "Isoform"))
+
+    # ── Differential region shading on the bar that carries it (residues 1..diff_end) ──
     diff_lo = diff_start + 1
     diff_hi = diff_end
     if diff_hi >= diff_lo:
-        if is_trunc:
-            diff_y, diff_fill = _CANON_Y, _TRUNC_FILL
-        else:
-            diff_y, diff_fill = _ISO_Y, _EXT_FILL
+        diff_y, diff_fill = (_CANON_Y, _TRUNC_FILL) if is_trunc else (_ISO_Y, _EXT_FILL)
         traces.append(_diff_overlay(diff_lo, diff_hi, diff_y, diff_fill))
 
     # ── Variant lollipops, coloured by significance, one legend entry per class ──
@@ -151,7 +161,13 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
                     "name": "Domain (InterPro)",
                     "mode": "lines",
                     "fill": "toself",
-                    "x": [d["start"], d["end"], d["end"], d["start"], d["start"]],
+                    "x": [
+                        d["start"] + feat_offset,
+                        d["end"] + feat_offset,
+                        d["end"] + feat_offset,
+                        d["start"] + feat_offset,
+                        d["start"] + feat_offset,
+                    ],
                     "y": [-0.7, -0.7, -0.3, -0.3, -0.7],
                     "line": {"color": "rgba(0,0,0,0)"},
                     "fillcolor": _DOMAIN_FILL,
@@ -175,7 +191,7 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
                     "type": "scatter",
                     "name": "Motif",
                     "mode": "lines",
-                    "x": [m["start"], end],
+                    "x": [m["start"] + feat_offset, end + feat_offset],
                     "y": [-1.0, -1.0],
                     "line": {"color": _MOTIF_COLOR, "width": 6},
                     "legendgroup": "motif",
@@ -192,6 +208,9 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
     shapes: list[dict[str, Any]] = []
     annotations: list[dict[str, Any]] = []
     y_bottom = -1.5
+    # Siblings longer than the focal map to residues left of 1 — extend the axis.
+    all_res = [m["residue"] for t in tracks for m in t["marks"]]
+    x_left = min(0.0, min(all_res)) - 4 if all_res else 0.0
     if tracks:
         lane_base, lane_gap = -1.7, 0.45
         all_ie = [m["log2_ie"] for t in tracks for m in t["marks"]]
@@ -233,7 +252,7 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
             )
             annotations.append(
                 {
-                    "x": 0,
+                    "x": x_left,
                     "y": ly,
                     "xref": "x",
                     "yref": "y",
@@ -298,7 +317,7 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
                     "font": {"size": 12, "color": "#4b5563"},
                 },
                 "tickfont": {"size": 11, "color": "#6b7280"},
-                "range": [0, axis_len + 5],
+                "range": [x_left, axis_len + 5],
             },
             "yaxis": {
                 "range": [y_bottom - 0.2, 1.7],

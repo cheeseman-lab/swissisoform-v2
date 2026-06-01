@@ -154,16 +154,18 @@ def test_domains_drawn_as_rectangles_in_separate_track():
     fig = pplot.build_protein_figure(_iso(), overlays={"domains": True})
     rect_traces = [t for t in fig["data"] if t.get("name") == "Domain (InterPro)"]
     assert len(rect_traces) == 1
-    assert min(rect_traces[0]["x"]) == 100
-    assert max(rect_traces[0]["x"]) == 380
+    # Truncation fixture (diff_end=29): isoform-coord domain shifts +29 onto the
+    # canonical display axis so it aligns with the shifted isoform bar.
+    assert min(rect_traces[0]["x"]) == 129
+    assert max(rect_traces[0]["x"]) == 409
 
 
 def test_motifs_drawn_as_spans():
     fig = pplot.build_protein_figure(_iso(), overlays={"motifs": True})
     motif_traces = [t for t in fig["data"] if t.get("name") == "Motif"]
     assert len(motif_traces) == 1
-    # Span covers start..end, not a single point.
-    assert motif_traces[0]["x"] == [35, 41]
+    # Span covers start..end (+29 offset onto the canonical axis for truncations).
+    assert motif_traces[0]["x"] == [64, 70]
 
 
 def test_motifs_off_when_overlay_disabled():
