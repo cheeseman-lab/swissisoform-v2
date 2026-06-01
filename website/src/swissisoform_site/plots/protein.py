@@ -19,14 +19,6 @@ _TRUNC_FILL = "#d62728"  # red (lost region)
 _DOMAIN_FILL = "rgba(44, 160, 44, 0.45)"
 _MOTIF_COLOR = "#9467bd"
 
-# Variant significance colour classes (label, colour, predicate on lowered sig).
-_VARIANT_CLASSES = [
-    ("Pathogenic", "#d62728", lambda s: s.startswith(("pathogenic", "likely_path", "likely path"))),
-    ("Benign", "#94a3b8", lambda s: "benign" in s),
-    ("Uncertain", "#f59e0b", lambda s: "uncertain" in s or s in ("vus", "")),
-    ("Other", "#6b7280", lambda _s: True),
-]
-
 _FONT_FAMILY = (
     '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
 )
@@ -35,13 +27,43 @@ _HOVER_FONT_FAMILY = "system-ui, sans-serif"
 _CANON_Y = 1.0
 _ISO_Y = 0.5
 
-
-def _classify_variant(sig: str) -> tuple[str, str]:
-    s = (sig or "").lower()
-    for label, color, pred in _VARIANT_CLASSES:
-        if pred(s):
-            return label, color
-    return "Other", "#6b7280"
+# Variant tracks, one row per consequence type, ordered most→least severe.
+_CONSEQ_ORDER = [
+    "frameshift_variant",
+    "stop_gained",
+    "stop_lost",
+    "start_lost",
+    "splice_donor_variant",
+    "splice_acceptor_variant",
+    "missense_variant",
+    "inframe_deletion",
+    "inframe_insertion",
+    "synonymous_variant",
+]
+_CONSEQ_COLOR = {
+    "frameshift_variant": "#7f1d1d",
+    "stop_gained": "#b91c1c",
+    "stop_lost": "#b91c1c",
+    "start_lost": "#b91c1c",
+    "splice_donor_variant": "#c2410c",
+    "splice_acceptor_variant": "#c2410c",
+    "missense_variant": "#d97706",
+    "inframe_deletion": "#7c3aed",
+    "inframe_insertion": "#7c3aed",
+    "synonymous_variant": "#94a3b8",
+}
+_CONSEQ_SHORT = {
+    "frameshift_variant": "frameshift",
+    "stop_gained": "stop-gain",
+    "stop_lost": "stop-lost",
+    "start_lost": "start-lost",
+    "splice_donor_variant": "splice",
+    "splice_acceptor_variant": "splice",
+    "missense_variant": "missense",
+    "inframe_deletion": "inframe-del",
+    "inframe_insertion": "inframe-ins",
+    "synonymous_variant": "synonymous",
+}
 
 
 def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, Any]:
@@ -75,7 +97,14 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
         }
 
     traces: list[dict[str, Any]] = []
+    shapes: list[dict[str, Any]] = []
+    annotations: list[dict[str, Any]] = []
     is_trunc = diff_space == "canonical" or orf_type == "truncated"
+
+    # Left axis bound — siblings longer than the focal map left of residue 1.
+    cl_tracks = getattr(isoform, "cell_line_tracks", None) or []
+    _all_res = [m["residue"] for t in cl_tracks for m in t["marks"]]
+    x_left = min(0.0, min(_all_res)) - 4 if _all_res else 0.0
 
     # ── Length bars, aligned on the SHARED region (not the N-terminus) ──
     # The differential (unique) region occupies residues 1..diff_end on the
@@ -101,55 +130,62 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
         diff_y, diff_fill = (_CANON_Y, _TRUNC_FILL) if is_trunc else (_ISO_Y, _EXT_FILL)
         traces.append(_diff_overlay(diff_lo, diff_hi, diff_y, diff_fill))
 
-    # ── Variant lollipops, coloured by significance, one legend entry per class ──
+    # ── Variant tracks ABOVE the bars: one row per consequence type ──
+    mut_base = _CANON_Y + 0.35  # first variant row, above the canonical bar
+    mut_top = _CANON_Y
     if overlays.get("variants", True):
-        seen_classes: set[str] = set()
+        by_conseq: dict[str, list] = {}
         for v in getattr(isoform, "variants_in_unique", []) or []:
             pos = v.get("isoform_protein_pos")
             if pos is None:
                 pos = v.get("protein_pos")
             if pos is None:
                 continue
-            label, color = _classify_variant(v.get("clinical_significance") or "")
-            is_path = label == "Pathogenic"
-            vid = v.get("variant_id") or v.get("id") or "?"
-            tooltip = (
-                f"{vid}<br>{v.get('hgvsp', '')}<br>"
-                f"{v.get('clinical_significance', '')}<br>{v.get('source', '')}"
-            )
-            show = label not in seen_classes
-            seen_classes.add(label)
+            by_conseq.setdefault(v.get("consequence") or "other", []).append((pos, v))
+        conseqs = sorted(
+            by_conseq,
+            key=lambda c: (_CONSEQ_ORDER.index(c) if c in _CONSEQ_ORDER else 99, c),
+        )
+        for i, c in enumerate(conseqs):
+            ty = mut_base + i * 0.32
+            xs, cols, sizes, hover = [], [], [], []
+            for pos, v in by_conseq[c]:
+                sig = (v.get("clinical_significance") or "").lower()
+                is_path = "pathogenic" in sig
+                xs.append(pos)
+                cols.append("#d62728" if is_path else _CONSEQ_COLOR.get(c, "#94a3b8"))
+                sizes.append(9 if is_path else 6)
+                hover.append(
+                    f"{v.get('variant_id', '?')}<br>{v.get('hgvsp') or ''}<br>"
+                    f"{c}<br>{v.get('clinical_significance') or '—'} · {v.get('source') or ''}"
+                )
             traces.append(
                 {
                     "type": "scatter",
-                    "mode": "lines",
-                    "x": [pos, pos],
-                    "y": [_ISO_Y, _ISO_Y + 0.55],
-                    "line": {"color": color, "width": 1.5},
-                    "legendgroup": label,
-                    "hoverinfo": "skip",
+                    "mode": "markers",
+                    "x": xs,
+                    "y": [ty] * len(xs),
+                    "marker": {"size": sizes, "color": cols, "symbol": "circle"},
+                    "hovertext": hover,
+                    "hoverinfo": "text",
                     "showlegend": False,
                 }
             )
-            traces.append(
+            annotations.append(
                 {
-                    "type": "scatter",
-                    "name": label,
-                    "mode": "markers",
-                    "x": [pos],
-                    "y": [_ISO_Y + 0.55],
-                    "marker": {
-                        "size": 12 if is_path else 9,
-                        "color": color,
-                        "symbol": "circle",
-                        "line": {"width": 1, "color": "#111"},
-                    },
-                    "legendgroup": label,
-                    "hovertext": [tooltip],
-                    "hoverinfo": "text",
-                    "showlegend": show,
+                    "x": x_left,
+                    "y": ty,
+                    "xref": "x",
+                    "yref": "y",
+                    "xanchor": "right",
+                    "xshift": -6,
+                    "text": _CONSEQ_SHORT.get(c, c)[:14],
+                    "showarrow": False,
+                    "font": {"size": 9, "color": "#475569"},
                 }
             )
+        if conseqs:
+            mut_top = mut_base + (len(conseqs) - 1) * 0.32 + 0.3
 
     # ── Domains (boxes), one legend entry ──
     if overlays.get("domains", True):
@@ -203,14 +239,9 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
             motif_legend_shown = True
 
     # ── Per-cell-line initiation lanes (TIS mapped onto the residue axis) ──
-    tracks = getattr(isoform, "cell_line_tracks", None) or []
+    tracks = cl_tracks
     canon_residue = getattr(isoform, "canon_residue", None)
-    shapes: list[dict[str, Any]] = []
-    annotations: list[dict[str, Any]] = []
     y_bottom = -1.5
-    # Siblings longer than the focal map to residues left of 1 — extend the axis.
-    all_res = [m["residue"] for t in tracks for m in t["marks"]]
-    x_left = min(0.0, min(all_res)) - 4 if all_res else 0.0
     if tracks:
         lane_base, lane_gap = -1.7, 0.45
         all_ie = [m["log2_ie"] for t in tracks for m in t["marks"]]
@@ -276,17 +307,29 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
                 "font": {"size": 9, "color": "#94a3b8"},
             }
         )
-        if canon_residue is not None:
-            shapes.append(
-                {
-                    "type": "line",
-                    "x0": canon_residue,
-                    "x1": canon_residue,
-                    "y0": y_bottom,
-                    "y1": 1.3,
-                    "line": {"color": "#111827", "width": 1, "dash": "dot"},
-                }
-            )
+    # ── Vertical guides: focal start (red) + canonical start (grey) ──
+    guide_top = max(mut_top, _CANON_Y + 0.2)
+    shapes.append(
+        {
+            "type": "line",
+            "x0": iso_x0,
+            "x1": iso_x0,
+            "y0": y_bottom,
+            "y1": guide_top,
+            "line": {"color": _TRUNC_FILL, "width": 1, "dash": "dot"},
+        }
+    )
+    if canon_residue is not None and abs(canon_residue - iso_x0) > 0.5:
+        shapes.append(
+            {
+                "type": "line",
+                "x0": canon_residue,
+                "x1": canon_residue,
+                "y0": y_bottom,
+                "y1": guide_top,
+                "line": {"color": "#111827", "width": 1, "dash": "dot"},
+            }
+        )
 
     title = (
         f"Protein — {orf_type.title()}; "
@@ -320,12 +363,14 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
                 "range": [x_left, axis_len + 5],
             },
             "yaxis": {
-                "range": [y_bottom - 0.2, 1.7],
+                "range": [y_bottom - 0.2, mut_top + 0.3],
                 "showticklabels": False,
                 "zeroline": False,
             },
-            "height": 320 + (40 * len(tracks) if tracks else 0),
-            "margin": {"l": 95, "r": 30, "t": 70, "b": 50},
+            "height": 300
+            + int(60 * max(0.0, mut_top - _CANON_Y))
+            + (40 * len(tracks) if tracks else 0),
+            "margin": {"l": 110, "r": 30, "t": 70, "b": 50},
         },
     }
 

@@ -393,6 +393,7 @@ def _make_protein_adapter(iso: Isoform, gene: Any, skeleton: Any | None) -> type
                 "hgvsp": v.get("hgvsp"),
                 "clinical_significance": v.get("clinical_significance"),
                 "source": v.get("source"),
+                "consequence": v.get("isoform_consequence") or v.get("consequence") or "other",
             }
         )
 

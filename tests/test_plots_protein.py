@@ -35,6 +35,7 @@ def _iso(orf_type="truncated", diff_space="canonical", iso_len=405, can_len=434)
                 "hgvsp": "p.Leu13fs",
                 "clinical_significance": "Pathogenic",
                 "source": "ClinVar",
+                "consequence": "frameshift_variant",
             },
             {
                 "variant_id": "ClinVar:2",
@@ -43,6 +44,7 @@ def _iso(orf_type="truncated", diff_space="canonical", iso_len=405, can_len=434)
                 "hgvsp": "p.Gln25Ter",
                 "clinical_significance": "Pathogenic",
                 "source": "ClinVar",
+                "consequence": "stop_gained",
             },
         ],
         domains=[
@@ -89,35 +91,35 @@ def test_extension_diff_space_is_isoform():
     assert min(span["x"]) == 1
 
 
-def _lollipop_heads(fig):
-    """Marker traces sitting at the lollipop y — the variant heads."""
+def _variant_marks(fig):
+    """Marker traces sitting in the variant tracks above the bars (y > 1.0)."""
     return [
         t
         for t in fig["data"]
-        if t.get("mode") == "markers" and _LOLLIPOP_Y in (t.get("y") or [])
+        if t.get("mode") == "markers" and (t.get("y") or []) and all(y > 1.0 for y in t["y"])
     ]
 
 
-def _lollipop_stems(fig):
-    """Line traces rising to the lollipop y — the variant stems."""
-    return [
-        t
-        for t in fig["data"]
-        if t.get("mode") == "lines" and (t.get("y") or [])[-1:] == [_LOLLIPOP_Y]
-    ]
-
-
-def test_variants_drawn_as_lollipops_at_protein_positions():
+def test_variants_render_above_bars_at_protein_positions():
     fig = pplot.build_protein_figure(_iso(), overlays={"variants": True})
-    xs = sorted(x for t in _lollipop_heads(fig) for x in t["x"])
+    xs = sorted(x for t in _variant_marks(fig) for x in t["x"])
     assert xs == [10, 24]
 
 
-def test_variant_heads_named_by_significance_class():
-    """Heads carry the significance label so the legend explains the colours."""
+def test_variants_grouped_into_one_track_per_consequence():
+    """Two consequence types (frameshift, stop_gained) → two variant tracks."""
     fig = pplot.build_protein_figure(_iso(), overlays={"variants": True})
-    head_names = {t.get("name") for t in _lollipop_heads(fig)}
-    assert head_names == {"Pathogenic"}
+    marks = _variant_marks(fig)
+    assert len(marks) == 2  # one track per consequence type
+    # each track sits at its own y row
+    ys = {t["y"][0] for t in marks}
+    assert len(ys) == 2
+
+
+def test_pathogenic_variants_are_red():
+    fig = pplot.build_protein_figure(_iso(), overlays={"variants": True})
+    colors = {c for t in _variant_marks(fig) for c in t["marker"]["color"]}
+    assert "#d62728" in colors
 
 
 def test_non_pathogenic_variants_also_render():
@@ -129,25 +131,18 @@ def test_non_pathogenic_variants_also_render():
             "isoform_protein_pos": 15,
             "clinical_significance": "Uncertain_significance",
             "source": "gnomAD",
+            "consequence": "missense_variant",
         }
     ]
     fig = pplot.build_protein_figure(iso, overlays={"variants": True})
-    xs = sorted(x for t in _lollipop_heads(fig) for x in t["x"])
+    xs = sorted(x for t in _variant_marks(fig) for x in t["x"])
     assert 15 in xs
-    head_names = {t.get("name") for t in _lollipop_heads(fig)}
-    assert "Uncertain" in head_names
+    assert len(_variant_marks(fig)) == 3  # frameshift, stop_gained, missense
 
 
-def test_each_variant_has_a_stem_and_a_head():
-    fig = pplot.build_protein_figure(_iso(), overlays={"variants": True})
-    assert len(_lollipop_heads(fig)) == 2
-    assert len(_lollipop_stems(fig)) == 2
-
-
-def test_variants_overlay_off_hides_lollipops():
+def test_variants_overlay_off_hides_variant_tracks():
     fig = pplot.build_protein_figure(_iso(), overlays={"variants": False})
-    assert _lollipop_heads(fig) == []
-    assert _lollipop_stems(fig) == []
+    assert _variant_marks(fig) == []
 
 
 def test_domains_drawn_as_rectangles_in_separate_track():
