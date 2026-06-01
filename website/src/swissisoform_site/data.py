@@ -538,6 +538,231 @@ def variant_rows_for_isoform(path: Path, tis_id: str) -> list[dict[str, Any]]:
     return rows
 
 
+def _fmt_num(v, pct=False):
+    """Format a metric value for display, or None if missing/NaN."""
+    import math
+
+    if v is None:
+        return None
+    if isinstance(v, str):
+        return v or None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    if math.isnan(f):
+        return None
+    if pct:
+        return f"{f * 100:.0f}%"
+    if f == int(f) and abs(f) < 1e6:
+        return str(int(f))
+    return f"{f:.3g}"
+
+
+def diff_evidence_for(iso) -> dict:
+    """Pull every piece of differential-region evidence off the parquet row into
+    display-ready, modality-grouped sections for the isoform page.
+
+    Surfaces the conservation / structure / biophysics / localization /
+    PLM-VEP / function / cell-line evidence that is computed in the pipeline but
+    otherwise only reaches the LLM narrative.
+    """
+    raw = getattr(iso, "raw", None) or {}
+    g = raw.get
+    diff_space = getattr(iso, "diff_space", "") or ""
+    is_trunc = diff_space == "canonical" or (getattr(iso, "orf_type", "") or "") == "truncated"
+
+    def rows(specs, pct_keys=()):
+        out = []
+        for label, key in specs:
+            val = _fmt_num(g(key), pct=key in pct_keys)
+            if val is not None:
+                out.append({"label": label, "value": val})
+        return out
+
+    sections = []
+
+    bio = rows(
+        [
+            ("Length (aa)", "diff_biophysics_length"),
+            ("Isoelectric point (pI)", "diff_biophysics_pI"),
+            ("Hydropathy (GRAVY)", "diff_biophysics_gravy"),
+            ("Instability index", "diff_biophysics_instability_index"),
+            ("Aromaticity", "diff_biophysics_aromaticity"),
+            ("Fraction charged", "diff_biophysics_fraction_charged"),
+            ("Disorder fraction", "diff_biophysics_disorder"),
+            ("Low-complexity fraction", "diff_biophysics_fraction_lcr"),
+            ("Prion-like fraction", "diff_biophysics_prionlike_fraction"),
+            ("LLPS score", "diff_biophysics_llps_score"),
+            ("Shannon entropy", "diff_biophysics_shannon_entropy"),
+            ("AA diversity", "diff_biophysics_aa_diversity"),
+            ("Longest homopolymer", "diff_biophysics_longest_homopolymer"),
+        ]
+    )
+    if bio:
+        sections.append(
+            {
+                "id": "biophysics",
+                "title": "Biophysics",
+                "subtitle": "of the differential sequence",
+                "rows": bio,
+                "seq": getattr(iso, "differential_sequence", "") or "",
+            }
+        )
+
+    cons = rows(
+        [
+            ("phyloP at TIS codon", "isoform_conservation_phylop_at_tis"),
+            ("phyloP Kozak window", "isoform_conservation_phylop_kozak_mean"),
+            ("phyloP — unique region", "isoform_conservation_phylop_unique_region_mean"),
+            ("phyloP — shared region", "isoform_conservation_phylop_shared_region_mean"),
+            ("phyloP enrichment (unique/shared)", "isoform_conservation_phylop_enrichment"),
+            ("phastCons — unique region", "isoform_conservation_phastcons_unique_region_mean"),
+            ("phastCons — shared region", "isoform_conservation_phastcons_shared_region_mean"),
+            ("Primate frame intact", "isoform_conservation_frame_primate_frac_intact"),
+            ("Primate species aligned", "isoform_conservation_frame_primate_n_species_aligned"),
+            ("Primate deepest intact", "isoform_conservation_frame_primate_deepest_species"),
+            ("Mammalian frame intact", "isoform_conservation_frame_mammalian_frac_intact"),
+            ("Mammalian deepest intact", "isoform_conservation_frame_mammalian_deepest_species"),
+        ],
+        pct_keys=(
+            "isoform_conservation_frame_primate_frac_intact",
+            "isoform_conservation_frame_mammalian_frac_intact",
+        ),
+    )
+    if cons:
+        sections.append({"id": "conservation", "title": "Conservation", "rows": cons})
+
+    struct_status = g("isoform_structure_status")
+    struct = rows(
+        [
+            ("pLDDT — differential region", "isoform_structure_plddt_diffregion_mean"),
+            ("pLDDT — isoform (whole)", "isoform_structure_plddt_isoform_mean"),
+            ("pLDDT — canonical (whole)", "isoform_structure_plddt_canonical_mean"),
+            ("TM-score (iso vs canonical)", "isoform_structure_tm_score"),
+            ("RMSD global (Å)", "isoform_structure_rmsd_global"),
+            ("Extension contacts", "isoform_structure_extension_contacts"),
+        ]
+    )
+    if struct:
+        warn = None
+        if struct_status == "uniform_plddt":
+            warn = (
+                "Structure metrics are a uniform-pLDDT placeholder for this "
+                "isoform — treat the per-residue confidence as unreliable."
+            )
+        sections.append(
+            {
+                "id": "structure",
+                "title": "Structure",
+                "subtitle": f"Boltz · status: {struct_status}" if struct_status else "Boltz",
+                "rows": struct,
+                "warn": warn,
+            }
+        )
+
+    loc = rows(
+        [
+            ("DeepLoc — canonical", "cmp_localization_deeploc_prediction_canonical"),
+            ("DeepLoc — isoform", "cmp_localization_deeploc_prediction_isoform"),
+            ("DeepLoc signals — canonical", "cmp_localization_deeploc_signals_canonical"),
+            ("DeepLoc signals — isoform", "cmp_localization_deeploc_signals_isoform"),
+            ("TargetP — canonical", "canonical_targetp_targetp_prediction"),
+            ("TargetP — isoform", "isoform_targetp_targetp_prediction"),
+            ("SignalP — canonical", "canonical_signalp_signalp_prediction"),
+            ("SignalP — isoform", "isoform_signalp_signalp_prediction"),
+        ]
+    )
+    if loc:
+        changed = bool(g("cmp_localization_deeploc_signals_changed")) or bool(
+            g("cmp_localization_deeploc_prediction_changed")
+        )
+        sections.append(
+            {
+                "id": "localization",
+                "title": "Localization",
+                "subtitle": "targeting signal changed" if changed else "no compartment change",
+                "rows": loc,
+                "highlight": changed,
+            }
+        )
+
+    plm = rows(
+        [
+            ("ESM-2 mean LLR — unique region", "isoform_plm_vep_mean_llr_unique_region"),
+            ("ESM-2 mean LLR — shared region", "isoform_plm_vep_mean_llr_shared_region"),
+            ("Constraint enrichment (unique/shared)", "isoform_plm_vep_constraint_enrichment"),
+            ("Constrained positions — unique", "isoform_plm_vep_n_constrained_positions_unique"),
+            ("Constrained positions — shared", "isoform_plm_vep_n_constrained_positions_shared"),
+            ("Scorable variants in unique region", "isoform_varianteffect_n_scorable_in_unique"),
+            ("Damaging variants in unique region", "isoform_varianteffect_n_damaging_in_unique"),
+            ("Mean ΔLLR — unique-region variants", "isoform_varianteffect_mean_delta_llr_unique"),
+            ("Mean AlphaMissense — unique", "isoform_varianteffect_mean_am_pathogenicity_unique"),
+        ]
+    )
+    if plm:
+        sections.append(
+            {
+                "id": "constraint",
+                "title": "Constraint",
+                "subtitle": "ESM-2 / variant effect",
+                "rows": plm,
+            }
+        )
+
+    func_rows = rows(
+        [
+            ("InterPro domains in diff region", "cmp_interproscan_n_hits_in_diff_region"),
+            ("Motifs in diff region", "cmp_motifs_n_hits_in_diff_region"),
+            ("Mass-spec peptides in diff region", "cmp_massspec_n_hits_in_diff_region"),
+        ]
+    )
+    func_hits = []
+    for col, kind in [
+        ("cmp_interproscan_hits_in_diff_region", "domain"),
+        ("cmp_motifs_hits_in_diff_region", "motif"),
+        ("cmp_massspec_hits_in_diff_region", "peptide"),
+    ]:
+        for h in _to_record_list(g(col)):
+            name = (
+                h.get("name") or h.get("peptide") or h.get("match") or h.get("description") or "?"
+            )
+            pos = h.get("pos") or h.get("start")
+            end = h.get("end")
+            span = f"{pos}–{end}" if pos is not None and end is not None else ""
+            func_hits.append({"kind": kind, "name": str(name)[:60], "span": span})
+    if func_rows or func_hits:
+        sections.append(
+            {
+                "id": "function",
+                "title": "Domains · Motifs · MS",
+                "rows": func_rows,
+                "hits": func_hits,
+            }
+        )
+
+    cell_rows = []
+    for cl in ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"):
+        cpm = _fmt_num(g(f"expr_{cl}_cpm"))
+        pval = _fmt_num(g(f"expr_{cl}_p_value"))
+        if cpm is not None or pval is not None:
+            cell_rows.append(
+                {"label": cl.replace("_", " "), "value": f"CPM {cpm or '—'} · p {pval or '—'}"}
+            )
+    if cell_rows:
+        q = _fmt_num(g("fisher_qvalue"))
+        sections.append(
+            {
+                "id": "cell_lines",
+                "title": "Cell-line usage",
+                "subtitle": f"Fisher q = {q}" if q else "TIS initiation per cell line",
+                "rows": cell_rows,
+            }
+        )
+
+    return {"sections": sections, "is_trunc": is_trunc}
+
+
 def _isoform_view(iso, gene):
     """Adapter — turns an Isoform + GeneRecord into the dict the V2 template uses.
 

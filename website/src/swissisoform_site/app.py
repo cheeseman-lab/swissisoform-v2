@@ -37,6 +37,7 @@ from swissisoform_site.data import (
     Isoform,
     _isoform_view,
     data_dir,
+    diff_evidence_for,
     llm_criterion_for_isoform,
     llm_synthesis_for_isoform,
     load_all,
@@ -218,6 +219,7 @@ def create_app() -> Flask:
         return render_template(
             "isoform.html",
             isoform=_isoform_view(iso, gene),
+            diff_evidence=diff_evidence_for(iso),
             criteria=CRITERIA_FOR_PAGE,
             criterion_slices=criterion_slices,
             criterion_llms=criterion_llms,

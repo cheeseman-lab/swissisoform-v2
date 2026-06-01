@@ -1,0 +1,69 @@
+{% if diff_evidence and diff_evidence.sections %}
+<section class="diff-evidence">
+  <h2>Differential region — evidence</h2>
+  <p class="diff-evidence-sub">
+    Everything the pipeline computes about the {{ 'lost' if diff_evidence.is_trunc else 'gained' }}
+    N-terminal region, grouped by modality.
+  </p>
+
+  <div class="diff-tabs" role="tablist">
+    {% for s in diff_evidence.sections %}
+      <button type="button" class="diff-tab{% if loop.first %} active{% endif %}"
+              data-difftab="diff-{{ s.id }}" role="tab">{{ s.title }}</button>
+    {% endfor %}
+  </div>
+
+  {% for s in diff_evidence.sections %}
+  <div class="diff-tabpanel{% if loop.first %} active{% endif %}" id="diff-{{ s.id }}" role="tabpanel">
+    {% if s.subtitle %}<p class="diff-subtitle">{{ s.subtitle }}</p>{% endif %}
+    {% if s.warn %}<p class="diff-warn">⚠ {{ s.warn }}</p>{% endif %}
+    {% if s.seq %}<p class="diff-seq">{{ s.seq }}</p>{% endif %}
+
+    {% if s.rows %}
+    <table class="diff-metrics{% if s.highlight %} hl{% endif %}">
+      <tbody>
+        {% for r in s.rows %}
+        <tr><td class="dm-label">{{ r.label }}</td><td class="dm-val">{{ r.value }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    {% if s.hits %}
+    <ul class="diff-hits">
+      {% for h in s.hits %}
+      <li><span class="diff-hit-kind diff-hit-{{ h.kind }}">{{ h.kind }}</span>
+        <span class="diff-hit-name">{{ h.name }}</span>
+        {% if h.span %}<span class="diff-hit-span">{{ h.span }}</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+
+    {% if not s.rows and not s.hits %}
+    <p class="empty">No evidence of this type in the differential region.</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+</section>
+
+<script>
+(function () {
+  var root = document.currentScript.previousElementSibling;
+  // find the diff-evidence section (the script sits right after it)
+  while (root && !root.classList.contains('diff-evidence')) root = root.previousElementSibling;
+  if (!root) return;
+  var tabs = root.querySelectorAll('.diff-tab');
+  var panels = root.querySelectorAll('.diff-tabpanel');
+  tabs.forEach(function (t) {
+    t.addEventListener('click', function () {
+      tabs.forEach(function (x) { x.classList.remove('active'); });
+      panels.forEach(function (p) { p.classList.remove('active'); });
+      t.classList.add('active');
+      var target = root.querySelector('#' + t.getAttribute('data-difftab'));
+      if (target) target.classList.add('active');
+    });
+  });
+})();
+</script>
+{% endif %}

@@ -225,8 +225,8 @@ def test_isoform_page_has_12_evidence_tiles(client):
     assert b"folding-panel" in body
 
 
-def test_isoform_page_renders_single_superposed_viewer(client):
-    """The folding panel renders one superposed Mol* viewer + a color legend."""
+def test_isoform_page_renders_side_by_side_viewers(client):
+    """The folding panel renders two side-by-side Mol* viewers + a pLDDT legend."""
     import pandas as pd
     from swissisoform_site.data import tis_slug as make_slug
 
@@ -235,13 +235,14 @@ def test_isoform_page_renders_single_superposed_viewer(client):
     r = client.get(f"/genes/{row['gene_name']}/isoforms/{make_slug(row['tis_id'])}")
     assert r.status_code == 200
     body = r.data
-    # Single viewer + legend; the old dual divs are gone.
-    assert b"folding-viewer" in body
+    # Two side-by-side viewers + legend; the old single/superposed divs are gone.
+    assert b"folding-grid" in body
     assert b"folding-legend" in body
+    assert b"folding-viewer-canonical" in body
+    assert b"folding-viewer-isoform" in body
     assert b"molstar-canonical" not in body
-    assert b"molstar-isoform" not in body
-    # Legend names the colors (grey = shared core, red = differential region).
-    assert b"Shared core" in body
+    # Legend names the colouring scheme.
+    assert b"pLDDT" in body
 
 
 def test_isoform_page_has_evidence_modal_element(client):
@@ -279,3 +280,24 @@ def test_isoform_page_truncation_marks_differential_region(client):
     # The single viewer's legend flags the lost (differential) region by residue range.
     assert b"folding-legend" in body
     assert b"Differential region" in body
+
+
+def test_diff_evidence_panel_surfaces_modalities(client):
+    """The differential-region panel renders modality tabs with real evidence."""
+    from swissisoform_site.data import diff_evidence_for, load_all, tis_slug as make_slug
+
+    iso = load_all()["MSRA"].isoforms[0]
+    de = diff_evidence_for(iso)
+    ids = {s["id"] for s in de["sections"]}
+    # Conservation, structure, localization, biophysics must all be surfaced.
+    assert {"biophysics", "conservation", "structure", "localization"}.issubset(ids)
+    # MSRA's mito->peroxisome retargeting must be flagged on the localization section.
+    loc = next(s for s in de["sections"] if s["id"] == "localization")
+    assert loc.get("highlight") is True
+
+    r = client.get("/genes/MSRA/isoforms/" + make_slug("chr8:10054582:+:ATG:ENST00000317173.9"))
+    assert r.status_code == 200
+    body = r.data
+    assert b"Differential region \xe2\x80\x94 evidence" in body  # em-dash heading
+    assert b"diff-tab" in body
+    assert b"Peroxisomal targeting signal" in body  # raw evidence now visible

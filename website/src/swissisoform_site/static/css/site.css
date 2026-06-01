@@ -496,3 +496,43 @@
 }
 .folding-legend .swatch.grey { background: #9ca3af; }
 .folding-legend .swatch.red { background: #d62728; }
+
+/* ── Differential-region evidence panel ──────────────────────────── */
+.diff-evidence { margin: 1.5rem 0; }
+.diff-evidence h2 { margin-bottom: .15rem; }
+.diff-evidence-sub { font-size: .85rem; color: #64748b; margin: 0 0 .75rem; }
+.diff-tabs { display: flex; flex-wrap: wrap; gap: .25rem; border-bottom: 1px solid #e2e8f0; margin-bottom: .75rem; }
+.diff-tab {
+  font-size: .8rem; padding: .35rem .7rem; border: none; background: transparent;
+  color: #64748b; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.diff-tab:hover { color: #1e293b; }
+.diff-tab.active { color: #4338ca; border-bottom-color: #4338ca; font-weight: 600; }
+.diff-tabpanel { display: none; }
+.diff-tabpanel.active { display: block; }
+.diff-subtitle { font-size: .8rem; color: #64748b; margin: 0 0 .5rem; }
+.diff-warn {
+  font-size: .8rem; color: #92400e; background: #fffbeb; border: 1px solid #fde68a;
+  border-radius: 6px; padding: .4rem .6rem; margin: 0 0 .6rem;
+}
+.diff-seq {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem;
+  word-break: break-all; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;
+  padding: .4rem .6rem; margin: 0 0 .6rem; color: #334155;
+}
+.diff-metrics { border-collapse: collapse; width: 100%; max-width: 560px; }
+.diff-metrics tr { border-bottom: 1px solid #f1f5f9; }
+.diff-metrics .dm-label { padding: .3rem .6rem .3rem 0; color: #475569; font-size: .85rem; }
+.diff-metrics .dm-val { padding: .3rem 0; text-align: right; font-variant-numeric: tabular-nums;
+  font-weight: 600; color: #1e293b; font-size: .85rem; }
+.diff-metrics.hl { background: #f5f3ff; border-radius: 6px; }
+.diff-hits { list-style: none; padding: 0; margin: .6rem 0 0; display: flex; flex-direction: column; gap: .25rem; }
+.diff-hits li { font-size: .82rem; color: #334155; }
+.diff-hit-kind {
+  display: inline-block; font-size: .68rem; text-transform: uppercase; letter-spacing: .03em;
+  padding: .05rem .35rem; border-radius: 4px; margin-right: .4rem; color: #fff; font-weight: 600;
+}
+.diff-hit-domain { background: #2ca02c; }
+.diff-hit-motif { background: #9467bd; }
+.diff-hit-peptide { background: #0891b2; }
+.diff-hit-span { color: #94a3b8; font-family: ui-monospace, monospace; font-size: .75rem; margin-left: .3rem; }
