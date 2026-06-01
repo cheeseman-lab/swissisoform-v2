@@ -672,8 +672,13 @@ METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
     "TargetP": ("m-localization", "TargetP N-terminal presequence (mitochondrial / chloroplast / none)."),
     "SignalP": ("m-localization", "SignalP secretory signal-peptide call."),
     # Domains / motifs / MS
+    "InterPro domains": ("m-domains", "Count of annotated InterPro domains on the canonical vs the isoform protein."),
+    "Short linear motifs": ("m-domains", "Count of short linear motifs on the canonical vs the isoform protein."),
     "InterPro domains in diff region": ("m-domains", "Annotated InterPro domains overlapping the differential region."),
     "Motifs in diff region": ("m-domains", "Short linear motifs in the differential region."),
+    "Peptides detected": ("m-massspec", "Total tryptic peptides matched to the canonical vs the isoform protein."),
+    "Validated peptides": ("m-massspec", "Peptides passing PepQuery validation on each protein."),
+    "Isoform-unique peptides": ("m-massspec", "Peptides that map only to the isoform — direct existence evidence."),
     "Mass-spec peptides in diff region": ("m-massspec", "Detected tryptic peptides unique to the differential region."),
     # Constraint / variant effect
     "ESM-2 mean LLR": ("m-esm2", "Mean ESM-2 masked-marginal log-likelihood ratio; lower = more constrained."),
@@ -701,6 +706,8 @@ METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
     "Shannon entropy": ("m-biophysics", "Compositional entropy (sequence diversity)."),
     "Normalized complexity": ("m-biophysics", "Compositional complexity normalized to length."),
     # Clinical burden
+    "All variants": ("m-clinical", "ClinVar / gnomAD / COSMIC variants intersecting each region."),
+    "Pathogenic": ("m-clinical", "Pathogenic / likely-pathogenic variants in each region."),
     "Clinical/observed variants": ("m-clinical", "ClinVar / gnomAD / COSMIC variants intersecting the region."),
     "Pathogenic variants": ("m-clinical", "Pathogenic / likely-pathogenic variants in the region."),
     "Clinical variants in diff region": ("m-clinical", "Clinical-database variants inside the differential region."),
@@ -829,7 +836,7 @@ def criterion_evidence_for(iso) -> dict:
         return {
             "title": "Per-base conservation (phyloP / phastCons)",
             "subtitle": "differential region vs shared core (enrichment = unique/shared)",
-            "cmp_headers": ["Property", "Differential", "Shared core", "Enrichment"],
+            "cmp_headers": ["Property", "Differential", "Conserved core", "Enrichment"],
             "col_classes": DIFF_SHARED_3,
             "compare_rows": compare_rows,
             "rows": point,
@@ -948,7 +955,7 @@ def criterion_evidence_for(iso) -> dict:
         return {
             "title": "Biophysics",
             "subtitle": "differential region vs shared core (highlighted = enriched)",
-            "cmp_headers": ["Property", "Differential", "Shared core", "Ratio"],
+            "cmp_headers": ["Property", "Differential", "Conserved core", "Ratio"],
             "col_classes": DIFF_SHARED_3,
             "compare_rows": compare_rows,
             "seq": getattr(iso, "differential_sequence", "") or "",
@@ -1025,49 +1032,97 @@ def criterion_evidence_for(iso) -> dict:
             "highlight": changed,
         }
 
-    def _hit_list(cols):
-        out = []
-        for col, kind in cols:
-            for h in _to_record_list(g(col)):
-                name = (
-                    h.get("name")
-                    or h.get("peptide")
-                    or h.get("match")
-                    or h.get("description")
-                    or "?"
-                )
-                pos = h.get("pos") or h.get("start")
-                end = h.get("end")
-                span = f"{pos}–{end}" if pos is not None and end is not None else ""
-                out.append({"kind": kind, "name": str(name)[:60], "span": span})
+    def _named_features(col, kind):
+        """{signature_name: display_label} for an interproscan / motifs column."""
+        out = {}
+        for h in _to_record_list(g(col)):
+            nm = h.get("name") or h.get("match") or h.get("description")
+            if not nm:
+                continue
+            desc = h.get("description") or h.get("interpro_description")
+            label = desc if (kind == "domain" and desc and desc not in ("-", "—")) else nm
+            out[str(nm)] = str(label)[:60]
         return out
 
     def sec_domains_motifs():
-        body = rows(
-            [
-                ("InterPro domains in diff region", "cmp_interproscan_n_hits_in_diff_region"),
-                ("Motifs in diff region", "cmp_motifs_n_hits_in_diff_region"),
-            ]
-        )
-        hits = _hit_list(
-            [("cmp_interproscan_hits_in_diff_region", "domain"), ("cmp_motifs_hits_in_diff_region", "motif")]
-        )
-        if not body and not hits:
+        can_dom = _named_features("canonical_interproscan_hits", "domain")
+        iso_dom = _named_features("isoform_interproscan_hits", "domain")
+        can_mot = _named_features("canonical_motifs_hits", "motif")
+        iso_mot = _named_features("isoform_motifs_hits", "motif")
+        if not (can_dom or iso_dom or can_mot or iso_mot):
             return None
+        compare_rows = [
+            {
+                "label": "InterPro domains",
+                "cols": [str(len(can_dom)), str(len(iso_dom))],
+                "hot": len(iso_dom) != len(can_dom),
+                **_term("InterPro domains"),
+            },
+            {
+                "label": "Short linear motifs",
+                "cols": [str(len(can_mot)), str(len(iso_mot))],
+                "hot": len(iso_mot) != len(can_mot),
+                **_term("Short linear motifs"),
+            },
+        ]
+        hits = []
+        for nm in sorted(set(iso_dom) - set(can_dom)):
+            hits.append({"kind": "gained", "name": iso_dom[nm], "span": "domain"})
+        for nm in sorted(set(can_dom) - set(iso_dom)):
+            hits.append({"kind": "lost", "name": can_dom[nm], "span": "domain"})
+        for nm in sorted(set(iso_mot) - set(can_mot)):
+            hits.append({"kind": "gained", "name": iso_mot[nm], "span": "motif"})
+        for nm in sorted(set(can_mot) - set(iso_mot)):
+            hits.append({"kind": "lost", "name": can_mot[nm], "span": "motif"})
         return {
-            "title": "Domains & motifs in the differential region",
-            "rows": body,
+            "title": "Domains & motifs (canonical vs isoform)",
+            "subtitle": "gained = only in the isoform; lost = only in the canonical",
+            "cmp_headers": ["Feature", "Canonical", "Isoform"],
+            "col_classes": CANON_ISO,
+            "compare_rows": compare_rows,
             "hits": hits,
         }
 
     def sec_massspec():
-        body = rows([("Mass-spec peptides in diff region", "cmp_massspec_n_hits_in_diff_region")])
-        hits = _hit_list([("cmp_massspec_hits_in_diff_region", "peptide")])
-        if not body and not hits:
+        can = _to_record_list(g("canonical_massspec_hits"))
+        iso = _to_record_list(g("isoform_massspec_hits"))
+        if not can and not iso:
             return None
+        can_val = sum(1 for p in can if p.get("validated"))
+        iso_val = sum(1 for p in iso if p.get("validated"))
+        iso_unique = [p for p in iso if p.get("unique_to_isoform")]
+        compare_rows = [
+            {
+                "label": "Peptides detected",
+                "cols": [str(len(can)), str(len(iso))],
+                "hot": False,
+                **_term("Peptides detected"),
+            },
+            {
+                "label": "Validated peptides",
+                "cols": [str(can_val), str(iso_val)],
+                "hot": False,
+                **_term("Validated peptides"),
+            },
+            {
+                "label": "Isoform-unique peptides",
+                "cols": ["—", str(len(iso_unique))],
+                "hot": bool(iso_unique),
+                **_term("Isoform-unique peptides"),
+            },
+        ]
+        hits = []
+        for p in iso_unique[:20]:
+            pos, end = p.get("pos"), p.get("end")
+            span = f"{pos}–{end}" if pos is not None and end is not None else ""
+            kind = "validated" if p.get("validated") else "peptide"
+            hits.append({"kind": kind, "name": str(p.get("peptide") or "?")[:40], "span": span})
         return {
-            "title": "Mass-spec peptides in the differential region",
-            "rows": body,
+            "title": "Mass-spec peptide support (canonical vs isoform)",
+            "subtitle": "isoform-unique peptides are direct evidence the alternative protein exists",
+            "cmp_headers": ["Feature", "Canonical", "Isoform"],
+            "col_classes": CANON_ISO,
+            "compare_rows": compare_rows,
             "hits": hits,
         }
 
@@ -1117,40 +1172,78 @@ def criterion_evidence_for(iso) -> dict:
         return {
             "title": "Sequence constraint & variant effect",
             "subtitle": sub,
-            "cmp_headers": ["Property", "Differential", "Shared core", "Enrichment"],
+            "cmp_headers": ["Property", "Differential", "Conserved core", "Enrichment"],
             "col_classes": DIFF_SHARED_3,
             "compare_rows": compare_rows,
             "rows": body,
         }
 
     def sec_clinical_burden():
-        compare_rows = compare(
-            [
-                (
-                    "Clinical/observed variants",
-                    [
-                        "isoform_variant_intersection_n_in_unique_region",
-                        "isoform_variant_intersection_n_in_shared_region",
-                    ],
-                ),
-                (
-                    "Pathogenic variants",
-                    [
-                        "isoform_variant_intersection_n_pathogenic_in_unique_region",
-                        "isoform_variant_intersection_n_pathogenic_in_shared_region",
-                    ],
-                ),
-            ]
+        # Region lengths (aa) for length-normalized density. The differential
+        # region is the unique N-terminus; the conserved core is whichever whole
+        # protein it is shared with (canonical for extensions, isoform for
+        # truncations).
+        unique_len = getattr(iso, "diff_end", None) or len(
+            getattr(iso, "differential_sequence", "") or ""
         )
+        can_len = getattr(iso, "canonical_len", None)
+        iso_len = getattr(iso, "isoform_len", None)
+        shared_len = iso_len if is_trunc else can_len
+
+        def _n(key):
+            v = _fmt_num(g(key))
+            try:
+                return float(v) if v is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        def _enrich(nu, ns):
+            if nu is None or ns is None or not unique_len or not shared_len or ns == 0:
+                return None
+            du, ds = nu / unique_len, ns / shared_len
+            return None if ds == 0 else du / ds
+
+        crows = []
+        for label, uk, sk in [
+            (
+                "All variants",
+                "isoform_variant_intersection_n_in_unique_region",
+                "isoform_variant_intersection_n_in_shared_region",
+            ),
+            (
+                "Pathogenic",
+                "isoform_variant_intersection_n_pathogenic_in_unique_region",
+                "isoform_variant_intersection_n_pathogenic_in_shared_region",
+            ),
+        ]:
+            nu, ns = _n(uk), _n(sk)
+            if nu is None and ns is None:
+                continue
+            r = _enrich(nu, ns)
+            crows.append(
+                {
+                    "label": label,
+                    "cols": [
+                        _fmt_num(nu) or "—",
+                        _fmt_num(ns) or "—",
+                        f"{r:.2g}×" if r is not None else "—",
+                    ],
+                    "hot": bool(r is not None and r > 1),
+                    **_term(label),
+                }
+            )
         body = rows([("Clinical variants in diff region", "cmp_clinical_n_hits_in_diff_region")])
-        if not compare_rows and not body:
+        if not crows and not body:
             return None
         return {
             "title": "Clinical-variant burden",
-            "subtitle": "differential region vs shared core",
-            "cmp_headers": ["Variant set", "Differential", "Shared core"],
-            "col_classes": DIFF_SHARED_2,
-            "compare_rows": compare_rows,
+            "subtitle": (
+                "counts per region; ratio is length-normalized (variants per residue, "
+                "differential ÷ conserved — >1× = concentrated in the differential region)"
+            ),
+            "cmp_headers": ["Variant set", "Differential", "Conserved core", "per-aa ratio"],
+            "col_classes": DIFF_SHARED_3,
+            "compare_rows": crows,
             "rows": body,
         }
 

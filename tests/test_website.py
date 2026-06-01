@@ -316,6 +316,37 @@ def test_criterion_evidence_folds_into_score_popups(client):
     assert b"Peroxisomal targeting signal" in body  # evidence still present (in modal template)
 
 
+def test_domains_massspec_are_canonical_vs_isoform(client):
+    """F3 domains and E6 mass-spec compare the whole canonical vs isoform protein."""
+    from swissisoform_site.data import criterion_evidence_for, load_all
+
+    iso = load_all()["CBX1"].isoforms[0]
+    ce = criterion_evidence_for(iso)
+
+    f3 = ce["F3_domain_change"]["sections"][0]
+    assert f3["cmp_headers"] == ["Feature", "Canonical", "Isoform"]
+    dom = next(r for r in f3["compare_rows"] if r["label"] == "InterPro domains")
+    assert len(dom["cols"]) == 2  # canonical | isoform counts
+    # gained/lost features surface in the Details box
+    assert any(h["kind"] in ("gained", "lost") for h in f3.get("hits", []))
+
+    e6 = ce["E6_mass_spec"]["sections"][0]
+    assert e6["cmp_headers"] == ["Feature", "Canonical", "Isoform"]
+    uniq = next(r for r in e6["compare_rows"] if r["label"] == "Isoform-unique peptides")
+    assert uniq["cols"][0] == "—"  # uniqueness is an isoform-only property
+
+
+def test_f6_clinical_burden_is_length_normalized(client):
+    """F6 reports a per-residue enrichment ratio, not just raw counts."""
+    from swissisoform_site.data import criterion_evidence_for, load_all
+
+    iso = load_all()["CBX1"].isoforms[0]
+    sec = criterion_evidence_for(iso)["F6_clinical_variant_overlap"]["sections"][0]
+    assert sec["cmp_headers"][-1] == "per-aa ratio"
+    allv = next(r for r in sec["compare_rows"] if r["label"] == "All variants")
+    assert len(allv["cols"]) == 3 and allv["cols"][2].endswith("×")
+
+
 def test_about_page_renders_glossary(client):
     """The /about route explains the axes, criteria, and the diff_space frame rule."""
     r = client.get("/about")
