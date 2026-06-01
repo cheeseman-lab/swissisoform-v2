@@ -46,7 +46,7 @@ from swissisoform_site.data import (
     variant_rows_for_isoform,
     variant_url,
 )
-from swissisoform_site.plots import build_protein_figure, build_transcript_figure
+from swissisoform_site.plots import build_protein_figure
 
 # Cell line samples used by the transcript figure's bottom panel.
 _CELL_LINE_SAMPLES = ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen")
@@ -209,10 +209,9 @@ def create_app() -> Flask:
                 llm_dir=llm_dir, tis_slug=tis_slug_str, criterion_id=cid
             )
 
-        transcript_fig = build_transcript_figure(
-            _make_transcript_adapter(iso, gene), skeleton, overlays={}
+        protein_fig = build_protein_figure(
+            _make_protein_adapter(iso, gene, skeleton), overlays={}
         )
-        protein_fig = build_protein_figure(_make_protein_adapter(iso), overlays={})
 
         variant_rows = variant_rows_for_isoform(data_dir_path / "variants_long.parquet", iso.tis_id)
 
@@ -225,7 +224,6 @@ def create_app() -> Flask:
             criterion_llms=criterion_llms,
             synthesis=synthesis,
             variant_rows=variant_rows,
-            transcript_figure_json=json.dumps(transcript_fig),
             protein_figure_json=json.dumps(protein_fig),
             canonical_cif=iso.canonical_cif,
             isoform_cif=iso.isoform_cif,
@@ -315,7 +313,7 @@ def _make_transcript_adapter(iso: Isoform, gene: Any) -> types.SimpleNamespace:
     )
 
 
-def _make_protein_adapter(iso: Isoform) -> types.SimpleNamespace:
+def _make_protein_adapter(iso: Isoform, gene: Any, skeleton: Any | None) -> types.SimpleNamespace:
     """Convert a V1 ``Isoform`` into the duck-typed input ``build_protein_figure`` expects.
 
     Variants come from ``iso.variants_in_unique`` (all clinical hits in the
@@ -400,6 +398,8 @@ def _make_protein_adapter(iso: Isoform) -> types.SimpleNamespace:
             }
         )
 
+    tracks, canon_residue = _cell_line_tracks(iso, gene, skeleton)
+
     return types.SimpleNamespace(
         tis_id=iso.tis_id,
         orf_type=iso.orf_type,
@@ -412,7 +412,68 @@ def _make_protein_adapter(iso: Isoform) -> types.SimpleNamespace:
         variants_in_unique=variants,
         domains=domains,
         motifs=motifs,
+        cell_line_tracks=tracks,
+        canon_residue=canon_residue,
     )
+
+
+# Display order for the per-cell-line initiation lanes.
+_CELL_LINES = ["HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"]
+
+
+def _cell_line_tracks(iso: Isoform, gene: Any, skeleton: Any | None) -> tuple[list, float | None]:
+    """Per-cell-line TIS initiation, mapped onto the displayed protein residue axis.
+
+    Each TIS's genomic position is converted to a residue offset from the focal
+    start (``residue = R_focal + (g - G_focal)·strand/3``), anchored so the focal
+    isoform start is residue 1 (extension) or ``diff_end+1`` (truncation). Returns
+    (tracks, canonical_start_residue) where tracks is a list of
+    ``{sample, marks: [{residue, log2_ie, focal}]}`` in display order.
+    """
+    g_focal = getattr(iso, "position", None)
+    if g_focal is None or skeleton is None:
+        return [], None
+    strand = getattr(skeleton, "strand", "+")
+    sign = 1 if strand == "+" else -1
+    cds_start = getattr(skeleton, "cds_start", None)
+    cds_end = getattr(skeleton, "cds_end", None)
+    canon_start_g = cds_start if strand == "+" else cds_end
+    diff_end = getattr(iso, "diff_end", 0) or 0
+    is_trunc = (getattr(iso, "diff_space", "") or "") == "canonical" or iso.orf_type == "truncated"
+    r_focal = (diff_end + 1) if is_trunc else 1
+
+    def residue(g: float) -> float:
+        return r_focal + (g - g_focal) * sign / 3.0
+
+    canon_residue = residue(canon_start_g) if canon_start_g is not None else None
+
+    siblings = [s for s in gene.isoforms if s.transcript_id == iso.transcript_id]
+    per_sample: dict[str, list] = {}
+    for s in siblings:
+        sraw = getattr(s, "raw", None) or {}
+        g = getattr(s, "position", None)
+        if g is None:
+            continue
+        r = residue(g)
+        is_focal = s.tis_id == iso.tis_id
+        for sample in _CELL_LINES:
+            v = sraw.get(f"expr_{sample}_initiation_efficiency")
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(v) or v <= 0:
+                continue
+            per_sample.setdefault(sample, []).append(
+                {
+                    "residue": r,
+                    "log2_ie": math.log2(v),
+                    "focal": is_focal,
+                    "label": f"{s.orf_type} · {s.start_codon}",
+                }
+            )
+    tracks = [{"sample": s, "marks": per_sample[s]} for s in _CELL_LINES if s in per_sample]
+    return tracks, canon_residue
 
 
 def _isoform_to_dict(iso: Isoform) -> dict[str, Any]:

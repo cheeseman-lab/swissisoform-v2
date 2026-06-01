@@ -1,10 +1,14 @@
-"""Tests for the per-cell-line TIS-usage figure builder."""
+"""Tests for the IGV-style per-cell-line initiation figure builder."""
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 
 from swissisoform_site.plots import transcript as tplot
+
+
+def _skeleton():
+    return SimpleNamespace(chrom="chr1", strand="+", cds_start=200, cds_end=4000)
 
 
 def _iso_two_tis():
@@ -23,37 +27,51 @@ def _iso_two_tis():
 
 
 def test_figure_is_a_plotly_dict():
-    fig = tplot.build_transcript_figure(_iso_two_tis(), None, overlays={})
+    fig = tplot.build_transcript_figure(_iso_two_tis(), _skeleton(), overlays={})
     assert "data" in fig and "layout" in fig
     assert isinstance(fig["data"], list)
 
 
-def test_one_grouped_bar_trace_per_tis():
-    fig = tplot.build_transcript_figure(_iso_two_tis(), None, overlays={})
-    bars = [t for t in fig["data"] if t.get("type") == "bar"]
-    assert len(bars) == 2  # one bar group per TIS
-    assert fig["layout"]["barmode"] == "group"
+def test_one_marker_trace_per_tis():
+    fig = tplot.build_transcript_figure(_iso_two_tis(), _skeleton(), overlays={})
+    markers = [t for t in fig["data"] if t.get("mode") == "markers"]
+    assert len(markers) == 2  # one trace per TIS
 
 
-def test_cell_lines_are_the_categorical_x_axis():
-    fig = tplot.build_transcript_figure(_iso_two_tis(), None, overlays={})
-    bars = [t for t in fig["data"] if t.get("type") == "bar"]
-    assert fig["layout"]["xaxis"]["type"] == "category"
-    # x values are cell-line names, in canonical display order.
-    assert bars[0]["x"] == ["HeLa", "K562"]
+def test_cell_lines_are_the_y_lanes():
+    fig = tplot.build_transcript_figure(_iso_two_tis(), _skeleton(), overlays={})
+    ticktext = fig["layout"]["yaxis"]["ticktext"]
+    assert "HeLa" in ticktext and "K562" in ticktext
+
+
+def test_x_axis_is_genomic_position():
+    fig = tplot.build_transcript_figure(_iso_two_tis(), _skeleton(), overlays={})
+    xr = fig["layout"]["xaxis"]["range"]
+    # ROI spans the TIS cluster (200, 250) with padding.
+    assert xr[0] < 200 and xr[1] > 250
 
 
 def test_focal_tis_uses_distinguishing_color():
-    fig = tplot.build_transcript_figure(_iso_two_tis(), None, overlays={})
+    fig = tplot.build_transcript_figure(_iso_two_tis(), _skeleton(), overlays={})
     focal = [t for t in fig["data"] if "(focal)" in t.get("name", "")]
     assert len(focal) == 1
     assert focal[0]["marker"]["color"] == tplot._FOCAL_COLOR
 
 
-def test_tis_label_includes_orf_type_and_codon():
-    fig = tplot.build_transcript_figure(_iso_two_tis(), None, overlays={})
-    names = [t["name"] for t in fig["data"] if t.get("type") == "bar"]
-    assert any("Truncated" in n and "ATG" in n for n in names)
+def test_marker_size_scales_with_initiation_efficiency():
+    fig = tplot.build_transcript_figure(_iso_two_tis(), _skeleton(), overlays={})
+    sizes = [s for t in fig["data"] if t.get("mode") == "markers" for s in t["marker"]["size"]]
+    assert sizes and max(sizes) > min(sizes)  # not all the same
+
+
+def test_canonical_start_and_diff_region_drawn():
+    fig = tplot.build_transcript_figure(_iso_two_tis(), _skeleton(), overlays={})
+    shapes = fig["layout"]["shapes"]
+    # a dotted vertical line (canonical start) and a filled rect (diff region)
+    assert any(s.get("type") == "line" for s in shapes)
+    assert any(s.get("type") == "rect" for s in shapes)
+    texts = [a["text"] for a in fig["layout"]["annotations"]]
+    assert "canonical start" in texts and "differential region" in texts
 
 
 def test_no_cell_line_data_returns_empty_figure_with_caption():
@@ -65,17 +83,12 @@ def test_no_cell_line_data_returns_empty_figure_with_caption():
         ],
         cell_line_bars={},
     )
-    fig = tplot.build_transcript_figure(iso, None, overlays={})
+    fig = tplot.build_transcript_figure(iso, _skeleton(), overlays={})
     assert fig["data"] == []
     assert "initiation" in fig["layout"]["annotations"][0]["text"].lower()
 
 
-def test_y_axis_is_log2_initiation_efficiency():
-    fig = tplot.build_transcript_figure(_iso_two_tis(), None, overlays={})
-    assert "initiation efficiency" in fig["layout"]["yaxis"]["title"]["text"].lower()
-
-
 def test_figure_uses_system_font_stack():
-    fig = tplot.build_transcript_figure(_iso_two_tis(), None, overlays={})
+    fig = tplot.build_transcript_figure(_iso_two_tis(), _skeleton(), overlays={})
     family = fig["layout"]["font"]["family"]
     assert "sans-serif" in family or "Helvetica" in family or "Segoe" in family

@@ -186,6 +186,89 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
             )
             motif_legend_shown = True
 
+    # ── Per-cell-line initiation lanes (TIS mapped onto the residue axis) ──
+    tracks = getattr(isoform, "cell_line_tracks", None) or []
+    canon_residue = getattr(isoform, "canon_residue", None)
+    shapes: list[dict[str, Any]] = []
+    annotations: list[dict[str, Any]] = []
+    y_bottom = -1.5
+    if tracks:
+        lane_base, lane_gap = -1.7, 0.45
+        all_ie = [m["log2_ie"] for t in tracks for m in t["marks"]]
+        vmin, vmax = (min(all_ie), max(all_ie)) if all_ie else (-1.0, 0.0)
+
+        def _ie_size(v: float) -> float:
+            return 12.0 if vmax <= vmin else 7.0 + (v - vmin) / (vmax - vmin) * 15.0
+
+        for i, t in enumerate(tracks):
+            ly = lane_base - i * lane_gap
+            xs, ys, sizes, colors, hover = [], [], [], [], []
+            for m in t["marks"]:
+                xs.append(m["residue"])
+                ys.append(ly)
+                sizes.append(_ie_size(m["log2_ie"]))
+                colors.append(_TRUNC_FILL if m["focal"] else _ISO_COLOR)
+                try:
+                    ie = f"{2 ** m['log2_ie']:.3g}"
+                except (OverflowError, ValueError):
+                    ie = "n/a"
+                hover.append(
+                    f"<b>{t['sample']}</b><br>{m['label']}<br>residue ~{m['residue']:.0f} · IE {ie}"
+                )
+            traces.append(
+                {
+                    "type": "scatter",
+                    "mode": "markers",
+                    "x": xs,
+                    "y": ys,
+                    "marker": {
+                        "size": sizes,
+                        "color": colors,
+                        "line": {"width": 1, "color": "#fff"},
+                    },
+                    "hovertext": hover,
+                    "hoverinfo": "text",
+                    "showlegend": False,
+                }
+            )
+            annotations.append(
+                {
+                    "x": 0,
+                    "y": ly,
+                    "xref": "x",
+                    "yref": "y",
+                    "xanchor": "right",
+                    "xshift": -6,
+                    "text": t["sample"].replace("_", " "),
+                    "showarrow": False,
+                    "font": {"size": 10, "color": "#475569"},
+                }
+            )
+        y_bottom = lane_base - (len(tracks) - 1) * lane_gap - 0.3
+        annotations.append(
+            {
+                "x": axis_len + 5,
+                "y": lane_base + 0.35,
+                "xref": "x",
+                "yref": "y",
+                "xanchor": "right",
+                "text": "initiation efficiency per cell line (dot size)",
+                "showarrow": False,
+                "font": {"size": 9, "color": "#94a3b8"},
+            }
+        )
+        if canon_residue is not None:
+            shapes.append(
+                {
+                    "type": "line",
+                    "x0": canon_residue,
+                    "x1": canon_residue,
+                    "y0": y_bottom,
+                    "y1": 1.3,
+                    "line": {"color": "#111827", "width": 1, "dash": "dot"},
+                }
+            )
+
     title = (
         f"Protein — {orf_type.title()}; "
         f"canonical {can_len} aa vs isoform {iso_len} aa; "
@@ -207,6 +290,8 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
                 "x": 0,
                 "font": {"size": 11},
             },
+            "shapes": shapes,
+            "annotations": annotations,
             "xaxis": {
                 "title": {
                     "text": "Protein residue",
@@ -216,12 +301,12 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
                 "range": [0, axis_len + 5],
             },
             "yaxis": {
-                "range": [-1.5, 1.7],
+                "range": [y_bottom - 0.2, 1.7],
                 "showticklabels": False,
                 "zeroline": False,
             },
-            "height": 320,
-            "margin": {"l": 70, "r": 30, "t": 70, "b": 50},
+            "height": 320 + (40 * len(tracks) if tracks else 0),
+            "margin": {"l": 95, "r": 30, "t": 70, "b": 50},
         },
     }
 

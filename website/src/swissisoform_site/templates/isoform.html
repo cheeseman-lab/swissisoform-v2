@@ -31,19 +31,16 @@
     <p class="iso-head-tis"><span class="font-mono text-xs text-slate-500">{{ isoform.tis_id }}</span></p>
   </header>
 
-  <!-- Pinned graph panels — three rows, vertically stacked. -->
+  <!-- Pinned graph panels — vertically stacked. -->
   <section class="iso-panels">
-    <div class="iso-panel iso-panel-transcript">
-      <h2 class="iso-panel-h">Initiation across cell lines</h2>
-      <div id="graph-transcript" class="plotly-graph"></div>
-    </div>
     <div class="iso-panel iso-panel-protein">
-      <h2 class="iso-panel-h">Protein</h2>
+      <h2 class="iso-panel-h">Protein &amp; initiation</h2>
       <p class="protein-caption">
         {% if isoform.orf_type == 'extended' %}Isoform is the canonical protein plus a {{ diff_end }}-aa N-terminal extension (green).
         {% elif isoform.orf_type == 'truncated' %}Isoform loses the first {{ diff_end }} aa of the canonical N-terminus (red).
         {% else %}Differential region highlighted.{% endif %}
         Lollipops = ClinVar/gnomAD/COSMIC variants (red = pathogenic); green boxes = InterPro domains; purple = motifs.
+        Lower lanes = per-cell-line initiation efficiency at each start codon (dot size); dotted line = canonical start.
       </p>
       <div id="graph-protein" class="plotly-graph"></div>
     </div>
@@ -120,11 +117,9 @@
 </div>
 
 <script>
-  const TRANSCRIPT_FIG = {{ transcript_figure_json|safe }};
-  const PROTEIN_FIG    = {{ protein_figure_json|safe }};
+  const PROTEIN_FIG = {{ protein_figure_json|safe }};
   function swissRenderPlots() {
-    Plotly.newPlot("graph-transcript", TRANSCRIPT_FIG.data, TRANSCRIPT_FIG.layout, {responsive: true});
-    Plotly.newPlot("graph-protein",    PROTEIN_FIG.data,    PROTEIN_FIG.layout,    {responsive: true});
+    Plotly.newPlot("graph-protein", PROTEIN_FIG.data, PROTEIN_FIG.layout, {responsive: true});
   }
   if (window.Plotly) { swissRenderPlots(); }
   else { document.addEventListener('DOMContentLoaded', function () {

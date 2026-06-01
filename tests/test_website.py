@@ -198,7 +198,6 @@ def test_isoform_page_contains_graphs_and_synthesis_block(client):
     r = client.get(f"/genes/{row['gene_name']}/isoforms/{make_slug(row['tis_id'])}")
     assert r.status_code == 200
     body = r.data
-    assert b"graph-transcript" in body
     assert b"graph-protein" in body
     assert b"Synthesis" in body
     # 12-tile evidence grid replaced the 7-tab strip.
