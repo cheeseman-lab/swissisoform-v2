@@ -797,11 +797,16 @@ def diff_evidence_for(iso) -> dict:
         ]
     )
     if plm:
+        constraint_sub = (
+            "ESM-2 + AlphaMissense (canonical frame)"
+            if is_trunc
+            else "ESM-2 ΔLLR (isoform frame) — AlphaMissense N/A on this non-canonical region"
+        )
         sections.append(
             {
                 "id": "constraint",
                 "title": "Constraint",
-                "subtitle": "ESM-2 / variant effect",
+                "subtitle": constraint_sub,
                 "rows": plm,
             }
         )

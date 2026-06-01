@@ -559,3 +559,6 @@
 .impact-dmg { display:inline-block; font-size:.7rem; font-weight:600; color:#fff; background:#dc2626;
   padding:.05rem .4rem; border-radius:4px; }
 .var-foot { font-size:.78rem; color:#64748b; margin:.5rem 0 0; max-width:680px; line-height:1.4; }
+
+.variants-table .am-na { font-size:.78rem; color:#94a3b8; font-style:italic; cursor:help;
+  border-bottom:1px dotted #cbd5e1; }

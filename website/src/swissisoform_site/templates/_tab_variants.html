@@ -44,7 +44,9 @@
           {% else %}—{% endif %}
         </td>
         <td>
-          {% if v.am_class %}{{ v.am_class }}{% if v.am_pathogenicity is not none %} ({{ '%.2f'|format(v.am_pathogenicity|float) }}){% endif %}{% else %}—{% endif %}
+          {% if v.am_class %}{{ v.am_class }}{% if v.am_pathogenicity is not none %} ({{ '%.2f'|format(v.am_pathogenicity|float) }}){% endif %}
+          {% elif diff_space == 'isoform' %}<span class="am-na" title="AlphaMissense is computed in the canonical transcript frame; this extension region is non-canonical, so AlphaMissense cannot score it. Use ESM-2 ΔLLR.">N/A</span>
+          {% else %}—{% endif %}
         </td>
         <td class="var-num">
           {% if v.plm_delta_llr is not none %}{{ '%.2f'|format(v.plm_delta_llr|float) }}{% else %}—{% endif %}
