@@ -536,3 +536,18 @@
 .diff-hit-motif { background: #9467bd; }
 .diff-hit-peptide { background: #0891b2; }
 .diff-hit-span { color: #94a3b8; font-family: ui-monospace, monospace; font-size: .75rem; margin-left: .3rem; }
+
+/* comparative biophysics (differential vs shared) */
+.diff-compare { border-collapse: collapse; width: 100%; max-width: 620px; }
+.diff-compare th { text-align: right; font-size: .72rem; text-transform: uppercase; letter-spacing: .03em;
+  color: #94a3b8; padding: .2rem .6rem .35rem; border-bottom: 1px solid #e2e8f0; }
+.diff-compare th:first-child { text-align: left; }
+.diff-compare td { padding: .28rem .6rem; font-size: .85rem; border-bottom: 1px solid #f1f5f9; }
+.diff-compare .dm-label { color: #475569; }
+.diff-compare .dm-val { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; color: #1e293b; }
+.diff-compare .dm-shared { color: #94a3b8; font-weight: 500; }
+.diff-compare .dm-ratio { color: #4338ca; }
+.diff-compare tr.cmp-hot { background: #f5f3ff; }
+.diff-compare tr.cmp-hot .dm-ratio { font-weight: 700; }
+.diff-conf { font-size: .72rem; color: #64748b; background: #f1f5f9; border-radius: 4px;
+  padding: .05rem .4rem; margin-left: .5rem; font-family: ui-monospace, monospace; }

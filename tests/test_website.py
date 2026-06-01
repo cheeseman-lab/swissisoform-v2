@@ -290,7 +290,11 @@ def test_diff_evidence_panel_surfaces_modalities(client):
     de = diff_evidence_for(iso)
     ids = {s["id"] for s in de["sections"]}
     # Conservation, structure, localization, biophysics must all be surfaced.
-    assert {"biophysics", "conservation", "structure", "localization"}.issubset(ids)
+    assert {"biophysics", "conservation", "structure", "localization", "initiation"}.issubset(ids)
+    bio = next(s for s in de["sections"] if s["id"] == "biophysics")
+    assert bio.get("compare_rows"), "biophysics must be comparative (unique vs shared)"
+    pi = next(r for r in bio["compare_rows"] if "pI" in r["label"])
+    assert pi["unique"] != pi["shared"]  # differential, not whole-protein
     # MSRA's mito->peroxisome retargeting must be flagged on the localization section.
     loc = next(s for s in de["sections"] if s["id"] == "localization")
     assert loc.get("highlight") is True

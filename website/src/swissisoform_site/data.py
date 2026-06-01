@@ -355,7 +355,7 @@ def _build_isoform(row: pd.Series, struct_index: dict[tuple[str, str], str]) -> 
         variants_in_unique=variants_in_unique,
         isoform_cif=isoform_cif,
         canonical_cif=canonical_cif,
-        raw=_clean_nan({k: row[k] for k in row.index if not k.startswith("cmp_biophysics_")}),
+        raw=_clean_nan({k: row[k] for k in row.index}),
     )
 
 
@@ -582,30 +582,51 @@ def diff_evidence_for(iso) -> dict:
 
     sections = []
 
-    bio = rows(
+    def cmp_rows(feats):
+        """Comparative biophysics: differential (unique) region vs shared core."""
+        out = []
+        for label, feat in feats:
+            u = _fmt_num(g(f"cmp_biophysics_{feat}_unique"))
+            s = _fmt_num(g(f"cmp_biophysics_{feat}_shared"))
+            r = _fmt_num(g(f"cmp_biophysics_{feat}_ratio"))
+            if u is None and s is None:
+                continue
+            enriched = g(f"cmp_biophysics_{feat}_enriched")
+            out.append(
+                {
+                    "label": label,
+                    "unique": u or "—",
+                    "shared": s or "—",
+                    "ratio": r or "—",
+                    "hot": bool(enriched) if enriched is not None else False,
+                }
+            )
+        return out
+
+    bio_compare = cmp_rows(
         [
-            ("Length (aa)", "diff_biophysics_length"),
-            ("Isoelectric point (pI)", "diff_biophysics_pI"),
-            ("Hydropathy (GRAVY)", "diff_biophysics_gravy"),
-            ("Instability index", "diff_biophysics_instability_index"),
-            ("Aromaticity", "diff_biophysics_aromaticity"),
-            ("Fraction charged", "diff_biophysics_fraction_charged"),
-            ("Disorder fraction", "diff_biophysics_disorder"),
-            ("Low-complexity fraction", "diff_biophysics_fraction_lcr"),
-            ("Prion-like fraction", "diff_biophysics_prionlike_fraction"),
-            ("LLPS score", "diff_biophysics_llps_score"),
-            ("Shannon entropy", "diff_biophysics_shannon_entropy"),
-            ("AA diversity", "diff_biophysics_aa_diversity"),
-            ("Longest homopolymer", "diff_biophysics_longest_homopolymer"),
+            ("Isoelectric point (pI)", "pI"),
+            ("Hydropathy (GRAVY)", "gravy"),
+            ("Fraction charged", "fraction_charged"),
+            ("Disorder fraction", "disorder"),
+            ("Disorder-promoting", "fraction_disorder_promoting"),
+            ("Low-complexity fraction", "fraction_lcr"),
+            ("Prion-like fraction", "prionlike_fraction"),
+            ("LLPS score", "llps_score"),
+            ("π–π propensity", "pipi_propensity"),
+            ("Aromaticity", "aromaticity"),
+            ("Instability index", "instability_index"),
+            ("Shannon entropy", "shannon_entropy"),
+            ("Normalized complexity", "normalized_complexity"),
         ]
     )
-    if bio:
+    if bio_compare:
         sections.append(
             {
                 "id": "biophysics",
                 "title": "Biophysics",
-                "subtitle": "of the differential sequence",
-                "rows": bio,
+                "subtitle": "differential region vs the shared core (highlighted = enriched)",
+                "compare_rows": bio_compare,
                 "seq": getattr(iso, "differential_sequence", "") or "",
             }
         )
@@ -617,30 +638,62 @@ def diff_evidence_for(iso) -> dict:
             ("phyloP — unique region", "isoform_conservation_phylop_unique_region_mean"),
             ("phyloP — shared region", "isoform_conservation_phylop_shared_region_mean"),
             ("phyloP enrichment (unique/shared)", "isoform_conservation_phylop_enrichment"),
+            ("phastCons at TIS codon", "isoform_conservation_phastcons_at_tis"),
+            ("phastCons Kozak window", "isoform_conservation_phastcons_kozak_mean"),
             ("phastCons — unique region", "isoform_conservation_phastcons_unique_region_mean"),
             ("phastCons — shared region", "isoform_conservation_phastcons_shared_region_mean"),
             ("Primate frame intact", "isoform_conservation_frame_primate_frac_intact"),
             ("Primate species aligned", "isoform_conservation_frame_primate_n_species_aligned"),
+            (
+                "Primate start codon conserved",
+                "isoform_conservation_frame_primate_start_codon_conserved",
+            ),
+            ("Primate AA identity", "isoform_conservation_frame_primate_mean_pident"),
             ("Primate deepest intact", "isoform_conservation_frame_primate_deepest_species"),
+            ("Primate phylo depth (MRCA)", "isoform_conservation_frame_primate_max_depth"),
             ("Mammalian frame intact", "isoform_conservation_frame_mammalian_frac_intact"),
             ("Mammalian deepest intact", "isoform_conservation_frame_mammalian_deepest_species"),
+            ("Mammalian phylo depth (MRCA)", "isoform_conservation_frame_mammalian_max_depth"),
         ],
         pct_keys=(
             "isoform_conservation_frame_primate_frac_intact",
             "isoform_conservation_frame_mammalian_frac_intact",
+            "isoform_conservation_frame_primate_mean_pident",
+            "isoform_conservation_frame_primate_start_codon_conserved",
         ),
     )
     if cons:
         sections.append({"id": "conservation", "title": "Conservation", "rows": cons})
 
+    init = rows(
+        [
+            ("Kozak context (−9..+4)", "isoform_initiation_context_kozak_context"),
+            ("Kozak Hamming — full consensus", "isoform_initiation_context_kozak_hamming_full"),
+            ("Kozak Hamming — major positions", "isoform_initiation_context_kozak_hamming_major"),
+            ("Kozak Hamming — partial", "isoform_initiation_context_kozak_hamming_partial"),
+            ("Kozak window GC content", "isoform_initiation_context_kozak_window_gc_content"),
+        ]
+    )
+    if init:
+        sections.append(
+            {
+                "id": "initiation",
+                "title": "Initiation context",
+                "subtitle": "Kozak sequence around the alternative start",
+                "rows": init,
+            }
+        )
+
     struct_status = g("isoform_structure_status")
     struct = rows(
         [
             ("pLDDT — differential region", "isoform_structure_plddt_diffregion_mean"),
+            ("pLDDT std — differential region", "isoform_structure_plddt_diffregion_std"),
+            ("pLDDT Δ (diff vs shared)", "isoform_structure_plddt_delta_shared"),
             ("pLDDT — isoform (whole)", "isoform_structure_plddt_isoform_mean"),
             ("pLDDT — canonical (whole)", "isoform_structure_plddt_canonical_mean"),
-            ("TM-score (iso vs canonical)", "isoform_structure_tm_score"),
-            ("RMSD global (Å)", "isoform_structure_rmsd_global"),
+            ("TM-score (iso vs canonical, whole)", "isoform_structure_tm_score"),
+            ("RMSD global (Å, whole)", "isoform_structure_rmsd_global"),
             ("Extension contacts", "isoform_structure_extension_contacts"),
         ]
     )
@@ -667,6 +720,8 @@ def diff_evidence_for(iso) -> dict:
             ("DeepLoc — isoform", "cmp_localization_deeploc_prediction_isoform"),
             ("DeepLoc signals — canonical", "cmp_localization_deeploc_signals_canonical"),
             ("DeepLoc signals — isoform", "cmp_localization_deeploc_signals_isoform"),
+            ("Membrane — canonical", "cmp_localization_deeploc_membrane_canonical"),
+            ("Membrane — isoform", "cmp_localization_deeploc_membrane_isoform"),
             ("TargetP — canonical", "canonical_targetp_targetp_prediction"),
             ("TargetP — isoform", "isoform_targetp_targetp_prediction"),
             ("SignalP — canonical", "canonical_signalp_signalp_prediction"),
@@ -674,8 +729,10 @@ def diff_evidence_for(iso) -> dict:
         ]
     )
     if loc:
-        changed = bool(g("cmp_localization_deeploc_signals_changed")) or bool(
-            g("cmp_localization_deeploc_prediction_changed")
+        changed = (
+            bool(g("cmp_localization_deeploc_signals_changed"))
+            or bool(g("cmp_localization_deeploc_prediction_changed"))
+            or bool(g("cmp_localization_deeploc_membrane_changed"))
         )
         sections.append(
             {
@@ -694,10 +751,25 @@ def diff_evidence_for(iso) -> dict:
             ("Constraint enrichment (unique/shared)", "isoform_plm_vep_constraint_enrichment"),
             ("Constrained positions — unique", "isoform_plm_vep_n_constrained_positions_unique"),
             ("Constrained positions — shared", "isoform_plm_vep_n_constrained_positions_shared"),
+            ("Variants in unique region", "isoform_variant_intersection_n_in_unique_region"),
+            ("Variants in shared region", "isoform_variant_intersection_n_in_shared_region"),
+            (
+                "Pathogenic in unique region",
+                "isoform_variant_intersection_n_pathogenic_in_unique_region",
+            ),
+            (
+                "Pathogenic in shared region",
+                "isoform_variant_intersection_n_pathogenic_in_shared_region",
+            ),
             ("Scorable variants in unique region", "isoform_varianteffect_n_scorable_in_unique"),
             ("Damaging variants in unique region", "isoform_varianteffect_n_damaging_in_unique"),
+            (
+                "AlphaMissense-pathogenic in unique",
+                "isoform_varianteffect_n_am_pathogenic_in_unique",
+            ),
             ("Mean ΔLLR — unique-region variants", "isoform_varianteffect_mean_delta_llr_unique"),
             ("Mean AlphaMissense — unique", "isoform_varianteffect_mean_am_pathogenicity_unique"),
+            ("Max AlphaMissense — unique", "isoform_varianteffect_max_am_pathogenicity_unique"),
         ]
     )
     if plm:
@@ -760,7 +832,11 @@ def diff_evidence_for(iso) -> dict:
             }
         )
 
-    return {"sections": sections, "is_trunc": is_trunc}
+    return {
+        "sections": sections,
+        "is_trunc": is_trunc,
+        "confidence": _maybe_str(g("diff_region_confidence")),
+    }
 
 
 def _isoform_view(iso, gene):

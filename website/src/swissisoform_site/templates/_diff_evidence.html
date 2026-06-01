@@ -4,6 +4,7 @@
   <p class="diff-evidence-sub">
     Everything the pipeline computes about the {{ 'lost' if diff_evidence.is_trunc else 'gained' }}
     N-terminal region, grouped by modality.
+    {% if diff_evidence.confidence %}<span class="diff-conf">region: {{ diff_evidence.confidence }}</span>{% endif %}
   </p>
 
   <div class="diff-tabs" role="tablist">
@@ -18,6 +19,24 @@
     {% if s.subtitle %}<p class="diff-subtitle">{{ s.subtitle }}</p>{% endif %}
     {% if s.warn %}<p class="diff-warn">⚠ {{ s.warn }}</p>{% endif %}
     {% if s.seq %}<p class="diff-seq">{{ s.seq }}</p>{% endif %}
+
+    {% if s.compare_rows %}
+    <table class="diff-compare">
+      <thead>
+        <tr><th>Property</th><th>Differential</th><th>Shared core</th><th>Ratio</th></tr>
+      </thead>
+      <tbody>
+        {% for r in s.compare_rows %}
+        <tr class="{{ 'cmp-hot' if r.hot else '' }}">
+          <td class="dm-label">{{ r.label }}</td>
+          <td class="dm-val">{{ r.unique }}</td>
+          <td class="dm-val dm-shared">{{ r.shared }}</td>
+          <td class="dm-val dm-ratio">{{ r.ratio }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
 
     {% if s.rows %}
     <table class="diff-metrics{% if s.highlight %} hl{% endif %}">
@@ -40,7 +59,7 @@
     </ul>
     {% endif %}
 
-    {% if not s.rows and not s.hits %}
+    {% if not s.rows and not s.hits and not s.compare_rows %}
     <p class="empty">No evidence of this type in the differential region.</p>
     {% endif %}
   </div>
