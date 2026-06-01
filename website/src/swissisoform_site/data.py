@@ -632,6 +632,90 @@ CRITERION_ABOUT = {
 }
 
 
+# Per-metric glossary: label -> (about-page anchor, one-line hover definition).
+# Each metric in a criterion modal links to its About section and shows this tip
+# on hover. Labels must match the strings produced in criterion_evidence_for.
+METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
+    # phyloP / phastCons
+    "phyloP mean": ("m-phylop", "Mean phyloP evolutionary constraint over the region (higher = more conserved)."),
+    "phastCons mean": ("m-phylop", "Mean phastCons probability the region sits in a conserved element."),
+    "phyloP at TIS codon": ("m-phylop", "phyloP score at the 3-nt start codon."),
+    "phyloP Kozak window": ("m-phylop", "Mean phyloP over the Kozak window (−9..+4)."),
+    "phastCons at TIS codon": ("m-phylop", "phastCons score at the start codon."),
+    "phastCons Kozak window": ("m-phylop", "Mean phastCons over the Kozak window."),
+    # Frame conservation
+    "Frame intact (fraction of species)": ("m-frame", "Fraction of aligned species keeping an intact reading frame."),
+    "Species aligned": ("m-frame", "Number of species with an alignment over the differential ORF."),
+    "Species frame-intact": ("m-frame", "Number of species whose reading frame stays intact."),
+    "Start codon conserved": ("m-frame", "Fraction of species conserving the start codon."),
+    "Mean AA identity": ("m-frame", "Mean amino-acid identity across aligned species."),
+    "Deepest intact species": ("m-frame", "Most evolutionarily distant species whose frame is still intact."),
+    "Phylo depth (MRCA)": ("m-frame", "Phylogenetic depth of the deepest frame-intact species."),
+    # Initiation / Kozak
+    "Kozak context (−9..+4)": ("m-initiation", "Sequence window around the start codon (−9..+4)."),
+    "Kozak Hamming — full consensus": ("m-initiation", "Mismatches to the full Kozak consensus."),
+    "Kozak Hamming — major positions": ("m-initiation", "Mismatches at the key −3 and +4 Kozak positions."),
+    "Kozak Hamming — partial": ("m-initiation", "Mismatches at the partial Kozak consensus positions."),
+    "Kozak window GC content": ("m-initiation", "GC fraction of the Kozak window."),
+    # Structure / Boltz
+    "pLDDT (whole protein)": ("m-structure", "Mean Boltz per-residue confidence (0–100) over the whole protein."),
+    "pLDDT — differential region": ("m-structure", "Mean Boltz confidence over the differential region only."),
+    "pLDDT std — differential region": ("m-structure", "Spread of pLDDT within the differential region."),
+    "pLDDT Δ (diff vs shared)": ("m-structure", "Differential-minus-shared mean pLDDT."),
+    "TM-score (iso vs canonical)": ("m-structure", "Global fold similarity (0–1) between isoform and canonical."),
+    "RMSD global (Å)": ("m-structure", "Backbone RMSD between isoform and canonical folds."),
+    "Extension contacts": ("m-structure", "Inter-residue contacts the differential region makes with the core."),
+    # Localization / targeting
+    "Predicted location": ("m-localization", "DeepLoc predicted subcellular compartment."),
+    "Sorting signals": ("m-localization", "DeepLoc-detected sorting / targeting signals."),
+    "Membrane": ("m-localization", "DeepLoc membrane-association call."),
+    "TargetP": ("m-localization", "TargetP N-terminal presequence (mitochondrial / chloroplast / none)."),
+    "SignalP": ("m-localization", "SignalP secretory signal-peptide call."),
+    # Domains / motifs / MS
+    "InterPro domains in diff region": ("m-domains", "Annotated InterPro domains overlapping the differential region."),
+    "Motifs in diff region": ("m-domains", "Short linear motifs in the differential region."),
+    "Mass-spec peptides in diff region": ("m-massspec", "Detected tryptic peptides unique to the differential region."),
+    # Constraint / variant effect
+    "ESM-2 mean LLR": ("m-esm2", "Mean ESM-2 masked-marginal log-likelihood ratio; lower = more constrained."),
+    "Constrained positions": ("m-esm2", "Count of residues the language model flags as highly constrained."),
+    "Mean ΔLLR — unique-region variants": ("m-esm2", "Mean ESM-2 ΔLLR across variants in the unique region."),
+    "Min ΔLLR — unique-region variants": ("m-esm2", "Most-constrained ESM-2 ΔLLR among unique-region variants."),
+    "Variants ESM-2-scored": ("m-esm2", "Number of variants scored by ESM-2."),
+    "AlphaMissense-pathogenic in unique": ("m-alphamissense", "AlphaMissense-pathogenic missense variants in the unique region."),
+    "Mean AlphaMissense — unique": ("m-alphamissense", "Mean AlphaMissense pathogenicity in the unique region."),
+    "Variants AlphaMissense-scored": ("m-alphamissense", "Number of variants scored by AlphaMissense."),
+    "Scorable variants in unique region": ("m-clinical", "Variants in the unique region that could be scored."),
+    "Damaging variants in unique region": ("m-clinical", "Variants called damaging by AlphaMissense or ESM-2."),
+    # Biophysics
+    "Isoelectric point (pI)": ("m-biophysics", "pH at which the region carries no net charge."),
+    "Hydropathy (GRAVY)": ("m-biophysics", "Grand average of hydropathy; positive = hydrophobic."),
+    "Fraction charged": ("m-biophysics", "Fraction of charged residues (D/E/K/R)."),
+    "Disorder fraction": ("m-biophysics", "Fraction of residues predicted intrinsically disordered."),
+    "Disorder-promoting": ("m-biophysics", "Fraction of disorder-promoting residues."),
+    "Low-complexity fraction": ("m-biophysics", "Fraction in low-complexity (repetitive) sequence."),
+    "Prion-like fraction": ("m-biophysics", "Fraction in prion-like (Q/N-rich) sequence."),
+    "LLPS score": ("m-biophysics", "Propensity to drive liquid–liquid phase separation."),
+    "π–π propensity": ("m-biophysics", "Planar π-contact propensity (a phase-separation driver)."),
+    "Aromaticity": ("m-biophysics", "Fraction of aromatic residues (F/W/Y)."),
+    "Instability index": ("m-biophysics", "Predicted in-vivo instability; >40 suggests unstable."),
+    "Shannon entropy": ("m-biophysics", "Compositional entropy (sequence diversity)."),
+    "Normalized complexity": ("m-biophysics", "Compositional complexity normalized to length."),
+    # Clinical burden
+    "Clinical/observed variants": ("m-clinical", "ClinVar / gnomAD / COSMIC variants intersecting the region."),
+    "Pathogenic variants": ("m-clinical", "Pathogenic / likely-pathogenic variants in the region."),
+    "Clinical variants in diff region": ("m-clinical", "Clinical-database variants inside the differential region."),
+}
+
+
+def _term(label: str) -> dict[str, str]:
+    """Glossary tip + about-page anchor for a metric label (empty if unknown)."""
+    ent = METRIC_GLOSSARY.get(label)
+    if not ent:
+        return {}
+    anchor, tip = ent
+    return {"tip": tip, "anchor": anchor}
+
+
 def criterion_evidence_for(iso) -> dict:
     """Per-criterion differential evidence for the 12 score modals.
 
@@ -654,7 +738,7 @@ def criterion_evidence_for(iso) -> dict:
         for label, key in specs:
             val = _fmt_num(g(key), pct=key in pct_keys)
             if val is not None:
-                out.append({"label": label, "value": val})
+                out.append({"label": label, "value": val, **_term(label)})
         return out
 
     def compare(specs):
@@ -676,6 +760,7 @@ def criterion_evidence_for(iso) -> dict:
                     "label": label,
                     "cols": [v if v is not None else "—" for v in vals],
                     "hot": bool(g(hot_key)) if hot_key else False,
+                    **_term(label),
                 }
             )
         return out

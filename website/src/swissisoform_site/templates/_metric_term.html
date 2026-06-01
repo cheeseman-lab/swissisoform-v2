@@ -1,0 +1,7 @@
+{# Render a metric label `r.label` as a glossary term: a link to its About-page
+   section with a hover tooltip. Falls back to plain text when no tip exists. #}
+{%- if r.tip -%}
+<a class="metric-term" href="{{ url_for('about') }}#{{ r.anchor }}" title="{{ r.tip }}" target="_blank" rel="noopener">{{ r.label }}</a>
+{%- else -%}
+{{ r.label }}
+{%- endif -%}

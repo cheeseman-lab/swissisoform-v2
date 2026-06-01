@@ -76,7 +76,7 @@
   <section class="about-sec">
     <h2>The metrics behind the criteria</h2>
     <dl class="about-glossary">
-      <dt>phyloP / phastCons</dt>
+      <dt id="m-phylop">phyloP / phastCons</dt>
       <dd>
         Per-base evolutionary constraint from the Zoonomia 241-mammal alignment.
         phyloP scores acceleration/conservation at single sites; phastCons scores the
@@ -85,7 +85,7 @@
         higher constraint in the unique region means it is selected.
       </dd>
 
-      <dt>Frame conservation (primate / mammalian)</dt>
+      <dt id="m-frame">Frame conservation (primate / mammalian)</dt>
       <dd>
         We extract the differential ORF across primate and mammalian genomes and test
         whether the reading frame stays intact (no frameshift, no premature stop, start
@@ -93,7 +93,7 @@
         species sits — deeper = older selection on the ORF.
       </dd>
 
-      <dt>Initiation efficiency &amp; Kozak context</dt>
+      <dt id="m-initiation">Initiation efficiency &amp; Kozak context</dt>
       <dd>
         How strongly ribosomes initiate at the alternative start relative to background,
         per cell line (CPM + p-value). The Kozak context (−9..+4 around the ATG) and its
@@ -101,14 +101,14 @@
         initiation.
       </dd>
 
-      <dt>Mass spec</dt>
+      <dt id="m-massspec">Mass spec</dt>
       <dd>
         In-silico tryptic digest of the differential region, matched against detected
         peptides (PepQuery). A peptide unique to the isoform region is direct proof of
         translation.
       </dd>
 
-      <dt>pLDDT &amp; structure (Boltz)</dt>
+      <dt id="m-structure">pLDDT &amp; structure (Boltz)</dt>
       <dd>
         Per-residue model confidence (0–100) from a Boltz structure prediction. High
         pLDDT in the differential region implies it folds into ordered structure rather
@@ -117,7 +117,7 @@
         unreliable.
       </dd>
 
-      <dt>DeepLoc / SignalP / TargetP</dt>
+      <dt id="m-localization">DeepLoc / SignalP / TargetP</dt>
       <dd>
         Subcellular-localization (DeepLoc) and N-terminal targeting-signal predictors
         (SignalP = secretion, TargetP = mitochondrial/chloroplast transit). We run them
@@ -126,13 +126,13 @@
         peptides.
       </dd>
 
-      <dt>InterProScan domains &amp; motifs</dt>
+      <dt id="m-domains">InterProScan domains &amp; motifs</dt>
       <dd>
         Annotated protein domains (InterPro) and short linear motifs that fall inside the
         differential region. Gaining or losing a domain is a direct functional change.
       </dd>
 
-      <dt>ESM-2 ΔLLR (sequence constraint)</dt>
+      <dt id="m-esm2">ESM-2 ΔLLR (sequence constraint)</dt>
       <dd>
         A protein language model scores how "surprised" it is by each residue (masked-
         marginal log-likelihood ratio). Averaged over the unique vs shared region, it
@@ -140,7 +140,7 @@
         extensions where AlphaMissense cannot.
       </dd>
 
-      <dt>AlphaMissense <span class="about-warn-chip">canonical frame only</span></dt>
+      <dt id="m-alphamissense">AlphaMissense <span class="about-warn-chip">canonical frame only</span></dt>
       <dd>
         Precomputed missense-pathogenicity for every canonical-protein amino-acid change.
         Valid on <strong>truncations</strong> (canonical-coding lost region), but
@@ -150,7 +150,7 @@
         separately.
       </dd>
 
-      <dt>Biophysics</dt>
+      <dt id="m-biophysics">Biophysics</dt>
       <dd>
         Whole-region physicochemical properties of the differential vs shared sequence:
         isoelectric point, hydropathy (GRAVY), charge, disorder, low-complexity and
@@ -159,7 +159,7 @@
         phase separation).
       </dd>
 
-      <dt>Clinical variants</dt>
+      <dt id="m-clinical">Clinical variants</dt>
       <dd>
         ClinVar / gnomAD / COSMIC variants intersected with the differential region.
         Burden of pathogenic variants in the unique region (vs the shared core) ties the

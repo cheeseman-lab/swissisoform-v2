@@ -1,29 +1,32 @@
-{# Differential-region evidence rendered INSIDE a criterion modal body.
+{# Per-criterion differential evidence inside a score modal.
    Expects ``ce`` = {about, sections:[...]} from data.criterion_evidence_for.
-   Each section: {title, subtitle?, warn?, seq?, cmp_headers?, compare_rows?,
-   rows?, hits?, highlight?}. #}
+   Two flat boxes: a Comparison box (side-by-side tables) and a Details box
+   (differential-region-only metrics + hits). No dropdowns; every metric label
+   is a glossary term (link to /about + hover tip). #}
 {% if ce and (ce.about or ce.sections) %}
   <div class="crit-evidence">
     {% if ce.about %}
       <p class="crit-about"><span class="crit-about-icon">?</span>{{ ce.about }}</p>
     {% endif %}
-    {% for s in ce.sections %}
-      <div class="crit-sec{% if s.highlight %} hl{% endif %}">
-        <h4 class="crit-sec-h">{{ s.title }}</h4>
-        {% if s.subtitle %}<p class="crit-sec-sub">{{ s.subtitle }}</p>{% endif %}
-        {% if s.warn %}<p class="crit-warn">⚠ {{ s.warn }}</p>{% endif %}
 
-        {% if s.compare_rows %}
+    {# criterion-level cautions (e.g. uniform-pLDDT placeholder) #}
+    {% for s in ce.sections %}{% if s.warn %}<p class="crit-warn">⚠ {{ s.warn }}</p>{% endif %}{% endfor %}
+
+    {# ── Box 1 · Comparison ── #}
+    {% set comp_secs = ce.sections | selectattr('compare_rows') | list %}
+    {% if comp_secs %}
+    <div class="crit-box">
+      <h4 class="crit-box-h">Comparison</h4>
+      {% for s in comp_secs %}
+      <div class="crit-grp{% if s.highlight %} hl{% endif %}">
+        {% if s.title %}<p class="crit-grp-t">{{ s.title }}</p>{% endif %}
+        {% if s.subtitle %}<p class="crit-grp-s">{{ s.subtitle }}</p>{% endif %}
         <table class="crit-compare">
-          <thead>
-            <tr>
-              {% for h in s.cmp_headers %}<th>{{ h }}</th>{% endfor %}
-            </tr>
-          </thead>
+          <thead><tr>{% for h in s.cmp_headers %}<th>{{ h }}</th>{% endfor %}</tr></thead>
           <tbody>
             {% for r in s.compare_rows %}
             <tr class="{{ 'cmp-hot' if r.hot else '' }}">
-              <td class="dm-label">{{ r.label }}</td>
+              <td class="dm-label">{% include "_metric_term.html" %}</td>
               {% for v in r.cols %}
               <td class="dm-val {{ s.col_classes[loop.index0] if s.col_classes else '' }}">{{ v }}</td>
               {% endfor %}
@@ -31,31 +34,44 @@
             {% endfor %}
           </tbody>
         </table>
-        {% endif %}
-
-        {% if s.rows %}
-        <table class="crit-metrics">
-          <tbody>
-            {% for r in s.rows %}
-            <tr><td class="dm-label">{{ r.label }}</td><td class="dm-val">{{ r.value }}</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        {% endif %}
-
-        {% if s.hits %}
-        <ul class="crit-hits">
-          {% for h in s.hits %}
-          <li><span class="diff-hit-kind diff-hit-{{ h.kind }}">{{ h.kind }}</span>
-            <span class="diff-hit-name">{{ h.name }}</span>
-            {% if h.span %}<span class="diff-hit-span">{{ h.span }}</span>{% endif %}
-          </li>
-          {% endfor %}
-        </ul>
-        {% endif %}
-
-        {% if s.seq %}<p class="crit-seq">{{ s.seq }}</p>{% endif %}
       </div>
-    {% endfor %}
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {# ── Box 2 · Details (non-comparison metrics + hits) ── #}
+    {% set has_detail = (ce.sections|selectattr('rows')|list) or (ce.sections|selectattr('hits')|list) or (ce.sections|selectattr('seq')|list) %}
+    {% if has_detail %}
+    <div class="crit-box">
+      <h4 class="crit-box-h">Details</h4>
+      {% for s in ce.sections %}
+        {% if s.rows or s.hits or s.seq %}
+        <div class="crit-grp">
+          {% if s.title %}<p class="crit-grp-t">{{ s.title }}</p>{% endif %}
+          {% if s.rows %}
+          <table class="crit-metrics">
+            <tbody>
+              {% for r in s.rows %}
+              <tr><td class="dm-label">{% include "_metric_term.html" %}</td><td class="dm-val">{{ r.value }}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% endif %}
+          {% if s.hits %}
+          <ul class="crit-hits">
+            {% for h in s.hits %}
+            <li><span class="diff-hit-kind diff-hit-{{ h.kind }}">{{ h.kind }}</span>
+              <span class="diff-hit-name">{{ h.name }}</span>
+              {% if h.span %}<span class="diff-hit-span">{{ h.span }}</span>{% endif %}
+            </li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+          {% if s.seq %}<p class="crit-seq">{{ s.seq }}</p>{% endif %}
+        </div>
+        {% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
   </div>
 {% endif %}
