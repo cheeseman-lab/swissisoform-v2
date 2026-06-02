@@ -781,25 +781,41 @@ def criterion_evidence_for(iso) -> dict:
     # ---- modality section builders (each → section dict or None) ----------
 
     def sec_frame(clade):
+        # Canonical-ORF frame vs differential-ORF frame across the clade. The
+        # canonical twin columns (``..._canonical_*``) score the full canonical
+        # ORF; the bare columns score the isoform-unique region only.
         pre = f"isoform_conservation_frame_{clade}"
-        body = rows(
-            [
-                ("Frame intact (fraction of species)", f"{pre}_frac_intact"),
-                ("Species aligned", f"{pre}_n_species_aligned"),
-                ("Species frame-intact", f"{pre}_n_species_intact_frame"),
-                ("Start codon conserved", f"{pre}_start_codon_conserved"),
-                ("Mean AA identity", f"{pre}_mean_pident"),
-                ("Deepest intact species", f"{pre}_deepest_species"),
-                ("Phylo depth (MRCA)", f"{pre}_max_depth"),
-            ],
-            pct_keys=(f"{pre}_frac_intact", f"{pre}_mean_pident", f"{pre}_start_codon_conserved"),
-        )
-        if not body:
+        specs = [
+            ("Frame intact (fraction of species)", "frac_intact", True),
+            ("Species aligned", "n_species_aligned", False),
+            ("Species frame-intact", "n_species_intact_frame", False),
+            ("Start codon conserved", "start_codon_conserved", True),
+            ("Mean AA identity", "mean_pident", True),
+            ("Deepest intact species", "deepest_species", False),
+            ("Phylo depth (MRCA)", "max_depth", False),
+        ]
+        compare_rows = []
+        for label, suf, pct in specs:
+            can = _fmt_num(g(f"{pre}_canonical_{suf}"), pct=pct)
+            iso = _fmt_num(g(f"{pre}_{suf}"), pct=pct)
+            if can is None and iso is None:
+                continue
+            compare_rows.append(
+                {
+                    "label": label,
+                    "cols": [can or "—", iso or "—"],
+                    "hot": False,
+                    **_term(label),
+                }
+            )
+        if not compare_rows:
             return None
         return {
             "title": f"Reading-frame conservation · {clade}",
-            "subtitle": "frame intactness of the differential ORF across the clade",
-            "rows": body,
+            "subtitle": "full canonical ORF vs the differential ORF, across the clade",
+            "cmp_headers": ["Frame metric", "Canonical ORF", "Differential ORF"],
+            "col_classes": CANON_ISO,
+            "compare_rows": compare_rows,
         }
 
     def sec_phylop():
@@ -842,24 +858,57 @@ def criterion_evidence_for(iso) -> dict:
             "rows": point,
         }
 
+    CELL_LINES = ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen")
+
     def sec_cell_lines():
         cell_rows = []
-        for cl in ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"):
+        for cl in CELL_LINES:
+            raw = _fmt_num(g(f"expr_{cl}_raw_count"))
             cpm = _fmt_num(g(f"expr_{cl}_cpm"))
             pval = _fmt_num(g(f"expr_{cl}_p_value"))
-            if cpm is not None or pval is not None:
+            if raw is not None or cpm is not None or pval is not None:
                 cell_rows.append(
-                    {"label": cl.replace("_", " "), "cols": [cpm or "—", pval or "—"], "hot": False}
+                    {
+                        "label": cl.replace("_", " "),
+                        "cols": [raw or "—", cpm or "—", pval or "—"],
+                        "hot": False,
+                    }
                 )
         if not cell_rows:
             return None
         q = _fmt_num(g("fisher_qvalue"))
         return {
             "title": "Per-cell-line usage",
-            "subtitle": f"Fisher q = {q}" if q else "TIS initiation per cell line",
-            "cmp_headers": ["Cell line", "CPM", "p-value"],
-            "col_classes": ["", ""],
+            "subtitle": f"Fisher q = {q}" if q else "alternative-TIS initiation per cell line",
+            "cmp_headers": ["Cell line", "Reads", "CPM", "p-value"],
+            "col_classes": ["", "", ""],
             "compare_rows": cell_rows,
+        }
+
+    def sec_efficiency():
+        # Canonical-start vs this alternative-start initiation efficiency, per
+        # cell line. Canonical efficiency comes from the per-Tid Annotated row
+        # (``canonical_expr_*``); the alternative start from ``expr_*``.
+        eff_rows = []
+        for cl in CELL_LINES:
+            can = _fmt_num(g(f"canonical_expr_{cl}_initiation_efficiency"))
+            alt = _fmt_num(g(f"expr_{cl}_initiation_efficiency"))
+            if can is None and alt is None:
+                continue
+            eff_rows.append(
+                {"label": cl.replace("_", " "), "cols": [can or "—", alt or "—"], "hot": False}
+            )
+        if not eff_rows:
+            return None
+        return {
+            "title": "Initiation efficiency · canonical vs alternative start",
+            "subtitle": (
+                "ribosome initiation efficiency at the canonical start vs this "
+                "alternative start, per cell line"
+            ),
+            "cmp_headers": ["Cell line", "Canonical start", "Alternative start"],
+            "col_classes": CANON_ISO,
+            "compare_rows": eff_rows,
         }
 
     def sec_initiation():
@@ -1252,8 +1301,8 @@ def criterion_evidence_for(iso) -> dict:
         "E1_primate_conservation": [sec_frame("primate")],
         "E2_mammalian_conservation": [sec_frame("mammalian")],
         "E3_phylop_coding_selection": [sec_phylop()],
-        "E4_multi_cell_line": [sec_cell_lines()],
-        "E5_initiation_efficiency": [sec_initiation(), sec_cell_lines()],
+        "E4_multi_cell_line": [sec_cell_lines(), sec_efficiency()],
+        "E5_initiation_efficiency": [sec_efficiency(), sec_initiation()],
         "E6_mass_spec": [sec_massspec()],
         "F1_structured_extension": [sec_structure(), sec_biophysics()],
         "F2_localization_change": [sec_deeploc()],
