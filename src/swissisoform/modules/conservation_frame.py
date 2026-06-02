@@ -45,6 +45,32 @@ from swissisoform.models import TranslationInitiationSite
 
 logger = logging.getLogger(__name__)
 
+# The 14 per-region frame metrics (7 primate + 7 mammalian). Each is emitted
+# once for the differential (unique) region and once — as a ``{clade}_canonical_*``
+# twin — for the full canonical ORF, so E1/E2 read as canonical-vs-isoform.
+_METRIC_FIELDS: tuple[str, ...] = (
+    "primate_n_species_aligned",
+    "primate_n_species_intact_frame",
+    "primate_frac_intact",
+    "primate_start_codon_conserved",
+    "primate_mean_pident",
+    "primate_deepest_species",
+    "primate_max_depth",
+    "mammalian_n_species_aligned",
+    "mammalian_n_species_intact_frame",
+    "mammalian_frac_intact",
+    "mammalian_start_codon_conserved",
+    "mammalian_mean_pident",
+    "mammalian_deepest_species",
+    "mammalian_max_depth",
+)
+
+
+def _canonical_key(field: str) -> str:
+    """``primate_frac_intact`` → ``primate_canonical_frac_intact`` (clade-prefixed)."""
+    clade, rest = field.split("_", 1)
+    return f"{clade}_canonical_{rest}"
+
 
 class ConservationFrameModule:
     """Path 1/2 SiteModule: primate + mammalian frame integrity per TIS.
@@ -77,6 +103,14 @@ class ConservationFrameModule:
         "conservation_mammalian_mean_pident",
         "conservation_mammalian_deepest_species",
         "conservation_mammalian_max_depth",
+        "conservation_primate_canonical_frac_intact",
+        "conservation_primate_canonical_n_species_intact_frame",
+        "conservation_primate_canonical_start_codon_conserved",
+        "conservation_primate_canonical_mean_pident",
+        "conservation_mammalian_canonical_frac_intact",
+        "conservation_mammalian_canonical_n_species_intact_frame",
+        "conservation_mammalian_canonical_start_codon_conserved",
+        "conservation_mammalian_canonical_mean_pident",
         "conservation_frame_summary",
     ]
     SCOPE: str = "C"
@@ -191,9 +225,56 @@ class ConservationFrameModule:
         if not unique:
             return self._empty_result(status="no_unique_region")
 
-        ref_seq, per_species_seqs = self._fetch_alignment(site.chrom, unique, site.strand)
-        if ref_seq is None:
+        # ``start_codon_conserved`` reports cross-ortholog conservation of the
+        # first codon of each scored region. For the unique region the
+        # interpretation differs by ORF type (alt-start gain vs lost-canonical-
+        # start defence); the data extraction is symmetric.
+        unique_metrics = self._score_region(site.chrom, unique, site.strand)
+        if unique_metrics is None:
             return self._empty_result(status="no_alignment")
+
+        # Canonical-ORF baseline (flag H): score the full canonical ORF too, so
+        # E1/E2 can be read as canonical-vs-isoform. The canonical ORF is a known
+        # real coding ORF — a positive control for how frame-conserved a genuine
+        # ORF is at this locus. Emitted as ``{clade}_canonical_*`` twins.
+        canonical_metrics: dict[str, Any] | None = None
+        if site.canonical_orf_exons:
+            canonical_metrics = self._score_region(
+                site.chrom, site.canonical_orf_exons, site.strand
+            )
+
+        result: dict[str, Any] = dict(unique_metrics)
+        for field in _METRIC_FIELDS:
+            result[_canonical_key(field)] = (
+                canonical_metrics.get(field) if canonical_metrics else None
+            )
+        canonical_status = (
+            "ok"
+            if canonical_metrics
+            else ("no_skeleton" if not site.canonical_orf_exons else "no_alignment")
+        )
+        result["summary"] = {
+            "status": "ok",
+            "unique_space": unique_space,
+            "unique_region_nt": sum(e - s for s, e in unique),
+            "canonical_status": canonical_status,
+            "canonical_region_nt": sum(e - s for s, e in site.canonical_orf_exons),
+            "hal_path": str(self._hal_path),
+            "tree_loaded": bool(self._depth_map),
+        }
+        return result
+
+    def _score_region(
+        self, chrom: str, intervals: list[tuple[int, int]], strand: str
+    ) -> dict[str, Any] | None:
+        """Fetch the MAF over *intervals* and score frame integrity.
+
+        Returns the 14 ``primate_*`` / ``mammalian_*`` metrics, or ``None`` when
+        no alignment block covered the region.
+        """
+        ref_seq, per_species_seqs = self._fetch_alignment(chrom, intervals, strand)
+        if ref_seq is None:
+            return None
 
         primate_results = [
             analyze_species(sp, ref_seq, per_species_seqs.get(sp, "-" * len(ref_seq)))
@@ -208,19 +289,6 @@ class ConservationFrameModule:
         mammalian_agg = aggregate_species_results(mammalian_results)
         primate_deepest = self._deepest_intact(primate_results)
         mammalian_deepest = self._deepest_intact(mammalian_results)
-
-        # ``start_codon_conserved`` reports cross-ortholog conservation of the
-        # first codon of the differential (unique) region. This is meaningful
-        # for both ORF types — what changes is the interpretation:
-        #   * extension/uORF/altORF — diff region starts with the isoform's
-        #     alt-start codon (CTG/GTG/ATT/…); metric reports whether the
-        #     alt-start trinucleotide is conserved across orthologs.
-        #   * truncation — diff region starts with the canonical Met (ATG)
-        #     that the isoform skips; metric reports whether that canonical
-        #     start codon is conserved across orthologs. We care about this
-        #     too: it tells us how strongly the lost initiator is defended.
-        # The data extraction is symmetric; downstream interpretation differs
-        # (gain-of-alt-start signal vs loss-of-canonical-start signal).
 
         return {
             "primate_n_species_aligned": primate_agg["n_species_aligned"],
@@ -237,13 +305,6 @@ class ConservationFrameModule:
             "mammalian_mean_pident": mammalian_agg["mean_pident"],
             "mammalian_deepest_species": mammalian_deepest[0],
             "mammalian_max_depth": mammalian_deepest[1],
-            "summary": {
-                "status": "ok",
-                "unique_space": unique_space,
-                "unique_region_nt": sum(e - s for s, e in unique),
-                "hal_path": str(self._hal_path),
-                "tree_loaded": bool(self._depth_map),
-            },
         }
 
     def _deepest_intact(
@@ -360,23 +421,10 @@ class ConservationFrameModule:
     @staticmethod
     def _empty_result(*, status: str) -> dict[str, Any]:
         """Shape an output dict with every metric ``None`` and a reason code."""
-        return {
-            "primate_n_species_aligned": None,
-            "primate_n_species_intact_frame": None,
-            "primate_frac_intact": None,
-            "primate_start_codon_conserved": None,
-            "primate_mean_pident": None,
-            "primate_deepest_species": None,
-            "primate_max_depth": None,
-            "mammalian_n_species_aligned": None,
-            "mammalian_n_species_intact_frame": None,
-            "mammalian_frac_intact": None,
-            "mammalian_start_codon_conserved": None,
-            "mammalian_mean_pident": None,
-            "mammalian_deepest_species": None,
-            "mammalian_max_depth": None,
-            "summary": {"status": status},
-        }
+        out: dict[str, Any] = {f: None for f in _METRIC_FIELDS}
+        out.update({_canonical_key(f): None for f in _METRIC_FIELDS})
+        out["summary"] = {"status": status}
+        return out
 
 
 _COMPLEMENT = str.maketrans("ACGTNacgtn-", "TGCANtgcan-")
