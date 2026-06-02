@@ -125,5 +125,9 @@ class TestRegroupByGene:
         assert out["GENE_B"] == {"SHARED"}
 
     def test_unvalidated_peptide_absent(self):
+        # The unvalidated peptide must not appear in any gene's set, but the
+        # queried gene itself stays present with an empty set — that is how
+        # MassSpecModule tells "queried, no evidence" (E6=False) apart from
+        # "never queried" (E6=None). See _regroup_by_gene's docstring.
         peptide_to_genes = {"UNVALIDATED": {"GENE_A"}}
-        assert _regroup_by_gene(set(), peptide_to_genes) == {}
+        assert _regroup_by_gene(set(), peptide_to_genes) == {"GENE_A": set()}
