@@ -3,7 +3,10 @@
 # against the combined catalog to pull its sequence; the canonical Annotated
 # rows for these genes are kept automatically. Runs multi-sample.
 run_name = "cheeseman_13gene"
-min_cell_lines = 1
+# E4 = "detected in multiple cell lines" — 2 makes the criterion discriminate
+# (isoforms seen in a single line score False). Scoring-only; does not filter
+# which isoforms are included (the [[isoforms]] picks are explicit).
+min_cell_lines = 2
 
 [[isoforms]]
 gene = "CBX1"
