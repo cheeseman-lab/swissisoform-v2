@@ -165,12 +165,21 @@ class VariantFetcher:
     # Public API
     # ------------------------------------------------------------------
 
-    def fetch_gene(self, gene_name: str, sources: list[str] | None = None) -> list[dict[str, Any]]:
+    def fetch_gene(
+        self,
+        gene_name: str,
+        sources: list[str] | None = None,
+        locus: tuple[str, int, int] | None = None,
+    ) -> list[dict[str, Any]]:
         """Fetch variants from specified sources for a gene.
 
         Args:
             gene_name: Gene symbol (e.g. ``"TP53"``).
             sources: List of sources to query. Default: ``["gnomad", "clinvar"]``.
+            locus: Optional ``(chrom, start, end)`` genomic window. When given,
+                gnomAD is fetched by ``gene_symbol`` **union** position-in-window,
+                recovering variants that VEP assigned to an overlapping gene (the
+                extension-region dropout in flag B). ``None`` keeps symbol-only.
 
         Returns:
             List of variant dicts in the clinical module's standard hit format.
@@ -180,7 +189,7 @@ class VariantFetcher:
         all_variants: list[dict[str, Any]] = []
         for source in sources:
             if source == "gnomad":
-                all_variants.extend(self._fetch_gnomad(gene_name))
+                all_variants.extend(self._fetch_gnomad(gene_name, locus=locus))
             elif source == "clinvar":
                 all_variants.extend(self._fetch_clinvar(gene_name))
             elif source == "cosmic":
@@ -191,18 +200,28 @@ class VariantFetcher:
     # gnomAD
     # ------------------------------------------------------------------
 
-    def _fetch_gnomad(self, gene_name: str) -> list[dict[str, Any]]:
+    def _fetch_gnomad(
+        self, gene_name: str, locus: tuple[str, int, int] | None = None
+    ) -> list[dict[str, Any]]:
         """Fetch gnomAD variants for *gene_name*.
 
         Prefers the local bulk parquet (``self.gnomad_db``) when configured;
         falls back to the live GraphQL API otherwise.
         """
         if self.gnomad_db:
-            return self._fetch_gnomad_local(gene_name)
+            return self._fetch_gnomad_local(gene_name, locus=locus)
         return self._fetch_gnomad_api(gene_name)
 
-    def _fetch_gnomad_local(self, gene_name: str) -> list[dict[str, Any]]:
-        """Read gnomAD variants for *gene_name* from the bulk parquet."""
+    def _fetch_gnomad_local(
+        self, gene_name: str, locus: tuple[str, int, int] | None = None
+    ) -> list[dict[str, Any]]:
+        """Read gnomAD variants for *gene_name* from the bulk parquet.
+
+        With *locus* = ``(chrom, start, end)``, fetches by ``gene_symbol`` OR
+        position-in-window and de-duplicates by ``variant_id`` — a superset of
+        the symbol-only fetch that recovers variants VEP attributed to an
+        overlapping gene (flag B: SRSF2/UBE2M extension dropout).
+        """
         if not os.path.exists(self.gnomad_db):
             logger.warning("gnomAD parquet not found at %s — returning empty", self.gnomad_db)
             return []
@@ -210,8 +229,20 @@ class VariantFetcher:
             import pyarrow.dataset as ds
 
             dataset = ds.dataset(self.gnomad_db, format="parquet")
-            table = dataset.to_table(filter=ds.field("gene_symbol") == gene_name)
+            symbol_filter = ds.field("gene_symbol") == gene_name
+            if locus is not None:
+                chrom, start, end = locus
+                window = (
+                    (ds.field("chrom") == chrom)
+                    & (ds.field("pos") >= start)
+                    & (ds.field("pos") <= end)
+                )
+                table = dataset.to_table(filter=symbol_filter | window)
+            else:
+                table = dataset.to_table(filter=symbol_filter)
             df = table.to_pandas()
+            if locus is not None and "variant_id" in df.columns:
+                df = df.drop_duplicates(subset="variant_id")
         except Exception as exc:
             logger.error("gnomAD parquet query for %s failed: %s", gene_name, exc)
             return []

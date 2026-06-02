@@ -150,6 +150,7 @@ class ClinicalModule:
         gene_name: str,
         sources: list[str] | None = None,
         transcript_id: str = "",
+        gene_locus: tuple[str, int, int] | None = None,
     ) -> list[dict[str, Any]]:
         """Fetch variants from external databases for a gene.
 
@@ -164,6 +165,9 @@ class ClinicalModule:
             transcript_id: Optional GENCODE transcript ID. When provided along
                 with a ``ConsequenceValidator``, fetched variants are validated
                 via codon-level translation analysis.
+            gene_locus: Optional ``(chrom, start, end)`` genomic window forwarded
+                to gnomAD so variants VEP assigned to an overlapping gene (flag B)
+                are recovered.
 
         Returns:
             List of variant dicts in the standard hit format.
@@ -190,7 +194,7 @@ class ClinicalModule:
             max_retries=clinical_cfg.max_retries if clinical_cfg else 3,
             retry_delay=clinical_cfg.retry_delay if clinical_cfg else 1.0,
         )
-        variants = fetcher.fetch_gene(gene_name, sources=sources)
+        variants = fetcher.fetch_gene(gene_name, sources=sources, locus=gene_locus)
 
         # Validate if validator available and transcript known
         if self._validator and transcript_id:

@@ -446,6 +446,26 @@ def _load_generef() -> dict[str, dict] | None:
     return None
 
 
+def _gene_locus(gene) -> tuple[str, int, int] | None:
+    """``(chrom, start, end)`` bounding box over a gene's canonical + isoform ORFs.
+
+    Covers the canonical CDS and every isoform ORF — including 5′ extensions —
+    so the gnomAD fetch can pull variants by position (flag B), recovering those
+    VEP attributed to an overlapping gene. ``None`` when no genomic intervals or
+    chrom are available (e.g. skeleton not loaded).
+    """
+    chrom: str | None = None
+    intervals: list[tuple[int, int]] = list(gene.canonical_orf_exons or [])
+    for s in gene.tis_sites:
+        if chrom is None:
+            chrom = getattr(s, "chrom", None)
+        intervals.extend(s.orf_exons or [])
+        intervals.extend(s.canonical_orf_exons or [])
+    if not chrom or not intervals:
+        return None
+    return chrom, min(a for a, _ in intervals), max(b for _, b in intervals)
+
+
 def build_pipeline(cfg, preds, ref, genes, skip: set[str]) -> AnnotationPipeline:
     """Build the annotation pipeline, omitting modules in `skip`."""
     validator = ConsequenceValidator(cds_df=ref.cds_df, genome_fasta=str(GENOME))
@@ -462,7 +482,9 @@ def build_pipeline(cfg, preds, ref, genes, skip: set[str]) -> AnnotationPipeline
         for gene in genes:
             try:
                 variants = clinical_mod.fetch_variants(
-                    gene.gene_name, transcript_id=gene.canonical_transcript_id,
+                    gene.gene_name,
+                    transcript_id=gene.canonical_transcript_id,
+                    gene_locus=_gene_locus(gene),
                 )
                 clinical_mod._variant_cache[gene.gene_name] = variants
             except Exception as e:  # pragma: no cover

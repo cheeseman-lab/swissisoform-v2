@@ -31,6 +31,47 @@ class TestClinVarReviewStars:
         assert _clinvar_review_stars("") is None
         assert _clinvar_review_stars("something novel") is None
 
+
+class TestGnomadLocusUnionFetch:
+    """Flag B: locus fetch recovers variants VEP assigned to an overlapping gene."""
+
+    def _gnomad_parquet(self, tmp_path):
+        import pandas as pd
+
+        df = pd.DataFrame(
+            [
+                # In-locus, correctly attributed to SRSF2.
+                dict(chrom="chr17", pos=100, ref="C", alt="T", variant_id="17-100-C-T",
+                     allele_frequency=1e-4, consequence="missense_variant",
+                     gene_symbol="SRSF2", hgvsp="p.A1V", hgvsc="c.1C>T", protein_position=1),
+                # In-locus but VEP assigned to the OVERLAPPING gene METTL23 —
+                # the symbol filter misses it; the locus union must recover it.
+                dict(chrom="chr17", pos=150, ref="G", alt="A", variant_id="17-150-G-A",
+                     allele_frequency=2e-4, consequence="missense_variant",
+                     gene_symbol="METTL23", hgvsp="p.G5S", hgvsc="c.13G>A", protein_position=5),
+                # Out of locus — must NOT be recovered.
+                dict(chrom="chr17", pos=9999, ref="A", alt="G", variant_id="17-9999-A-G",
+                     allele_frequency=3e-4, consequence="missense_variant",
+                     gene_symbol="OTHER", hgvsp="p.K9R", hgvsc="c.26A>G", protein_position=9),
+            ]
+        )
+        p = tmp_path / "gnomad.parquet"
+        df.to_parquet(p)
+        return p
+
+    def test_symbol_only_misses_overlap_variant(self, tmp_path):
+        fetcher = VariantFetcher(gnomad_db=str(self._gnomad_parquet(tmp_path)))
+        hits = fetcher.fetch_gene("SRSF2", sources=["gnomad"])
+        ids = {h["variant_id"] for h in hits}
+        assert ids == {"17-100-C-T"}  # only the SRSF2-attributed variant
+
+    def test_locus_union_recovers_overlap_variant(self, tmp_path):
+        fetcher = VariantFetcher(gnomad_db=str(self._gnomad_parquet(tmp_path)))
+        hits = fetcher.fetch_gene("SRSF2", sources=["gnomad"], locus=("chr17", 50, 200))
+        ids = {h["variant_id"] for h in hits}
+        # Recovers the METTL23-attributed in-locus variant; excludes out-of-locus.
+        assert ids == {"17-100-C-T", "17-150-G-A"}
+
 # ---------------------------------------------------------------------------
 # Mock response data
 # ---------------------------------------------------------------------------
