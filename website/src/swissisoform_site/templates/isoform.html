@@ -30,6 +30,31 @@
     <p class="iso-head-tis"><span class="font-mono text-xs text-slate-500">{{ isoform.tis_id }}</span></p>
   </header>
 
+  <!-- AI summary — pinned to the top, collapsible. -->
+  <details class="synthesis synthesis-dd" open>
+    <summary class="synthesis-summary">
+      <span class="synthesis-badge">AI summary</span>
+      {% if synthesis and synthesis.headline %}
+        <span class="synthesis-headline-inline">{{ synthesis.headline }}</span>
+      {% endif %}
+    </summary>
+    <div class="synthesis-body">
+      {% if synthesis %}
+        <div class="syn-narrative">{{ (synthesis.narrative_html or synthesis.narrative or '') | safe }}</div>
+        {% if synthesis.key_findings %}
+          <ul class="syn-findings">
+            {% for f in synthesis.key_findings %}<li>{{ f }}</li>{% endfor %}
+          </ul>
+        {% endif %}
+        {% if synthesis.caveats %}
+          <p class="syn-caveats"><em>{{ synthesis.caveats }}</em></p>
+        {% endif %}
+      {% else %}
+        <p class="empty">LLM synthesis not yet generated for this isoform.</p>
+      {% endif %}
+    </div>
+  </details>
+
   <!-- Pinned graph panels — vertically stacked. -->
   <section class="iso-panels">
     <div class="iso-panel iso-panel-protein">
@@ -47,25 +72,6 @@
       <h2 class="iso-panel-h">Folding</h2>
       {% include "_folding_panel.html" %}
     </div>
-  </section>
-
-  <!-- Synthesis narrative (open by default) -->
-  <section class="synthesis">
-    <h2>Synthesis</h2>
-    {% if synthesis %}
-      <p class="syn-headline"><strong>{{ synthesis.headline }}</strong></p>
-      <div class="syn-narrative">{{ (synthesis.narrative_html or synthesis.narrative or '') | safe }}</div>
-      {% if synthesis.key_findings %}
-        <ul class="syn-findings">
-          {% for f in synthesis.key_findings %}<li>{{ f }}</li>{% endfor %}
-        </ul>
-      {% endif %}
-      {% if synthesis.caveats %}
-        <p class="syn-caveats"><em>{{ synthesis.caveats }}</em></p>
-      {% endif %}
-    {% else %}
-      <p class="empty">LLM synthesis not yet generated for this isoform.</p>
-    {% endif %}
   </section>
 
   <!-- 12 evidence tiles — each modal now hosts its own differential-region evidence -->
