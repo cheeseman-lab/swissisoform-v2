@@ -6,9 +6,30 @@ import json
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from swissisoform.clinical.fetch import VariantFetcher
+from swissisoform.clinical.fetch import VariantFetcher, _clinvar_review_stars
 from swissisoform.config import PipelineConfig
 from swissisoform.modules.clinical import ClinicalModule
+
+
+class TestClinVarReviewStars:
+    """Flag F: ClinVar ReviewStatus → 0–4 gold-star rating."""
+
+    def test_known_review_levels(self):
+        assert _clinvar_review_stars("practice guideline") == 4
+        assert _clinvar_review_stars("reviewed by expert panel") == 3
+        assert (
+            _clinvar_review_stars("criteria provided, multiple submitters, no conflicts") == 2
+        )
+        assert _clinvar_review_stars("criteria provided, single submitter") == 1
+        assert _clinvar_review_stars("no assertion criteria provided") == 0
+
+    def test_case_insensitive_and_whitespace(self):
+        assert _clinvar_review_stars("  Reviewed By Expert Panel  ") == 3
+
+    def test_none_and_unknown(self):
+        assert _clinvar_review_stars(None) is None
+        assert _clinvar_review_stars("") is None
+        assert _clinvar_review_stars("something novel") is None
 
 # ---------------------------------------------------------------------------
 # Mock response data

@@ -48,6 +48,30 @@ def _str_or_empty(val: Any) -> str:
     return "" if _nz(val) is None else str(val)
 
 
+# ClinVar review-status → star rating (0–4), the standard ClinVar gold-star
+# scale. Higher = stronger review backing for the clinical interpretation.
+_CLINVAR_REVIEW_STARS = {
+    "practice guideline": 4,
+    "reviewed by expert panel": 3,
+    "criteria provided, multiple submitters, no conflicts": 2,
+    "criteria provided, conflicting classifications": 1,
+    "criteria provided, conflicting interpretations": 1,
+    "criteria provided, single submitter": 1,
+    "no assertion criteria provided": 0,
+    "no assertion provided": 0,
+    "no classification provided": 0,
+    "no classifications from unflagged records": 0,
+    "no assertion for the individual variant": 0,
+}
+
+
+def _clinvar_review_stars(review_status: str | None) -> int | None:
+    """Map a ClinVar ReviewStatus string to its 0–4 gold-star rating (or None)."""
+    if not review_status:
+        return None
+    return _CLINVAR_REVIEW_STARS.get(review_status.strip().lower())
+
+
 GNOMAD_QUERY = """
 query VariantsInGene($geneSymbol: String!, $referenceGenome: ReferenceGenomeId!) {
   gene(gene_symbol: $geneSymbol, reference_genome: $referenceGenome) {
@@ -344,6 +368,7 @@ class VariantFetcher:
                 f"chr{chrom_raw}" if chrom_raw and not chrom_raw.startswith("chr") else chrom_raw
             )
             clin_sig = _str_or_empty(r.get("ClinicalSignificance")) or None
+            review_status = _str_or_empty(r.get("ReviewStatus")) or None
 
             hits.append(
                 {
@@ -362,6 +387,8 @@ class VariantFetcher:
                         "title": title,
                         "rs_id": r.get("RS# (dbSNP)") or None,
                         "hgvsp_canonical_hint": parse_hgvsp_position(hgvsp),
+                        "review_status": review_status,
+                        "review_stars": _clinvar_review_stars(review_status),
                     },
                 }
             )
