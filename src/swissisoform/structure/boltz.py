@@ -118,6 +118,80 @@ def _parse_confidence_json(path: Path) -> tuple[list[float] | None, float | None
     return plddt, conf.get("ptm"), conf.get("iptm")
 
 
+def _recover_per_residue_plddt(
+    plddt: list[float] | None, cif_path: Path | None
+) -> list[float] | None:
+    """Prefer real per-residue pLDDT from the CIF B-factor column.
+
+    Boltz-2 v2.2.x writes only the scalar ``complex_plddt`` to
+    ``confidence.json`` (so the parsed per-residue list is ``None``) — or, in
+    other versions, a uniform fill — yet still emits genuine per-residue values
+    in the CIF B-factor column. Recover from the CIF whenever the JSON list is
+    missing *or* uniform; otherwise return ``plddt`` unchanged. Returns the
+    original value (possibly ``None``) when the CIF can't improve on it, so the
+    caller's uniform-scalar fallback still applies.
+    """
+    needs_cif = cif_path is not None and (
+        plddt is None or (len(plddt) > 0 and (max(plddt) - min(plddt)) < 1e-6)
+    )
+    if not needs_cif:
+        return plddt
+    cif_plddt = _parse_plddt_from_cif(cif_path)
+    if cif_plddt is not None and len(set(cif_plddt)) > 1:
+        return cif_plddt
+    return plddt
+
+
+def repair_uniform_plddt_cache(
+    cache_dir: Path | str = DEFAULT_CACHE_DIR, backend: str = "boltz"
+) -> list[str]:
+    """Re-derive per-residue pLDDT for cached entries stuck at ``uniform_plddt``.
+
+    Entries written before CIF recovery covered the ``plddt is None`` case carry
+    a planted-scalar ``confidence.json`` and ``status='uniform_plddt'`` even
+    though their ``model.cif`` holds real per-residue B-factors. This rewrites
+    ``confidence.json`` + ``metrics.json`` (status ``ok``) in place from the
+    existing CIF — no refold, no GPU. Entries whose CIF genuinely lacks varied
+    per-residue values are left untouched.
+
+    Returns the list of repaired hashes.
+    """
+    root = Path(cache_dir) / backend
+    repaired: list[str] = []
+    if not root.is_dir():
+        return repaired
+    for base in sorted(p for p in root.iterdir() if p.is_dir()):
+        metrics_p = base / "metrics.json"
+        cif_p = base / "model.cif"
+        if not metrics_p.is_file() or not cif_p.is_file():
+            continue
+        try:
+            metrics = json.loads(metrics_p.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if metrics.get("status") != "uniform_plddt":
+            continue
+        cif_plddt = _parse_plddt_from_cif(cif_p)
+        if cif_plddt is None or len(set(cif_plddt)) <= 1:
+            logger.warning(
+                "repair: %s CIF has no usable per-residue pLDDT; left as-is", base.name
+            )
+            continue
+        ptm = metrics.get("ptm")
+        new_metrics = derive_metrics(backend=backend, plddt=cif_plddt, ptm=ptm, status="ok")
+        confidence = {"plddt": [float(v) for v in cif_plddt], "ptm": ptm, "iptm": None}
+        write_cache(
+            base.name, cache_dir=cache_dir, backend=backend,
+            confidence=confidence, metrics=new_metrics,
+        )
+        repaired.append(base.name)
+        logger.info(
+            "repair: %s uniform_plddt -> ok (%d residues, mean=%.3f)",
+            base.name, len(cif_plddt), new_metrics["plddt_mean"],
+        )
+    return repaired
+
+
 def fold_one(
     h: str,
     seq: str,
@@ -216,28 +290,20 @@ def fold_one(
             if conf_files:
                 conf_files.sort()
                 plddt, ptm, _iptm = _parse_confidence_json(conf_files[0])
-                # Boltz-2 v2.2.x writes a uniform-value list to
-                # confidence.json (every position = complex_plddt); the
-                # real per-residue lives in the CIF B-factor column.
-                # Prefer the CIF when JSON pLDDT is suspiciously uniform.
-                # Treat as uniform if min == max OR the spread is below a
-                # tiny numerical jitter floor — Boltz writes the same float
-                # to every position, so set-cardinality works in practice,
-                # but defending against floating-point jitter is cheap.
-                _is_uniform = (
-                    plddt is not None
-                    and len(plddt) > 0
-                    and (max(plddt) - min(plddt)) < 1e-6
+                # The CIF B-factor column carries genuine per-residue pLDDT even
+                # when confidence.json is missing the list entirely (None, the
+                # Boltz-2 v2.2.x shape) or filled with a uniform scalar. Recover
+                # from it before resorting to the planted-scalar fallback.
+                recovered = _recover_per_residue_plddt(
+                    plddt, cif_files[0] if cif_files else None
                 )
-                if _is_uniform and cif_files:
-                    cif_plddt = _parse_plddt_from_cif(cif_files[0])
-                    if cif_plddt is not None and len(set(cif_plddt)) > 1:
-                        logger.info(
-                            "boltz: %s confidence.json pLDDT uniform; "
-                            "recovered %d per-residue values from CIF B-factor",
-                            h, len(cif_plddt),
-                        )
-                        plddt = cif_plddt
+                if recovered is not plddt and recovered is not None:
+                    logger.info(
+                        "boltz: %s confidence.json pLDDT missing/uniform; "
+                        "recovered %d per-residue values from CIF B-factor",
+                        h, len(recovered),
+                    )
+                plddt = recovered
                 if plddt is None:
                     # No per-residue pLDDT in confidence JSON; fall back to
                     # the scalar ``complex_plddt`` as a UNIFORM per-residue
