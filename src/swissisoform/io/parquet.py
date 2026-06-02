@@ -219,6 +219,39 @@ def _flatten_annotations(prefix: str, annotations: dict[str, dict[str, Any]]) ->
     return out
 
 
+def _genomic_unique_shared(
+    orf_type: Any,
+    orf_exons: list[tuple[int, int]] | None,
+    canonical_orf_exons: list[tuple[int, int]] | None,
+) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    r"""Compute the genomic unique and shared interval sets per ORF type.
+
+    Mirrors the ORF-type-aware unique definition used by
+    :class:`VariantIntersectionModule` / conservation / conservation_frame —
+    extensions / uORFs / altORFs contribute new isoform sequence
+    (``isoform_orf \ canonical_orf``); truncations *lose* canonical
+    sequence (``canonical_orf \ isoform_orf``). The shared set is the
+    intersection in both cases. Empty lists are returned when either ORF
+    skeleton is missing.
+
+    Surfacing these in the parquet lets downstream codebases — genome
+    language models, motif callers, off-target tools — pull DNA over
+    arbitrary windows around the *biologically meaningful* region of each
+    TIS without re-running the assembly layer.
+    """
+    from swissisoform.coords import interval_difference, interval_intersection
+    from swissisoform.models import ORFType
+
+    if not orf_exons or not canonical_orf_exons:
+        return [], []
+    if orf_type == ORFType.TRUNCATED:
+        unique = interval_difference(canonical_orf_exons, orf_exons)
+    else:
+        unique = interval_difference(orf_exons, canonical_orf_exons)
+    shared = interval_intersection(orf_exons, canonical_orf_exons)
+    return unique, shared
+
+
 def _diff_location(diff: Any) -> tuple[int | None, int | None, str | None]:
     """Collapse a DifferentialRegion to a single (start, end, space) triple.
 
@@ -278,6 +311,17 @@ def paired_tis_dataframe(genes: list[Gene]) -> pd.DataFrame:
             # different reference proteins in the same row — surface this so
             # consumers can detect it instead of being silently inconsistent.
             per_tid_len = len(site.canonical_protein.rstrip("*"))
+            # Serialize the per-TIS ORF exon intervals + the derived genomic
+            # unique / shared sets so downstream codebases (genome language
+            # models, motif scanners, off-target callers) can extract DNA over
+            # arbitrary windows around the isoform without re-running our
+            # assembly layer. All intervals are 0-based half-open plus-strand
+            # genomic coords; strand is in the ``strand`` column.
+            orf_exons = [list(t) for t in (site.orf_exons or [])]
+            canonical_orf_exons = [list(t) for t in (site.canonical_orf_exons or [])]
+            unique_genomic_intervals, shared_genomic_intervals = _genomic_unique_shared(
+                site.orf_type, site.orf_exons, site.canonical_orf_exons
+            )
             row: dict[str, Any] = {
                 "gene_name": gene.gene_name,
                 "gene_id": gene.gene_id,
@@ -299,6 +343,10 @@ def paired_tis_dataframe(genes: list[Gene]) -> pd.DataFrame:
                 "diff_start": diff_start,
                 "diff_end": diff_end,
                 "diff_space": diff_space,
+                "orf_exons": orf_exons,
+                "canonical_orf_exons": canonical_orf_exons,
+                "unique_genomic_intervals": [list(t) for t in unique_genomic_intervals],
+                "shared_genomic_intervals": [list(t) for t in shared_genomic_intervals],
                 "kozak_context": site.kozak_context,
                 "tis_pvalue": site.tis_pvalue,
                 "ribo_pvalue": site.ribo_pvalue,

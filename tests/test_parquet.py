@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pandas as pd
 
-from swissisoform.io.parquet import dataframe_to_tis, genes_to_dataframe, tis_to_dataframe
+from swissisoform.io.parquet import (
+    dataframe_to_tis,
+    genes_to_dataframe,
+    paired_tis_dataframe,
+    tis_to_dataframe,
+)
 from swissisoform.models import (
     CellLineExpression,
     DifferentialRegion,
@@ -160,3 +165,156 @@ class TestGenesToDataframe:
         assert df["canonical_protein"].iloc[0] == "MVLSPADKTNVK"
         assert "summary_score" in df.columns
         assert df["summary_score"].iloc[0] == 0.8
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# paired_tis_dataframe — genomic ORF intervals for downstream GLM handoff
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _gene_with_orf_exons(
+    *,
+    orf_type: ORFType,
+    orf_exons: list[tuple[int, int]],
+    canonical_orf_exons: list[tuple[int, int]],
+    strand: str = "+",
+    iso_protein: str = "MVLSPADKTNVK",
+    canonical_protein: str = "MVLSPADKTNVKAAWGKVGAHAGEYG",
+) -> Gene:
+    """Synthetic Gene with a single TIS carrying explicit ORF exon intervals."""
+    site = TranslationInitiationSite(
+        tis_id=f"chr1:100:{strand}:ATG:ENST_TEST.1",
+        gene_name="GENE",
+        transcript_id="ENST_TEST.1",
+        chrom="chr1",
+        position=100,
+        strand=strand,
+        start_codon="ATG",
+        orf_type=orf_type,
+        aa_len=len(iso_protein),
+        canonical_protein=canonical_protein,
+        isoform_protein=iso_protein,
+        diff_region=DifferentialRegion(sequence="X"),
+        orf_exons=orf_exons,
+        canonical_orf_exons=canonical_orf_exons,
+        expression={
+            "HeLa": CellLineExpression(raw_count=1, cpm=1.0, p_value=1.0),
+        },
+    )
+    return Gene(
+        gene_name="GENE",
+        gene_id="ENSG_TEST",
+        canonical_transcript_id="ENST_TEST.1",
+        canonical_protein=canonical_protein,
+        tis_sites=[site],
+    )
+
+
+class TestPairedDataframeGenomicIntervals:
+    """Verify the GLM-handoff fields land in the paired dataframe correctly."""
+
+    EXPECTED_COLS = (
+        "orf_exons",
+        "canonical_orf_exons",
+        "unique_genomic_intervals",
+        "shared_genomic_intervals",
+    )
+
+    def test_columns_present(self) -> None:
+        gene = _gene_with_orf_exons(
+            orf_type=ORFType.EXTENDED,
+            orf_exons=[(100, 200), (300, 400)],
+            canonical_orf_exons=[(150, 200), (300, 400)],
+        )
+        df = paired_tis_dataframe([gene])
+        for c in self.EXPECTED_COLS:
+            assert c in df.columns, f"missing column: {c}"
+
+    def test_extension_unique_is_isoform_minus_canonical(self) -> None:
+        r"""Extension: unique = isoform_orf \ canonical_orf (the added 5' region)."""
+        gene = _gene_with_orf_exons(
+            orf_type=ORFType.EXTENDED,
+            orf_exons=[(100, 200), (300, 400)],  # isoform adds [100,150)
+            canonical_orf_exons=[(150, 200), (300, 400)],
+        )
+        df = paired_tis_dataframe([gene])
+        row = df.iloc[0]
+        assert list(map(tuple, row["orf_exons"])) == [(100, 200), (300, 400)]
+        assert list(map(tuple, row["canonical_orf_exons"])) == [(150, 200), (300, 400)]
+        # Unique = the new extension exon segment [100, 150).
+        assert list(map(tuple, row["unique_genomic_intervals"])) == [(100, 150)]
+        # Shared = the body the two ORFs overlap on.
+        assert list(map(tuple, row["shared_genomic_intervals"])) == [
+            (150, 200),
+            (300, 400),
+        ]
+
+    def test_truncation_unique_is_canonical_minus_isoform(self) -> None:
+        r"""Truncation: unique = canonical_orf \ isoform_orf (the LOST N-terminus)."""
+        gene = _gene_with_orf_exons(
+            orf_type=ORFType.TRUNCATED,
+            orf_exons=[(150, 200), (300, 400)],  # isoform starts later
+            canonical_orf_exons=[(100, 200), (300, 400)],
+        )
+        df = paired_tis_dataframe([gene])
+        row = df.iloc[0]
+        # Unique = the LOST canonical N-terminus [100, 150).
+        assert list(map(tuple, row["unique_genomic_intervals"])) == [(100, 150)]
+        # Shared = everything the truncated isoform retains.
+        assert list(map(tuple, row["shared_genomic_intervals"])) == [
+            (150, 200),
+            (300, 400),
+        ]
+
+    def test_minus_strand_intervals_emitted_in_plus_coords(self) -> None:
+        """orf_exons are documented as 0-based half-open *plus-strand* — verify
+        we don't accidentally strand-flip the coordinates on serialization.
+        """
+        gene = _gene_with_orf_exons(
+            orf_type=ORFType.EXTENDED,
+            orf_exons=[(1000, 1200), (2000, 2300)],
+            canonical_orf_exons=[(1100, 1200), (2000, 2300)],
+            strand="-",
+        )
+        df = paired_tis_dataframe([gene])
+        row = df.iloc[0]
+        assert row["strand"] == "-"
+        # Coords ascend even though the mRNA is read 3'→5' on the plus strand.
+        assert list(map(tuple, row["orf_exons"])) == [(1000, 1200), (2000, 2300)]
+        # Unique = the minus-strand-mRNA-leading extension exon segment.
+        assert list(map(tuple, row["unique_genomic_intervals"])) == [(1000, 1100)]
+
+    def test_missing_skeleton_yields_empty_lists(self) -> None:
+        """If either orf_exons or canonical_orf_exons is empty (no skeleton)
+        we don't synthesize fake intervals — both derived sets are empty.
+        """
+        gene = _gene_with_orf_exons(
+            orf_type=ORFType.EXTENDED,
+            orf_exons=[],
+            canonical_orf_exons=[],
+        )
+        df = paired_tis_dataframe([gene])
+        row = df.iloc[0]
+        assert list(row["orf_exons"]) == []
+        assert list(row["canonical_orf_exons"]) == []
+        assert list(row["unique_genomic_intervals"]) == []
+        assert list(row["shared_genomic_intervals"]) == []
+
+    def test_parquet_round_trip_preserves_interval_lists(self, tmp_path) -> None:
+        """Write to parquet + read back — interval lists survive the trip."""
+        gene = _gene_with_orf_exons(
+            orf_type=ORFType.EXTENDED,
+            orf_exons=[(100, 200), (300, 400)],
+            canonical_orf_exons=[(150, 200), (300, 400)],
+        )
+        df = paired_tis_dataframe([gene])
+        path = tmp_path / "paired.parquet"
+        df.to_parquet(path, index=False)
+        back = pd.read_parquet(path)
+        for c in self.EXPECTED_COLS:
+            assert c in back.columns
+        # The round-tripped values should match the originals coordinate-wise.
+        for c in self.EXPECTED_COLS:
+            orig = [tuple(x) for x in df[c].iloc[0]]
+            roundtripped = [tuple(x) for x in back[c].iloc[0]]
+            assert orig == roundtripped, f"round-trip failed for {c}"

@@ -447,8 +447,23 @@ class InterProScanModule:
             }
         summary = dict(pred.get("summary", {"n_hits": 0, "n_databases": 0, "n_interpro": 0}))
         summary.setdefault("status", "ok")
+        # Sort hits deterministically — the underlying Nextflow pipeline runs
+        # member-DB scans in parallel and the resulting hit order isn't stable
+        # across reruns, which makes back-to-back parquets diff on this one
+        # column for no semantic reason. Sort by (pos, end, signature name)
+        # so the *set* (already identical) becomes a deterministic *list*.
+        raw_hits = pred.get("hits", [])
+        hits = sorted(
+            raw_hits,
+            key=lambda h: (
+                h.get("pos") if isinstance(h.get("pos"), int) else 10**9,
+                h.get("end") if isinstance(h.get("end"), int) else 10**9,
+                str(h.get("name", "")),
+                str(h.get("source", "")),
+            ),
+        )
         return {
-            "hits": pred.get("hits", []),
+            "hits": hits,
             "summary": summary,
         }
 

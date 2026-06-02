@@ -209,40 +209,31 @@ class ConservationFrameModule:
         primate_deepest = self._deepest_intact(primate_results)
         mammalian_deepest = self._deepest_intact(mammalian_results)
 
-        # ``start_codon_conserved`` reports conservation of the first codon of
-        # the unique region. For extensions/uORFs/altORFs that IS the TIS's
-        # alt-start codon, so the metric is semantically "alt-start codon
-        # conserved across orthologs". For TRUNCATIONS the unique region is
-        # canonical \ isoform — its first codon is the CANONICAL Met (always
-        # ATG in hg38), not the isoform's alt-start. The metric would then
-        # measure canonical-Met conservation, which is a different question
-        # from "alt-start conserved" and would mislead a reader who took the
-        # column name at face value. Emit None for truncations with an
-        # explicit reason in the summary.
-        if site.orf_type == ORFType.TRUNCATED:
-            primate_start = None
-            mammalian_start = None
-            start_codon_note = (
-                "not_applicable_truncation: unique region starts at the "
-                "canonical Met, not the isoform alt-start"
-            )
-        else:
-            primate_start = primate_agg["start_codon_conserved"]
-            mammalian_start = mammalian_agg["start_codon_conserved"]
-            start_codon_note = None
+        # ``start_codon_conserved`` reports cross-ortholog conservation of the
+        # first codon of the differential (unique) region. This is meaningful
+        # for both ORF types — what changes is the interpretation:
+        #   * extension/uORF/altORF — diff region starts with the isoform's
+        #     alt-start codon (CTG/GTG/ATT/…); metric reports whether the
+        #     alt-start trinucleotide is conserved across orthologs.
+        #   * truncation — diff region starts with the canonical Met (ATG)
+        #     that the isoform skips; metric reports whether that canonical
+        #     start codon is conserved across orthologs. We care about this
+        #     too: it tells us how strongly the lost initiator is defended.
+        # The data extraction is symmetric; downstream interpretation differs
+        # (gain-of-alt-start signal vs loss-of-canonical-start signal).
 
         return {
             "primate_n_species_aligned": primate_agg["n_species_aligned"],
             "primate_n_species_intact_frame": primate_agg["n_species_intact_frame"],
             "primate_frac_intact": primate_agg["frac_intact"],
-            "primate_start_codon_conserved": primate_start,
+            "primate_start_codon_conserved": primate_agg["start_codon_conserved"],
             "primate_mean_pident": primate_agg["mean_pident"],
             "primate_deepest_species": primate_deepest[0],
             "primate_max_depth": primate_deepest[1],
             "mammalian_n_species_aligned": mammalian_agg["n_species_aligned"],
             "mammalian_n_species_intact_frame": mammalian_agg["n_species_intact_frame"],
             "mammalian_frac_intact": mammalian_agg["frac_intact"],
-            "mammalian_start_codon_conserved": mammalian_start,
+            "mammalian_start_codon_conserved": mammalian_agg["start_codon_conserved"],
             "mammalian_mean_pident": mammalian_agg["mean_pident"],
             "mammalian_deepest_species": mammalian_deepest[0],
             "mammalian_max_depth": mammalian_deepest[1],
@@ -252,7 +243,6 @@ class ConservationFrameModule:
                 "unique_region_nt": sum(e - s for s, e in unique),
                 "hal_path": str(self._hal_path),
                 "tree_loaded": bool(self._depth_map),
-                "start_codon_note": start_codon_note,
             },
         }
 

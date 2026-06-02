@@ -256,7 +256,18 @@ def _e6_mass_spec(
 def _f1_structured_extension(
     site: TranslationInitiationSite, cfg: ScoringConfig
 ) -> CriterionResult:
-    """F1: structured extension — diff-region pLDDT exceeds threshold.
+    """F1: structured differential region — diff-region pLDDT exceeds threshold.
+
+    The metric is symmetric across ORF types — it asks "is the differential
+    region structured?" — and the interpretation differs by direction:
+
+    * extension/uORF/altORF — the diff region is the NEW N-terminal sequence
+      the isoform adds; a high diff-region pLDDT indicates a well-folded
+      addition (possibly a new functional domain).
+    * truncation — the diff region is the canonical N-terminal sequence the
+      isoform LOSES; a high diff-region pLDDT indicates that what was lost
+      was structured (potentially functional). Same measurement, opposite
+      narrative.
 
     Reads ``site.isoform_annotations['structure']`` written by
     ``StructureModule``.  Returns ``None`` when:
@@ -321,17 +332,24 @@ def _f2_localization_change(
 def _f3_domain_change(
     site: TranslationInitiationSite, cfg: ScoringConfig  # noqa: ARG001
 ) -> CriterionResult:
-    """F3: domain gain/loss — fires when an InterProScan hit *starts in* the diff region.
+    """F3: domain gain/loss — InterProScan hit STARTS in the differential region.
+
+    Symmetric across ORF types — the metric asks "is there a domain in the
+    differential region?" and the interpretation flips by direction:
+
+    * extension/uORF/altORF — diff region is added; an InterProScan hit
+      starting there represents a GAINED domain.
+    * truncation — diff region is lost; a hit starting there represents a
+      LOST canonical domain.
 
     The comparator's positional subset emits every domain whose interval
     *overlaps* the diff region; for long domains a 1–2 aa boundary touch
-    counts as overlap, which would call a body domain a "domain gain in
-    the extension." This criterion tightens the rule to: the hit's
+    counts as overlap, which would call a body domain a "domain in the diff
+    region" spuriously. This criterion tightens the rule to: the hit's
     ``pos`` (its start residue) must fall inside the diff window. For
-    extensions the diff window is ``[diff_isoform_start, diff_isoform_end)``
-    in isoform-frame; for truncations it's ``[diff_canonical_start,
-    diff_canonical_end)`` in canonical-frame. The comparator's
-    ``hits_source_pane`` field tells us which side we're looking at.
+    extensions the diff window is in isoform-frame; for truncations it's in
+    canonical-frame — the comparator's ``hits_source_pane`` field tells us
+    which side we're looking at.
 
     Returns ``None`` when:
 
