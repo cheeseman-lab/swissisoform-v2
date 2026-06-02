@@ -1,20 +1,17 @@
-{# Side-by-side Mol* folding viewers — canonical | isoform.
+{# Side-by-side interactive folding viewers — canonical | isoform (3Dmol.js).
 
-   Context vars expected (set by isoform_page view):
-     - canonical_cif   : filename in /structures/ (or None)
-     - isoform_cif     : filename in /structures/ (or None)
-     - diff_start      : 0-based int (residue index, inclusive)
-     - diff_end        : 0-based int (residue index, exclusive)
-     - diff_space      : "canonical" | "isoform" — which structure carries the diff region
-     - canonical_length_aa : int | None
-     - isoform_length_aa   : int | None
+   Each structure loads into a rotatable 3Dmol viewer and is coloured from a
+   precomputed per-residue palette (scripts/build_folding_colors.py): the whole
+   protein by Boltz pLDDT, with the differential region recoloured on a distinct
+   diverging ramp on whichever structure carries it (canonical for truncations,
+   isoform for extensions). The recolouring is done offline; the viewer just
+   displays it. A CIF download is offered for deeper exploration / overlays.
 
-   Each structure renders in its own viewer, coloured by Boltz pLDDT confidence
-   (blue = high, orange/red = low). Side-by-side (rather than overlaid) so the
-   reader can judge whether the *shared* region folds the same — an N-terminal
-   truncation/extension need not leave the rest of the fold unchanged. The
-   differential region's sequence location is shown in the 2D protein track
-   above and named in the caption here.
+   Context vars (set by isoform_page view):
+     - canonical_cif / isoform_cif       : CIF filename in /structures/ (or None)
+     - canonical_colors / isoform_colors : colour-map filename in /structure-colors/ (or None)
+     - diff_start (0-based incl) / diff_end (0-based excl) / diff_space
+     - canonical_length_aa / isoform_length_aa : int | None
 #}
 {% set diff_lo_1based = (diff_start or 0) + 1 %}
 {% set diff_hi_1based = diff_end if diff_end is not none else 0 %}
@@ -29,6 +26,9 @@
     {% else %}
     <div class="molstar-viewer-mini molstar-empty">Canonical structure not predicted</div>
     {% endif %}
+    {% if canonical_cif %}
+    <a class="folding-download" href="{{ url_for('structures', filename=canonical_cif) }}" download>Download CIF</a>
+    {% endif %}
   </div>
   <div class="folding-half">
     <div class="folding-title">Isoform{% if isoform_length_aa %} ({{ isoform_length_aa }} aa){% endif %}</div>
@@ -37,47 +37,55 @@
     {% else %}
     <div class="molstar-viewer-mini molstar-empty">Isoform structure not predicted</div>
     {% endif %}
+    {% if isoform_cif %}
+    <a class="folding-download" href="{{ url_for('structures', filename=isoform_cif) }}" download>Download CIF</a>
+    {% endif %}
   </div>
 </div>
 <div class="folding-legend">
   <span>Coloured by Boltz pLDDT confidence (blue = high, orange/red = low).</span>
   {% if has_diff %}
-  <span>Differential region: residues {{ hi_lo_label }} ({{ 'lost from canonical' if diff_space == 'canonical' else 'added in isoform' }}) — see the protein track above.</span>
+  <span>Differential region — residues {{ hi_lo_label }} ({{ 'lost from canonical' if diff_space == 'canonical' else 'added in isoform' }}) — recoloured on a yellow→purple pLDDT ramp so it stands out.</span>
   {% endif %}
+  <span class="folding-explore">Drag to rotate · scroll to zoom · download a CIF to explore in your own viewer.</span>
 </div>
 
 <script>
 (function() {
   var CANONICAL_URL = {{ (url_for('structures', filename=canonical_cif) if canonical_cif else '')|tojson }};
   var ISOFORM_URL   = {{ (url_for('structures', filename=isoform_cif) if isoform_cif else '')|tojson }};
+  var CANONICAL_COLORS = {{ (url_for('structure_colors', filename=canonical_colors) if canonical_colors else '')|tojson }};
+  var ISOFORM_COLORS   = {{ (url_for('structure_colors', filename=isoform_colors) if isoform_colors else '')|tojson }};
 
-  function loadFoldingViewers() {
-    if (typeof molstar === 'undefined') {
+  function mount() {
+    if (typeof $3Dmol === 'undefined' || typeof window.swissFolding !== 'function') {
       ['folding-viewer-canonical', 'folding-viewer-isoform'].forEach(function (id) {
         var el = document.getElementById(id);
-        if (el) el.innerHTML = '<div class="molstar-fallback">Mol* failed to load from CDN.</div>';
+        if (el) el.innerHTML = '<div class="molstar-fallback">3Dmol failed to load from CDN.</div>';
       });
       return;
     }
-    if (CANONICAL_URL) window.swissisoformViewer('folding-viewer-canonical', CANONICAL_URL);
-    if (ISOFORM_URL) window.swissisoformViewer('folding-viewer-isoform', ISOFORM_URL);
+    if (CANONICAL_URL) window.swissFolding('folding-viewer-canonical', CANONICAL_URL, CANONICAL_COLORS);
+    if (ISOFORM_URL) window.swissFolding('folding-viewer-isoform', ISOFORM_URL, ISOFORM_COLORS);
   }
 
-  // Defer the CIF fetch + WebGL init until the folding panel scrolls into view;
-  // Mol* itself is loaded deferred, so wait for it before starting.
+  // Defer CIF fetch + WebGL init until the panel scrolls into view; wait for the
+  // deferred 3Dmol bundle + helper to be present first.
   var panel = document.getElementById('folding-panel');
-  if (!panel) { loadFoldingViewers(); return; }
+  if (!panel) { mount(); return; }
   var started = false;
   function start() {
     if (started) return;
-    if (typeof molstar === 'undefined') {
+    if (typeof $3Dmol === 'undefined' || typeof window.swissFolding !== 'function') {
       var t = setInterval(function () {
-        if (typeof molstar !== 'undefined') { clearInterval(t); started = true; loadFoldingViewers(); }
+        if (typeof $3Dmol !== 'undefined' && typeof window.swissFolding === 'function') {
+          clearInterval(t); started = true; mount();
+        }
       }, 30);
       return;
     }
     started = true;
-    loadFoldingViewers();
+    mount();
   }
   var io = new IntersectionObserver(function (entries) {
     if (entries.some(function (e) { return e.isIntersecting; })) { start(); io.disconnect(); }

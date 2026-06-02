@@ -3,8 +3,7 @@
 
 {% block head_extra %}
   {% if canonical_cif or isoform_cif %}
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/molstar@4/build/viewer/molstar.css">
-  <script defer src="https://cdn.jsdelivr.net/npm/molstar@4/build/viewer/molstar.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/3dmol@2.4.2/build/3Dmol-min.js"></script>
   {% endif %}
 {% endblock %}
 
@@ -124,6 +123,6 @@
     else { var t = setInterval(function () { if (window.Plotly) { clearInterval(t); swissRenderPlots(); } }, 30); }
   }); }
 </script>
-<script src="{{ url_for('static', filename='js/molstar_setup.js') }}"></script>
+<script src="{{ url_for('static', filename='js/folding3d.js') }}"></script>
 <script src="{{ url_for('static', filename='js/isoform_page.js') }}"></script>
 {% endblock %}

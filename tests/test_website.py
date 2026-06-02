@@ -225,7 +225,11 @@ def test_isoform_page_has_12_evidence_tiles(client):
 
 
 def test_isoform_page_renders_side_by_side_viewers(client):
-    """The folding panel renders two side-by-side Mol* viewers + a pLDDT legend."""
+    """Folding panel: two side-by-side interactive 3Dmol viewers + a pLDDT legend.
+
+    Each viewer loads its CIF and applies a precomputed per-residue colour map
+    (the diff-region recolouring is decided offline, served at /structure-colors/).
+    """
     import pandas as pd
     from swissisoform_site.data import tis_slug as make_slug
 
@@ -240,6 +244,10 @@ def test_isoform_page_renders_side_by_side_viewers(client):
     assert b"folding-viewer-canonical" in body
     assert b"folding-viewer-isoform" in body
     assert b"molstar-canonical" not in body
+    # Interactive 3Dmol viewer wired with the offline colour map + CIF download.
+    assert b"3Dmol-min.js" in body
+    assert b"/structure-colors/" in body
+    assert b"Download CIF" in body
     # Legend names the colouring scheme.
     assert b"pLDDT" in body
 

@@ -26,6 +26,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))  # so `import run` (scripts/run.py) resolves
 
+import build_folding_colors  # noqa: E402, I001
 import run  # noqa: E402, I001
 from swissisoform.plm.embed import protein_hash  # noqa: E402
 
@@ -117,6 +118,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  manifest: {man_path}")
     print(f"  {n_missing} isoforms had no cached structure (too long for Boltz, or not folded)")
     print("View in ChimeraX (colour by bfactor = pLDDT) or molstar.org/viewer")
+
+    # Precompute the per-residue folding colour maps the site's 3Dmol viewer
+    # applies (whole protein by pLDDT, differential region on a diverging ramp).
+    parquet = ROOT / "data" / "output" / run_name / "all_paired.parquet"
+    if parquet.is_file():
+        print(f"building folding colour maps from {parquet.name}…")
+        build_folding_colors.main(["--parquet", str(parquet), "--structures", str(outdir)])
+    else:
+        print(f"  (skipped colour maps: {parquet} not found — run scripts/run.py first)")
     return 0
 
 

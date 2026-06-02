@@ -455,6 +455,14 @@
   border-radius: 4px;
   overflow: hidden;
 }
+.folding-download {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 11px;
+  color: #2563eb;
+}
+.folding-download:hover { text-decoration: underline; }
+.folding-explore { color: #64748b; font-style: italic; }
 .molstar-fallback {
   padding: 12px;
   font-size: 11px;

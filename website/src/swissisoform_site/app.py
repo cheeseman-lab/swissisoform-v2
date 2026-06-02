@@ -236,6 +236,8 @@ def create_app() -> Flask:
             protein_figure_json=json.dumps(protein_fig),
             canonical_cif=iso.canonical_cif,
             isoform_cif=iso.isoform_cif,
+            canonical_colors=iso.canonical_colors,
+            isoform_colors=iso.isoform_colors,
             diff_start=iso.diff_start,
             diff_end=iso.diff_end,
             diff_space=iso.diff_space,
@@ -274,6 +276,18 @@ def create_app() -> Flask:
         if not (root / filename).is_file():
             abort(404)
         return send_from_directory(root, filename, mimetype="chemical/x-mmcif")
+
+    @app.get("/structure-colors/<path:filename>")
+    def structure_colors(filename: str) -> Any:
+        """Serve precomputed per-residue colour maps from ``<DATA_DIR>/structures/colors/``.
+
+        The 3Dmol folding viewer fetches these and applies them — the diff-region
+        recolouring is decided offline (scripts/build_folding_colors.py), not live.
+        """
+        root = data_dir() / "structures" / "colors"
+        if not (root / filename).is_file():
+            abort(404)
+        return send_from_directory(root, filename, mimetype="application/json")
 
     @app.errorhandler(404)
     def not_found(e: Any) -> tuple[Any, int]:
