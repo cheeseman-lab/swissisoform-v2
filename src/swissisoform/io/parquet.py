@@ -357,6 +357,17 @@ def paired_tis_dataframe(genes: list[Gene]) -> pd.DataFrame:
                 row[f"expr_{cell_line}_cpm"] = expr.cpm
                 row[f"expr_{cell_line}_p_value"] = expr.p_value
                 row[f"expr_{cell_line}_initiation_efficiency"] = expr.initiation_efficiency
+            # Canonical (Annotated) start's expression per cell line, under a
+            # distinct ``canonical_expr_`` prefix so the alt-TIS ``expr_``
+            # discovery regex never picks it up. Lets the viewer put
+            # canonical-start vs alt-start initiation efficiency side by side.
+            for cell_line, expr in site.canonical_expression.items():
+                row[f"canonical_expr_{cell_line}_raw_count"] = expr.raw_count
+                row[f"canonical_expr_{cell_line}_cpm"] = expr.cpm
+                row[f"canonical_expr_{cell_line}_p_value"] = expr.p_value
+                row[f"canonical_expr_{cell_line}_initiation_efficiency"] = (
+                    expr.initiation_efficiency
+                )
             row.update(gene_annot_cols)
             row.update(canonical_cols)
             row.update(_flatten_annotations("isoform", site.isoform_annotations))

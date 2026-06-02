@@ -205,6 +205,12 @@ class TranslationInitiationSite:
     # Expression
     expression: dict[str, CellLineExpression] = field(default_factory=dict)
 
+    # Per-cell-line expression of this transcript's *canonical* (Annotated) start,
+    # so downstream comparison can put canonical-start vs alt-start initiation
+    # efficiency side by side (E4/E5). Keyed by cell line; empty when the Tid has
+    # no Annotated row or in single-sample mode.
+    canonical_expression: dict[str, CellLineExpression] = field(default_factory=dict)
+
     # Proteins
     canonical_protein: str = ""
     isoform_protein: str = ""

@@ -382,6 +382,38 @@ def _build_canonical_by_tid(gene_rows: pd.DataFrame) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
+def _build_canonical_expression_by_tid(
+    gene_rows: pd.DataFrame,
+    samples: list[str] | None,
+) -> dict[str, dict[str, CellLineExpression]]:
+    """Map each transcript ID to its Annotated (canonical) start's expression.
+
+    Symmetric with :func:`_build_canonical_by_tid` but for per-cell-line
+    expression rather than protein sequence. Lets the comparator put
+    canonical-start vs alt-start initiation efficiency side by side. Empty in
+    single-sample mode (no ``samples``) or for Tids with no Annotated row.
+
+    Args:
+        gene_rows: All TIS rows for a single gene.
+        samples: Cell-line sample names (combined-table mode), or None.
+
+    Returns:
+        Dict from transcript_id to ``{cell_line: CellLineExpression}``.
+    """
+    if not samples:
+        return {}
+    annotated = gene_rows[gene_rows["TisType"].str.startswith("Annotated")]
+    by_tid: dict[str, dict[str, CellLineExpression]] = {}
+    for _, row in annotated.iterrows():
+        tid = str(row["Tid"])
+        expr = _expression_from_row(row, samples)
+        # If a Tid has multiple Annotated rows, keep the one detected in more
+        # cell lines (proxy for the representative canonical start).
+        if tid not in by_tid or len(expr) > len(by_tid[tid]):
+            by_tid[tid] = expr
+    return by_tid
+
+
 def _min_present_metric(row: pd.Series, samples: list[str], metric: str) -> float | None:
     """Most-significant (min) ``{sample}_{metric}`` over *samples*; None if all absent."""
     vals = [
@@ -437,6 +469,7 @@ def _row_to_tis(
     fasta: Any | None = None,
     samples: list[str] | None = None,
     skeleton: TranscriptCoordinates | None = None,
+    canonical_expression: dict[str, CellLineExpression] | None = None,
 ) -> TranslationInitiationSite:
     """Convert a single DataFrame row to a TranslationInitiationSite.
 
@@ -547,6 +580,7 @@ def _row_to_tis(
         orf_exons=orf_exons,
         canonical_orf_exons=canonical_orf_exons_site,
         expression=expression,
+        canonical_expression=dict(canonical_expression or {}),
     )
 
 
@@ -681,6 +715,7 @@ def assemble_genes(
     for symbol, gene_df in df.groupby("Symbol"):
         canonical_tid, canonical_protein, gene_id = _select_canonical(gene_df)
         canonical_by_tid = _build_canonical_by_tid(gene_df)
+        canonical_expr_by_tid = _build_canonical_expression_by_tid(gene_df, samples)
 
         if include_annotated:
             rows = gene_df
@@ -706,6 +741,7 @@ def assemble_genes(
                 skeleton=(
                     exon_skeletons.get(str(row["Tid"])) if exon_skeletons else None
                 ),
+                canonical_expression=canonical_expr_by_tid.get(str(row["Tid"])),
             )
             for _, row in rows.iterrows()
         ]
