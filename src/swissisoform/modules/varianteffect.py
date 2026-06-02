@@ -21,8 +21,14 @@ Runs as a SiteModule **after** ``ClinicalModule`` and
 (``in_isoform_unique``) the latter writes. Emits a per-variant table plus
 unique-region aggregates that feed evidence-scoring criterion F5.
 
-Only single-residue missense variants are scorable by either predictor;
-indels / frameshifts pass through with ``None`` effect fields.
+Two independent damaging branches (mirrors v1):
+1. **Loss-of-function** — a frameshift / stop-gained / splice / start-lost
+   consequence is damaging on its own; neither AlphaMissense nor ESM-2 (both
+   missense-only) can see these, so they are flagged from the consequence term.
+2. **Missense** — AlphaMissense (canonical frame only) or ESM-2 ΔLLR.
+
+Single-residue missense variants get ΔLLR / AlphaMissense scores; LoF variants
+get ``effect_lof=True`` with ``None`` numeric scores but still count as damaging.
 """
 
 from __future__ import annotations
@@ -43,6 +49,27 @@ logger = logging.getLogger(__name__)
 # −7.5 is the threshold Brandes et al. (2023) use for the analogous LLR.
 DEFAULT_LLR_DAMAGING_THRESHOLD = -7.5
 
+# Loss-of-function (high-impact) consequence terms. A variant with any of these
+# is functionally damaging independent of any missense pathogenicity score —
+# AlphaMissense and ESM-2 ΔLLR are missense-only and never see these. Restores
+# v1's first clinical branch (is-there-a-LoF-variant) alongside the missense
+# branch. SequenceOntology high-impact terms plus the short forms our annotators
+# emit.
+LOF_CONSEQUENCES = frozenset(
+    {
+        "frameshift_variant",
+        "frameshift",
+        "stop_gained",
+        "stop_lost",
+        "start_lost",
+        "start_loss",
+        "splice_acceptor_variant",
+        "splice_donor_variant",
+        "transcript_ablation",
+        "feature_truncation",
+    }
+)
+
 
 class VariantEffectModule:
     """Per-variant ESM-2 ΔLLR + AlphaMissense effect scoring (SiteModule).
@@ -60,6 +87,7 @@ class VariantEffectModule:
         "varianteffect_n_scored_am",
         "varianteffect_n_scorable_in_unique",
         "varianteffect_n_damaging_in_unique",
+        "varianteffect_n_lof_in_unique",
         "varianteffect_mean_delta_llr_unique",
         "varianteffect_min_delta_llr_unique",
         "varianteffect_mean_am_pathogenicity_unique",
@@ -237,11 +265,13 @@ class VariantEffectModule:
         deltas_unique: list[float] = []
         am_path_unique: list[float] = []
         n_am_pathogenic_unique = 0
+        n_lof_unique = 0
         scorable_unique_ids: set[int] = set()
         damaging_unique_ids: set[int] = set()
 
         for idx, hit in enumerate(raw_hits):
             tagged_hit = dict(hit)
+            in_unique = hit.get("in_isoform_unique") if tagged else None
 
             plm = self._score_hit_plm(
                 hit, canonical_seq, canonical_lp, isoform_seq, isoform_lp,
@@ -267,23 +297,53 @@ class VariantEffectModule:
                 tagged_hit["am_pathogenicity"] = None
                 tagged_hit["am_class"] = None
 
-            # Damaging by either predictor.
-            is_damaging = (
-                am_rec is not None and am_rec["am_class"] == PATHOGENIC_CLASS
-            ) or (
+            # Frame for this hit. An extension/uORF/altORF variant in the
+            # isoform-unique region acts in *isoform* coordinates (it maps to
+            # isoform_protein_pos); everything else — shared region, the lost
+            # N-terminus of a truncation, or any unmapped variant — acts in the
+            # canonical frame. Mirrors _score_hit_plm's frame choice (A2).
+            use_isoform_frame = (
+                hit.get("isoform_protein_pos") is not None and in_unique is True
+            )
+            consequence = (
+                hit.get("isoform_consequence") if use_isoform_frame else hit.get("consequence")
+            )
+            consequence = consequence or hit.get("consequence") or hit.get("isoform_consequence")
+            is_lof = bool(consequence) and str(consequence) in LOF_CONSEQUENCES
+
+            # AlphaMissense is canonical-frame, missense-only — it is meaningless
+            # on an extension-unique (isoform-frame) variant, so it must not drive
+            # the damaging flag there (A3). PLM ΔLLR is already frame-aware.
+            am_damaging = (
+                am_rec is not None
+                and am_rec["am_class"] == PATHOGENIC_CLASS
+                and not use_isoform_frame
+            )
+            plm_damaging = (
                 plm["plm_delta_llr"] is not None
                 and plm["plm_delta_llr"] <= self.llr_damaging_threshold
             )
+            # Two independent branches (A1/A4): a loss-of-function consequence,
+            # OR a missense call from AlphaMissense / ESM-2.
+            is_damaging = is_lof or am_damaging or plm_damaging
+            tagged_hit["effect_lof"] = is_lof
+            tagged_hit["effect_consequence"] = consequence
             tagged_hit["effect_damaging"] = is_damaging
 
-            in_unique = hit.get("in_isoform_unique") if tagged else None
             if in_unique is True:
-                scorable = plm["plm_delta_llr"] is not None or am_rec is not None
+                # A LoF variant is assessable even though no missense predictor
+                # scores it — count it as scorable so F5 isn't blocked when the
+                # only unique-region variants are frameshifts / stop-gains.
+                scorable = (
+                    plm["plm_delta_llr"] is not None or am_rec is not None or is_lof
+                )
                 if scorable:
                     scorable_unique_ids.add(idx)
+                if is_lof:
+                    n_lof_unique += 1
                 if plm["plm_delta_llr"] is not None:
                     deltas_unique.append(plm["plm_delta_llr"])
-                if am_rec is not None:
+                if am_rec is not None and not use_isoform_frame:
                     am_path_unique.append(am_rec["am_pathogenicity"])
                     if am_rec["am_class"] == PATHOGENIC_CLASS:
                         n_am_pathogenic_unique += 1
@@ -305,6 +365,7 @@ class VariantEffectModule:
             "n_scored_am": n_scored_am,
             "n_scorable_in_unique": len(scorable_unique_ids),
             "n_damaging_in_unique": len(damaging_unique_ids),
+            "n_lof_in_unique": n_lof_unique,
             "mean_delta_llr_unique": (
                 sum(deltas_unique) / len(deltas_unique) if deltas_unique else None
             ),

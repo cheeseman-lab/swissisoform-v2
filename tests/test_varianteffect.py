@@ -157,6 +157,71 @@ class TestAlphaMissense:
         assert out["max_am_pathogenicity_unique"] == pytest.approx(0.92)
 
 
+class TestLossOfFunction:
+    """A1/A4: LoF variants are damaging independent of any missense score."""
+
+    def test_frameshift_in_unique_is_damaging(self, tmp_path):
+        # No PLM cache, no AlphaMissense — a frameshift is still LoF-damaging.
+        hit = _vi_hit(ref="CTT", alt="C", aa_ref=None, aa_alt=None, consequence="frameshift_variant")
+        site = _with_intersection(_tis(), [hit])
+        out = VariantEffectModule(PipelineConfig(), plm_cache_dir=tmp_path).annotate_site(site)
+        h = out["hits"][0]
+        assert h["effect_lof"] is True
+        assert h["effect_damaging"] is True
+        assert out["n_lof_in_unique"] == 1
+        assert out["n_damaging_in_unique"] == 1
+        # LoF counts as scorable even though no missense predictor applies.
+        assert out["n_scorable_in_unique"] == 1
+
+    def test_stop_gained_is_lof(self, tmp_path):
+        hit = _vi_hit(consequence="stop_gained")
+        site = _with_intersection(_tis(), [hit])
+        out = VariantEffectModule(PipelineConfig(), plm_cache_dir=tmp_path).annotate_site(site)
+        assert out["hits"][0]["effect_lof"] is True
+        assert out["hits"][0]["effect_damaging"] is True
+
+    def test_missense_is_not_lof(self, tmp_path):
+        site = _with_intersection(_tis(), [_vi_hit(consequence="missense_variant")])
+        out = VariantEffectModule(PipelineConfig(), plm_cache_dir=tmp_path).annotate_site(site)
+        assert out["hits"][0]["effect_lof"] is False
+
+
+class TestFrameAwareConsequence:
+    """A2/A3: extension-unique variants use the isoform frame; AM is gated off."""
+
+    def _ext_hit(self, **kw):
+        # An extension-unique variant: maps into isoform space.
+        h = _vi_hit(
+            in_isoform_unique=True,
+            isoform_protein_pos=2,
+            isoform_aa_ref="K",
+            isoform_aa_alt="T",
+            **kw,
+        )
+        return h
+
+    def test_isoform_consequence_used_for_extension_unique(self, tmp_path):
+        # Canonical-frame consequence is missense, but the isoform frame sees a
+        # stop_gained — the isoform frame must win for an extension-unique hit.
+        hit = self._ext_hit(consequence="missense_variant", isoform_consequence="stop_gained")
+        site = _with_intersection(_tis(orf_type=ORFType.EXTENDED), [hit])
+        out = VariantEffectModule(PipelineConfig(), plm_cache_dir=tmp_path).annotate_site(site)
+        assert out["hits"][0]["effect_lof"] is True
+
+    def test_alphamissense_gated_off_on_extension_unique(self, tmp_path):
+        # AM calls it pathogenic, but it is an extension-unique (isoform-frame)
+        # variant where AM is inapplicable — it must NOT drive the damaging flag.
+        am = _StubAM(
+            {("chr1", 100, "C", "T"): {"am_pathogenicity": 0.95, "am_class": "likely_pathogenic"}}
+        )
+        hit = self._ext_hit(consequence="missense_variant", isoform_consequence="missense_variant")
+        site = _with_intersection(_tis(orf_type=ORFType.EXTENDED), [hit])
+        out = VariantEffectModule(
+            PipelineConfig(), plm_cache_dir=tmp_path, alphamissense=am
+        ).annotate_site(site)
+        assert out["hits"][0]["effect_damaging"] is False
+
+
 class TestSiteModuleContract:
     def test_run_does_not_drop_sites(self, synthetic_tis, tmp_path):
         mod = VariantEffectModule(PipelineConfig(), plm_cache_dir=tmp_path)

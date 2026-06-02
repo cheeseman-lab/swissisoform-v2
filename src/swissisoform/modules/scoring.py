@@ -460,13 +460,17 @@ def _f5_pathogenic_variant_enrichment(
       residue, and
     - AlphaMissense calibrated missense pathogenicity.
 
-    A variant counts as damaging when AlphaMissense calls it
-    ``likely_pathogenic`` **or** its ΔLLR ≤ ``cfg.f5_llr_damaging_threshold``.
+    A variant counts as damaging on either of two independent branches: a
+    **loss-of-function** consequence (frameshift / stop-gained / splice /
+    start-lost), **or** a missense call — AlphaMissense ``likely_pathogenic``
+    or ΔLLR ≤ ``cfg.f5_llr_damaging_threshold``. LoF variants are counted as
+    scorable even though no missense predictor scores them, so F5 is not blocked
+    when the only unique-region variants are frameshifts / stop-gains.
 
     Returns:
-        ``None`` when ``varianteffect`` didn't run or no scorable (missense,
-        predictor-available) variant falls in the unique region — there is
-        nothing to evaluate. ``True`` when at least
+        ``None`` when ``varianteffect`` didn't run or no scorable variant
+        (missense with a predictor, or a LoF) falls in the unique region — there
+        is nothing to evaluate. ``True`` when at least
         ``cfg.f5_min_pathogenic_in_unique`` such variants are damaging,
         ``False`` when scorable variants exist but too few are damaging.
     """
@@ -497,6 +501,7 @@ def _f5_pathogenic_variant_enrichment(
 
     passed = n_damaging >= cfg.f5_min_pathogenic_in_unique
     n_am_path = ve.get("n_am_pathogenic_in_unique")
+    n_lof = ve.get("n_lof_in_unique")
     mean_delta = ve.get("mean_delta_llr_unique")
     mean_delta_str = f"{mean_delta:.2f}" if isinstance(mean_delta, (int, float)) else "n/a"
     return CriterionResult(
@@ -505,7 +510,7 @@ def _f5_pathogenic_variant_enrichment(
         (
             f"n_damaging={n_damaging}/{n_scorable} in unique "
             f"(≥{cfg.f5_min_pathogenic_in_unique}); "
-            f"n_am_pathogenic={n_am_path}; mean_ΔLLR={mean_delta_str}"
+            f"n_lof={n_lof}; n_am_pathogenic={n_am_path}; mean_ΔLLR={mean_delta_str}"
         ),
     )
 
