@@ -461,7 +461,14 @@ class AnnotationPipeline:
                 gene_name=site.gene_name,
             )
 
-        # SiteModules
+        # SiteModules — annotate the isoform start, and (when the module can)
+        # the canonical start too, so canonical_<module>_* twins are emitted
+        # symmetrically (e.g. conservation / initiation_context start-site).
         for mod in self.site_modules:
             name = mod.MODULE_NAME
             site.isoform_annotations[name] = mod.annotate_site(site)
+            canonical_fn = getattr(mod, "annotate_canonical_site", None)
+            if callable(canonical_fn):
+                canonical_out = canonical_fn(site)
+                if canonical_out is not None:
+                    site.canonical_annotations[name] = canonical_out

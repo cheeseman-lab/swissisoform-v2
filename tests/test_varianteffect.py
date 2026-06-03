@@ -236,3 +236,56 @@ class TestSiteModuleContract:
         out = VariantEffectModule(PipelineConfig(), plm_cache_dir=tmp_path).annotate_site(site)
         assert out["summary"]["status"] == "no_intersection"
         assert out["hits"] == []
+
+
+class TestGnomadToleranceGate:
+    """§3 — gnomAD is a tolerance catalogue; a predicted-damaging variant common
+    in healthy humans is tolerated, so it must not count as damaging. Disease-DB
+    variants and LoF are never gated."""
+
+    def test_common_gnomad_damaging_is_tolerated(self, tmp_path):
+        _seed_aa_logprobs(tmp_path, CANON, {(3, "A"): -1.0, (3, "V"): -9.0})  # ΔLLR -8 → damaging
+        site = _with_intersection(_tis(), [_vi_hit(source="gnomAD", allele_frequency=0.05)])
+        out = VariantEffectModule(PipelineConfig(), plm_cache_dir=tmp_path).annotate_site(site)
+        assert out["hits"][0]["effect_tolerated_in_gnomad"] is True
+        assert out["hits"][0]["effect_damaging"] is False
+        assert out["n_damaging_in_unique"] == 0
+
+    def test_rare_gnomad_damaging_not_gated(self, tmp_path):
+        _seed_aa_logprobs(tmp_path, CANON, {(3, "A"): -1.0, (3, "V"): -9.0})
+        site = _with_intersection(_tis(), [_vi_hit(source="gnomAD", allele_frequency=1e-6)])
+        out = VariantEffectModule(PipelineConfig(), plm_cache_dir=tmp_path).annotate_site(site)
+        assert out["hits"][0]["effect_damaging"] is True
+
+    def test_clinvar_common_never_gated(self, tmp_path):
+        _seed_aa_logprobs(tmp_path, CANON, {(3, "A"): -1.0, (3, "V"): -9.0})
+        site = _with_intersection(_tis(), [_vi_hit(source="clinvar", allele_frequency=0.05)])
+        out = VariantEffectModule(PipelineConfig(), plm_cache_dir=tmp_path).annotate_site(site)
+        assert out["hits"][0]["effect_damaging"] is True
+
+    def test_common_gnomad_lof_stays_damaging(self, tmp_path):
+        _seed_aa_logprobs(tmp_path, CANON, {})
+        hit = _vi_hit(
+            source="gnomAD", allele_frequency=0.05,
+            consequence="stop_gained", aa_ref=None, aa_alt=None,
+        )
+        out = VariantEffectModule(PipelineConfig(), plm_cache_dir=tmp_path).annotate_site(
+            _with_intersection(_tis(), [hit])
+        )
+        assert out["hits"][0]["effect_lof"] is True
+        assert out["hits"][0]["effect_damaging"] is True
+
+
+class TestSharedRegionAggregates:
+    """§2 — shared-region (conserved-core) twins of the unique-region counts."""
+
+    def test_shared_region_damaging_counted(self, tmp_path):
+        _seed_aa_logprobs(tmp_path, CANON, {(3, "A"): -1.0, (3, "V"): -9.0})
+        hit = _vi_hit(source="clinvar", in_isoform_unique=False, in_isoform_shared=True)
+        out = VariantEffectModule(PipelineConfig(), plm_cache_dir=tmp_path).annotate_site(
+            _with_intersection(_tis(), [hit])
+        )
+        assert out["n_scorable_in_shared"] == 1
+        assert out["n_damaging_in_shared"] == 1
+        assert out["mean_delta_llr_shared"] == pytest.approx(-8.0)
+        assert out["n_damaging_in_unique"] == 0

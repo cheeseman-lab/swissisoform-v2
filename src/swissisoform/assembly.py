@@ -96,6 +96,22 @@ def extract_kozak_context(
         return None
 
 
+def canonical_start_position(
+    canonical_orf_exons: list[tuple[int, int]] | None, strand: str
+) -> int | None:
+    """Genomic position of the canonical start codon's A — ``TIS.position`` convention.
+
+    The canonical ORF's first codon is at the lowest coordinate on the plus
+    strand and the highest on the minus strand; ``TIS.position`` is the A of ATG
+    for plus and the exclusive end of the ORF range for minus (see
+    ``extract_kozak_context``). So plus → first interval start, minus → last
+    interval end.
+    """
+    if not canonical_orf_exons:
+        return None
+    return int(canonical_orf_exons[0][0]) if strand == "+" else int(canonical_orf_exons[-1][1])
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -523,6 +539,17 @@ def _row_to_tis(
                 len(_strip_stop(canonical_protein)),
             )
 
+    # Canonical start's Kozak window + codon (symmetric with kozak_context /
+    # start_codon) — for the canonical-vs-isoform start-site comparison (E3).
+    canonical_kozak_context: str | None = None
+    canonical_start_codon_val: str | None = None
+    if fasta is not None and canonical_orf_exons_site:
+        canon_pos = canonical_start_position(canonical_orf_exons_site, strand)
+        if canon_pos is not None:
+            canonical_kozak_context = extract_kozak_context(fasta, chrom, canon_pos, strand)
+            if canonical_kozak_context and len(canonical_kozak_context) == 13:
+                canonical_start_codon_val = canonical_kozak_context[9:12]
+
     if samples is not None:
         expression = _expression_from_row(row, samples)
         # Most-significant (min) per-TIS stat across the present cell lines, so
@@ -577,6 +604,8 @@ def _row_to_tis(
         isoform_protein=isoform_protein,
         diff_region=diff_region,
         kozak_context=kozak_context,
+        canonical_kozak_context=canonical_kozak_context,
+        canonical_start_codon=canonical_start_codon_val,
         orf_exons=orf_exons,
         canonical_orf_exons=canonical_orf_exons_site,
         expression=expression,

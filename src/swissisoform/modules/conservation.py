@@ -308,6 +308,33 @@ class ConservationModule:
             },
         }
 
+    def annotate_canonical_site(self, site: TranslationInitiationSite) -> dict[str, Any] | None:
+        """Point conservation at the canonical (Annotated) start.
+
+        The symmetric twin of the at-TIS / Kozak-window point values.
+        Returns the four ``phylop_*`` / ``phastcons_*`` point values keyed
+        without a prefix (serialized as ``canonical_conservation_*``), or
+        ``None`` when the canonical start position can't be derived.
+        """
+        from swissisoform.assembly import canonical_start_position
+
+        pos = canonical_start_position(site.canonical_orf_exons, site.strand)
+        if pos is None:
+            return None
+        chrom = self._clean_chrom(site.chrom)
+        codon_start, codon_end = self._tis_codon_window(pos, site.strand)
+        kozak_start, kozak_end = self._kozak_window(pos, site.strand)
+        return {
+            "phylop_at_tis": self._mean_from_bw(self._phylop_bw, chrom, codon_start, codon_end),
+            "phylop_kozak_mean": self._mean_from_bw(self._phylop_bw, chrom, kozak_start, kozak_end),
+            "phastcons_at_tis": self._mean_from_bw(
+                self._phastcons_bw, chrom, codon_start, codon_end
+            ),
+            "phastcons_kozak_mean": self._mean_from_bw(
+                self._phastcons_bw, chrom, kozak_start, kozak_end
+            ),
+        }
+
     def run(
         self,
         tis_sites: list[TranslationInitiationSite],

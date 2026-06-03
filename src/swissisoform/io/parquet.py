@@ -332,6 +332,7 @@ def paired_tis_dataframe(genes: list[Gene]) -> pd.DataFrame:
                 "position": site.position,
                 "strand": site.strand,
                 "start_codon": site.start_codon,
+                "canonical_start_codon": site.canonical_start_codon,
                 "canonical_per_tid_length": per_tid_len,
                 "canonical_per_tid_differs_from_gene": per_tid_len != canonical_len,
                 "orf_type": site.orf_type.value,
@@ -348,6 +349,7 @@ def paired_tis_dataframe(genes: list[Gene]) -> pd.DataFrame:
                 "unique_genomic_intervals": [list(t) for t in unique_genomic_intervals],
                 "shared_genomic_intervals": [list(t) for t in shared_genomic_intervals],
                 "kozak_context": site.kozak_context,
+                "canonical_kozak_context": site.canonical_kozak_context,
                 "tis_pvalue": site.tis_pvalue,
                 "ribo_pvalue": site.ribo_pvalue,
                 "fisher_qvalue": site.fisher_qvalue,
@@ -370,6 +372,11 @@ def paired_tis_dataframe(genes: list[Gene]) -> pd.DataFrame:
                 )
             row.update(gene_annot_cols)
             row.update(canonical_cols)
+            # Per-TIS canonical-start site annotations (conservation /
+            # initiation_context at the canonical start) → canonical_<module>_*,
+            # the symmetric twin of isoform_<module>_*. Distinct module names
+            # from the gene-level canonical_cols, so no key collision.
+            row.update(_flatten_annotations("canonical", site.canonical_annotations))
             row.update(_flatten_annotations("isoform", site.isoform_annotations))
             row.update(_flatten_annotations("diff", site.diff_annotations))
             row.update(_flatten_annotations("cmp", site.comparison))

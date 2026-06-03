@@ -178,3 +178,26 @@ class TestRunWrapper:
         mod.run([site])
         out = site.isoform_annotations["variant_intersection"]
         assert out["n_in_unique_region"] == 1
+
+
+class TestSourceSeparation:
+    """§3 — disease (ClinVar+COSMIC) vs tolerance (gnomAD) counts per region."""
+
+    def test_disease_vs_gnomad_counts(self):
+        mod = VariantIntersectionModule()
+        site = _site(
+            orf_exons=[(900, 930), (1000, 1030)],
+            canonical_orf_exons=[(1000, 1030)],
+            hits=[
+                _hit(910, source="clinvar"),   # unique, disease
+                _hit(915, source="cosmic"),    # unique, disease
+                _hit(920, source="gnomAD"),    # unique, tolerance
+                _hit(1010, source="gnomAD"),   # shared, tolerance
+                _hit(1015, source="clinvar"),  # shared, disease
+            ],
+        )
+        out = mod.annotate_site(site)
+        assert out["n_disease_in_unique_region"] == 2
+        assert out["n_gnomad_in_unique_region"] == 1
+        assert out["n_disease_in_shared_region"] == 1
+        assert out["n_gnomad_in_shared_region"] == 1

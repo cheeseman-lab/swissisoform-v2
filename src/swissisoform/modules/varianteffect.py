@@ -49,6 +49,13 @@ logger = logging.getLogger(__name__)
 # −7.5 is the threshold Brandes et al. (2023) use for the analogous LLR.
 DEFAULT_LLR_DAMAGING_THRESHOLD = -7.5
 
+# gnomAD is a *tolerance* catalogue, not a disease one: a predicted-damaging
+# variant seen at appreciable frequency in healthy humans is tolerated, so it
+# must not count as damaging (ACMG allele-frequency benign evidence). Variants
+# from gnomAD with allele_frequency at or above this are gated out of the
+# damaging flag. ClinVar / COSMIC (disease) variants are never gated.
+DEFAULT_GNOMAD_TOLERATED_AF = 1e-3
+
 # Loss-of-function (high-impact) consequence terms. A variant with any of these
 # is functionally damaging independent of any missense pathogenicity score —
 # AlphaMissense and ESM-2 ΔLLR are missense-only and never see these. Restores
@@ -93,6 +100,15 @@ class VariantEffectModule:
         "varianteffect_mean_am_pathogenicity_unique",
         "varianteffect_max_am_pathogenicity_unique",
         "varianteffect_n_am_pathogenic_in_unique",
+        # Shared-region (conserved-core) twins — for F5's differential-vs-shared
+        # enrichment (§2). Same per-variant scoring, restricted to in_shared hits.
+        "varianteffect_n_scorable_in_shared",
+        "varianteffect_n_damaging_in_shared",
+        "varianteffect_n_lof_in_shared",
+        "varianteffect_mean_delta_llr_shared",
+        "varianteffect_min_delta_llr_shared",
+        "varianteffect_mean_am_pathogenicity_shared",
+        "varianteffect_n_am_pathogenic_in_shared",
         "varianteffect_summary",
     ]
     SCOPE: str = "C"
@@ -134,6 +150,7 @@ class VariantEffectModule:
             self.llr_damaging_threshold = scoring.f5_llr_damaging_threshold
         else:
             self.llr_damaging_threshold = DEFAULT_LLR_DAMAGING_THRESHOLD
+        self.gnomad_tolerated_af = DEFAULT_GNOMAD_TOLERATED_AF
         # Per-protein-hash aa_logprobs cache, populated lazily within a run.
         self._llr_cache: dict[str, Any] = {}
 
@@ -268,6 +285,13 @@ class VariantEffectModule:
         n_lof_unique = 0
         scorable_unique_ids: set[int] = set()
         damaging_unique_ids: set[int] = set()
+        # Shared-region (conserved-core) twins (§2).
+        deltas_shared: list[float] = []
+        am_path_shared: list[float] = []
+        n_am_pathogenic_shared = 0
+        n_lof_shared = 0
+        scorable_shared_ids: set[int] = set()
+        damaging_shared_ids: set[int] = set()
 
         for idx, hit in enumerate(raw_hits):
             tagged_hit = dict(hit)
@@ -326,9 +350,37 @@ class VariantEffectModule:
             # Two independent branches (A1/A4): a loss-of-function consequence,
             # OR a missense call from AlphaMissense / ESM-2.
             is_damaging = is_lof or am_damaging or plm_damaging
+
+            # gnomAD tolerance gate (§3): a predicted-damaging *gnomAD* variant
+            # common in healthy humans is tolerated → not damaging. LoF stands
+            # (it is functionally definitive); disease-DB variants are untouched.
+            af = hit.get("allele_frequency")
+            tolerated = (
+                str(hit.get("source")).lower() == "gnomad"
+                and isinstance(af, (int, float))
+                and af >= self.gnomad_tolerated_af
+            )
+            if tolerated and not is_lof:
+                is_damaging = False
+            tagged_hit["effect_tolerated_in_gnomad"] = bool(tolerated)
             tagged_hit["effect_lof"] = is_lof
             tagged_hit["effect_consequence"] = consequence
             tagged_hit["effect_damaging"] = is_damaging
+
+            in_shared = hit.get("in_isoform_shared") if tagged else None
+            if in_shared is True:
+                if plm["plm_delta_llr"] is not None or am_rec is not None or is_lof:
+                    scorable_shared_ids.add(idx)
+                if is_lof:
+                    n_lof_shared += 1
+                if plm["plm_delta_llr"] is not None:
+                    deltas_shared.append(plm["plm_delta_llr"])
+                if am_rec is not None and not use_isoform_frame:
+                    am_path_shared.append(am_rec["am_pathogenicity"])
+                    if am_rec["am_class"] == PATHOGENIC_CLASS:
+                        n_am_pathogenic_shared += 1
+                if is_damaging:
+                    damaging_shared_ids.add(idx)
 
             if in_unique is True:
                 # A LoF variant is assessable even though no missense predictor
@@ -375,6 +427,17 @@ class VariantEffectModule:
             ),
             "max_am_pathogenicity_unique": max(am_path_unique) if am_path_unique else None,
             "n_am_pathogenic_in_unique": n_am_pathogenic_unique,
+            "n_scorable_in_shared": len(scorable_shared_ids),
+            "n_damaging_in_shared": len(damaging_shared_ids),
+            "n_lof_in_shared": n_lof_shared,
+            "mean_delta_llr_shared": (
+                sum(deltas_shared) / len(deltas_shared) if deltas_shared else None
+            ),
+            "min_delta_llr_shared": min(deltas_shared) if deltas_shared else None,
+            "mean_am_pathogenicity_shared": (
+                sum(am_path_shared) / len(am_path_shared) if am_path_shared else None
+            ),
+            "n_am_pathogenic_in_shared": n_am_pathogenic_shared,
             "summary": {
                 "status": status,
                 "n_total": len(raw_hits),

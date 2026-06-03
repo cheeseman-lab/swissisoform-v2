@@ -93,6 +93,10 @@ class VariantIntersectionModule:
         "variant_intersection_n_in_shared_region",
         "variant_intersection_n_pathogenic_in_unique_region",
         "variant_intersection_n_pathogenic_in_shared_region",
+        "variant_intersection_n_disease_in_unique_region",
+        "variant_intersection_n_disease_in_shared_region",
+        "variant_intersection_n_gnomad_in_unique_region",
+        "variant_intersection_n_gnomad_in_shared_region",
         "variant_intersection_n_dropped_outside_coding",
         "variant_intersection_summary",
     ]
@@ -180,6 +184,13 @@ class VariantIntersectionModule:
         n_shared = 0
         n_path_unique = 0
         n_path_shared = 0
+        # Source-separated (§3): gnomAD answers "tolerated in healthy humans?",
+        # ClinVar/COSMIC answer "disease-associated?" — opposite meanings, so F6
+        # (disease burden) should read the disease counts, not the lumped total.
+        n_disease_unique = 0
+        n_disease_shared = 0
+        n_gnomad_unique = 0
+        n_gnomad_shared = 0
         n_scored = 0
         n_dropped_outside = 0
         n_unscored = 0
@@ -212,14 +223,25 @@ class VariantIntersectionModule:
             tagged["in_isoform"] = in_isoform_orf or in_unique
 
             n_scored += 1
+            src = str(hit.get("source")).lower()
+            is_disease = src in ("clinvar", "cosmic")
+            is_gnomad = src == "gnomad"
             if in_unique:
                 n_unique += 1
                 if _is_pathogenic(hit):
                     n_path_unique += 1
+                if is_disease:
+                    n_disease_unique += 1
+                if is_gnomad:
+                    n_gnomad_unique += 1
             if in_shared:
                 n_shared += 1
                 if _is_pathogenic(hit):
                     n_path_shared += 1
+                if is_disease:
+                    n_disease_shared += 1
+                if is_gnomad:
+                    n_gnomad_shared += 1
             hits_out.append(tagged)
 
         # Share the augmented + filtered hits back to clinical's annotation so
@@ -237,6 +259,11 @@ class VariantIntersectionModule:
             "n_in_shared_region": n_shared,
             "n_pathogenic_in_unique_region": n_path_unique,
             "n_pathogenic_in_shared_region": n_path_shared,
+            # Disease (ClinVar+COSMIC) vs tolerance (gnomAD), per region (§3).
+            "n_disease_in_unique_region": n_disease_unique,
+            "n_disease_in_shared_region": n_disease_shared,
+            "n_gnomad_in_unique_region": n_gnomad_unique,
+            "n_gnomad_in_shared_region": n_gnomad_shared,
             "n_dropped_outside_coding": n_dropped_outside,
             "summary": {
                 "status": "ok",

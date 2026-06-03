@@ -198,6 +198,26 @@ class InitiationContextModule:
             "kozak_window_gc_content": gc,
         }
 
+    def annotate_canonical_site(self, site: TranslationInitiationSite) -> dict[str, Any] | None:
+        """Kozak features at the canonical (Annotated) start.
+
+        The symmetric twin of ``annotate_site``, computed from
+        ``site.canonical_kozak_context``. Serialized as
+        ``canonical_initiation_context_*``; returns ``None`` when the canonical
+        Kozak window isn't available.
+        """
+        if not site.canonical_kozak_context:
+            return None
+        major, partial, full = self._kozak_hamming(site.canonical_kozak_context)
+        gc = self._gc_content(site.canonical_kozak_context)
+        return {
+            "kozak_context": site.canonical_kozak_context,
+            "kozak_hamming_major": major,
+            "kozak_hamming_partial": partial,
+            "kozak_hamming_full": full,
+            "kozak_window_gc_content": gc,
+        }
+
     def run(self, tis_sites: list[TranslationInitiationSite]) -> list[TranslationInitiationSite]:
         """Annotate all TIS sites with Kozak context features.
 

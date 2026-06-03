@@ -221,6 +221,13 @@ class TranslationInitiationSite:
     # Context
     kozak_context: str | None = None
 
+    # Canonical (Annotated) start's Kozak window + codon — symmetric twins of
+    # ``kozak_context`` / ``start_codon`` for the canonical-vs-isoform start-site
+    # comparison (E3). Populated by the assembly layer when a genome FASTA + the
+    # transcript skeleton are available; left None otherwise.
+    canonical_kozak_context: str | None = None
+    canonical_start_codon: str | None = None
+
     # Genomic exon intervals (plus-strand, 0-based half-open) covering
     # the isoform ORF's nucleotide sequence, skipping introns. Populated
     # by the assembly layer from the transcript skeleton. Empty list when
@@ -235,6 +242,12 @@ class TranslationInitiationSite:
 
     # Isoform-level annotations — per-protein modules write here
     isoform_annotations: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    # Canonical-side per-TIS site annotations — SiteModules that compute a
+    # metric at the canonical start (conservation, initiation_context) write
+    # here via ``annotate_canonical_site``. Serialized as ``canonical_<module>_*``,
+    # mirroring ``isoform_<module>_*``. Symmetric with ``isoform_annotations``.
+    canonical_annotations: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     # Differential-region annotations — Scope-A baseline. Populated by the
     # Comparator when it re-runs ProteinModules on ``diff_region.sequence``
