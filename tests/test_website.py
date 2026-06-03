@@ -199,7 +199,9 @@ def test_isoform_page_contains_graphs_and_synthesis_block(client):
     assert r.status_code == 200
     body = r.data
     assert b"graph-protein" in body
-    assert b"Synthesis" in body
+    # AI summary is pinned to the top as a collapsible dropdown.
+    assert b"AI summary" in body
+    assert b"synthesis-dd" in body
     # 12-tile evidence grid replaced the 7-tab strip.
     assert b"tab-strip" not in body
     assert b"evidence-tile" in body
@@ -305,7 +307,8 @@ def test_criterion_evidence_folds_into_score_popups(client):
     assert ce["F2_localization_change"]["about"]
     # F1 hosts comparative biophysics (differential vs shared, not whole-protein).
     bio = next(
-        s for s in ce["F1_structured_extension"]["sections"] if s["title"] == "Biophysics"
+        s for s in ce["F1_structured_extension"]["sections"]
+        if s["title"].startswith("Biophysics")
     )
     pi = next(r for r in bio["compare_rows"] if "pI" in r["label"])
     assert pi["cols"][0] != pi["cols"][1]  # differential vs shared core

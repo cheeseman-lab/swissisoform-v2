@@ -705,8 +705,8 @@ METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
     "Short linear motifs": ("m-domains", "Count of short linear motifs on the canonical vs the isoform protein."),
     "InterPro domains in diff region": ("m-domains", "Annotated InterPro domains overlapping the differential region."),
     "Motifs in diff region": ("m-domains", "Short linear motifs in the differential region."),
-    "Peptides detected": ("m-massspec", "Total tryptic peptides matched to the canonical vs the isoform protein."),
-    "Validated peptides": ("m-massspec", "Peptides passing PepQuery validation on each protein."),
+    "Tryptic peptides (in-silico)": ("m-massspec", "Predicted tryptic peptides from each protein (in-silico digest, not MS-detected)."),
+    "Validated by mass-spec": ("m-massspec", "Peptides confirmed against real spectra by PepQuery."),
     "Isoform-unique peptides": ("m-massspec", "Peptides that map only to the isoform — direct existence evidence."),
     "Mass-spec peptides in diff region": ("m-massspec", "Detected tryptic peptides unique to the differential region."),
     # Constraint / variant effect
@@ -720,6 +720,13 @@ METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
     "Variants AlphaMissense-scored": ("m-alphamissense", "Number of variants scored by AlphaMissense."),
     "Scorable variants in unique region": ("m-clinical", "Variants in the unique region that could be scored."),
     "Damaging variants in unique region": ("m-clinical", "Variants called damaging by AlphaMissense or ESM-2."),
+    "Scorable variants": ("m-clinical", "Variants in the differential region that could be scored (ESM-2, AlphaMissense, or LoF)."),
+    "Damaging variants": ("m-clinical", "Variants called damaging — AlphaMissense-pathogenic, ESM-2-constrained, or loss-of-function."),
+    "— of which loss-of-function": ("m-clinical", "Damaging variants that are frameshift / stop-gained / splice / start-lost (missense predictors never see these)."),
+    "AlphaMissense-pathogenic": ("m-alphamissense", "AlphaMissense-pathogenic missense variants in the differential region."),
+    "Mean ΔLLR (ESM-2)": ("m-esm2", "Mean ESM-2 ΔLLR across variants in the differential region (lower = more constrained)."),
+    "Min ΔLLR (ESM-2)": ("m-esm2", "Most-constrained ESM-2 ΔLLR among differential-region variants."),
+    "Mean AlphaMissense": ("m-alphamissense", "Mean AlphaMissense pathogenicity in the differential region."),
     # Biophysics
     "Isoelectric point (pI)": ("m-biophysics", "pH at which the region carries no net charge."),
     "Hydropathy (GRAVY)": ("m-biophysics", "Grand average of hydropathy; positive = hydrophobic."),
@@ -848,58 +855,68 @@ def criterion_evidence_for(iso) -> dict:
         }
 
     def sec_phylop():
+        # One table: both tracks (phyloP + phastCons) across the columns, every
+        # scope (region means + the two points at the alternative start) down the
+        # rows. The differential region sits above the conserved core so the
+        # contrast reads directly.
         compare_rows = compare(
             [
                 (
-                    "phyloP mean",
+                    "Differential region",
                     [
                         "isoform_conservation_phylop_unique_region_mean",
-                        "isoform_conservation_phylop_shared_region_mean",
-                        "isoform_conservation_phylop_enrichment",
+                        "isoform_conservation_phastcons_unique_region_mean",
                     ],
                 ),
                 (
-                    "phastCons mean",
+                    "Conserved core",
                     [
-                        "isoform_conservation_phastcons_unique_region_mean",
+                        "isoform_conservation_phylop_shared_region_mean",
                         "isoform_conservation_phastcons_shared_region_mean",
-                        None,
+                    ],
+                ),
+                (
+                    "Start codon (3 nt)",
+                    [
+                        "isoform_conservation_phylop_at_tis",
+                        "isoform_conservation_phastcons_at_tis",
+                    ],
+                ),
+                (
+                    "Kozak window (−9..+4)",
+                    [
+                        "isoform_conservation_phylop_kozak_mean",
+                        "isoform_conservation_phastcons_kozak_mean",
                     ],
                 ),
             ]
         )
-        point = rows(
-            [
-                ("phyloP at TIS codon", "isoform_conservation_phylop_at_tis"),
-                ("phyloP Kozak window", "isoform_conservation_phylop_kozak_mean"),
-                ("phastCons at TIS codon", "isoform_conservation_phastcons_at_tis"),
-                ("phastCons Kozak window", "isoform_conservation_phastcons_kozak_mean"),
-            ]
-        )
-        if not compare_rows and not point:
+        if not compare_rows:
             return None
         return {
             "title": "Per-base conservation (phyloP / phastCons)",
-            "subtitle": "differential region vs shared core (enrichment = unique/shared)",
-            "cmp_headers": ["Property", "Differential", "Conserved core", "Enrichment"],
-            "col_classes": DIFF_SHARED_3,
+            "subtitle": "both tracks across the differential region, conserved core, and the alternative start",
+            "cmp_headers": ["Region", "phyloP", "phastCons"],
+            "col_classes": ["", ""],
             "compare_rows": compare_rows,
-            "rows": point,
         }
 
     CELL_LINES = ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen")
 
     def sec_cell_lines():
+        # Canonical-start vs alternative-start usage (CPM) per cell line — the
+        # differential is the alternative start; p-value is the significance of
+        # the alternative-TIS call in that cell line.
         cell_rows = []
         for cl in CELL_LINES:
-            raw = _fmt_num(g(f"expr_{cl}_raw_count"))
-            cpm = _fmt_num(g(f"expr_{cl}_cpm"))
+            can_cpm = _fmt_num(g(f"canonical_expr_{cl}_cpm"))
+            alt_cpm = _fmt_num(g(f"expr_{cl}_cpm"))
             pval = _fmt_num(g(f"expr_{cl}_p_value"))
-            if raw is not None or cpm is not None or pval is not None:
+            if can_cpm is not None or alt_cpm is not None or pval is not None:
                 cell_rows.append(
                     {
                         "label": cl.replace("_", " "),
-                        "cols": [raw or "—", cpm or "—", pval or "—"],
+                        "cols": [can_cpm or "—", alt_cpm or "—", pval or "—"],
                         "hot": False,
                     }
                 )
@@ -907,10 +924,10 @@ def criterion_evidence_for(iso) -> dict:
             return None
         q = _fmt_num(g("fisher_qvalue"))
         return {
-            "title": "Per-cell-line usage",
-            "subtitle": f"Fisher q = {q}" if q else "alternative-TIS initiation per cell line",
-            "cmp_headers": ["Cell line", "Reads", "CPM", "p-value"],
-            "col_classes": ["", "", ""],
+            "title": "Per-cell-line usage · canonical vs alternative start",
+            "subtitle": f"Fisher q = {q}" if q else "canonical vs alternative-start CPM per cell line",
+            "cmp_headers": ["Cell line", "Canonical CPM", "Alternative CPM", "p-value"],
+            "col_classes": ["dm-shared", "", ""],
             "compare_rows": cell_rows,
         }
 
@@ -943,6 +960,7 @@ def criterion_evidence_for(iso) -> dict:
     def sec_initiation():
         body = rows(
             [
+                ("Start codon", "start_codon"),
                 ("Kozak context (−9..+4)", "isoform_initiation_context_kozak_context"),
                 ("Kozak Hamming — full consensus", "isoform_initiation_context_kozak_hamming_full"),
                 ("Kozak Hamming — major positions", "isoform_initiation_context_kozak_hamming_major"),
@@ -952,8 +970,8 @@ def criterion_evidence_for(iso) -> dict:
         if not body:
             return None
         return {
-            "title": "Initiation context",
-            "subtitle": "Kozak sequence around the alternative start",
+            "title": "Initiation context (Kozak)",
+            "subtitle": "start codon + Kozak sequence around the alternative start",
             "rows": body,
         }
 
@@ -1031,12 +1049,11 @@ def criterion_evidence_for(iso) -> dict:
         if not compare_rows:
             return None
         return {
-            "title": "Biophysics",
-            "subtitle": "differential region vs shared core (highlighted = enriched)",
+            "title": "Biophysics · differential vs conserved core",
+            "subtitle": "highlighted rows are enriched in the differential region",
             "cmp_headers": ["Property", "Differential", "Conserved core", "Ratio"],
             "col_classes": DIFF_SHARED_3,
             "compare_rows": compare_rows,
-            "seq": getattr(iso, "differential_sequence", "") or "",
         }
 
     def sec_deeploc():
@@ -1171,16 +1188,16 @@ def criterion_evidence_for(iso) -> dict:
         iso_unique = [p for p in iso if p.get("unique_to_isoform")]
         compare_rows = [
             {
-                "label": "Peptides detected",
+                "label": "Tryptic peptides (in-silico)",
                 "cols": [str(len(can)), str(len(iso))],
                 "hot": False,
-                **_term("Peptides detected"),
+                **_term("Tryptic peptides (in-silico)"),
             },
             {
-                "label": "Validated peptides",
+                "label": "Validated by mass-spec",
                 "cols": [str(can_val), str(iso_val)],
-                "hot": False,
-                **_term("Validated peptides"),
+                "hot": bool(iso_val),
+                **_term("Validated by mass-spec"),
             },
             {
                 "label": "Isoform-unique peptides",
@@ -1205,6 +1222,8 @@ def criterion_evidence_for(iso) -> dict:
         }
 
     def sec_constraint():
+        # Region-resolved sequence constraint (ESM-2): is the differential region
+        # more constrained than the conserved core?
         compare_rows = compare(
             [
                 (
@@ -1225,34 +1244,48 @@ def criterion_evidence_for(iso) -> dict:
                 ),
             ]
         )
-        body = rows(
+        if not compare_rows:
+            return None
+        return {
+            "title": "Sequence constraint (ESM-2) · differential vs conserved core",
+            "subtitle": "lower LLR = more constrained; enrichment = differential / conserved",
+            "cmp_headers": ["Property", "Differential", "Conserved core", "Enrichment"],
+            "col_classes": DIFF_SHARED_3,
+            "compare_rows": compare_rows,
+        }
+
+    def sec_variant_effect():
+        # Variant counts + score stats for variants falling in the differential
+        # region. Counts first (the actionable summary), then score statistics,
+        # then predictor coverage.
+        counts = rows(
             [
-                ("Scorable variants in unique region", "isoform_varianteffect_n_scorable_in_unique"),
-                ("Damaging variants in unique region", "isoform_varianteffect_n_damaging_in_unique"),
-                (
-                    "AlphaMissense-pathogenic in unique",
-                    "isoform_varianteffect_n_am_pathogenic_in_unique",
-                ),
-                ("Mean ΔLLR — unique-region variants", "isoform_varianteffect_mean_delta_llr_unique"),
-                ("Min ΔLLR — unique-region variants", "isoform_varianteffect_min_delta_llr_unique"),
-                ("Mean AlphaMissense — unique", "isoform_varianteffect_mean_am_pathogenicity_unique"),
+                ("Scorable variants", "isoform_varianteffect_n_scorable_in_unique"),
+                ("Damaging variants", "isoform_varianteffect_n_damaging_in_unique"),
+                ("— of which loss-of-function", "isoform_varianteffect_n_lof_in_unique"),
+                ("AlphaMissense-pathogenic", "isoform_varianteffect_n_am_pathogenic_in_unique"),
+            ]
+        )
+        stats = rows(
+            [
+                ("Mean ΔLLR (ESM-2)", "isoform_varianteffect_mean_delta_llr_unique"),
+                ("Min ΔLLR (ESM-2)", "isoform_varianteffect_min_delta_llr_unique"),
+                ("Mean AlphaMissense", "isoform_varianteffect_mean_am_pathogenicity_unique"),
                 ("Variants ESM-2-scored", "isoform_varianteffect_n_scored_plm"),
                 ("Variants AlphaMissense-scored", "isoform_varianteffect_n_scored_am"),
             ]
         )
-        if not compare_rows and not body:
+        body = counts + stats
+        if not body:
             return None
         sub = (
             "ESM-2 ΔLLR + AlphaMissense (canonical frame — valid here)"
             if is_trunc
-            else "ESM-2 ΔLLR (isoform frame) — AlphaMissense N/A on this non-canonical region"
+            else "ESM-2 ΔLLR (isoform frame); AlphaMissense N/A on this non-canonical region"
         )
         return {
-            "title": "Sequence constraint & variant effect",
+            "title": "Variant effect in the differential region",
             "subtitle": sub,
-            "cmp_headers": ["Property", "Differential", "Conserved core", "Enrichment"],
-            "col_classes": DIFF_SHARED_3,
-            "compare_rows": compare_rows,
             "rows": body,
         }
 
@@ -1310,11 +1343,10 @@ def criterion_evidence_for(iso) -> dict:
                     **_term(label),
                 }
             )
-        body = rows([("Clinical variants in diff region", "cmp_clinical_n_hits_in_diff_region")])
-        if not crows and not body:
+        if not crows:
             return None
         return {
-            "title": "Clinical-variant burden",
+            "title": "Clinical-variant burden · differential vs conserved core",
             "subtitle": (
                 "counts per region; ratio is length-normalized (variants per residue, "
                 "differential ÷ conserved — >1× = concentrated in the differential region)"
@@ -1322,22 +1354,21 @@ def criterion_evidence_for(iso) -> dict:
             "cmp_headers": ["Variant set", "Differential", "Conserved core", "per-aa ratio"],
             "col_classes": DIFF_SHARED_3,
             "compare_rows": crows,
-            "rows": body,
         }
 
     # ---- assign sections to criteria --------------------------------------
     assignments = {
         "E1_primate_conservation": [sec_frame("primate")],
         "E2_mammalian_conservation": [sec_frame("mammalian")],
-        "E3_phylop_coding_selection": [sec_phylop()],
-        "E4_multi_cell_line": [sec_cell_lines(), sec_efficiency()],
-        "E5_initiation_efficiency": [sec_efficiency(), sec_initiation()],
+        "E3_phylop_coding_selection": [sec_phylop(), sec_initiation()],
+        "E4_multi_cell_line": [sec_cell_lines()],
+        "E5_initiation_efficiency": [sec_efficiency()],
         "E6_mass_spec": [sec_massspec()],
         "F1_structured_extension": [sec_structure(), sec_biophysics()],
         "F2_localization_change": [sec_deeploc()],
         "F3_domain_change": [sec_domains_motifs()],
         "F4_targeting_change": [sec_targeting()],
-        "F5_pathogenic_variant_enrichment": [sec_constraint()],
+        "F5_pathogenic_variant_enrichment": [sec_constraint(), sec_variant_effect()],
         "F6_clinical_variant_overlap": [sec_clinical_burden()],
     }
 
