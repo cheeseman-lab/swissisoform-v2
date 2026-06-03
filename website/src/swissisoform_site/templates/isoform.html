@@ -30,8 +30,8 @@
     <p class="iso-head-tis"><span class="font-mono text-xs text-slate-500">{{ isoform.tis_id }}</span></p>
   </header>
 
-  <!-- AI summary — pinned to the top, collapsible. -->
-  <details class="synthesis synthesis-dd" open>
+  <!-- AI summary — pinned to the top, collapsible (collapsed by default). -->
+  <details class="synthesis synthesis-dd">
     <summary class="synthesis-summary">
       <span class="synthesis-badge">AI summary</span>
       {% if synthesis and synthesis.headline %}
