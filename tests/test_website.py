@@ -373,6 +373,23 @@ def test_comparison_tables_use_two_standard_flavors(client):
     assert not offenders, f"non-standard comparison headers: {set(offenders)}"
 
 
+def test_details_boxes_are_qualitative_lists_only(client):
+    """The Details box should host only qualitative info (hit lists — peptides,
+    gained/lost domains), never single-scalar key/value rows. Scalars belong in a
+    comparison table (two-sided) or a section caption (single)."""
+    from swissisoform_site.data import criterion_evidence_for, load_all
+
+    genes = load_all()
+    offenders = []
+    for g in genes.values():
+        for iso in g.isoforms:
+            for cid, ce in criterion_evidence_for(iso).items():
+                for s in ce["sections"]:
+                    if s.get("rows"):
+                        offenders.append((cid, s.get("title")))
+    assert not offenders, f"Details 'rows' should be tables or captions: {set(offenders)}"
+
+
 def test_f6_clinical_burden_is_length_normalized(client):
     """F6 reports a per-residue enrichment ratio, not just raw counts."""
     from swissisoform_site.data import criterion_evidence_for, load_all

@@ -1014,6 +1014,10 @@ def criterion_evidence_for(iso) -> dict:
         }
 
     def sec_structure():
+        # Whole-protein pLDDT, canonical vs isoform. Global fold-similarity
+        # singletons (TM-score, RMSD, interface contacts) have no second side —
+        # they are the canonical-vs-isoform comparison expressed as one number —
+        # so they ride along in the caption rather than a Details list.
         status = g("isoform_structure_status")
         compare_rows = compare(
             [
@@ -1026,18 +1030,19 @@ def criterion_evidence_for(iso) -> dict:
                 ),
             ]
         )
-        body = rows(
-            [
-                ("pLDDT — differential region", "isoform_structure_plddt_diffregion_mean"),
-                ("pLDDT std — differential region", "isoform_structure_plddt_diffregion_std"),
-                ("pLDDT Δ (diff vs shared)", "isoform_structure_plddt_delta_shared"),
-                ("TM-score (iso vs canonical)", "isoform_structure_tm_score"),
-                ("RMSD global (Å)", "isoform_structure_rmsd_global"),
-                ("Extension contacts", "isoform_structure_extension_contacts"),
-            ]
-        )
-        if not compare_rows and not body:
+        if not compare_rows:
             return None
+        bits = []
+        tm = _fmt_num(g("isoform_structure_tm_score"))
+        rmsd = _fmt_num(g("isoform_structure_rmsd_global"))
+        con = _fmt_num(g("isoform_structure_extension_contacts"))
+        if tm is not None:
+            bits.append(f"TM-score {tm}")
+        if rmsd is not None:
+            bits.append(f"RMSD {rmsd} Å")
+        if con is not None:
+            bits.append(f"{con} interface contacts")
+        sub = " · ".join(bits) if bits else (f"status: {status}" if status else None)
         warn = None
         if status == "uniform_plddt":
             warn = (
@@ -1045,13 +1050,45 @@ def criterion_evidence_for(iso) -> dict:
                 "isoform — treat the per-residue confidence as unreliable."
             )
         return {
-            "title": "Structure (Boltz)",
-            "subtitle": f"status: {status}" if status else None,
+            "title": "Structure (Boltz) · canonical vs isoform",
+            "subtitle": sub,
             "cmp_headers": ["Metric", "Canonical", "Isoform"],
             "col_classes": CANON_ISO,
             "compare_rows": compare_rows,
-            "rows": body,
             "warn": warn,
+        }
+
+    def sec_structure_region():
+        # Per-region fold confidence: differential region vs shared core. The
+        # shared-region pLDDT isn't stored, but Δ (= diff − shared) is, so we
+        # recover it (no pipeline change). Enrichment = differential / shared.
+        diff_raw = g("isoform_structure_plddt_diffregion_mean")
+        delta_raw = g("isoform_structure_plddt_delta_shared")
+        if diff_raw is None or (isinstance(diff_raw, float) and not math.isfinite(diff_raw)):
+            return None
+        shared_raw = None
+        try:
+            if delta_raw is not None and math.isfinite(float(delta_raw)):
+                shared_raw = float(diff_raw) - float(delta_raw)
+        except (TypeError, ValueError):
+            shared_raw = None
+        enr = (float(diff_raw) / shared_raw) if (shared_raw and shared_raw != 0) else None
+        row = {
+            "label": "pLDDT",
+            "cols": [
+                _fmt_num(diff_raw) or "—",
+                _fmt_num(shared_raw) or "—",
+                f"{enr:.2g}" if enr is not None else "—",
+            ],
+            "hot": False,
+            **_term("pLDDT — differential region"),
+        }
+        return {
+            "title": "Fold confidence · differential vs shared region",
+            "subtitle": "mean Boltz pLDDT in each region",
+            "cmp_headers": ["Metric", "Differential", "Shared", "Enrichment"],
+            "col_classes": DIFF_SHARED_3,
+            "compare_rows": [row],
         }
 
     def sec_biophysics():
@@ -1362,28 +1399,58 @@ def criterion_evidence_for(iso) -> dict:
             "compare_rows": compare_rows,
         }
 
-    def sec_variant_stats():
-        # Differential-region summary statistics (single-valued by nature).
-        body = rows(
-            [
-                ("Mean ΔLLR (ESM-2)", "isoform_varianteffect_mean_delta_llr_unique"),
-                ("Min ΔLLR (ESM-2)", "isoform_varianteffect_min_delta_llr_unique"),
-                ("Mean AlphaMissense", "isoform_varianteffect_mean_am_pathogenicity_unique"),
-                ("Variants ESM-2-scored", "isoform_varianteffect_n_scored_plm"),
-                ("Variants AlphaMissense-scored", "isoform_varianteffect_n_scored_am"),
-            ]
-        )
-        if not body:
+    def sec_variant_scores():
+        # Per-variant constraint, differential vs shared region. The shared-side
+        # means aren't scored yet (see pipeline-followups §2) → "—". Predictor
+        # coverage (how many variants each model scored) is a single QC count,
+        # so it rides in the caption, not a column.
+        specs = [
+            (
+                "Mean ΔLLR (ESM-2)",
+                "isoform_varianteffect_mean_delta_llr_unique",
+                "isoform_varianteffect_mean_delta_llr_shared",
+            ),
+            (
+                "Min ΔLLR (ESM-2)",
+                "isoform_varianteffect_min_delta_llr_unique",
+                "isoform_varianteffect_min_delta_llr_shared",
+            ),
+            (
+                "Mean AlphaMissense",
+                "isoform_varianteffect_mean_am_pathogenicity_unique",
+                "isoform_varianteffect_mean_am_pathogenicity_shared",
+            ),
+        ]
+        compare_rows = []
+        any_diff = False
+        for label, diff_key, shared_key in specs:
+            diff = _fmt_num(g(diff_key))
+            shared = _fmt_num(g(shared_key))
+            if diff is not None:
+                any_diff = True
+            compare_rows.append(
+                {"label": label, "cols": [diff or "—", shared or "—"], "hot": False, **_term(label)}
+            )
+        if not any_diff:
             return None
+        cov = []
+        plm = _fmt_num(g("isoform_varianteffect_n_scored_plm"))
+        am = _fmt_num(g("isoform_varianteffect_n_scored_am"))
+        if plm is not None:
+            cov.append(f"{plm} ESM-2")
+        if am is not None:
+            cov.append(f"{am} AlphaMissense")
         sub = (
-            "ESM-2 ΔLLR + AlphaMissense (canonical frame — valid here)"
-            if is_trunc
-            else "ESM-2 ΔLLR (isoform frame); AlphaMissense N/A on this non-canonical region"
+            "scored: " + " · ".join(cov)
+            if cov
+            else "per-variant constraint in the differential region"
         )
         return {
-            "title": "Variant-effect scores in the differential region",
+            "title": "Variant constraint · differential vs shared region",
             "subtitle": sub,
-            "rows": body,
+            "cmp_headers": ["Property", "Differential", "Shared"],
+            "col_classes": DIFF_SHARED_2,
+            "compare_rows": compare_rows,
         }
 
     def sec_clinical_burden():
@@ -1461,14 +1528,14 @@ def criterion_evidence_for(iso) -> dict:
         "E4_multi_cell_line": [sec_cell_lines()],
         "E5_initiation_efficiency": [sec_efficiency()],
         "E6_mass_spec": [sec_massspec()],
-        "F1_structured_extension": [sec_structure(), sec_biophysics()],
+        "F1_structured_extension": [sec_structure(), sec_structure_region(), sec_biophysics()],
         "F2_localization_change": [sec_deeploc()],
         "F3_domain_change": [sec_domains_motifs()],
         "F4_targeting_change": [sec_targeting()],
         "F5_pathogenic_variant_enrichment": [
             sec_constraint(),
             sec_variant_burden(),
-            sec_variant_stats(),
+            sec_variant_scores(),
         ],
         "F6_clinical_variant_overlap": [sec_clinical_burden()],
     }
