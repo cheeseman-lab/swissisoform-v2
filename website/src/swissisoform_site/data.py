@@ -672,6 +672,12 @@ METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
     "phyloP Kozak window": ("m-phylop", "Mean phyloP over the Kozak window (−9..+4)."),
     "phastCons at TIS codon": ("m-phylop", "phastCons score at the start codon."),
     "phastCons Kozak window": ("m-phylop", "Mean phastCons over the Kozak window."),
+    "phyloP at start codon": ("m-phylop", "phyloP score at the 3-nt start codon."),
+    "phastCons at start codon": ("m-phylop", "phastCons score at the 3-nt start codon."),
+    "phyloP over Kozak window": ("m-phylop", "Mean phyloP over the Kozak window (−9..+4)."),
+    "phastCons over Kozak window": ("m-phylop", "Mean phastCons over the Kozak window (−9..+4)."),
+    "Start codon": ("m-initiation", "The start codon (ATG or a near-cognate) at this initiation site."),
+    "Kozak mismatch — full consensus": ("m-initiation", "Mismatches to the full Kozak consensus (0 = perfect)."),
     # Frame conservation
     "Frame intact (fraction of species)": ("m-frame", "Fraction of aligned species keeping an intact reading frame."),
     "Species aligned": ("m-frame", "Number of species with an alignment over the differential ORF."),
@@ -855,38 +861,24 @@ def criterion_evidence_for(iso) -> dict:
         }
 
     def sec_phylop():
-        # One table: both tracks (phyloP + phastCons) across the columns, every
-        # scope (region means + the two points at the alternative start) down the
-        # rows. The differential region sits above the conserved core so the
-        # contrast reads directly.
+        # Baseline comparison: differential region vs conserved core (the column
+        # convention used across every tile), one row per track.
         compare_rows = compare(
             [
                 (
-                    "Differential region",
+                    "phyloP mean",
                     [
                         "isoform_conservation_phylop_unique_region_mean",
-                        "isoform_conservation_phastcons_unique_region_mean",
-                    ],
-                ),
-                (
-                    "Conserved core",
-                    [
                         "isoform_conservation_phylop_shared_region_mean",
+                        "isoform_conservation_phylop_enrichment",
+                    ],
+                ),
+                (
+                    "phastCons mean",
+                    [
+                        "isoform_conservation_phastcons_unique_region_mean",
                         "isoform_conservation_phastcons_shared_region_mean",
-                    ],
-                ),
-                (
-                    "Start codon (3 nt)",
-                    [
-                        "isoform_conservation_phylop_at_tis",
-                        "isoform_conservation_phastcons_at_tis",
-                    ],
-                ),
-                (
-                    "Kozak window (−9..+4)",
-                    [
-                        "isoform_conservation_phylop_kozak_mean",
-                        "isoform_conservation_phastcons_kozak_mean",
+                        None,
                     ],
                 ),
             ]
@@ -894,10 +886,74 @@ def criterion_evidence_for(iso) -> dict:
         if not compare_rows:
             return None
         return {
-            "title": "Per-base conservation (phyloP / phastCons)",
-            "subtitle": "both tracks across the differential region, conserved core, and the alternative start",
-            "cmp_headers": ["Region", "phyloP", "phastCons"],
-            "col_classes": ["", ""],
+            "title": "Per-base conservation · differential vs conserved core",
+            "subtitle": "mean over each region (enrichment = differential / conserved)",
+            "cmp_headers": ["Track", "Differential", "Conserved core", "Enrichment"],
+            "col_classes": DIFF_SHARED_3,
+            "compare_rows": compare_rows,
+        }
+
+    def sec_start_site():
+        # Canonical-start vs alternative-start: initiation context + per-base
+        # conservation at each start codon. The canonical column reads
+        # ``canonical_*`` mirrors that the pipeline does not emit yet — they
+        # render "—" until the backfill lands (see
+        # docs/reviews/2026-06-03-pipeline-followups.md). One row per property.
+        specs = [
+            ("Start codon", "canonical_start_codon", "start_codon"),
+            (
+                "Kozak context (−9..+4)",
+                "canonical_initiation_context_kozak_context",
+                "isoform_initiation_context_kozak_context",
+            ),
+            (
+                "phyloP at start codon",
+                "canonical_conservation_phylop_at_tis",
+                "isoform_conservation_phylop_at_tis",
+            ),
+            (
+                "phastCons at start codon",
+                "canonical_conservation_phastcons_at_tis",
+                "isoform_conservation_phastcons_at_tis",
+            ),
+            (
+                "phyloP over Kozak window",
+                "canonical_conservation_phylop_kozak_mean",
+                "isoform_conservation_phylop_kozak_mean",
+            ),
+            (
+                "phastCons over Kozak window",
+                "canonical_conservation_phastcons_kozak_mean",
+                "isoform_conservation_phastcons_kozak_mean",
+            ),
+            (
+                "Kozak mismatch — full consensus",
+                "canonical_initiation_context_kozak_hamming_full",
+                "isoform_initiation_context_kozak_hamming_full",
+            ),
+            (
+                "Kozak window GC content",
+                "canonical_initiation_context_kozak_window_gc_content",
+                "isoform_initiation_context_kozak_window_gc_content",
+            ),
+        ]
+        compare_rows = []
+        any_alt = False
+        for label, can_key, alt_key in specs:
+            can = _fmt_num(g(can_key))
+            alt = _fmt_num(g(alt_key))
+            if alt is not None:
+                any_alt = True
+            compare_rows.append(
+                {"label": label, "cols": [can or "—", alt or "—"], "hot": False, **_term(label)}
+            )
+        if not any_alt:
+            return None
+        return {
+            "title": "Start site · canonical vs alternative",
+            "subtitle": "initiation context + per-base conservation at each start codon",
+            "cmp_headers": ["Property", "Canonical start", "Alternative start"],
+            "col_classes": CANON_ISO,
             "compare_rows": compare_rows,
         }
 
@@ -955,24 +1011,6 @@ def criterion_evidence_for(iso) -> dict:
             "cmp_headers": ["Cell line", "Canonical start", "Alternative start"],
             "col_classes": CANON_ISO,
             "compare_rows": eff_rows,
-        }
-
-    def sec_initiation():
-        body = rows(
-            [
-                ("Start codon", "start_codon"),
-                ("Kozak context (−9..+4)", "isoform_initiation_context_kozak_context"),
-                ("Kozak Hamming — full consensus", "isoform_initiation_context_kozak_hamming_full"),
-                ("Kozak Hamming — major positions", "isoform_initiation_context_kozak_hamming_major"),
-                ("Kozak window GC content", "isoform_initiation_context_kozak_window_gc_content"),
-            ]
-        )
-        if not body:
-            return None
-        return {
-            "title": "Initiation context (Kozak)",
-            "subtitle": "start codon + Kozak sequence around the alternative start",
-            "rows": body,
         }
 
     def sec_structure():
@@ -1360,7 +1398,7 @@ def criterion_evidence_for(iso) -> dict:
     assignments = {
         "E1_primate_conservation": [sec_frame("primate")],
         "E2_mammalian_conservation": [sec_frame("mammalian")],
-        "E3_phylop_coding_selection": [sec_phylop(), sec_initiation()],
+        "E3_phylop_coding_selection": [sec_phylop(), sec_start_site()],
         "E4_multi_cell_line": [sec_cell_lines()],
         "E5_initiation_efficiency": [sec_efficiency()],
         "E6_mass_spec": [sec_massspec()],
