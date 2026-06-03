@@ -399,7 +399,7 @@ def test_f6_clinical_burden_is_length_normalized(client):
     # Standardized Flavor-2 columns: Differential | Shared | Enrichment (the
     # enrichment is the length-normalized per-residue ratio).
     assert sec["cmp_headers"][1:] == ["Differential", "Shared", "Enrichment"]
-    allv = next(r for r in sec["compare_rows"] if r["label"] == "All variants")
+    allv = next(r for r in sec["compare_rows"] if r["label"] == "Disease variants")
     assert len(allv["cols"]) == 3 and allv["cols"][2].endswith("×")
 
 

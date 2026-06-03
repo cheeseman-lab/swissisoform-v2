@@ -749,6 +749,7 @@ METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
     "Normalized complexity": ("m-biophysics", "Compositional complexity normalized to length."),
     # Clinical burden
     "All variants": ("m-clinical", "ClinVar / gnomAD / COSMIC variants intersecting each region."),
+    "Disease variants": ("m-clinical", "ClinVar + COSMIC (disease/cancer) variants in each region — gnomAD (population/tolerance) is excluded; it feeds F5's constraint, not disease burden."),
     "Pathogenic": ("m-clinical", "Pathogenic / likely-pathogenic variants in each region."),
     "Clinical/observed variants": ("m-clinical", "ClinVar / gnomAD / COSMIC variants intersecting the region."),
     "Pathogenic variants": ("m-clinical", "Pathogenic / likely-pathogenic variants in the region."),
@@ -1481,9 +1482,9 @@ def criterion_evidence_for(iso) -> dict:
         crows = []
         for label, uk, sk in [
             (
-                "All variants",
-                "isoform_variant_intersection_n_in_unique_region",
-                "isoform_variant_intersection_n_in_shared_region",
+                "Disease variants",
+                "isoform_variant_intersection_n_disease_in_unique_region",
+                "isoform_variant_intersection_n_disease_in_shared_region",
             ),
             (
                 "Pathogenic",
