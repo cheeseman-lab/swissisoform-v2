@@ -197,8 +197,12 @@
 }
 .tile-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  /* Fixed 3 columns → each axis's 6 tiles lay out as a clean 3×2 grid. */
+  grid-template-columns: repeat(3, 1fr);
   gap: 10px;
+}
+@media (max-width: 640px) {
+  .tile-grid { grid-template-columns: repeat(2, 1fr); }
 }
 .evidence-tile {
   border: 1px solid #ddd;
