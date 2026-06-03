@@ -347,13 +347,41 @@ def test_domains_massspec_are_canonical_vs_isoform(client):
     assert uniq["cols"][0] == "—"  # uniqueness is an isoform-only property
 
 
+def test_comparison_tables_use_two_standard_flavors(client):
+    """Every comparison table is one of two flavors — Canonical|Isoform or
+    Differential|Shared — so the modals read consistently. E1/E2 frame is the
+    one documented exception (its differential side flips with diff_space)."""
+    from swissisoform_site.data import criterion_evidence_for, load_all
+
+    genes = load_all()
+    offenders = []
+    for g in genes.values():
+        for iso in g.isoforms:
+            for cid, ce in criterion_evidence_for(iso).items():
+                for s in ce["sections"]:
+                    hdr = s.get("cmp_headers")
+                    if not hdr:
+                        continue
+                    pair = hdr[1:3]
+                    ok = pair in (["Canonical", "Isoform"], ["Differential", "Shared"])
+                    frame_exception = cid in (
+                        "E1_primate_conservation",
+                        "E2_mammalian_conservation",
+                    )
+                    if not ok and not frame_exception:
+                        offenders.append((cid, tuple(hdr)))
+    assert not offenders, f"non-standard comparison headers: {set(offenders)}"
+
+
 def test_f6_clinical_burden_is_length_normalized(client):
     """F6 reports a per-residue enrichment ratio, not just raw counts."""
     from swissisoform_site.data import criterion_evidence_for, load_all
 
     iso = load_all()["CBX1"].isoforms[0]
     sec = criterion_evidence_for(iso)["F6_clinical_variant_overlap"]["sections"][0]
-    assert sec["cmp_headers"][-1] == "per-aa ratio"
+    # Standardized Flavor-2 columns: Differential | Shared | Enrichment (the
+    # enrichment is the length-normalized per-residue ratio).
+    assert sec["cmp_headers"][1:] == ["Differential", "Shared", "Enrichment"]
     allv = next(r for r in sec["compare_rows"] if r["label"] == "All variants")
     assert len(allv["cols"]) == 3 and allv["cols"][2].endswith("×")
 

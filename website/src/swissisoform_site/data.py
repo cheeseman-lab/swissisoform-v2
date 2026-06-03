@@ -886,9 +886,9 @@ def criterion_evidence_for(iso) -> dict:
         if not compare_rows:
             return None
         return {
-            "title": "Per-base conservation · differential vs conserved core",
+            "title": "Per-base conservation · differential vs shared region",
             "subtitle": "mean over each region (enrichment = differential / conserved)",
-            "cmp_headers": ["Track", "Differential", "Conserved core", "Enrichment"],
+            "cmp_headers": ["Track", "Differential", "Shared", "Enrichment"],
             "col_classes": DIFF_SHARED_3,
             "compare_rows": compare_rows,
         }
@@ -950,9 +950,9 @@ def criterion_evidence_for(iso) -> dict:
         if not any_alt:
             return None
         return {
-            "title": "Start site · canonical vs alternative",
+            "title": "Start site · canonical vs isoform",
             "subtitle": "initiation context + per-base conservation at each start codon",
-            "cmp_headers": ["Property", "Canonical start", "Alternative start"],
+            "cmp_headers": ["Property", "Canonical", "Isoform"],
             "col_classes": CANON_ISO,
             "compare_rows": compare_rows,
         }
@@ -980,9 +980,9 @@ def criterion_evidence_for(iso) -> dict:
             return None
         q = _fmt_num(g("fisher_qvalue"))
         return {
-            "title": "Per-cell-line usage · canonical vs alternative start",
-            "subtitle": f"Fisher q = {q}" if q else "canonical vs alternative-start CPM per cell line",
-            "cmp_headers": ["Cell line", "Canonical CPM", "Alternative CPM", "p-value"],
+            "title": "Per-cell-line usage · canonical vs isoform",
+            "subtitle": f"Fisher q = {q}" if q else "canonical vs isoform-start CPM per cell line",
+            "cmp_headers": ["Cell line", "Canonical", "Isoform", "p-value"],
             "col_classes": ["dm-shared", "", ""],
             "compare_rows": cell_rows,
         }
@@ -1003,12 +1003,12 @@ def criterion_evidence_for(iso) -> dict:
         if not eff_rows:
             return None
         return {
-            "title": "Initiation efficiency · canonical vs alternative start",
+            "title": "Initiation efficiency · canonical vs isoform",
             "subtitle": (
                 "ribosome initiation efficiency at the canonical start vs this "
                 "alternative start, per cell line"
             ),
-            "cmp_headers": ["Cell line", "Canonical start", "Alternative start"],
+            "cmp_headers": ["Cell line", "Canonical", "Isoform"],
             "col_classes": CANON_ISO,
             "compare_rows": eff_rows,
         }
@@ -1087,9 +1087,9 @@ def criterion_evidence_for(iso) -> dict:
         if not compare_rows:
             return None
         return {
-            "title": "Biophysics · differential vs conserved core",
+            "title": "Biophysics · differential vs shared region",
             "subtitle": "highlighted rows are enriched in the differential region",
-            "cmp_headers": ["Property", "Differential", "Conserved core", "Ratio"],
+            "cmp_headers": ["Property", "Differential", "Shared", "Enrichment"],
             "col_classes": DIFF_SHARED_3,
             "compare_rows": compare_rows,
         }
@@ -1261,7 +1261,7 @@ def criterion_evidence_for(iso) -> dict:
 
     def sec_constraint():
         # Region-resolved sequence constraint (ESM-2): is the differential region
-        # more constrained than the conserved core?
+        # more constrained than the shared region?
         compare_rows = compare(
             [
                 (
@@ -1285,18 +1285,31 @@ def criterion_evidence_for(iso) -> dict:
         if not compare_rows:
             return None
         return {
-            "title": "Sequence constraint (ESM-2) · differential vs conserved core",
+            "title": "Sequence constraint (ESM-2) · differential vs shared region",
             "subtitle": "lower LLR = more constrained; enrichment = differential / conserved",
-            "cmp_headers": ["Property", "Differential", "Conserved core", "Enrichment"],
+            "cmp_headers": ["Property", "Differential", "Shared", "Enrichment"],
             "col_classes": DIFF_SHARED_3,
             "compare_rows": compare_rows,
         }
 
     def sec_variant_burden():
-        # Variant-effect counts, differential vs conserved core. The conserved
+        # Variant-effect counts, differential vs shared region. The shared
         # column reads ``_in_shared`` mirrors the pipeline does not emit yet
-        # (see docs/reviews/2026-06-03-pipeline-followups.md) — they render "—"
-        # until the backfill scores conserved-core variants.
+        # (see docs/reviews/2026-06-03-pipeline-followups.md) — they (and the
+        # length-normalized enrichment) render "—" until the backfill scores
+        # shared-region variants.
+        unique_len = getattr(iso, "diff_end", None) or len(
+            getattr(iso, "differential_sequence", "") or ""
+        )
+        shared_len = (getattr(iso, "isoform_len", None) if is_trunc
+                      else getattr(iso, "canonical_len", None))
+
+        def _enrich(nu, ns):
+            if nu is None or ns is None or not unique_len or not shared_len or ns == 0:
+                return None
+            du, ds = nu / unique_len, ns / shared_len
+            return None if ds == 0 else du / ds
+
         specs = [
             (
                 "Scorable variants",
@@ -1326,16 +1339,26 @@ def criterion_evidence_for(iso) -> dict:
             cons = _fmt_num(g(cons_key))
             if diff is not None:
                 any_diff = True
+            try:
+                r = _enrich(float(diff) if diff is not None else None,
+                            float(cons) if cons is not None else None)
+            except (TypeError, ValueError):
+                r = None
             compare_rows.append(
-                {"label": label, "cols": [diff or "—", cons or "—"], "hot": False, **_term(label)}
+                {
+                    "label": label,
+                    "cols": [diff or "—", cons or "—", f"{r:.2g}×" if r is not None else "—"],
+                    "hot": bool(r is not None and r > 1),
+                    **_term(label),
+                }
             )
         if not any_diff:
             return None
         return {
-            "title": "Variant burden · differential vs conserved core",
-            "subtitle": "damaging / pathogenic variant counts per region",
-            "cmp_headers": ["Variant set", "Differential", "Conserved core"],
-            "col_classes": DIFF_SHARED_2,
+            "title": "Variant burden · differential vs shared region",
+            "subtitle": "damaging / pathogenic variant counts per region (enrichment length-normalized)",
+            "cmp_headers": ["Variant set", "Differential", "Shared", "Enrichment"],
+            "col_classes": DIFF_SHARED_3,
             "compare_rows": compare_rows,
         }
 
@@ -1365,7 +1388,7 @@ def criterion_evidence_for(iso) -> dict:
 
     def sec_clinical_burden():
         # Region lengths (aa) for length-normalized density. The differential
-        # region is the unique N-terminus; the conserved core is whichever whole
+        # region is the unique N-terminus; the shared region is whichever whole
         # protein it is shared with (canonical for extensions, isoform for
         # truncations).
         unique_len = getattr(iso, "diff_end", None) or len(
@@ -1420,12 +1443,12 @@ def criterion_evidence_for(iso) -> dict:
         if not crows:
             return None
         return {
-            "title": "Clinical-variant burden · differential vs conserved core",
+            "title": "Clinical-variant burden · differential vs shared region",
             "subtitle": (
                 "counts per region; ratio is length-normalized (variants per residue, "
                 "differential ÷ conserved — >1× = concentrated in the differential region)"
             ),
-            "cmp_headers": ["Variant set", "Differential", "Conserved core", "per-aa ratio"],
+            "cmp_headers": ["Variant set", "Differential", "Shared", "Enrichment"],
             "col_classes": DIFF_SHARED_3,
             "compare_rows": crows,
         }
