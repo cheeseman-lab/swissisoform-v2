@@ -1047,7 +1047,7 @@ def criterion_evidence_for(iso) -> dict:
         return {
             "title": "Structure (Boltz)",
             "subtitle": f"status: {status}" if status else None,
-            "cmp_headers": ["Region", "Canonical", "Isoform"],
+            "cmp_headers": ["Metric", "Canonical", "Isoform"],
             "col_classes": CANON_ISO,
             "compare_rows": compare_rows,
             "rows": body,
@@ -1292,19 +1292,56 @@ def criterion_evidence_for(iso) -> dict:
             "compare_rows": compare_rows,
         }
 
-    def sec_variant_effect():
-        # Variant counts + score stats for variants falling in the differential
-        # region. Counts first (the actionable summary), then score statistics,
-        # then predictor coverage.
-        counts = rows(
-            [
-                ("Scorable variants", "isoform_varianteffect_n_scorable_in_unique"),
-                ("Damaging variants", "isoform_varianteffect_n_damaging_in_unique"),
-                ("— of which loss-of-function", "isoform_varianteffect_n_lof_in_unique"),
-                ("AlphaMissense-pathogenic", "isoform_varianteffect_n_am_pathogenic_in_unique"),
-            ]
-        )
-        stats = rows(
+    def sec_variant_burden():
+        # Variant-effect counts, differential vs conserved core. The conserved
+        # column reads ``_in_shared`` mirrors the pipeline does not emit yet
+        # (see docs/reviews/2026-06-03-pipeline-followups.md) — they render "—"
+        # until the backfill scores conserved-core variants.
+        specs = [
+            (
+                "Scorable variants",
+                "isoform_varianteffect_n_scorable_in_unique",
+                "isoform_varianteffect_n_scorable_in_shared",
+            ),
+            (
+                "Damaging variants",
+                "isoform_varianteffect_n_damaging_in_unique",
+                "isoform_varianteffect_n_damaging_in_shared",
+            ),
+            (
+                "— of which loss-of-function",
+                "isoform_varianteffect_n_lof_in_unique",
+                "isoform_varianteffect_n_lof_in_shared",
+            ),
+            (
+                "AlphaMissense-pathogenic",
+                "isoform_varianteffect_n_am_pathogenic_in_unique",
+                "isoform_varianteffect_n_am_pathogenic_in_shared",
+            ),
+        ]
+        compare_rows = []
+        any_diff = False
+        for label, diff_key, cons_key in specs:
+            diff = _fmt_num(g(diff_key))
+            cons = _fmt_num(g(cons_key))
+            if diff is not None:
+                any_diff = True
+            compare_rows.append(
+                {"label": label, "cols": [diff or "—", cons or "—"], "hot": False, **_term(label)}
+            )
+        if not any_diff:
+            return None
+        return {
+            "title": "Variant burden · differential vs conserved core",
+            "subtitle": "damaging / pathogenic variant counts per region",
+            "cmp_headers": ["Variant set", "Differential", "Conserved core"],
+            "col_classes": DIFF_SHARED_2,
+            "compare_rows": compare_rows,
+        }
+
+    def sec_variant_stats():
+        # Differential-region summary statistics (single-valued by nature).
+        body = rows(
             [
                 ("Mean ΔLLR (ESM-2)", "isoform_varianteffect_mean_delta_llr_unique"),
                 ("Min ΔLLR (ESM-2)", "isoform_varianteffect_min_delta_llr_unique"),
@@ -1313,7 +1350,6 @@ def criterion_evidence_for(iso) -> dict:
                 ("Variants AlphaMissense-scored", "isoform_varianteffect_n_scored_am"),
             ]
         )
-        body = counts + stats
         if not body:
             return None
         sub = (
@@ -1322,7 +1358,7 @@ def criterion_evidence_for(iso) -> dict:
             else "ESM-2 ΔLLR (isoform frame); AlphaMissense N/A on this non-canonical region"
         )
         return {
-            "title": "Variant effect in the differential region",
+            "title": "Variant-effect scores in the differential region",
             "subtitle": sub,
             "rows": body,
         }
@@ -1406,7 +1442,11 @@ def criterion_evidence_for(iso) -> dict:
         "F2_localization_change": [sec_deeploc()],
         "F3_domain_change": [sec_domains_motifs()],
         "F4_targeting_change": [sec_targeting()],
-        "F5_pathogenic_variant_enrichment": [sec_constraint(), sec_variant_effect()],
+        "F5_pathogenic_variant_enrichment": [
+            sec_constraint(),
+            sec_variant_burden(),
+            sec_variant_stats(),
+        ],
         "F6_clinical_variant_overlap": [sec_clinical_burden()],
     }
 
