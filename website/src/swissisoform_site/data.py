@@ -46,7 +46,7 @@ FUNCTIONAL_CRITERIA = [
     ("F2_localization_change", "F2", "Localization change"),
     ("F3_domain_change", "F3", "Domain (InterProScan) change"),
     ("F4_targeting_change", "F4", "Targeting (SignalP/TargetP) change"),
-    ("F5_pathogenic_variant_enrichment", "F5", "Pathogenic variant enrichment"),
+    ("F5_pathogenic_variant_enrichment", "F5", "Germline tolerance & constraint"),
     ("F6_clinical_variant_overlap", "F6", "Clinical variant overlap"),
 ]
 
@@ -648,10 +648,11 @@ CRITERION_ABOUT = {
         "N-terminal changes most directly add or remove targeting peptides."
     ),
     "F5_pathogenic_variant_enrichment": (
-        "Are the variants in the differential region constrained (ESM-2 ΔLLR) "
-        "or predicted-damaging (AlphaMissense — valid only on canonical-frame "
-        "truncations) — and are any loss-of-function? Constraint plus damaging "
-        "or LoF variants imply the region matters functionally."
+        "Does healthy human germline variation (gnomAD) avoid this region, and is "
+        "it intrinsically constrained (ESM-2)? Depletion of population variation "
+        "plus high sequence constraint mean the region resists change — it is "
+        "functionally important. gnomAD is a tolerance catalogue, not a disease "
+        "one; disease/cancer variants (ClinVar / COSMIC) live in F6."
     ),
     "F6_clinical_variant_overlap": (
         "Is there a burden of clinical (ClinVar / COSMIC) variants in the "
@@ -750,6 +751,7 @@ METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
     # Clinical burden
     "All variants": ("m-clinical", "ClinVar / gnomAD / COSMIC variants intersecting each region."),
     "Disease variants": ("m-clinical", "ClinVar + COSMIC (disease/cancer) variants in each region — gnomAD (population/tolerance) is excluded; it feeds F5's constraint, not disease burden."),
+    "gnomAD variants": ("m-clinical", "gnomAD (healthy-population/germline) variants per region. Depletion in the differential region (<1× enrichment) = it resists germline variation = constrained."),
     "Pathogenic": ("m-clinical", "Pathogenic / likely-pathogenic variants in each region."),
     "Clinical/observed variants": ("m-clinical", "ClinVar / gnomAD / COSMIC variants intersecting the region."),
     "Pathogenic variants": ("m-clinical", "Pathogenic / likely-pathogenic variants in the region."),
@@ -1297,6 +1299,51 @@ def criterion_evidence_for(iso) -> dict:
             "hits": hits,
         }
 
+    def sec_germline_tolerance():
+        # gnomAD = germline population variation, a *tolerance* readout. Depletion
+        # in the differential region vs the shared core = healthy human variation
+        # avoids it = the region is constrained. Enrichment < 1× = constrained;
+        # > 1× = tolerated. (Disease variants live in F6.)
+        unique_len = getattr(iso, "diff_end", None) or len(
+            getattr(iso, "differential_sequence", "") or ""
+        )
+        shared_len = (getattr(iso, "isoform_len", None) if is_trunc
+                      else getattr(iso, "canonical_len", None))
+
+        def _enrich(nu, ns):
+            if nu is None or ns is None or not unique_len or not shared_len or ns == 0:
+                return None
+            du, ds = nu / unique_len, ns / shared_len
+            return None if ds == 0 else du / ds
+
+        diff = _fmt_num(g("isoform_variant_intersection_n_gnomad_in_unique_region"))
+        cons = _fmt_num(g("isoform_variant_intersection_n_gnomad_in_shared_region"))
+        if diff is None and cons is None:
+            return None
+        try:
+            r = _enrich(
+                float(diff) if diff is not None else None,
+                float(cons) if cons is not None else None,
+            )
+        except (TypeError, ValueError):
+            r = None
+        row = {
+            "label": "gnomAD variants",
+            "cols": [diff or "—", cons or "—", f"{r:.2g}×" if r is not None else "—"],
+            "hot": False,
+            **_term("gnomAD variants"),
+        }
+        return {
+            "title": "Germline tolerance · differential vs shared region",
+            "subtitle": (
+                "gnomAD (population) variant density per region — depletion (<1×) "
+                "means healthy human variation avoids the region (constrained)"
+            ),
+            "cmp_headers": ["Variant set", "Differential", "Shared", "Enrichment"],
+            "col_classes": DIFF_SHARED_3,
+            "compare_rows": [row],
+        }
+
     def sec_constraint():
         # Region-resolved sequence constraint (ESM-2): is the differential region
         # more constrained than the shared region?
@@ -1534,6 +1581,7 @@ def criterion_evidence_for(iso) -> dict:
         "F3_domain_change": [sec_domains_motifs()],
         "F4_targeting_change": [sec_targeting()],
         "F5_pathogenic_variant_enrichment": [
+            sec_germline_tolerance(),
             sec_constraint(),
             sec_variant_burden(),
             sec_variant_scores(),
@@ -1650,8 +1698,8 @@ CRITERIA_FOR_PAGE = [
     {
         "id": "F5_pathogenic_variant_enrichment",
         "axis": "F",
-        "label": "Pathogenic variant enrichment",
-        "short_label": "Pathogenic",
+        "label": "Germline tolerance & constraint",
+        "short_label": "Germline",
     },
     {
         "id": "F6_clinical_variant_overlap",
