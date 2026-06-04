@@ -78,6 +78,19 @@ LOF_CONSEQUENCES = frozenset(
 )
 
 
+def _ve_metric_cols(prefix: str) -> list[str]:
+    """The seven varianteffect aggregate columns for a region[,source] prefix."""
+    return [
+        f"varianteffect_n_scorable_in_{prefix}",
+        f"varianteffect_n_damaging_in_{prefix}",
+        f"varianteffect_n_lof_in_{prefix}",
+        f"varianteffect_mean_delta_llr_{prefix}",
+        f"varianteffect_min_delta_llr_{prefix}",
+        f"varianteffect_mean_am_pathogenicity_{prefix}",
+        f"varianteffect_n_am_pathogenic_in_{prefix}",
+    ]
+
+
 class VariantEffectModule:
     """Per-variant ESM-2 ΔLLR + AlphaMissense effect scoring (SiteModule).
 
@@ -92,23 +105,19 @@ class VariantEffectModule:
         "varianteffect_hits",
         "varianteffect_n_scored_plm",
         "varianteffect_n_scored_am",
-        "varianteffect_n_scorable_in_unique",
-        "varianteffect_n_damaging_in_unique",
-        "varianteffect_n_lof_in_unique",
-        "varianteffect_mean_delta_llr_unique",
-        "varianteffect_min_delta_llr_unique",
-        "varianteffect_mean_am_pathogenicity_unique",
+        # Blended (all sources) per region. The shared twins back F5's
+        # differential-vs-shared enrichment (§2).
+        *_ve_metric_cols("unique"),
         "varianteffect_max_am_pathogenicity_unique",
-        "varianteffect_n_am_pathogenic_in_unique",
-        # Shared-region (conserved-core) twins — for F5's differential-vs-shared
-        # enrichment (§2). Same per-variant scoring, restricted to in_shared hits.
-        "varianteffect_n_scorable_in_shared",
-        "varianteffect_n_damaging_in_shared",
-        "varianteffect_n_lof_in_shared",
-        "varianteffect_mean_delta_llr_shared",
-        "varianteffect_min_delta_llr_shared",
-        "varianteffect_mean_am_pathogenicity_shared",
-        "varianteffect_n_am_pathogenic_in_shared",
+        *_ve_metric_cols("shared"),
+        "varianteffect_max_am_pathogenicity_shared",
+        # Source-separated (§4): the predictors are source-independent, so each
+        # region splits into gnomad (germline → F5) and disease (ClinVar+COSMIC
+        # → F6). Blended = gnomad + disease.
+        *_ve_metric_cols("unique_gnomad"),
+        *_ve_metric_cols("unique_disease"),
+        *_ve_metric_cols("shared_gnomad"),
+        *_ve_metric_cols("shared_disease"),
         "varianteffect_summary",
     ]
     SCOPE: str = "C"
@@ -278,20 +287,21 @@ class VariantEffectModule:
         hits_out: list[dict[str, Any]] = []
         n_scored_plm = 0
         n_scored_am = 0
-        # Unique-region aggregates.
-        deltas_unique: list[float] = []
-        am_path_unique: list[float] = []
-        n_am_pathogenic_unique = 0
-        n_lof_unique = 0
-        scorable_unique_ids: set[int] = set()
-        damaging_unique_ids: set[int] = set()
-        # Shared-region (conserved-core) twins (§2).
-        deltas_shared: list[float] = []
-        am_path_shared: list[float] = []
-        n_am_pathogenic_shared = 0
-        n_lof_shared = 0
-        scorable_shared_ids: set[int] = set()
-        damaging_shared_ids: set[int] = set()
+        # Predictor aggregates keyed by (region, source): region ∈ {unique,
+        # shared}, source ∈ {gnomad, disease}. The predictors are
+        # source-independent (they score a substitution's effect), so we apply
+        # them to both pools and surface the gnomad slice in F5 (germline
+        # tolerance) and the disease slice in F6 (clinical). The blended
+        # region-only columns are derived as gnomad+disease (§4).
+        def _bucket() -> dict[str, Any]:
+            return {
+                "scorable": set(), "damaging": set(), "lof": 0,
+                "deltas": [], "am_path": [], "n_am_path": 0,
+            }
+
+        agg: dict[tuple[str, str], dict[str, Any]] = {
+            (rg, sr): _bucket() for rg in ("unique", "shared") for sr in ("gnomad", "disease")
+        }
 
         for idx, hit in enumerate(raw_hits):
             tagged_hit = dict(hit)
@@ -368,39 +378,27 @@ class VariantEffectModule:
             tagged_hit["effect_damaging"] = is_damaging
 
             in_shared = hit.get("in_isoform_shared") if tagged else None
-            if in_shared is True:
+            region_key = (
+                "unique" if in_unique is True else ("shared" if in_shared is True else None)
+            )
+            src = str(hit.get("source")).lower()
+            source_key = "gnomad" if src == "gnomad" else "disease"  # clinvar/cosmic → disease
+            if region_key is not None:
+                b = agg[(region_key, source_key)]
+                # A LoF variant is assessable even when no missense predictor
+                # scores it (frameshift / stop-gain) — count it as scorable.
                 if plm["plm_delta_llr"] is not None or am_rec is not None or is_lof:
-                    scorable_shared_ids.add(idx)
+                    b["scorable"].add(idx)
                 if is_lof:
-                    n_lof_shared += 1
+                    b["lof"] += 1
                 if plm["plm_delta_llr"] is not None:
-                    deltas_shared.append(plm["plm_delta_llr"])
+                    b["deltas"].append(plm["plm_delta_llr"])
                 if am_rec is not None and not use_isoform_frame:
-                    am_path_shared.append(am_rec["am_pathogenicity"])
+                    b["am_path"].append(am_rec["am_pathogenicity"])
                     if am_rec["am_class"] == PATHOGENIC_CLASS:
-                        n_am_pathogenic_shared += 1
+                        b["n_am_path"] += 1
                 if is_damaging:
-                    damaging_shared_ids.add(idx)
-
-            if in_unique is True:
-                # A LoF variant is assessable even though no missense predictor
-                # scores it — count it as scorable so F5 isn't blocked when the
-                # only unique-region variants are frameshifts / stop-gains.
-                scorable = (
-                    plm["plm_delta_llr"] is not None or am_rec is not None or is_lof
-                )
-                if scorable:
-                    scorable_unique_ids.add(idx)
-                if is_lof:
-                    n_lof_unique += 1
-                if plm["plm_delta_llr"] is not None:
-                    deltas_unique.append(plm["plm_delta_llr"])
-                if am_rec is not None and not use_isoform_frame:
-                    am_path_unique.append(am_rec["am_pathogenicity"])
-                    if am_rec["am_class"] == PATHOGENIC_CLASS:
-                        n_am_pathogenic_unique += 1
-                if is_damaging:
-                    damaging_unique_ids.add(idx)
+                    b["damaging"].add(idx)
 
             hits_out.append(tagged_hit)
 
@@ -411,41 +409,52 @@ class VariantEffectModule:
         elif am is None and not plm_available:
             status = "no_predictors"
 
-        return {
+        def _merge(b1: dict[str, Any], b2: dict[str, Any]) -> dict[str, Any]:
+            # Variants have exactly one source, so the index sets are disjoint.
+            return {
+                "scorable": b1["scorable"] | b2["scorable"],
+                "damaging": b1["damaging"] | b2["damaging"],
+                "lof": b1["lof"] + b2["lof"],
+                "deltas": b1["deltas"] + b2["deltas"],
+                "am_path": b1["am_path"] + b2["am_path"],
+                "n_am_path": b1["n_am_path"] + b2["n_am_path"],
+            }
+
+        def _metrics(prefix: str, b: dict[str, Any]) -> dict[str, Any]:
+            deltas, am_path = b["deltas"], b["am_path"]
+            return {
+                f"n_scorable_in_{prefix}": len(b["scorable"]),
+                f"n_damaging_in_{prefix}": len(b["damaging"]),
+                f"n_lof_in_{prefix}": b["lof"],
+                f"mean_delta_llr_{prefix}": (sum(deltas) / len(deltas) if deltas else None),
+                f"min_delta_llr_{prefix}": (min(deltas) if deltas else None),
+                f"mean_am_pathogenicity_{prefix}": (
+                    sum(am_path) / len(am_path) if am_path else None
+                ),
+                f"n_am_pathogenic_in_{prefix}": b["n_am_path"],
+            }
+
+        result: dict[str, Any] = {
             "hits": hits_out,
             "n_scored_plm": n_scored_plm,
             "n_scored_am": n_scored_am,
-            "n_scorable_in_unique": len(scorable_unique_ids),
-            "n_damaging_in_unique": len(damaging_unique_ids),
-            "n_lof_in_unique": n_lof_unique,
-            "mean_delta_llr_unique": (
-                sum(deltas_unique) / len(deltas_unique) if deltas_unique else None
-            ),
-            "min_delta_llr_unique": min(deltas_unique) if deltas_unique else None,
-            "mean_am_pathogenicity_unique": (
-                sum(am_path_unique) / len(am_path_unique) if am_path_unique else None
-            ),
-            "max_am_pathogenicity_unique": max(am_path_unique) if am_path_unique else None,
-            "n_am_pathogenic_in_unique": n_am_pathogenic_unique,
-            "n_scorable_in_shared": len(scorable_shared_ids),
-            "n_damaging_in_shared": len(damaging_shared_ids),
-            "n_lof_in_shared": n_lof_shared,
-            "mean_delta_llr_shared": (
-                sum(deltas_shared) / len(deltas_shared) if deltas_shared else None
-            ),
-            "min_delta_llr_shared": min(deltas_shared) if deltas_shared else None,
-            "mean_am_pathogenicity_shared": (
-                sum(am_path_shared) / len(am_path_shared) if am_path_shared else None
-            ),
-            "n_am_pathogenic_in_shared": n_am_pathogenic_shared,
-            "summary": {
-                "status": status,
-                "n_total": len(raw_hits),
-                "plm_available": plm_available,
-                "alphamissense_available": am is not None and am.available,
-                "llr_damaging_threshold": self.llr_damaging_threshold,
-            },
         }
+        for rg in ("unique", "shared"):
+            blended = _merge(agg[(rg, "gnomad")], agg[(rg, "disease")])
+            result.update(_metrics(rg, blended))  # blended (backward-compat)
+            result[f"max_am_pathogenicity_{rg}"] = (
+                max(blended["am_path"]) if blended["am_path"] else None
+            )
+            for sr in ("gnomad", "disease"):  # source-separated (§4)
+                result.update(_metrics(f"{rg}_{sr}", agg[(rg, sr)]))
+        result["summary"] = {
+            "status": status,
+            "n_total": len(raw_hits),
+            "plm_available": plm_available,
+            "alphamissense_available": am is not None and am.available,
+            "llr_damaging_threshold": self.llr_damaging_threshold,
+        }
+        return result
 
     def run(self, tis_sites: list[TranslationInitiationSite]) -> list[TranslationInitiationSite]:
         """Annotate every TIS and attach results to ``isoform_annotations``."""

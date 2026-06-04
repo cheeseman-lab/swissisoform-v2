@@ -1377,12 +1377,11 @@ def criterion_evidence_for(iso) -> dict:
             "compare_rows": compare_rows,
         }
 
-    def sec_variant_burden():
-        # Variant-effect counts, differential vs shared region. The shared
-        # column reads ``_in_shared`` mirrors the pipeline does not emit yet
-        # (see docs/reviews/2026-06-03-pipeline-followups.md) — they (and the
-        # length-normalized enrichment) render "—" until the backfill scores
-        # shared-region variants.
+    def sec_variant_burden(source, pool_label):
+        # Predicted-damaging variant counts for one source pool (§4): gnomad
+        # (germline → F5) or disease (ClinVar+COSMIC → F6). The predictors are
+        # source-independent; this counts their calls over the chosen pool,
+        # differential vs shared, length-normalized enrichment.
         unique_len = getattr(iso, "diff_end", None) or len(
             getattr(iso, "differential_sequence", "") or ""
         )
@@ -1395,33 +1394,17 @@ def criterion_evidence_for(iso) -> dict:
             du, ds = nu / unique_len, ns / shared_len
             return None if ds == 0 else du / ds
 
-        specs = [
-            (
-                "Scorable variants",
-                "isoform_varianteffect_n_scorable_in_unique",
-                "isoform_varianteffect_n_scorable_in_shared",
-            ),
-            (
-                "Damaging variants",
-                "isoform_varianteffect_n_damaging_in_unique",
-                "isoform_varianteffect_n_damaging_in_shared",
-            ),
-            (
-                "— of which loss-of-function",
-                "isoform_varianteffect_n_lof_in_unique",
-                "isoform_varianteffect_n_lof_in_shared",
-            ),
-            (
-                "AlphaMissense-pathogenic",
-                "isoform_varianteffect_n_am_pathogenic_in_unique",
-                "isoform_varianteffect_n_am_pathogenic_in_shared",
-            ),
+        metrics = [
+            ("Scorable variants", "n_scorable_in"),
+            ("Damaging variants", "n_damaging_in"),
+            ("— of which loss-of-function", "n_lof_in"),
+            ("AlphaMissense-pathogenic", "n_am_pathogenic_in"),
         ]
         compare_rows = []
         any_diff = False
-        for label, diff_key, cons_key in specs:
-            diff = _fmt_num(g(diff_key))
-            cons = _fmt_num(g(cons_key))
+        for label, stem in metrics:
+            diff = _fmt_num(g(f"isoform_varianteffect_{stem}_unique_{source}"))
+            cons = _fmt_num(g(f"isoform_varianteffect_{stem}_shared_{source}"))
             if diff is not None:
                 any_diff = True
             try:
@@ -1440,40 +1423,26 @@ def criterion_evidence_for(iso) -> dict:
         if not any_diff:
             return None
         return {
-            "title": "Variant burden · differential vs shared region",
-            "subtitle": "damaging / pathogenic variant counts per region (enrichment length-normalized)",
+            "title": f"Predicted-damaging variants · {pool_label}",
+            "subtitle": "AlphaMissense / ESM-2 / LoF calls per region (length-normalized)",
             "cmp_headers": ["Variant set", "Differential", "Shared", "Enrichment"],
             "col_classes": DIFF_SHARED_3,
             "compare_rows": compare_rows,
         }
 
-    def sec_variant_scores():
-        # Per-variant constraint, differential vs shared region. The shared-side
-        # means aren't scored yet (see pipeline-followups §2) → "—". Predictor
-        # coverage (how many variants each model scored) is a single QC count,
-        # so it rides in the caption, not a column.
-        specs = [
-            (
-                "Mean ΔLLR (ESM-2)",
-                "isoform_varianteffect_mean_delta_llr_unique",
-                "isoform_varianteffect_mean_delta_llr_shared",
-            ),
-            (
-                "Min ΔLLR (ESM-2)",
-                "isoform_varianteffect_min_delta_llr_unique",
-                "isoform_varianteffect_min_delta_llr_shared",
-            ),
-            (
-                "Mean AlphaMissense",
-                "isoform_varianteffect_mean_am_pathogenicity_unique",
-                "isoform_varianteffect_mean_am_pathogenicity_shared",
-            ),
+    def sec_variant_scores(source, pool_label):
+        # Per-variant predictor scores for one source pool (§4), differential vs
+        # shared. Predictor coverage (overall #scored) rides in the caption.
+        metrics = [
+            ("Mean ΔLLR (ESM-2)", "mean_delta_llr"),
+            ("Min ΔLLR (ESM-2)", "min_delta_llr"),
+            ("Mean AlphaMissense", "mean_am_pathogenicity"),
         ]
         compare_rows = []
         any_diff = False
-        for label, diff_key, shared_key in specs:
-            diff = _fmt_num(g(diff_key))
-            shared = _fmt_num(g(shared_key))
+        for label, stem in metrics:
+            diff = _fmt_num(g(f"isoform_varianteffect_{stem}_unique_{source}"))
+            shared = _fmt_num(g(f"isoform_varianteffect_{stem}_shared_{source}"))
             if diff is not None:
                 any_diff = True
             compare_rows.append(
@@ -1488,13 +1457,9 @@ def criterion_evidence_for(iso) -> dict:
             cov.append(f"{plm} ESM-2")
         if am is not None:
             cov.append(f"{am} AlphaMissense")
-        sub = (
-            "scored: " + " · ".join(cov)
-            if cov
-            else "per-variant constraint in the differential region"
-        )
+        sub = "scored: " + " · ".join(cov) if cov else f"{pool_label} variants"
         return {
-            "title": "Variant constraint · differential vs shared region",
+            "title": f"Predictor scores · {pool_label}",
             "subtitle": sub,
             "cmp_headers": ["Property", "Differential", "Shared"],
             "col_classes": DIFF_SHARED_2,
@@ -1583,10 +1548,14 @@ def criterion_evidence_for(iso) -> dict:
         "F5_pathogenic_variant_enrichment": [
             sec_germline_tolerance(),
             sec_constraint(),
-            sec_variant_burden(),
-            sec_variant_scores(),
+            sec_variant_burden("gnomad", "germline (gnomAD)"),
+            sec_variant_scores("gnomad", "germline (gnomAD)"),
         ],
-        "F6_clinical_variant_overlap": [sec_clinical_burden()],
+        "F6_clinical_variant_overlap": [
+            sec_clinical_burden(),
+            sec_variant_burden("disease", "disease (ClinVar/COSMIC)"),
+            sec_variant_scores("disease", "disease (ClinVar/COSMIC)"),
+        ],
     }
 
     out = {}

@@ -289,3 +289,32 @@ class TestSharedRegionAggregates:
         assert out["n_damaging_in_shared"] == 1
         assert out["mean_delta_llr_shared"] == pytest.approx(-8.0)
         assert out["n_damaging_in_unique"] == 0
+
+
+class TestSourceSeparatedAggregates:
+    """§4 — predictors split into gnomad (germline → F5) and disease (→ F6)."""
+
+    def test_gnomad_vs_disease_damaging_split(self, tmp_path):
+        _seed_aa_logprobs(tmp_path, CANON, {(3, "A"): -1.0, (3, "V"): -9.0})  # ΔLLR -8 → damaging
+        hits = [
+            _vi_hit(source="gnomAD", allele_frequency=1e-6),   # unique, germline, damaging
+            _vi_hit(source="clinvar"),                          # unique, disease, damaging
+        ]
+        out = VariantEffectModule(PipelineConfig(), plm_cache_dir=tmp_path).annotate_site(
+            _with_intersection(_tis(), hits)
+        )
+        assert out["n_damaging_in_unique_gnomad"] == 1
+        assert out["n_damaging_in_unique_disease"] == 1
+        # Blended = gnomad + disease.
+        assert out["n_damaging_in_unique"] == 2
+        # ΔLLR means are per-slice.
+        assert out["mean_delta_llr_unique_gnomad"] == pytest.approx(-8.0)
+        assert out["mean_delta_llr_unique_disease"] == pytest.approx(-8.0)
+
+    def test_tolerated_gnomad_excluded_from_germline_damaging(self, tmp_path):
+        _seed_aa_logprobs(tmp_path, CANON, {(3, "A"): -1.0, (3, "V"): -9.0})
+        hits = [_vi_hit(source="gnomAD", allele_frequency=0.05)]  # common → tolerated
+        out = VariantEffectModule(PipelineConfig(), plm_cache_dir=tmp_path).annotate_site(
+            _with_intersection(_tis(), hits)
+        )
+        assert out["n_damaging_in_unique_gnomad"] == 0  # gate applies within the germline slice
