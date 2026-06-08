@@ -63,8 +63,8 @@
         {% if isoform.orf_type == 'extended' %}Isoform is the canonical protein plus a {{ diff_end }}-aa N-terminal extension (green).
         {% elif isoform.orf_type == 'truncated' %}Isoform loses the first {{ diff_end }} aa of the canonical N-terminus (red).
         {% else %}Differential region highlighted.{% endif %}
-        Lollipops = ClinVar/gnomAD/COSMIC variants (red = pathogenic); green boxes = InterPro domains; purple = motifs.
-        Lower lanes = per-cell-line initiation efficiency at each start codon (dot size); dotted line = canonical start.
+        Lollipops = ClinVar/gnomAD/COSMIC variants (red = pathogenic): solid in the differential region, faded over the shared canonical core; green boxes = InterPro domains; purple = motifs.
+        Lower lanes = per-cell-line initiation efficiency at each start codon (dot size). The solid red dot is this isoform's start (red dotted guide); hollow grey dots are other alternative starts on the same transcript; black dotted line = canonical start.
       </p>
       <div id="graph-protein" class="plotly-graph"></div>
     </div>

@@ -135,7 +135,7 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
     mut_top = _CANON_Y
     if overlays.get("variants", True):
         by_conseq: dict[str, list] = {}
-        for v in getattr(isoform, "variants_in_unique", []) or []:
+        for v in getattr(isoform, "variants", []) or []:
             pos = v.get("isoform_protein_pos")
             if pos is None:
                 pos = v.get("protein_pos")
@@ -148,16 +148,22 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
         )
         for i, c in enumerate(conseqs):
             ty = mut_base + i * 0.32
-            xs, cols, sizes, hover = [], [], [], []
+            xs, cols, sizes, opac, hover = [], [], [], [], []
             for pos, v in by_conseq[c]:
                 sig = (v.get("clinical_significance") or "").lower()
                 is_path = "pathogenic" in sig
+                in_unique = bool(v.get("in_unique"))
                 xs.append(pos)
                 cols.append("#d62728" if is_path else _CONSEQ_COLOR.get(c, "#94a3b8"))
-                sizes.append(9 if is_path else 6)
+                # Differential-region variants are the focus: full size/opacity.
+                # Shared canonical-core variants ride along, recessive.
+                sizes.append((9 if is_path else 6) if in_unique else (7 if is_path else 4))
+                opac.append(1.0 if in_unique else 0.4)
+                region = "unique" if in_unique else "shared"
                 hover.append(
                     f"{v.get('variant_id', '?')}<br>{v.get('hgvsp') or ''}<br>"
-                    f"{c}<br>{v.get('clinical_significance') or '—'} · {v.get('source') or ''}"
+                    f"{c} · {region} region<br>"
+                    f"{v.get('clinical_significance') or '—'} · {v.get('source') or ''}"
                 )
             traces.append(
                 {
@@ -165,7 +171,12 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
                     "mode": "markers",
                     "x": xs,
                     "y": [ty] * len(xs),
-                    "marker": {"size": sizes, "color": cols, "symbol": "circle"},
+                    "marker": {
+                        "size": sizes,
+                        "color": cols,
+                        "opacity": opac,
+                        "symbol": "circle",
+                    },
                     "hovertext": hover,
                     "hoverinfo": "text",
                     "showlegend": False,
@@ -252,18 +263,26 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
 
         for i, t in enumerate(tracks):
             ly = lane_base - i * lane_gap
-            xs, ys, sizes, colors, hover = [], [], [], [], []
+            xs, ys, sizes, colors, symbols, opac, hover = [], [], [], [], [], [], []
             for m in t["marks"]:
                 xs.append(m["residue"])
                 ys.append(ly)
                 sizes.append(_ie_size(m["log2_ie"]))
-                colors.append(_TRUNC_FILL if m["focal"] else _ISO_COLOR)
+                # The focal start (this isoform's TIS) is a solid red dot anchored
+                # to the red guide line; the other alternative starts on this
+                # transcript ride along as hollow grey dots so they read as
+                # context, not as this isoform's start.
+                colors.append(_TRUNC_FILL if m["focal"] else "#94a3b8")
+                symbols.append("circle" if m["focal"] else "circle-open")
+                opac.append(1.0 if m["focal"] else 0.6)
                 try:
                     ie = f"{2 ** m['log2_ie']:.3g}"
                 except (OverflowError, ValueError):
                     ie = "n/a"
+                tag = " (this isoform)" if m["focal"] else ""
                 hover.append(
-                    f"<b>{t['sample']}</b><br>{m['label']}<br>residue ~{m['residue']:.0f} · IE {ie}"
+                    f"<b>{t['sample']}</b><br>{m['label']}{tag}<br>"
+                    f"residue ~{m['residue']:.0f} · IE {ie}"
                 )
             traces.append(
                 {
@@ -274,6 +293,8 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
                     "marker": {
                         "size": sizes,
                         "color": colors,
+                        "symbol": symbols,
+                        "opacity": opac,
                         "line": {"width": 1, "color": "#fff"},
                     },
                     "hovertext": hover,

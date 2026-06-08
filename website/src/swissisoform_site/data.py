@@ -100,6 +100,8 @@ class Isoform:
     canonical_colors: str | None
     # All clinical variants in the isoform-unique region (any significance)
     variants_in_unique: list[dict[str, Any]] = field(default_factory=list)
+    # Every clinical variant over the isoform's coding region (unique + shared)
+    variants_all: list[dict[str, Any]] = field(default_factory=list)
     # Raw row (kept for /api/data.json)
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -384,6 +386,7 @@ def _build_isoform(
         ),
         pathogenic_variants=pathogenic,
         variants_in_unique=variants_in_unique,
+        variants_all=variants_all,
         isoform_cif=isoform_cif,
         canonical_cif=canonical_cif,
         isoform_colors=_lookup_colors(colors, gene, tis_id, "isoform"),

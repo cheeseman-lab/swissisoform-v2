@@ -1,4 +1,4 @@
-{% if variant_rows %}
+{% macro variant_table(rows, region) %}
 <table class="variants-table">
   <thead>
     <tr>
@@ -11,12 +11,11 @@
       <th>Impact</th>
       <th>AlphaMissense</th>
       <th>ESM-2 ΔLLR</th>
-      <th>In unique</th>
       <th>Link</th>
     </tr>
   </thead>
   <tbody>
-    {% for v in variant_rows %}
+    {% for v in rows %}
       {% set sig = (v.clinical_significance or '')|lower %}
       {% set is_path = 'pathogenic' in sig %}
       {% set conseq = (v.isoform_consequence or v.consequence or '')|lower %}
@@ -45,13 +44,12 @@
         </td>
         <td>
           {% if v.am_class %}{{ v.am_class }}{% if v.am_pathogenicity is not none %} ({{ '%.2f'|format(v.am_pathogenicity|float) }}){% endif %}
-          {% elif diff_space == 'isoform' %}<span class="am-na" title="AlphaMissense is computed in the canonical transcript frame; this extension region is non-canonical, so AlphaMissense cannot score it. Use ESM-2 ΔLLR.">N/A</span>
+          {% elif region == 'unique' and diff_space == 'isoform' %}<span class="am-na" title="AlphaMissense is computed in the canonical transcript frame; this extension region is non-canonical, so AlphaMissense cannot score it. Use ESM-2 ΔLLR.">N/A</span>
           {% else %}—{% endif %}
         </td>
         <td class="var-num">
           {% if v.plm_delta_llr is not none %}{{ '%.2f'|format(v.plm_delta_llr|float) }}{% else %}—{% endif %}
         </td>
-        <td>{% if v.in_isoform_unique %}✓{% else %}–{% endif %}</td>
         <td>
           {% if url %}<a href="{{ url }}" target="_blank" rel="noopener">{{ v.variant_id }}</a>{% else %}{{ v.variant_id or '—' }}{% endif %}
         </td>
@@ -59,12 +57,39 @@
     {% endfor %}
   </tbody>
 </table>
-<p class="var-count">{{ variant_rows|length }} variant{{ '' if variant_rows|length == 1 else 's' }} over this isoform's coding region.</p>
-<p class="var-foot">
-  <strong>LoF</strong> = frameshift / stop-gain / splice-disrupting — inherently loss-of-function,
-  flagged by consequence (AlphaMissense and ESM-2 score only missense/substitutions, so they are
-  blank here by design, not by absence of impact).
-</p>
+{% endmacro %}
+
+{% set has_any = variant_rows_unique or variant_rows_shared %}
+{% if has_any %}
+  {% set diff_label = 'lost N-terminus (canonical-only)' if diff_space == 'canonical' else 'N-terminal extension (isoform-unique)' %}
+
+  <div class="variants-subsection">
+    <h3 class="variants-subhead">Differential region <span class="variants-subnote">— {{ diff_label }}</span></h3>
+    {% if variant_rows_unique %}
+      {{ variant_table(variant_rows_unique, 'unique') }}
+      <p class="var-count">{{ variant_rows_unique|length }} variant{{ '' if variant_rows_unique|length == 1 else 's' }} in the differential region.</p>
+    {% else %}
+      <p class="empty">No clinical variants intersect the differential region.</p>
+    {% endif %}
+  </div>
+
+  <div class="variants-subsection">
+    <h3 class="variants-subhead">Shared canonical core <span class="variants-subnote">— sequence common to canonical and isoform; AlphaMissense applies here</span></h3>
+    {% if variant_rows_shared %}
+      {{ variant_table(variant_rows_shared, 'shared') }}
+      <p class="var-count">{{ variant_rows_shared|length }} variant{{ '' if variant_rows_shared|length == 1 else 's' }} in the shared canonical core.</p>
+    {% else %}
+      <p class="empty">No clinical variants intersect the shared core.</p>
+    {% endif %}
+  </div>
+
+  <p class="var-foot">
+    <strong>LoF</strong> = frameshift / stop-gain / splice-disrupting — inherently loss-of-function,
+    flagged by consequence (AlphaMissense and ESM-2 score only missense/substitutions, so they are
+    blank here by design, not by absence of impact). <strong>AlphaMissense</strong> is computed in the
+    canonical reading frame, so it scores the shared core but reads <em>N/A</em> across an isoform-unique
+    extension — use <strong>ESM-2 ΔLLR</strong> there.
+  </p>
 {% else %}
 <p class="empty">No clinical variants intersect this isoform's coding region.</p>
 {% endif %}

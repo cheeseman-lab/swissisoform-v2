@@ -224,6 +224,24 @@ def create_app() -> Flask:
 
         variant_rows = variant_rows_for_isoform(data_dir_path / "variants_long.parquet", iso.tis_id)
 
+        # Split the mutation table into the differential (isoform-unique) region
+        # and the shared canonical core — they carry different meaning, and only
+        # the canonical-frame shared core is AlphaMissense-scorable. Within each
+        # section, order N→C by isoform residue.
+        def _vsort(r: dict[str, Any]) -> tuple[int, float]:
+            p = r.get("isoform_protein_pos")
+            try:
+                return (0, float(p))
+            except (TypeError, ValueError):
+                return (1, 0.0)
+
+        variant_rows_unique = sorted(
+            (r for r in variant_rows if r.get("in_isoform_unique")), key=_vsort
+        )
+        variant_rows_shared = sorted(
+            (r for r in variant_rows if not r.get("in_isoform_unique")), key=_vsort
+        )
+
         return render_template(
             "isoform.html",
             isoform=_isoform_view(iso, gene),
@@ -233,6 +251,8 @@ def create_app() -> Flask:
             criterion_llms=criterion_llms,
             synthesis=synthesis,
             variant_rows=variant_rows,
+            variant_rows_unique=variant_rows_unique,
+            variant_rows_shared=variant_rows_shared,
             protein_figure_json=json.dumps(protein_fig),
             canonical_cif=iso.canonical_cif,
             isoform_cif=iso.isoform_cif,
@@ -398,13 +418,24 @@ def _make_protein_adapter(iso: Isoform, gene: Any, skeleton: Any | None) -> type
     except (TypeError, ValueError):
         motifs = []
 
+    # Lollipops span the WHOLE coding region (unique + shared). The displayed
+    # axis aligns the shared region: extensions use isoform coordinates,
+    # truncations use canonical coordinates — so the position a variant plots at
+    # depends on the orf type, not on which region it falls in.
+    is_trunc = (getattr(iso, "diff_space", "") or "") == "canonical" or iso.orf_type == "truncated"
+    all_variants = getattr(iso, "variants_all", None) or getattr(iso, "variants_in_unique", []) or []
     variants: list[dict[str, Any]] = []
-    for v in getattr(iso, "variants_in_unique", []) or []:
+    for v in all_variants:
         if not isinstance(v, dict):
             continue
-        pos = v.get("isoform_protein_pos")
-        if pos is None:
+        if is_trunc:
             pos = v.get("protein_pos")
+            if pos is None:
+                pos = v.get("isoform_protein_pos")
+        else:
+            pos = v.get("isoform_protein_pos")
+            if pos is None:
+                pos = v.get("protein_pos")
         if pos is None:
             continue
         try:
@@ -415,6 +446,7 @@ def _make_protein_adapter(iso: Isoform, gene: Any, skeleton: Any | None) -> type
             {
                 "variant_id": v.get("variant_id") or v.get("id") or "?",
                 "isoform_protein_pos": pos_int,
+                "in_unique": bool(v.get("in_isoform_unique")),
                 "hgvsp": v.get("hgvsp"),
                 "clinical_significance": v.get("clinical_significance"),
                 "source": v.get("source"),
@@ -433,7 +465,7 @@ def _make_protein_adapter(iso: Isoform, gene: Any, skeleton: Any | None) -> type
         canonical_len=getattr(iso, "canonical_len", 0) or 0,
         diff_start=getattr(iso, "diff_start", 0) or 0,
         diff_end=getattr(iso, "diff_end", 0) or 0,
-        variants_in_unique=variants,
+        variants=variants,
         domains=domains,
         motifs=motifs,
         cell_line_tracks=tracks,
