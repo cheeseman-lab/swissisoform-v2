@@ -174,19 +174,14 @@ def precompute_signalp(
             if not key:
                 continue
             prediction = row.get("Prediction", "OTHER").strip()
-            # SignalP's output columns are parenthesized (``SP(Sec/SPI)``,
-            # ``LIPO(Sec/SPII)``, ``TAT(Tat/SPI)``, ``TATLIPO(Tat/SPII)``,
-            # ``PILIN(Sec/SPIII)``) — find whichever starts with the
-            # predicted class code.
-            prob_field = "OTHER"
-            if prediction != "OTHER":
-                for col in row:
-                    if col == prediction or col.startswith(f"{prediction}("):
-                        prob_field = col
-                        break
+            # Store a fixed-axis probability ``1 − P(OTHER)`` so canonical and
+            # isoform values are on the same scale (P(any signal peptide)); the
+            # per-class call stays in ``signalp_prediction``.  Subtracting two
+            # per-class probabilities (the old behaviour) gave a wrong-signed,
+            # near-zero delta exactly when the class changed.
             try:
                 probability: float | None = (
-                    float(row[prob_field]) if prob_field in row else None
+                    1.0 - float(row["OTHER"]) if "OTHER" in row else None
                 )
             except ValueError:
                 probability = None

@@ -7,8 +7,6 @@ canonical and isoform protein forms.
 
 from __future__ import annotations
 
-import math
-
 
 class PairedComparison:
     """Static methods for canonical-vs-isoform paired comparisons."""
@@ -57,6 +55,8 @@ class PairedComparison:
 
         Returns:
             Dict with 'unique', 'shared', 'ratio', and 'enriched' keys.
+            ``ratio`` is ``None`` when ``shared_value`` is zero (no
+            JSON-representable quotient).
 
         ``enriched`` is only a meaningful "unique > shared" boolean for
         non-negative metrics (counts, fractions, lengths, magnitudes). For
@@ -66,8 +66,11 @@ class PairedComparison:
         "enriched". In those cases ``enriched`` is ``None`` (and ``ratio``
         is still emitted as a number for the curious, just not flagged).
         """
+        ratio: float | None
         if shared_value == 0:
-            ratio = math.inf if unique_value != 0 else 0.0
+            # A zero shared denominator has no JSON-representable ratio
+            # (``inf`` breaks the Flask viewer); report it as ``None``.
+            ratio = None
         else:
             ratio = unique_value / shared_value
         # Sign-aware: only call it "enriched" when both inputs are non-negative

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import math
-
 from swissisoform.compare.paired import PairedComparison
 
 
@@ -91,13 +89,13 @@ class TestCompareScalarRegions:
     def test_zero_shared_nonzero_unique(self) -> None:
         """shared=0 makes the ratio undefined for "enrichment" purposes → None."""
         result = PairedComparison.compare_scalar_regions(5.0, 0.0)
-        assert result["ratio"] == math.inf
+        assert result["ratio"] is None
         assert result["enriched"] is None
 
     def test_zero_both(self) -> None:
-        """Both zero → ratio 0, but enrichment can't be called → None."""
+        """Both zero → ratio undefined (None), and enrichment can't be called → None."""
         result = PairedComparison.compare_scalar_regions(0.0, 0.0)
-        assert result["ratio"] == 0.0
+        assert result["ratio"] is None
         assert result["enriched"] is None
 
     def test_sign_changing_negative_unique_returns_none(self) -> None:

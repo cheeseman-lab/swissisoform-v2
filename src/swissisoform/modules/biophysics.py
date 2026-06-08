@@ -134,19 +134,19 @@ def _compute_pi(seq: str) -> float:
     return round((lo + hi) / 2.0, 4)
 
 
-def _compute_gravy(seq: str) -> float:
+def _compute_gravy(seq: str) -> float | None:
     """Grand average of hydropathy (Kyte-Doolittle)."""
     values = [KD_HYDROPATHY[aa] for aa in seq if aa in KD_HYDROPATHY]
     if not values:
-        return 0.0
+        return None
     return round(sum(values) / len(values), 4)
 
 
-def _compute_disorder(seq: str) -> float:
+def _compute_disorder(seq: str) -> float | None:
     """Mean Top-IDP disorder propensity."""
     values = [TOP_IDP[aa] for aa in seq if aa in TOP_IDP]
     if not values:
-        return 0.0
+        return None
     return round(sum(values) / len(values), 4)
 
 
@@ -259,13 +259,15 @@ def _rg_fg_density(seq: str) -> float:
 
 
 def _composite_llps(
-    disorder: float,
+    disorder: float | None,
     prionlike: float,
     pipi: float,
     rg_fg: float,
     lcr_frac: float,
-) -> float:
+) -> float | None:
     """Composite LLPS propensity score."""
+    if disorder is None:
+        return None
     score = (
         0.25 * disorder
         + 0.25 * prionlike

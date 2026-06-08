@@ -89,28 +89,8 @@ class ConservationFrameModule:
 
     MODULE_NAME: str = "conservation_frame"
     OUTPUT_COLUMNS: list[str] = [
-        "conservation_primate_n_species_aligned",
-        "conservation_primate_n_species_intact_frame",
-        "conservation_primate_frac_intact",
-        "conservation_primate_start_codon_conserved",
-        "conservation_primate_mean_pident",
-        "conservation_primate_deepest_species",
-        "conservation_primate_max_depth",
-        "conservation_mammalian_n_species_aligned",
-        "conservation_mammalian_n_species_intact_frame",
-        "conservation_mammalian_frac_intact",
-        "conservation_mammalian_start_codon_conserved",
-        "conservation_mammalian_mean_pident",
-        "conservation_mammalian_deepest_species",
-        "conservation_mammalian_max_depth",
-        "conservation_primate_canonical_frac_intact",
-        "conservation_primate_canonical_n_species_intact_frame",
-        "conservation_primate_canonical_start_codon_conserved",
-        "conservation_primate_canonical_mean_pident",
-        "conservation_mammalian_canonical_frac_intact",
-        "conservation_mammalian_canonical_n_species_intact_frame",
-        "conservation_mammalian_canonical_start_codon_conserved",
-        "conservation_mammalian_canonical_mean_pident",
+        *(f"conservation_{f}" for f in _METRIC_FIELDS),
+        *(f"conservation_{_canonical_key(f)}" for f in _METRIC_FIELDS),
         "conservation_frame_summary",
     ]
     SCOPE: str = "C"
@@ -354,10 +334,9 @@ class ConservationFrameModule:
     ) -> tuple[str | None, dict[str, str]]:
         """Call ``hal2maf`` per interval, concatenate per-species aligned rows.
 
-        For minus-strand genes, each interval's alignment is
-        reverse-complemented and the intervals are concatenated in
-        descending genomic order so the resulting reference sequence reads
-        5'→3' in the mRNA.
+        Intervals are concatenated in ascending genomic order, building the
+        plus-strand sequence. For minus-strand genes a single full-sequence
+        reverse-complement at the end reorients everything 5'→3' in the mRNA.
 
         Returns ``(ref_seq, {species: seq})``. ``ref_seq`` is ``None`` when
         no MAF blocks contained the reference genome.
@@ -365,7 +344,7 @@ class ConservationFrameModule:
         all_species: set[str] = set()
         per_interval_rows: list[tuple[str, dict[str, str]]] = []
 
-        ordered = sorted(intervals, reverse=(strand == "-"))
+        ordered = sorted(intervals)
         for start, end in ordered:
             maf_text = extract_maf(
                 self._hal_path,

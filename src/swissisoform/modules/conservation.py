@@ -1,9 +1,10 @@
 """Module: Conservation — Zoonomia PhyloP / PhastCons BigWig lookups.
 
 Implementation of Path 3 from ``docs/reviews/conservation_module_spec.md``:
-nucleotide-level conservation metrics derived from the 241-mammal Cactus
-alignment (Christmas et al. 2023), queried as pre-computed PhyloP and
-PhastCons BigWig tracks.  Start-codon, Kozak-window, and region (unique /
+nucleotide-level conservation metrics queried as pre-computed BigWig tracks.
+PhyloP comes from the 241-mammal Cactus alignment (``cactus241way``, Christmas
+et al. 2023); PhastCons is the 100-vertebrate ``hg38.phastCons100way`` track.
+Start-codon, Kozak-window, and region (unique /
 shared / enrichment) metrics are all computed here.  Region metrics consume
 ``TIS.orf_exons`` and ``TIS.canonical_orf_exons`` produced by the assembly
 layer's Layer-2 walker over the GTF transcript skeletons.

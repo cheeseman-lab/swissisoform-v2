@@ -64,6 +64,13 @@ def load_ribotish_predictions(
 
     tis_df = pd.read_csv(filepath, sep="\t")
 
+    # Native Ribo-TISH AASeq carries a trailing stop '*'; strip it once at the
+    # source so AALen == len(AASeq) and native rows agree with imputed canonicals.
+    if "AASeq" in tis_df.columns:
+        tis_df["AASeq"] = tis_df["AASeq"].str.rstrip("*")
+        if "AALen" in tis_df.columns:
+            tis_df["AALen"] = tis_df["AASeq"].str.len()
+
     if tis_df.empty:
         tis_df["Chromosome"] = pd.Series(dtype="str")
         tis_df["Strand"] = pd.Series(dtype="str")

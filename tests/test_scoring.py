@@ -279,6 +279,7 @@ class TestF3DomainChange:
         site.comparison["interproscan"] = {
             "hits_in_diff_region": [{"pos": 3, "end": 7, "name": "PF_test"}],
             "hits_source_pane": "isoform",
+            "hits_canonical_status": "ok",
         }
         res = _f3_domain_change(site, ScoringConfig())
         assert res.value is True
@@ -295,6 +296,7 @@ class TestF3DomainChange:
         site.comparison["interproscan"] = {
             "hits_in_diff_region": [{"pos": 10, "end": 50, "name": "PF_body_spill"}],
             "hits_source_pane": "isoform",
+            "hits_canonical_status": "ok",
         }
         res = _f3_domain_change(site, ScoringConfig())
         assert res.value is False
@@ -304,9 +306,26 @@ class TestF3DomainChange:
         site = _site()
         site.diff_region = DifferentialRegion(isoform_start=0, isoform_end=10, sequence="X" * 10)
         site.isoform_annotations["interproscan"] = {"summary": {"status": "ok"}}
-        site.comparison["interproscan"] = {"hits_in_diff_region": [], "hits_source_pane": "isoform"}
+        site.comparison["interproscan"] = {
+            "hits_in_diff_region": [],
+            "hits_source_pane": "isoform",
+            "hits_canonical_status": "ok",
+        }
         res = _f3_domain_change(site, ScoringConfig())
         assert res.value is False
+
+    def test_canonical_status_not_ok_none(self):
+        """Comparator present but canonical IPS run didn't complete → None."""
+        from swissisoform.models import DifferentialRegion
+        site = _site()
+        site.diff_region = DifferentialRegion(isoform_start=0, isoform_end=10, sequence="X" * 10)
+        site.isoform_annotations["interproscan"] = {"summary": {"status": "ok"}}
+        site.comparison["interproscan"] = {
+            "hits_in_diff_region": [{"pos": 3, "end": 7, "name": "PF_test"}],
+            "hits_source_pane": "isoform",
+        }
+        res = _f3_domain_change(site, ScoringConfig())
+        assert res.value is None
 
 
 class TestF4TargetingChange:
@@ -358,10 +377,10 @@ class TestF5PathogenicVariantEnrichment:
         site = _site()
         site.isoform_annotations["varianteffect"] = {
             "summary": {"status": "ok"},
-            "n_scorable_in_unique": 3,
-            "n_damaging_in_unique": 2,
-            "n_am_pathogenic_in_unique": 1,
-            "mean_delta_llr_unique": -8.4,
+            "n_scorable_in_unique_gnomad": 3,
+            "n_damaging_in_unique_gnomad": 2,
+            "n_am_pathogenic_in_unique_gnomad": 1,
+            "mean_delta_llr_unique_gnomad": -8.4,
         }
         res = _f5_pathogenic_variant_enrichment(site, ScoringConfig())
         assert res.value is True
@@ -371,10 +390,10 @@ class TestF5PathogenicVariantEnrichment:
         site = _site()
         site.isoform_annotations["varianteffect"] = {
             "summary": {"status": "ok"},
-            "n_scorable_in_unique": 4,
-            "n_damaging_in_unique": 0,
-            "n_am_pathogenic_in_unique": 0,
-            "mean_delta_llr_unique": -1.2,
+            "n_scorable_in_unique_gnomad": 4,
+            "n_damaging_in_unique_gnomad": 0,
+            "n_am_pathogenic_in_unique_gnomad": 0,
+            "mean_delta_llr_unique_gnomad": -1.2,
         }
         res = _f5_pathogenic_variant_enrichment(site, ScoringConfig())
         assert res.value is False
@@ -384,10 +403,10 @@ class TestF5PathogenicVariantEnrichment:
         site = _site()
         site.isoform_annotations["varianteffect"] = {
             "summary": {"status": "ok"},
-            "n_scorable_in_unique": 3,
-            "n_damaging_in_unique": 1,
-            "n_am_pathogenic_in_unique": 1,
-            "mean_delta_llr_unique": -7.9,
+            "n_scorable_in_unique_gnomad": 3,
+            "n_damaging_in_unique_gnomad": 1,
+            "n_am_pathogenic_in_unique_gnomad": 1,
+            "mean_delta_llr_unique_gnomad": -7.9,
         }
         assert _f5_pathogenic_variant_enrichment(site, ScoringConfig()).value is True
         strict = ScoringConfig(f5_min_pathogenic_in_unique=2)
@@ -397,8 +416,8 @@ class TestF5PathogenicVariantEnrichment:
         site = _site()
         site.isoform_annotations["varianteffect"] = {
             "summary": {"status": "ok"},
-            "n_scorable_in_unique": "oops",
-            "n_damaging_in_unique": 1,
+            "n_scorable_in_unique_gnomad": "oops",
+            "n_damaging_in_unique_gnomad": 1,
         }
         res = _f5_pathogenic_variant_enrichment(site, ScoringConfig())
         assert res.value is None
@@ -409,11 +428,12 @@ class TestF6ClinicalVariantOverlap:
     def test_positive(self):
         site = _site()
         site.isoform_annotations["variant_intersection"] = {
-            "n_in_unique_region": 1,
+            "n_disease_in_unique_region": 1,
             "summary": {"status": "ok"},
         }
         res = _f6_clinical_variant_overlap(site, ScoringConfig())
         assert res.value is True
+        assert "n_disease_variants_in_unique=" in res.reason
 
 
 # ---------------------------------------------------------------------------
@@ -451,7 +471,7 @@ class TestModuleIntegration:
             "summary": {"status": "ok"},
         }
         site.isoform_annotations["variant_intersection"] = {
-            "n_in_unique_region": 1,
+            "n_disease_in_unique_region": 1,
             "summary": {"status": "ok"},
         }
         site.expression["HeLa"] = CellLineExpression(raw_count=10, cpm=1.0, p_value=0.01)

@@ -422,10 +422,15 @@ class VariantEffectModule:
 
         def _metrics(prefix: str, b: dict[str, Any]) -> dict[str, Any]:
             deltas, am_path = b["deltas"], b["am_path"]
+            # ``no_intersection`` means the region had no variants to evaluate;
+            # report ``None`` so a true zero (ran, found nothing) stays distinct.
+            # ``no_predictors`` still counts consequence-based LoF/damaging, so
+            # those counts stay real.
+            counted = status != "no_intersection"
             return {
-                f"n_scorable_in_{prefix}": len(b["scorable"]),
-                f"n_damaging_in_{prefix}": len(b["damaging"]),
-                f"n_lof_in_{prefix}": b["lof"],
+                f"n_scorable_in_{prefix}": len(b["scorable"]) if counted else None,
+                f"n_damaging_in_{prefix}": len(b["damaging"]) if counted else None,
+                f"n_lof_in_{prefix}": b["lof"] if counted else None,
                 f"mean_delta_llr_{prefix}": (sum(deltas) / len(deltas) if deltas else None),
                 f"min_delta_llr_{prefix}": (min(deltas) if deltas else None),
                 f"mean_am_pathogenicity_{prefix}": (

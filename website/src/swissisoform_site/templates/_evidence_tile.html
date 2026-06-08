@@ -10,7 +10,7 @@
     {% if sl.headline is none %}
       <span class="text-xs text-slate-400">—</span>
     {% else %}
-      {{ sl.headline }}
+      {{ format_metric(sl.headline, sl.headline_fmt) }}
     {% endif %}
   </div>
   {# Body content stored as a <template> fragment — never rendered inline.

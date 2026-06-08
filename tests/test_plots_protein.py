@@ -27,7 +27,7 @@ def _iso(orf_type="truncated", diff_space="canonical", iso_len=405, can_len=434)
         differential_sequence="MLRCLYHWHRPVLNRRWSRLCLPKQYLFT",
         canonical_len=can_len,
         isoform_len=iso_len,
-        variants_in_unique=[
+        variants=[
             {
                 "variant_id": "ClinVar:1",
                 "isoform_protein_pos": 10,
@@ -36,6 +36,7 @@ def _iso(orf_type="truncated", diff_space="canonical", iso_len=405, can_len=434)
                 "clinical_significance": "Pathogenic",
                 "source": "ClinVar",
                 "consequence": "frameshift_variant",
+                "in_unique": True,
             },
             {
                 "variant_id": "ClinVar:2",
@@ -45,6 +46,7 @@ def _iso(orf_type="truncated", diff_space="canonical", iso_len=405, can_len=434)
                 "clinical_significance": "Pathogenic",
                 "source": "ClinVar",
                 "consequence": "stop_gained",
+                "in_unique": True,
             },
         ],
         domains=[
@@ -125,13 +127,14 @@ def test_pathogenic_variants_are_red():
 def test_non_pathogenic_variants_also_render():
     """VUS / benign variants render too (not only pathogenic)."""
     iso = _iso()
-    iso.variants_in_unique = iso.variants_in_unique + [
+    iso.variants = iso.variants + [
         {
             "variant_id": "gnomAD:1",
             "isoform_protein_pos": 15,
             "clinical_significance": "Uncertain_significance",
             "source": "gnomAD",
             "consequence": "missense_variant",
+            "in_unique": True,
         }
     ]
     fig = pplot.build_protein_figure(iso, overlays={"variants": True})

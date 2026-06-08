@@ -621,36 +621,39 @@ CRITERIA: dict[str, dict[str, Any]] = {
     },
     "F5_pathogenic_variant_enrichment": {
         "axis": "F",
-        "label": "Pathogenic variant enrichment",
-        "short_label": "Pathogenic",
+        "label": "Germline tolerance",
+        "short_label": "Germline",
         "evidence_cols": [
-            "isoform_variant_intersection_n_pathogenic_in_unique_region",
-            "isoform_variant_intersection_n_pathogenic_in_shared_region",
-            "isoform_varianteffect_n_damaging_in_unique",
-            "isoform_varianteffect_mean_delta_llr_unique",
-            "isoform_varianteffect_mean_am_pathogenicity_unique",
+            "isoform_varianteffect_n_scorable_in_unique_gnomad",
+            "isoform_varianteffect_n_damaging_in_unique_gnomad",
+            "isoform_varianteffect_n_lof_in_unique_gnomad",
+            "isoform_varianteffect_mean_delta_llr_unique_gnomad",
+            "isoform_varianteffect_min_delta_llr_unique_gnomad",
+            "isoform_varianteffect_mean_am_pathogenicity_unique_gnomad",
         ],
         "evidence_hits_col": "isoform_variant_intersection_hits",
-        "headline_col": "isoform_variant_intersection_n_pathogenic_in_unique_region",
+        "headline_col": "isoform_varianteffect_n_damaging_in_unique_gnomad",
         "interpretation_hint": (
-            "Are clinical variants enriched in the unique region "
-            "(vs shared region or genome average)?"
+            "Do germline (gnomAD) variants in the unique region carry damaging "
+            "predicted effects (ESM-2 ΔLLR / AlphaMissense)?"
         ),
     },
     "F6_clinical_variant_overlap": {
         "axis": "F",
-        "label": "Clinical variant overlap",
-        "short_label": "Variants",
+        "label": "Disease variant overlap",
+        "short_label": "Disease",
         "evidence_cols": [
             "isoform_variant_intersection_n_total",
-            "isoform_variant_intersection_n_in_unique_region",
-            "isoform_variant_intersection_n_in_shared_region",
+            "isoform_variant_intersection_n_disease_in_unique_region",
+            "isoform_variant_intersection_n_disease_in_shared_region",
+            "isoform_variant_intersection_n_pathogenic_in_unique_region",
             "isoform_variant_intersection_n_dropped_outside_coding",
         ],
         "evidence_hits_col": "isoform_variant_intersection_hits",
-        "headline_col": "isoform_variant_intersection_n_in_unique_region",
+        "headline_col": "isoform_variant_intersection_n_disease_in_unique_region",
         "interpretation_hint": (
-            "How many clinical variants overlap the isoform's coding region at all?"
+            "How many disease variants (ClinVar + COSMIC) overlap the isoform's "
+            "unique coding region?"
         ),
     },
 }
@@ -836,6 +839,14 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "Variants in shared region",
         "format": "int",
     },
+    "isoform_variant_intersection_n_disease_in_unique_region": {
+        "label": "Disease variants in unique region",
+        "format": "int",
+    },
+    "isoform_variant_intersection_n_disease_in_shared_region": {
+        "label": "Disease variants in shared region",
+        "format": "int",
+    },
     "isoform_variant_intersection_n_pathogenic_in_unique_region": {
         "label": "Pathogenic in unique region",
         "format": "int",
@@ -848,16 +859,28 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "Variants dropped outside coding",
         "format": "int",
     },
-    "isoform_varianteffect_n_damaging_in_unique": {
-        "label": "Damaging effect predictions (AM+PLM)",
+    "isoform_varianteffect_n_scorable_in_unique_gnomad": {
+        "label": "Scorable germline variants (unique)",
         "format": "int",
     },
-    "isoform_varianteffect_mean_delta_llr_unique": {
-        "label": "Mean ESM-2 ΔLLR (unique)",
+    "isoform_varianteffect_n_damaging_in_unique_gnomad": {
+        "label": "Damaging germline predictions (AM+PLM)",
+        "format": "int",
+    },
+    "isoform_varianteffect_n_lof_in_unique_gnomad": {
+        "label": "LoF germline variants (unique)",
+        "format": "int",
+    },
+    "isoform_varianteffect_mean_delta_llr_unique_gnomad": {
+        "label": "Mean ESM-2 ΔLLR, germline (unique)",
         "format": "float3",
     },
-    "isoform_varianteffect_mean_am_pathogenicity_unique": {
-        "label": "Mean AlphaMissense pathogenicity (unique)",
+    "isoform_varianteffect_min_delta_llr_unique_gnomad": {
+        "label": "Min ESM-2 ΔLLR, germline (unique)",
+        "format": "float3",
+    },
+    "isoform_varianteffect_mean_am_pathogenicity_unique_gnomad": {
+        "label": "Mean AlphaMissense pathogenicity, germline (unique)",
         "format": "float3",
     },
 }
@@ -950,6 +973,7 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
           - ``value`` (True/False/None from isoform_scoring_criteria[criterion_id])
           - ``reason`` (string from isoform_scoring_reasons[criterion_id])
           - ``headline`` (the value at headline_col, or None)
+          - ``headline_fmt`` (format code for rendering ``headline`` via ``format_metric``)
           - ``evidence`` (dict of {col_name: value} for all evidence_cols)
           - ``hits`` (list of dicts from evidence_hits_col if present, else [])
     """
@@ -974,6 +998,7 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
     evidence = {col: raw.get(col) for col in cfg["evidence_cols"]}
     headline_col = cfg.get("headline_col")
     headline = raw.get(headline_col) if headline_col else None
+    headline_fmt = CRITERIA_METRIC_LABELS.get(headline_col, {}).get("format", "str")
 
     hits: list[dict[str, Any]] = []
     n_hits_total = 0
@@ -1021,6 +1046,7 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         "value": criterion_entry.get("value"),
         "reason": criterion_entry.get("reason"),
         "headline": headline,
+        "headline_fmt": headline_fmt,
         "evidence": evidence,
         "hits": hits,
         "n_hits_total": n_hits_total,

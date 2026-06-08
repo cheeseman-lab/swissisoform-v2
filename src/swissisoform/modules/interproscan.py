@@ -459,7 +459,7 @@ class InterProScanModule:
                 h.get("pos") if isinstance(h.get("pos"), int) else 10**9,
                 h.get("end") if isinstance(h.get("end"), int) else 10**9,
                 str(h.get("name", "")),
-                str(h.get("source", "")),
+                str(h.get("db", "")),
             ),
         )
         return {

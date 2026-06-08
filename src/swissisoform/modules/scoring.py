@@ -31,7 +31,7 @@ Existence:
     E5 Ribosome initiation efficiency threshold (``site.expression``)
     E6 Mass-spec validation — PepQuery2-validated unique peptide hits
        in public MS spectra (``massspec``).  Reports ``None`` until the
-       PepQuery2 precompute lands (it has not).  In-silico tryptic
+       PepQuery2 precompute lands.  In-silico tryptic
        detectability alone is NOT treated as evidence.
 
 Functional impact:
@@ -354,21 +354,19 @@ def _f3_domain_change(
     Returns ``None`` when:
 
     - the comparator data is missing (precompute not run), or
-    - the IPS annotation's ``summary.status`` is not ``ok`` (precompute
-      run but the scan didn't actually complete).
+    - the source pane's InterProScan ``summary.status`` (surfaced by the
+      comparator as ``hits_canonical_status``) is not ``ok`` — the
+      canonical hit list we count domains from didn't actually complete.
     """
-    ips_ann = _annotation(site, "interproscan")
-    if ips_ann is not None:
-        status = ips_ann.get("summary", {}).get("status", "ok")
-        if status != "ok":
-            return CriterionResult(
-                "F3_domain_change", None, f"interproscan status={status}"
-            )
-
     cmp = site.comparison.get("interproscan")
     if not isinstance(cmp, dict):
         return CriterionResult(
             "F3_domain_change", None, "interproscan comparison missing"
+        )
+    canonical_status = cmp.get("hits_canonical_status")
+    if canonical_status != "ok":
+        return CriterionResult(
+            "F3_domain_change", None, f"interproscan status={canonical_status}"
         )
     hits = cmp.get("hits_in_diff_region")
     if not isinstance(hits, list):
@@ -480,8 +478,8 @@ def _f5_pathogenic_variant_enrichment(
             "F5_pathogenic_variant_enrichment", None, "varianteffect not run"
         )
 
-    n_scorable_raw = ve.get("n_scorable_in_unique") if ve else None
-    n_damaging_raw = ve.get("n_damaging_in_unique") if ve else None
+    n_scorable_raw = ve.get("n_scorable_in_unique_gnomad") if ve else None
+    n_damaging_raw = ve.get("n_damaging_in_unique_gnomad") if ve else None
     try:
         n_scorable = int(n_scorable_raw) if n_scorable_raw is not None else 0
         n_damaging = int(n_damaging_raw) if n_damaging_raw is not None else 0
@@ -496,13 +494,13 @@ def _f5_pathogenic_variant_enrichment(
         return CriterionResult(
             "F5_pathogenic_variant_enrichment",
             None,
-            "no scorable missense variants in unique region",
+            "no scorable variants (missense or LoF) in unique region",
         )
 
     passed = n_damaging >= cfg.f5_min_pathogenic_in_unique
-    n_am_path = ve.get("n_am_pathogenic_in_unique")
-    n_lof = ve.get("n_lof_in_unique")
-    mean_delta = ve.get("mean_delta_llr_unique")
+    n_am_path = ve.get("n_am_pathogenic_in_unique_gnomad")
+    n_lof = ve.get("n_lof_in_unique_gnomad")
+    mean_delta = ve.get("mean_delta_llr_unique_gnomad")
     mean_delta_str = f"{mean_delta:.2f}" if isinstance(mean_delta, (int, float)) else "n/a"
     return CriterionResult(
         "F5_pathogenic_variant_enrichment",
@@ -518,21 +516,21 @@ def _f5_pathogenic_variant_enrichment(
 def _f6_clinical_variant_overlap(
     site: TranslationInitiationSite, cfg: ScoringConfig  # noqa: ARG001
 ) -> CriterionResult:
-    """F6: any clinical variant sits in the isoform-unique region."""
+    """F6: any disease variant sits in the isoform-unique region."""
     ann = _annotation(site, "variant_intersection")
     if not _status_ok(ann):
         return CriterionResult(
             "F6_clinical_variant_overlap", None, "variant_intersection not run"
         )
-    n = ann.get("n_in_unique_region") if ann else None
+    n = ann.get("n_disease_in_unique_region") if ann else None
     if n is None:
         return CriterionResult(
-            "F6_clinical_variant_overlap", None, "n_in_unique_region unavailable"
+            "F6_clinical_variant_overlap", None, "n_disease_in_unique_region unavailable"
         )
     return CriterionResult(
         "F6_clinical_variant_overlap",
         n > 0,
-        f"n_variants_in_unique={n}",
+        f"n_disease_variants_in_unique={n}",
     )
 
 
@@ -645,11 +643,15 @@ class EvidenceScoringModule:
         return {
             "existence_score": existence_score,
             "existence_evaluable": existence_evaluable,
-            "existence_high_confidence": existence_score >= self._scoring.existence_high_threshold,
+            "existence_high_confidence": (
+                existence_score >= self._scoring.existence_high_threshold
+                and existence_evaluable >= self._scoring.existence_high_threshold
+            ),
             "functional_score": functional_score,
             "functional_evaluable": functional_evaluable,
             "functional_high_confidence": (
                 functional_score >= self._scoring.functional_high_threshold
+                and functional_evaluable >= self._scoring.functional_high_threshold
             ),
             "criteria": criteria_map,
             "reasons": reasons_map,

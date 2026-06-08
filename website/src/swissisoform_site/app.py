@@ -32,9 +32,9 @@ from scripts.site.build_evidence_records import (
 
 from swissisoform_site.data import (
     CRITERIA_FOR_PAGE,
+    CRITERION_ABOUT,
     EXISTENCE_CRITERIA,
     FUNCTIONAL_CRITERIA,
-    CRITERION_ABOUT,
     Isoform,
     _isoform_view,
     criterion_evidence_for,
@@ -389,8 +389,8 @@ def _make_protein_adapter(iso: Isoform, gene: Any, skeleton: Any | None) -> type
                         or h.get("db")
                         or "domain"
                     ),
-                    "start": int(start),
-                    "end": int(end),
+                    "start": int(start) + 1,
+                    "end": int(end) + 1,
                 }
             )
     except (TypeError, ValueError):
@@ -411,8 +411,8 @@ def _make_protein_adapter(iso: Isoform, gene: Any, skeleton: Any | None) -> type
             motifs.append(
                 {
                     "name": m.get("name", "motif"),
-                    "start": int(start),
-                    "end": int(end),
+                    "start": int(start) + 1,
+                    "end": int(end) + 1,
                 }
             )
     except (TypeError, ValueError):
@@ -432,25 +432,29 @@ def _make_protein_adapter(iso: Isoform, gene: Any, skeleton: Any | None) -> type
             pos = v.get("protein_pos")
             if pos is None:
                 pos = v.get("isoform_protein_pos")
+            consequence = v.get("consequence") or v.get("isoform_consequence") or "other"
         else:
             pos = v.get("isoform_protein_pos")
             if pos is None:
                 pos = v.get("protein_pos")
+            consequence = v.get("isoform_consequence") or v.get("consequence") or "other"
         if pos is None:
             continue
         try:
             pos_int = int(float(pos))
         except (TypeError, ValueError):
             continue
+        # Pipeline ``pos`` is 0-based (0..len-1); the displayed bar axis is
+        # 1-based, so shift right by one to align lollipops with the bar.
         variants.append(
             {
                 "variant_id": v.get("variant_id") or v.get("id") or "?",
-                "isoform_protein_pos": pos_int,
+                "isoform_protein_pos": pos_int + 1,
                 "in_unique": bool(v.get("in_isoform_unique")),
                 "hgvsp": v.get("hgvsp"),
                 "clinical_significance": v.get("clinical_significance"),
                 "source": v.get("source"),
-                "consequence": v.get("isoform_consequence") or v.get("consequence") or "other",
+                "consequence": consequence,
             }
         )
 

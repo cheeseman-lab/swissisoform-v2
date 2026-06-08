@@ -11,10 +11,11 @@ if it has reason to trust canonical-frame coordinates, but the authoritative
 source of ``protein_pos`` is ``ConsequenceValidator``, which re-maps genomic
 positions to isoform-specific protein coordinates using the transcript model.
 
-Until a validator runs, ``ClinicalModule.annotate`` filters variants by
-``protein_pos is not None`` and will return zero hits — this is the correct
-behavior when we genuinely don't know where the variant falls in the isoform
-protein.
+``ClinicalModule.annotate`` retains all fetched variants regardless of
+``protein_pos`` so the per-TIS ``variant_intersection`` pass can re-validate
+non-canonical-CDS variants against each isoform's ``orf_exons`` (an
+extension/altORF unique region is 5'UTR-of-canonical and would otherwise be
+silently dropped).
 """
 
 from __future__ import annotations

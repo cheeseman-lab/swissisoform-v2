@@ -125,7 +125,8 @@ def get_protein_products(protein_fasta: str | Path) -> pd.DataFrame:
         tid = next((t for t in rec.id.split("|") if t.startswith("ENST")), None)
         if tid is None:
             continue
-        rows.append({"Tid": tid, "AASeq": str(rec.seq), "AALen": len(rec.seq)})
+        aaseq = str(rec.seq).rstrip("*")
+        rows.append({"Tid": tid, "AASeq": aaseq, "AALen": len(aaseq)})
     return pd.DataFrame(rows)
 
 

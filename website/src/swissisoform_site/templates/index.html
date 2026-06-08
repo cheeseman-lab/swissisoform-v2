@@ -30,14 +30,14 @@
   {% set n_other = others|length %}
 
   {# Max E and F across this gene's isoforms — headline summary. #}
-  {% set e_max = namespace(score=0, eval=0) %}
-  {% set f_max = namespace(score=0, eval=0) %}
+  {% set e_max = namespace(score=none, eval=none) %}
+  {% set f_max = namespace(score=none, eval=none) %}
   {% for iso in gene.isoforms %}
-    {% if iso.existence_score is not none and iso.existence_score > e_max.score %}
+    {% if iso.existence_score is not none and (e_max.score is none or iso.existence_score > e_max.score) %}
       {% set e_max.score = iso.existence_score %}
       {% set e_max.eval = iso.existence_evaluable or 0 %}
     {% endif %}
-    {% if iso.functional_score is not none and iso.functional_score > f_max.score %}
+    {% if iso.functional_score is not none and (f_max.score is none or iso.functional_score > f_max.score) %}
       {% set f_max.score = iso.functional_score %}
       {% set f_max.eval = iso.functional_evaluable or 0 %}
     {% endif %}
@@ -60,8 +60,8 @@
 
     {# Headline E/F scores — max across isoforms. #}
     <div class="flex gap-3 mb-3 text-xs font-mono text-slate-700">
-      <span><span class="text-slate-500">Best E</span> {{ e_max.score }}/{{ e_max.eval }}</span>
-      <span><span class="text-slate-500">Best F</span> {{ f_max.score }}/{{ f_max.eval }}</span>
+      <span><span class="text-slate-500">Best E</span> {% if e_max.score is not none %}{{ e_max.score }}/{{ e_max.eval }}{% else %}—{% endif %}</span>
+      <span><span class="text-slate-500">Best F</span> {% if f_max.score is not none %}{{ f_max.score }}/{{ f_max.eval }}{% else %}—{% endif %}</span>
     </div>
 
     {# Isoform dropdown — native <details> element, no JS. #}
@@ -81,19 +81,19 @@
         {% for iso in extensions %}
         <li><a href="{{ url_for('isoform_page', gene_name=gene.name, tis_slug_str=iso.tis_id|slugify) }}">
           <span class="iso-chip ext">EXT</span>
-          {{ iso.tis_id }} · {{ iso.aa_len }} aa · E {{ iso.existence_score }}/{{ iso.existence_evaluable }} · F {{ iso.functional_score }}/{{ iso.functional_evaluable }}
+          {{ iso.tis_id }} · {{ iso.aa_len }} aa · E {% if iso.existence_score is not none %}{{ iso.existence_score }}/{{ iso.existence_evaluable }}{% else %}—{% endif %} · F {% if iso.functional_score is not none %}{{ iso.functional_score }}/{{ iso.functional_evaluable }}{% else %}—{% endif %}
         </a></li>
         {% endfor %}
         {% for iso in truncations %}
         <li><a href="{{ url_for('isoform_page', gene_name=gene.name, tis_slug_str=iso.tis_id|slugify) }}">
           <span class="iso-chip trunc">TRUNC</span>
-          {{ iso.tis_id }} · {{ iso.aa_len }} aa · E {{ iso.existence_score }}/{{ iso.existence_evaluable }} · F {{ iso.functional_score }}/{{ iso.functional_evaluable }}
+          {{ iso.tis_id }} · {{ iso.aa_len }} aa · E {% if iso.existence_score is not none %}{{ iso.existence_score }}/{{ iso.existence_evaluable }}{% else %}—{% endif %} · F {% if iso.functional_score is not none %}{{ iso.functional_score }}/{{ iso.functional_evaluable }}{% else %}—{% endif %}
         </a></li>
         {% endfor %}
         {% for iso in others %}
         <li><a href="{{ url_for('isoform_page', gene_name=gene.name, tis_slug_str=iso.tis_id|slugify) }}">
           <span class="iso-chip other">{{ iso.orf_type|upper }}</span>
-          {{ iso.tis_id }} · {{ iso.aa_len }} aa · E {{ iso.existence_score }}/{{ iso.existence_evaluable }} · F {{ iso.functional_score }}/{{ iso.functional_evaluable }}
+          {{ iso.tis_id }} · {{ iso.aa_len }} aa · E {% if iso.existence_score is not none %}{{ iso.existence_score }}/{{ iso.existence_evaluable }}{% else %}—{% endif %} · F {% if iso.functional_score is not none %}{{ iso.functional_score }}/{{ iso.functional_evaluable }}{% else %}—{% endif %}
         </a></li>
         {% endfor %}
       </ul>

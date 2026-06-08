@@ -137,7 +137,7 @@ def filter_tis(
     frame_test_max_p: float = 0.01,
     combined_test_max_q: float = 0.05,
     tis_distance_buffer: int = 30,
-    exempt_annotated: bool = True,
+    exempt_annotated: bool = False,
     return_dropped: bool = False,
 ) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame]:
     """Filter TIS sites through a 5-step pipeline.
@@ -162,12 +162,12 @@ def filter_tis(
         combined_test_max_q: Maximum FisherQvalue.
         tis_distance_buffer: Minimum distance (nt) between kept TIS on the
             same transcript.
-        exempt_annotated: If True (default), Annotated TIS from reference
+        exempt_annotated: If True, Annotated TIS from reference
             transcripts skip the count and significance drops — they still
             have to come from a reference transcript but are retained
             regardless of re-detection p-values.  This preserves canonical
-            reference sequences downstream.  Set False for upstream-
-            reference-faithful behavior.
+            reference sequences downstream.  Default False for upstream-
+            reference-faithful behavior (imputation supersedes exemption).
         return_dropped: If True, return (filtered, dropped) tuple.
 
     Returns:
@@ -188,18 +188,6 @@ def filter_tis(
     )
 
     tis_df = df.copy()
-
-    # Add GenomeStart column
-    def _genome_start(genome_pos: str) -> str:
-        strand = genome_pos.split(":")[-1]
-        if strand == "+":
-            return genome_pos.split("-")[0]
-        else:
-            chrom = genome_pos.split(":")[0]
-            end = genome_pos.split(":")[1].split("-")[1]
-            return f"{chrom}:{end}"
-
-    tis_df["GenomeStart"] = tis_df["GenomePos"].apply(_genome_start)
     tis_df["DropReason"] = None
 
     logger.info("Identified %d reference transcript IDs", len(reference_tids))

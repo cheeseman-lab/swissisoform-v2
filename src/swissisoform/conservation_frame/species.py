@@ -17,7 +17,7 @@ from __future__ import annotations
 REFERENCE_SPECIES: str = "Homo_sapiens"
 
 # Path 1: primate radiation within the Zoonomia 241-mammal alignment.
-# 23 species spanning great apes, gibbons, Old-World monkeys, New-World
+# 25 species spanning great apes, gibbons, Old-World monkeys, New-World
 # monkeys, and strepsirrhines.
 PRIMATE_SPECIES: list[str] = [
     # Hominidae

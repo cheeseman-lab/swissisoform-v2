@@ -220,7 +220,7 @@ class VariantIntersectionModule:
 
             tagged["in_isoform_unique"] = in_unique
             tagged["in_isoform_shared"] = in_shared
-            tagged["in_isoform"] = in_isoform_orf or in_unique
+            tagged["in_isoform"] = in_isoform_orf
 
             n_scored += 1
             src = str(hit.get("source")).lower()

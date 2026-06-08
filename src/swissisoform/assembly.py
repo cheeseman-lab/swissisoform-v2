@@ -355,11 +355,8 @@ def _select_canonical(gene_rows: pd.DataFrame) -> tuple[str, str, str]:
     """
     annotated = gene_rows[gene_rows["TisType"].str.startswith("Annotated")]
 
-    if annotated.empty:
-        best = gene_rows.loc[gene_rows["AALen"].idxmax()]
-        return str(best["Tid"]), str(best["AASeq"]), str(best["Gid"])
-
-    best = annotated.loc[annotated["AALen"].idxmax()]
+    source = gene_rows if annotated.empty else annotated
+    best = source.loc[source["AASeq"].map(lambda s: len(_strip_stop(str(s)))).idxmax()]
     return str(best["Tid"]), str(best["AASeq"]), str(best["Gid"])
 
 
@@ -386,7 +383,7 @@ def _build_canonical_by_tid(gene_rows: pd.DataFrame) -> dict[str, str]:
         tid = str(row["Tid"])
         aaseq = str(row["AASeq"])
         existing = by_tid.get(tid)
-        if existing is None or len(aaseq) > len(existing):
+        if existing is None or len(_strip_stop(aaseq)) > len(_strip_stop(existing)):
             if existing is not None:
                 logger.debug("Multiple Annotated rows for transcript %s; keeping longest", tid)
             by_tid[tid] = aaseq
@@ -581,7 +578,7 @@ def _row_to_tis(
             expression[sample_name] = CellLineExpression(
                 raw_count=int(raw),
                 cpm=float(cpm),
-                p_value=float(qv) if pd.notna(qv) else float("nan"),
+                p_value=float(qv) if pd.notna(qv) else None,
                 initiation_efficiency=init_eff,
             )
 
@@ -652,7 +649,7 @@ def _validate_columns(df: pd.DataFrame, samples: list[str] | None) -> None:
         missing += [c for c in _PER_SAMPLE_REQUIRED if c not in df.columns]
     else:
         for sample in samples:
-            for metric in ("TISCounts", "NormTISCounts", "FisherQvalue"):
+            for metric in ("TISCounts", "NormTISCounts", "TISPvalue", "RiboPvalue", "FisherQvalue"):
                 col = f"{sample}_{metric}"
                 if col not in df.columns:
                     missing.append(col)

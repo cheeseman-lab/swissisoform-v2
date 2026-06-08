@@ -103,8 +103,8 @@
       *2. Cross-cell-line combine* (§1.4)
       #v(2pt)
       #text(size: 8.5pt)[
-        Union of distinct (chromosome, position, strand, codon, transcript)
-        tuples across the six samples. Each tuple carries a vector of
+        Union of distinct (gene symbol, transcript, ORF genomic span, start
+        codon) tuples across the six samples. Each tuple carries a vector of
         per-cell-line expression metrics; zero counts fill non-observing
         samples. Differential expression is deferred downstream.
       ]
@@ -146,12 +146,15 @@
         columns: (1fr, 1fr, 1fr),
         column-gutter: 4pt,
         row-gutter: 4pt,
-        mod[Biophysics][18 descriptors: pI, GRAVY, molecular weight, net charge, instability, aromaticity, disorder (TOP-IDP), Shannon complexity, 4 LLPS components],
+        mod[Biophysics][18 descriptors: pI, GRAVY, instability, aromaticity, disorder (TOP-IDP), Shannon / window entropy, complexity, homopolymer, LLPS composite + components],
         mod[Linear motifs][14 ELM-derived SLiM patterns (CDK / ATM / 14-3-3 / SH3 / PIP / RING / ZnF etc.) — positional hits + density],
-        mod[Subcellular localization][DeepLoc 2.1 (ESM-1b embeddings, Fast mode) in isolated env; batched FASTA for amortized ESM cost],
+        mod[Subcellular localization][DeepLoc 2.1 (Fast mode) in isolated env; batched FASTA for amortized embedding cost],
         mod[Clinical variant burden][gnomAD v4.1 + ClinVar + COSMIC v102 via PyArrow pushdown; codon-level re-validation in isoform frame],
-        mod[Evolutionary conservation][DIAMOND v2.1 vs. UniProt SwissProt; hit count saturating at 9, `no_hits` vs. `not_run` distinguished],
+        mod[Domain architecture][InterProScan 6 (Pfam etc.) domain hits — positional, with diff-region gain / loss],
         mod[Proteomic detectability][In-silico tryptic digest (≤1 missed cleavage, 7–30 aa), uniqueness flag vs. canonical, optional PepQuery2 hit],
+        mod[Signal / targeting peptides][SignalP 6.0 signal-peptide call + TargetP 2.0 SP / mTP / cTP targeting prediction],
+        mod[Evolutionary conservation][Zoonomia phyloP (cactus241way) + phastCons (100way) BigWig at TIS codon / Kozak / unique region; HAL reading-frame integrity],
+        mod[Per-variant effect][AlphaMissense + ESM-2 650M masked-marginal ΔLLR on each unique-region clinical variant; gnomAD tolerance gate],
       )
 
       #v(8pt)
@@ -200,8 +203,9 @@
   caption: [Overview of the SwissIsoform v2 annotation pipeline. Sand-colored
   boxes denote external inputs and reference data; blue denotes per-sample
   and cross-sample preprocessing; green denotes the symmetric canonical /
-  isoform annotation layer with its nine methods grouped by dispatch
-  protocol (six protein-level, two site-level, one gene-level); red denotes
+  isoform annotation layer with its annotation methods grouped by dispatch
+  protocol (protein-level methods run on canonical and isoform; site-level
+  methods on each TIS; one gene-level method); red denotes
   the final differential-annotation table.],
 ) <fig:overview>
 
@@ -225,9 +229,10 @@ and the initial ORF-type classification assigned by Ribo-TISH
 (Annotated, Extended, Truncated, 5$prime$UTR, 3$prime$UTR, Internal, or
 Novel). To normalize across samples of differing depth, we recoded
 Ribo-TISH's composite labels into a controlled vocabulary and divided
-each TIS's raw read count by the sum of uniquely-mapped RNA-seq reads
-assigned to the corresponding gene by HTSeq-count @htseq, scaled to
-reads per million (RPM).
+each TIS's raw read count by the total number of uniquely-mapped RNA-seq
+reads in the matched sample — a single grand-total constant summed over
+all genes from the HTSeq-count @htseq table — scaled to reads per million
+(RPM).
 
 == Reference-transcript pre-filter and significance filtering
 
@@ -249,8 +254,11 @@ distance-deduplication pass on the surviving events enforces a minimum
 spacing of 30 nucleotides between retained TIS on any given transcript:
 within each transcript, surviving events are sorted in descending RPM,
 canonical starts (`Annotated` events) are selected preferentially, and
-subsequent events whose genomic start falls within the 30-nucleotide
-downstream buffer of a retained event are marked _UpstreamTIS_. TIS
+subsequent events whose transcript-relative start position falls within a
+30-nucleotide window of a retained event are marked _UpstreamTIS_. The mask
+is applied on the raw `Start` column (in plus-strand genomic coordinates),
+so on minus-strand genes increasing `Start` is mRNA-upstream of the
+retained event. TIS
 rows are retained when they carry no drop reason across all five steps;
 all thresholds are exposed as configurable parameters.
 
@@ -270,9 +278,10 @@ annotation by combining the transcript's CDS coordinates, its
 FASTA (`pc_translations`). The resulting row inherits the transcript's
 coordinates, the trinucleotide of its start codon (extracted from the
 primary-assembly GRCh38 FASTA), and the full amino-acid sequence of the
-encoded protein, and is tagged with zero-valued expression fields so
+encoded protein, and is tagged with zero-valued read-count fields so
 that downstream layers treat it as a reference fixture rather than an
-empirical observation. Imputation supersedes — rather than augments — the
+empirical observation (the RNA-seq sample total carried for RPM
+normalization is left at its non-zero value). Imputation supersedes — rather than augments — the
 alternative convention of exempting `Annotated` rows from significance
 filtering, and we run the filter in non-exempting mode to match the
 upstream reference implementation exactly.
@@ -294,14 +303,15 @@ Because each cell line was processed independently through the pipeline
 above, a given alternative TIS may be supported in multiple cell lines
 with independent expression estimates. We combined the six per-sample
 tables by taking the union of distinct
-$("chromosome", "locus", "strand", "start codon", "transcript")$ tuples
+$("gene symbol", "transcript", "ORF genomic span", "start codon")$ tuples
 across samples and attaching, to each such tuple, a vector of
 cell-line-specific expression metrics (raw count, RPM, one-sided
 significance, and Ribo-TISH initiation efficiency score) carried forward
-from whichever sample(s) observed the event. Alternative events observed
-in only a single cell line were retained but flagged with zero expression
-in non-observing samples; canonical rows, by construction, appear in every
-cell line. Cross-cell-line differential analysis is performed downstream
+from whichever sample(s) observed the event. Here the ORF genomic span is
+the full start-to-stop coordinate range emitted by Ribo-TISH (`GenomePos`).
+Events observed in only a single cell line were retained but flagged with
+zero expression in non-observing samples. Cross-cell-line differential
+analysis is performed downstream
 on this unified table rather than during upstream filtering, so that the
 filter logic remains a pure within-sample operation.
 
@@ -311,17 +321,20 @@ filter logic remains a pure within-sample operation.
 
 From the aggregated filtered table we constructed, for each gene symbol,
 a structured _gene record_ containing: the gene's GENCODE identifier, a
-gene-level representative canonical transcript (defined as the longest
-GENCODE protein-coding transcript bearing a defined CDS start), the
+gene-level representative canonical (defined as the longest annotated
+protein among the reference transcripts surviving the upstream filter and
+imputation, not over all GENCODE transcripts), the
 protein sequence of that representative canonical, and a list of
 alternative TIS records. Each TIS record carries the canonical protein of
 its _own_ transcript — not the gene-level longest — because Ribo-TISH
 classifies ORF type (e.g. `Extended`, `Truncated`) relative to the CDS of
 the transcript on which the event was detected; comparing an alternative
 start against a transcript whose CDS it does not modify would produce
-spurious differential coordinates. When a TIS's own transcript lacked an
-`Annotated` row in the filtered output, the record fell back to the
-gene-level canonical with a record of the substitution.
+spurious differential coordinates. Because the upstream canonical-imputation
+step guarantees that every surviving reference transcript carries an
+`Annotated` row, this per-transcript lookup is always defined; assembly
+raises an error rather than substituting a gene-level canonical if a TIS's
+own transcript is found to lack one.
 
 == Differential-region derivation
 
@@ -332,22 +345,29 @@ sequences rather than from coordinates, which allowed the same logic to
 handle frame-preserving extensions, frame-preserving truncations, and
 out-of-frame or non-coding-frame alternative ORFs without special cases:
 
-- *Extensions* (`Ext:Known` or `Ext:Novel`): the isoform is longer than
+- *Extensions* (`extended`): the isoform is longer than
   its canonical; the differential region is the N-terminal segment of
   the isoform spanning positions $0..delta$, where $delta$ is the length
   difference, and the remainder of the isoform matches the canonical's
   full length exactly.
-- *Truncations* (`Trunc:Known` or `Trunc:Novel`): the canonical is longer
+- *Truncations* (`truncated`): the canonical is longer
   than the isoform; the differential region is the N-terminal segment of
   the canonical that is _absent_ from the isoform, spanning the first
   $|delta|$ canonical positions.
-- *uORFs, altORFs, internal ORFs, and ORFs in UTR regions*: no meaningful
+- *CDS-frame-overlapping uORFs* (`uoorf`, from Ribo-TISH's
+  `CDSFrameOverlap` types): these are first tested for a frame-preserving
+  extension- or truncation-like relationship to the canonical by the same
+  sequence-matching branch, and are treated as whole-isoform differential
+  only when no such relationship is found.
+- *Plain uORFs, altORFs, internal out-of-frame ORFs, and 3$prime$UTR ORFs*
+  (`uorf`, `alt_orf`, `internal_oof`, `3utr_orf`): no meaningful
   shared frame exists; the entire isoform protein is treated as
   differential.
 
 The derivation also accepts cross-transcript canonicals by verifying the
 tail of the shorter sequence against the corresponding tail of the longer
-at $gt.eq 95%$ identity over at least the final 15 residues; failures
+at $gt.eq 95%$ identity over the final $gt.eq 50$ residues (an exact match
+is required when fewer than 50 residues remain); failures
 trigger a warning and fall back to treating the entire isoform as
 differential. This guard protects against silently emitting spurious
 differential regions when a TIS's transcript changes frame mid-protein
@@ -405,20 +425,26 @@ information each requires:
 
 For each protein sequence we computed eighteen biophysical descriptors
 that summarize the global physicochemical character of the polypeptide:
-length, molecular weight, theoretical isoelectric point (pI), the Kyte–
-Doolittle hydropathy index (GRAVY) @kd, aromatic fraction, the net charge
-at physiological pH, the instability index, a TOP-IDP disorder propensity
+length, theoretical isoelectric point (pI), the Kyte–
+Doolittle hydropathy index (GRAVY) @kd, aromatic fraction, the fraction
+of charged residues, the instability index, a TOP-IDP disorder propensity
 score derived from the intrinsic-disorder amino-acid propensities of
-Campen et al. @topidp, the fraction of disorder-promoting residues, a
-low-complexity score derived from Shannon entropy over a sliding 50-
-residue window, and four liquid-liquid phase-separation (LLPS) score
-components comprising the prion-like-domain content (Q/N/G/S/Y fraction),
-the aromatic-residue fraction, the pi-pi interaction propensity (F/Y/W/R/
-H/Q/N), and the cation-$pi$ potential. Protein parameters requiring
-standard biochemical constants (pI, instability, aromaticity) were
-computed with BioPython's ProtParam module @biopython; descriptors
-requiring residue-level propensity tables (TOP-IDP, LLPS components,
-Shannon complexity) were implemented directly against published
+Campen et al. @topidp, the fraction of disorder-promoting residues, and a
+family of sequence-complexity descriptors: the whole-sequence Shannon
+entropy and its mean over a sliding 20-residue window, a
+normalized-complexity score, the fraction of residues in low-complexity
+regions (Shannon entropy below 2.2 bits over a sliding 12-residue window),
+the amino-acid diversity of the N-terminal window, and the longest
+homopolymer run. Liquid-liquid phase-separation (LLPS) propensity is
+reported as a composite score together with its three sequence-derived
+components — the prion-like-domain content (Q/N/G/S/Y fraction), the
+$pi$-$pi$ interaction propensity (F/Y/W/R/H/Q/N), and the
+RG/FG-motif density — combined with disorder and low-complexity fraction
+under fixed weights. The instability index is computed with BioPython's
+ProtParam module @biopython; pI is computed from an EMBOSS-style $p K$
+table by binary search; the remaining descriptors requiring residue-level
+propensity tables (TOP-IDP, LLPS components, the Shannon-entropy
+complexity family) were implemented directly against published
 residue-level propensity values. Residue-level vectors suitable for
 downstream positional comparisons (per-residue hydropathy and disorder
 propensity) are retained alongside the scalar summaries.
@@ -431,7 +457,8 @@ against fourteen canonical patterns curated from the ELM database
 ATM/ATR-substrate consensus (`[ST]Q`), 14-3-3 Mode I and Mode II binding
 motifs, EB1 SxIP-class microtubule-plus-end tracking, RGG
 methylation/RNA-binding motifs, SH3-domain class-I and class-II binding,
-heme-regulatory motif (CP) and cytochrome-c heme-binding motif (CXXCH),
+heme-regulatory motif (`C[^C].{2}C[^C]H`, a Cys-spaced HRM) and
+cytochrome-c heme-binding motif (CXXCH),
 PCNA-interacting PIP-box and APIM motifs, C2H2 zinc-finger and RING-
 finger E3-ligase consensus patterns. Hits were recorded with their
 start and end coordinates within the protein, the literal matching
@@ -442,8 +469,8 @@ hits.
 == Subcellular localization
 
 Subcellular localization was predicted with DeepLoc 2.1 @deeploc,
-operating in its "Fast" mode which uses ESM-1b @esm1b embeddings as
-input. Because DeepLoc's runtime dependencies are pinned to a Python 3.8
+operating in its "Fast" mode. Because DeepLoc's runtime dependencies are
+pinned to a Python 3.8
 environment that conflicts with the rest of the analysis stack, DeepLoc
 was executed within an isolated conda environment whose stdout was
 consumed by the main pipeline. To amortize the substantial fixed cost of
@@ -513,18 +540,21 @@ with the reference and alternate bases complemented before codon
 assembly. For single-nucleotide variants, the codon containing the
 variant position was extracted from the isoform's reference coding
 sequence, translated, and compared with the translation of the mutant
-codon to assign a consequence in
-$\{"synonymous", "missense", "nonsense", "reference\_mismatch"\}$. For
+codon to assign a consequence in $\{$`synonymous_variant`,
+`missense_variant`, `stop_gained`, `stop_lost`, `reference_mismatch`$\}$;
+the loss-of-function gate downstream keys on the exact `stop_gained`,
+`stop_lost`, and `frameshift_variant` terms. For
 in-frame indels we assigned `inframe_insertion` or `inframe_deletion`
-from the length differential; frameshifts were labelled accordingly.
+from the length differential; frameshifts were labelled `frameshift_variant`.
 Multi-nucleotide substitutions (equal-length reference and alternate
 alleles both longer than one base) were assigned the label `mnv` without
 a single-codon translation, because a full implementation would require
 walking multiple codons and is deferred. Variants outside the isoform's
 coding interval — including variants that fall upstream of truncated
 TIS starts, downstream of extended stops, or within introns — were
-assigned protein position `None` and excluded from downstream clinical
-summaries.
+assigned protein position `None`; these variants are _retained_ in the
+per-TIS hit list for re-validation against other transcripts rather than
+discarded, and are counted in the per-protein clinical summary.
 
 The per-protein clinical annotation therefore consists of: a positional
 list of validated variants, each with genomic coordinates, isoform-
@@ -534,24 +564,71 @@ per-protein summary reporting total validated variant count, counts by
 source, counts by consequence class, and counts of variants annotated
 pathogenic or likely pathogenic in ClinVar.
 
+== Protein-domain architecture
+
+Protein domains were annotated with InterProScan 6 @interproscan, run as a
+Nextflow pipeline that aggregates member-database signatures (Pfam and
+others) into InterPro entries. Because the per-invocation startup cost of
+the pipeline is large, all unique canonical and isoform protein sequences
+in a batch were written to a single FASTA, InterProScan was invoked once,
+and the resulting hits — each carrying its member database, signature
+accession, optional InterPro cross-reference, and start / end coordinates
+within the protein — were joined back onto the input records by sequence
+identity. The per-protein annotation records the positional hit list and a
+summary with a `status` field, so that a protein with zero domains (`ok`,
+empty list) is distinguished from a protein whose scan did not complete.
+Domain gain or loss in the differential region feeds functional criterion
+F3 (§5).
+
+== Signal and targeting peptides
+
+Two further precompute-and-lookup modules annotate N-terminal sorting
+signals, whose presence or absence is precisely the kind of property an
+alternative N-terminus can change. SignalP 6.0 @signalp6 predicts the
+five signal-peptide types using a protein language model; TargetP 2.0
+@targetp2 predicts the broader targeting-peptide classes — signal peptide
+(SP), mitochondrial transit peptide (mTP), and chloroplast transit peptide
+(cTP) — and, where present, the predicted cleavage site. Both tools are
+run once over the batch of unique sequences in their own pinned
+environments and joined back by sequence identity. For each protein we
+record the predicted class, the class probabilities, and the cleavage site;
+running SignalP and TargetP together lets functional criterion F4 (§5)
+detect a gained or lost targeting signal that either tool alone would miss.
+
 == Evolutionary conservation
 
-Conservation scores were derived from a local sequence-similarity search
-against UniProt SwissProt reviewed sequences @uniprot using DIAMOND v2.1
-@diamond in blastp-equivalent mode with default e-value threshold and
-the `--more-sensitive` sensitivity preset. For each protein, hits were
-tabulated with their alignment positions, identity, and bit score, and
-a summary conservation score in ${0, ..., 9}$ was assigned by counting
-distinct high-confidence hits (identity $gt.eq 40%$, alignment length
-$gt.eq 50%$ of query) and saturating at 9. A dedicated status field
-distinguishes three operational outcomes: `no_hits` (the tool ran but
-returned zero matches — a biologically meaningful negative result,
-particularly for short ORFs of fewer than 25 residues which fall below
-the BLAST-family sensitivity floor), `ok` (at least one hit), and
-`not_run` (the tool was not available). To amortize the per-invocation
-cost of spawning the search binary, all unique query sequences in an
-analysis run are submitted as a single batched FASTA and results are
-joined back onto the input records by sequence identity.
+Evolutionary conservation is annotated by two complementary site-level
+methods that operate in genomic coordinates rather than on the protein
+sequence, so that conservation is measured exactly over the isoform's
+own open reading frame.
+
+*Nucleotide-level conservation.* The first method reads pre-computed
+basewise conservation scores from two BigWig tracks: phyloP
+@phylop derived from the Zoonomia 241-mammal Cactus alignment
+@zoonomia (the `cactus241way` track), and phastCons @phastcons from the
+UCSC 100-vertebrate alignment (`phastCons100way`). For each TIS the method
+queries both tracks at the initiation codon (3 nt) and across the 13-nt
+Kozak window, and — using the per-ORF genomic exon intervals derived by the
+assembly layer's transcript-skeleton walker — computes length-weighted mean
+scores over the isoform-unique region, the canonical-shared region, and the
+unique/shared enrichment ratio. A status field distinguishes `ok`,
+`not_run` (no BigWig track or no configuration), and `no_skeleton` (the
+ORF exon intervals were unavailable for the region computation), so that a
+genuine zero score is not confused with a missing measurement.
+
+*Reading-frame integrity.* The second method assesses whether the
+isoform-unique open reading frame is preserved as a coding frame across
+the placental-mammal radiation. The unique-region exon intervals are
+extracted from the Zoonomia Cactus alignment HAL with `hal2maf`, and for
+each aligned species the method tests start-codon conservation, scans for
+frameshifting indels and premature stop codons, and records amino-acid
+percent identity. Per-species calls are aggregated into the fraction of
+primate and of mammalian species with an intact frame, and the
+deepest-diverging species (with its phylogenetic depth read from the HAL's
+own species tree) whose frame remains intact. These two aggregates feed
+existence criteria E1 and E2 (§5). The method distinguishes `not_run` (no
+HAL available), `no_skeleton` / `no_unique_region` (no region to query),
+`no_alignment` (the region did not align), and `ok`.
 
 == In-silico proteomic detectability
 
@@ -575,14 +652,63 @@ undefined (there is no alternative sequence to compare against) and the
 flag is recorded as `None` rather than `False`, to distinguish the
 semantically-undefined case from an empirically-negative one.
 
+== Per-variant effect scoring
+
+Beyond counting clinical variants, we estimate the predicted functional
+effect of each variant that falls in the isoform-unique region, combining
+two complementary per-variant predictors and aggregating them over the
+region. Each unique-region clinical hit is scored on two independent
+axes:
+
+- *AlphaMissense* @alphamissense supplies DeepMind's calibrated missense
+  pathogenicity (a 0–1 score plus a `likely_pathogenic` / `ambiguous` /
+  `likely_benign` class) looked up by genomic coordinate. AlphaMissense is
+  defined in the frame of the canonical transcript, so it applies to
+  shared-region and truncation-unique variants but not to
+  extension-unique variants, which fall outside the canonical CDS.
+- *ESM-2 650M* @esm2 supplies a masked-marginal change in
+  log-likelihood, $Delta "LLR" = log P("alt") - log P("wt")$, evaluated at
+  the variant's residue from the per-position amino-acid distribution of a
+  single full-protein forward pass (cached on disk by protein hash). More
+  negative values indicate a substitution less tolerated by the language
+  model.
+
+A variant is flagged damaging on either of two independent branches: a
+loss-of-function consequence (frameshift, stop-gained, splice, or
+start-lost) is damaging on its own — neither missense predictor can see it
+— or a missense variant is damaging when AlphaMissense calls it
+`likely_pathogenic` or its ESM-2 $Delta "LLR"$ is at or below
+$-7.5$, the threshold Brandes et al. @brandes use for the analogous
+language-model LLR. Because gnomAD is a population-tolerance catalogue
+rather than a disease one, a predicted-damaging gnomAD variant observed at
+an allele frequency at or above $10^(-3)$ is gated out of the damaging
+flag (ACMG allele-frequency benign evidence); ClinVar and COSMIC variants
+are never gated. Damaging counts are reported separately for germline
+(gnomAD) and disease (ClinVar + COSMIC) sources, since the predictors are
+source-independent; these source-split, unique-region counts feed
+functional criteria F5 (germline-damaging enrichment) and F6 (disease
+overlap) respectively (§5).
+
+A separate language-model module (`plm_vep`) records the ESM-2
+sequence-_constraint_ profile of the proteins themselves — the mean
+wild-type-residue log-probability (a constraint signal, with no alternate
+allele) over the isoform-unique and canonical-shared regions, their
+enrichment ratio, and the count of strongly-constrained positions in each
+region — distinct from the per-variant $Delta "LLR"$ scores above, which
+carry the allele change.
+
 == ORF classification and initiation-context descriptors
 
 Two site-level annotators record metadata specific to the alternative
-initiation event. The ORF-classification method re-exposes the
-recategorized Ribo-TISH ORF-type label (`Annotated`, `Ext:Known`,
-`Ext:Novel`, `Trunc:Known`, `Trunc:Novel`, `uORF`, `3'UTR:altORF`,
-`Internal`, `Novel`, `NotInCDS`) together with the lengths of the
-isoform and of its transcript-specific canonical, and a boolean
+initiation event. ORF type is assigned in two stages. The upstream filter
+first reduces Ribo-TISH's compound `TisType` strings to a five-value
+controlled vocabulary (`Annotated`, `Extended`, `Truncated`, `uORF`,
+`Other`) used for filtering and imputation. The output column then carries
+a finer eight-value enum (`annotated`, `extended`, `truncated`, `uorf`,
+`uoorf`, `internal_oof`, `3utr_orf`, `alt_orf`), where the `uoorf`
+category captures Ribo-TISH's `CDSFrameOverlap` types. The
+ORF-classification method exposes this label together with the lengths of
+the isoform and of its transcript-specific canonical, and a boolean
 flag indicating whether the alternative start maintains the canonical
 reading frame. The initiation-context method scores the 13-nucleotide
 Kozak window against three weighting schemes derived from @kozak:
@@ -601,6 +727,70 @@ alternative symbols, OMIM disease associations and phenotype labels
 where applicable, and the GENCODE biotype of the gene. This annotation
 is computed once per gene and shared across all TIS records of that
 gene; it is not subjected to canonical-versus-isoform comparison.
+
+= Evidence scoring
+
+The annotations above are summarized per TIS by a dual-axis evidence-
+scoring framework that runs after the comparator (§5), since several
+criteria read the canonical-versus-isoform comparison. The two axes are
+deliberately independent: an _existence_ score asks whether the
+alternative isoform is a real biological entity, and a _functional_ score
+asks whether it changes protein function. Each axis is the count of
+satisfied criteria among six.
+
+Every criterion returns one of three states: `True` (evidence present),
+`False` (evidence genuinely absent), or `None` (cannot be evaluated —
+the upstream annotation module did not run or did not produce the required
+field). `None` results are excluded from both the score numerator and the
+per-axis _evaluable_ count, so that a low score driven by missing data is
+distinguishable from one driven by genuine non-evidence. The six existence
+criteria are:
+
+- *E1 — primate frame conservation*: the fraction of primate species with
+  an intact reading frame over the unique region (from the reading-frame
+  integrity method, §3.4) is at or above a threshold.
+- *E2 — mammalian frame conservation*: the same, over the mammalian
+  radiation.
+- *E3 — coding-level nucleotide selection*: the mean phyloP over the
+  isoform-unique region exceeds a coding-selection threshold.
+- *E4 — multi-cell-line support*: the TIS is detected in at least a
+  minimum number of cell lines.
+- *E5 — initiation efficiency*: the maximum per-cell-line Ribo-TISH
+  initiation-efficiency score exceeds a threshold.
+- *E6 — mass-spectrometric validation*: at least one isoform-unique
+  tryptic peptide is matched in public MS spectra by a pre-computed
+  PepQuery2 @pepquery search. In-silico detectability alone is _not_
+  treated as evidence; E6 is `None` until the PepQuery2 precompute exists.
+
+The six functional criteria are:
+
+- *F1 — structured differential region*: the mean predicted-structure
+  pLDDT over the differential region exceeds a threshold (`None` until the
+  structure cache is populated).
+- *F2 — localization change*: the comparator flags a categorical shift in
+  DeepLoc subcellular localization between canonical and isoform.
+- *F3 — domain gain / loss*: an InterProScan domain hit _starts_ inside the
+  differential region (§3.5).
+- *F4 — targeting change*: SignalP or TargetP disagrees on the canonical
+  versus the isoform (§3.6).
+- *F5 — germline-damaging enrichment*: at least a minimum number of
+  predicted-damaging germline (gnomAD) variants fall in the
+  isoform-unique region (per-variant effect scoring, §4.5).
+- *F6 — disease-variant overlap*: at least one disease (ClinVar / COSMIC)
+  variant falls in the isoform-unique region (clinical genomic
+  intersection).
+
+Two boolean flags, `existence_high_confidence` and
+`functional_high_confidence`, mark isoforms whose score reaches a
+high-confidence cutoff. The production thresholds used to score the
+shipped dataset are set as run-script overrides:
+$"E1" gt.eq 0.3$, $"E2" gt.eq 0.2$, $"E3" gt.eq 1.0$, an
+existence high-confidence cutoff of 3, and a functional high-confidence
+cutoff of 2 (the configuration defaults are higher — $0.5$ / $0.3$ for the
+frame fractions and 5 / 3 for the high-confidence cutoffs). At these
+production cutoffs the high-confidence flags are weakly discriminating on
+the present single-cohort dataset and should be read together with the raw
+score and evaluable count.
 
 = Differential annotation table
 
@@ -649,17 +839,19 @@ localization matches that of a paralogue canonical).
 = Reference data and versioning
 
 Reference data supporting the pipeline were built from primary sources
-with machine-readable provenance: every reference artifact (DIAMOND
-database, ClinVar parquet, gnomAD parquet, COSMIC parquet directory,
-GENCODE FASTA/GTF, DeepLoc environment) was recorded alongside a sidecar
+with machine-readable provenance: every reference artifact (ClinVar
+parquet, gnomAD parquet, COSMIC parquet directory, AlphaMissense table,
+Zoonomia phyloP / phastCons BigWig tracks and Cactus HAL, GENCODE
+FASTA/GTF, DeepLoc environment) was recorded alongside a sidecar
 document capturing the source URL, version, timestamp of retrieval,
 size in bytes, and SHA-256 checksum for each file. GENCODE v49 (GRCh38
 primary assembly) was used throughout for gene, transcript, CDS, and
-protein-translation annotation; UniProt SwissProt reviewed was used at
-the current release snapshotted at analysis time; gnomAD v4.1 exome
-sites, ClinVar's current `variant_summary.txt.gz` release, and COSMIC
-v102 (GRCh38) provided clinical variant data; DeepLoc 2.1 with ESM-1b
-weights provided localization predictions.
+protein-translation annotation; the Zoonomia 241-mammal `cactus241way`
+phyloP track, the UCSC `phastCons100way` track, and the Zoonomia Cactus
+HAL provided conservation data; gnomAD v4.1 exome
+sites, ClinVar's current `variant_summary.txt.gz` release, COSMIC
+v102 (GRCh38), and AlphaMissense hg38 provided variant data; DeepLoc 2.1
+provided localization predictions.
 
 #pagebreak()
 

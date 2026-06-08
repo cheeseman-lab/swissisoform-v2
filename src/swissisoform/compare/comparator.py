@@ -89,6 +89,14 @@ def _hits_overlapping(
     return subset
 
 
+def _summary_status(ann: dict[str, Any]) -> Any:
+    """Return ``ann["summary"]["status"]`` if present, else ``None``."""
+    summary = ann.get("summary")
+    if isinstance(summary, dict):
+        return summary.get("status")
+    return None
+
+
 def _is_numeric(value: Any) -> bool:
     """True for finite real numbers (excludes bools, NaN, inf)."""
     if isinstance(value, bool):
@@ -96,6 +104,13 @@ def _is_numeric(value: Any) -> bool:
     if not isinstance(value, (int, float)):
         return False
     return not (math.isnan(value) or math.isinf(value))
+
+
+def _is_missing(value: Any) -> bool:
+    """True for ``None`` and float NaN (the two "uncomputable" sentinels)."""
+    if value is None:
+        return True
+    return isinstance(value, float) and math.isnan(value)
 
 
 def _scalar_deltas(canonical: dict[str, Any], isoform: dict[str, Any]) -> dict[str, float]:
@@ -125,7 +140,19 @@ def _categorical_changes(canonical: dict[str, Any], isoform: dict[str, Any]) -> 
         if isinstance(iso_val, (list, dict)):
             continue
         can_val = canonical.get(key)
-        changes[f"{key}_changed"] = iso_val != can_val
+        iso_missing = _is_missing(iso_val)
+        can_missing = _is_missing(can_val)
+        if iso_missing and can_missing:
+            # Both uncomputable (NaN/NaN, None/None) — ``nan != nan`` would
+            # manufacture a spurious change, so report "no change".
+            changed: bool | None = False
+        elif iso_missing or can_missing:
+            # Exactly one side uncomputable — can't tell whether the feature
+            # genuinely changed or the module failed on one pane.
+            changed = None
+        else:
+            changed = iso_val != can_val
+        changes[f"{key}_changed"] = changed
         changes[f"{key}_canonical"] = can_val
         changes[f"{key}_isoform"] = iso_val
     return changes
@@ -240,6 +267,11 @@ class Comparator:
             result["n_hits_in_diff_region"] = len(subset)
             if source_pane is not None:
                 result["hits_source_pane"] = source_pane
+            # Surface each pane's summary status so a status-gated criterion
+            # (F3) can tell "scan ran, zero hits" from "scan failed" instead
+            # of counting an empty list as a confident negative.
+            result["hits_canonical_status"] = _summary_status(canonical)
+            result["hits_isoform_status"] = _summary_status(isoform)
 
         # Scope-A enrichment: diff-region annotations vs. shared-region.
         if diff:

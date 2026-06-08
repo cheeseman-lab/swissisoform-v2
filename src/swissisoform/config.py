@@ -110,7 +110,7 @@ class ScoringConfig:
     """Configuration for evidence scoring (Module 10).
 
     Evidence scoring produces two independent scores per TIS:
-    ``existence_score`` (E1–E7 — does this isoform really exist?) and
+    ``existence_score`` (E1–E6 — does this isoform really exist?) and
     ``functional_score`` (F1–F6 — does it change function?). Each
     criterion returns ``True`` / ``False`` / ``None``; the score is the
     count of ``True``. Thresholds below are the cutoffs for turning
@@ -132,7 +132,7 @@ class ScoringConfig:
             unique region to count as under coding-level selection.
         initiation_efficiency_min: E5 threshold — minimum ribosome
             initiation efficiency across any cell line.
-        massspec_unique_peptides_min: E7 threshold — minimum number of
+        massspec_unique_peptides_min: E6 threshold — minimum number of
             peptides uniquely assigned to the isoform.
     """
 

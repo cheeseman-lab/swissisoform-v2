@@ -74,6 +74,25 @@ def _size(v: float, vmin: float, vmax: float) -> float:
     return 8.0 + frac * 22.0
 
 
+def _exonic_subintervals(
+    d0: int, d1: int, exons: tuple[tuple[int, int], ...]
+) -> list[tuple[int, int]]:
+    """Clip the ``[d0, d1]`` span to the exonic parts of ``exons``.
+
+    Returns one ``(start, end)`` per overlapping exon so introns between the
+    focal TIS and the canonical start are not shaded. Falls back to the whole
+    span when no exon structure is available.
+    """
+    if not exons:
+        return [(d0, d1)]
+    out: list[tuple[int, int]] = []
+    for ex0, ex1 in exons:
+        lo, hi = max(d0, ex0), min(d1, ex1)
+        if hi > lo:
+            out.append((lo, hi))
+    return out
+
+
 def build_transcript_figure(
     isoform: Any, skeleton: Any | None, overlays: dict[str, bool]
 ) -> dict[str, Any]:
@@ -173,22 +192,25 @@ def build_transcript_figure(
     annotations: list[dict[str, Any]] = []
     y_top = len(samples) - 0.5
 
-    # Differential region: between the focal TIS and the canonical start.
+    # Differential region: between the focal TIS and the canonical start. Shade
+    # only the exonic parts of the span so an intervening intron is not painted.
     focal_pos = pos_by_tis.get(focal_tis_id)
     if focal_pos is not None and canon_start is not None:
         d0, d1 = sorted((focal_pos, canon_start))
-        shapes.append(
-            {
-                "type": "rect",
-                "x0": d0,
-                "x1": d1,
-                "y0": -0.5,
-                "y1": y_top,
-                "fillcolor": _DIFF_FILL,
-                "line": {"width": 0},
-                "layer": "below",
-            }
-        )
+        exons = tuple(getattr(skeleton, "exons", ()) or ())
+        for sub0, sub1 in _exonic_subintervals(d0, d1, exons):
+            shapes.append(
+                {
+                    "type": "rect",
+                    "x0": sub0,
+                    "x1": sub1,
+                    "y0": -0.5,
+                    "y1": y_top,
+                    "fillcolor": _DIFF_FILL,
+                    "line": {"width": 0},
+                    "layer": "below",
+                }
+            )
         annotations.append(
             {
                 "x": (d0 + d1) / 2,

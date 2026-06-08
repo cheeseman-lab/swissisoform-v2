@@ -697,7 +697,7 @@ METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
     "Kozak Hamming — partial": ("m-initiation", "Mismatches at the partial Kozak consensus positions."),
     "Kozak window GC content": ("m-initiation", "GC fraction of the Kozak window."),
     # Structure / Boltz
-    "pLDDT (whole protein)": ("m-structure", "Mean Boltz per-residue confidence (0–100) over the whole protein."),
+    "pLDDT (whole protein)": ("m-structure", "Mean Boltz per-residue confidence (0–1) over the whole protein."),
     "pLDDT — differential region": ("m-structure", "Mean Boltz confidence over the differential region only."),
     "pLDDT std — differential region": ("m-structure", "Spread of pLDDT within the differential region."),
     "pLDDT Δ (diff vs shared)": ("m-structure", "Differential-minus-shared mean pLDDT."),
@@ -902,9 +902,7 @@ def criterion_evidence_for(iso) -> dict:
     def sec_start_site():
         # Canonical-start vs alternative-start: initiation context + per-base
         # conservation at each start codon. The canonical column reads
-        # ``canonical_*`` mirrors that the pipeline does not emit yet — they
-        # render "—" until the backfill lands (see
-        # docs/reviews/2026-06-03-pipeline-followups.md). One row per property.
+        # ``canonical_*`` mirrors. One row per property.
         specs = [
             ("Start codon", "canonical_start_codon", "start_codon"),
             (
@@ -1180,10 +1178,6 @@ def criterion_evidence_for(iso) -> dict:
         }
 
     def sec_targeting():
-        can_t = _maybe_str(g("canonical_targetp_targetp_prediction"))
-        iso_t = _maybe_str(g("isoform_targetp_targetp_prediction"))
-        can_s = _maybe_str(g("canonical_signalp_signalp_prediction"))
-        iso_s = _maybe_str(g("isoform_signalp_signalp_prediction"))
         compare_rows = compare(
             [
                 (
@@ -1198,7 +1192,10 @@ def criterion_evidence_for(iso) -> dict:
         )
         if not compare_rows:
             return None
-        changed = (can_t is not None and can_t != iso_t) or (can_s is not None and can_s != iso_s)
+        changed = (
+            bool(g("cmp_targetp_targetp_prediction_changed"))
+            or bool(g("cmp_signalp_signalp_prediction_changed"))
+        )
         return {
             "title": "N-terminal targeting (SignalP / TargetP)",
             "subtitle": "targeting signal changed" if changed else "no targeting change",

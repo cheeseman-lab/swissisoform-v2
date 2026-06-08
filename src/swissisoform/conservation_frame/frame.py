@@ -252,7 +252,7 @@ def aggregate_species_results(
     - ``n_species_aligned``
     - ``n_species_intact_frame``
     - ``frac_intact``
-    - ``start_codon_conserved`` (fraction of aligned species)
+    - ``start_codon_conserved`` (fraction of species with a determinate call)
     - ``mean_pident`` (over aligned species)
     """
     aligned = [r for r in results if r.aligned]
@@ -267,13 +267,14 @@ def aggregate_species_results(
         }
 
     n_intact = sum(1 for r in aligned if r.frame_intact)
-    n_start = sum(1 for r in aligned if r.start_codon_conserved)
+    starts = [r.start_codon_conserved for r in aligned if r.start_codon_conserved is not None]
+    start_conserved = sum(starts) / len(starts) if starts else None
     pidents = [r.pident for r in aligned if r.pident is not None]
     mean_pident = sum(pidents) / len(pidents) if pidents else None
     return {
         "n_species_aligned": n_aligned,
         "n_species_intact_frame": n_intact,
         "frac_intact": n_intact / n_aligned,
-        "start_codon_conserved": n_start / n_aligned,
+        "start_codon_conserved": start_conserved,
         "mean_pident": mean_pident,
     }

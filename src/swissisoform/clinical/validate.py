@@ -544,6 +544,9 @@ class ConsequenceValidator:
             result = self.validate_variant(transcript_id, gpos, ref, alt)
 
             if result["validated"] and result["consequence"]:
+                variant.setdefault("metadata", {})["consequence_source"] = variant.get(
+                    "consequence"
+                )
                 variant["consequence"] = result["consequence"]
                 if result["protein_pos"] is not None:
                     variant["protein_pos"] = result["protein_pos"]

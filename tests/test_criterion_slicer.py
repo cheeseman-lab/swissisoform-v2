@@ -133,7 +133,7 @@ def test_f5_extracts_pathogenic_variants_as_hits() -> None:
                 {"variant_id": "V1", "clinical_significance": "Pathogenic"},
                 {"variant_id": "V2"},
             ],
-            "isoform_variant_intersection_n_pathogenic_in_unique_region": 1,
+            "isoform_varianteffect_n_damaging_in_unique_gnomad": 1,
         },
     }
     sl = ber.slice_criterion(iso, "F5_pathogenic_variant_enrichment")
