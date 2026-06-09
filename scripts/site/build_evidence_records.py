@@ -20,6 +20,11 @@ import pandas as pd
 
 PATHOGENIC_CLINSIG_TOKENS = ("pathogenic", "likely_pathogenic", "likely pathogenic")
 
+# Sentinel headline_col for criteria whose headline is computed, not a column.
+_MAX_INITIATION_EFFICIENCY = "__max_initiation_efficiency__"
+
+_INITIATION_EFFICIENCY_SAMPLES = ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen")
+
 
 def _is_missing(value: Any) -> bool:
     """Return True for None, NaN, pd.NA, and empty numpy arrays."""
@@ -443,19 +448,23 @@ CRITERIA: dict[str, dict[str, Any]] = {
         "label": "Primate conservation",
         "short_label": "Primates",
         "evidence_cols": [
+            "isoform_conservation_frame_primate_mean_pident",
             "isoform_conservation_frame_primate_frac_intact",
             "isoform_conservation_frame_primate_start_codon_conserved",
             "isoform_conservation_frame_primate_n_species_aligned",
             "isoform_conservation_frame_primate_n_species_intact_frame",
-            "isoform_conservation_frame_primate_mean_pident",
             "isoform_conservation_frame_primate_deepest_species",
             "isoform_conservation_frame_primate_max_depth",
+            "isoform_conservation_frame_primate_canonical_mean_pident",
+            "isoform_conservation_frame_primate_canonical_frac_intact",
+            "isoform_conservation_frame_primate_canonical_n_species_aligned",
         ],
-        "headline_col": "isoform_conservation_frame_primate_frac_intact",
+        "headline_col": "isoform_conservation_frame_primate_mean_pident",
         "interpretation_hint": (
-            "Is the alternative reading frame preserved across primates? Look at "
-            "frac_intact (fraction of aligned species with intact ORF) and "
-            "start_codon_conserved."
+            "Is the alternative reading frame conserved across primates? Score on "
+            "mean_pident (mean amino-acid % identity to primate orthologs); "
+            "frac_intact and start_codon_conserved are context. Compare to the "
+            "_canonical_ twins for a within-gene baseline."
         ),
     },
     "E2_mammalian_conservation": {
@@ -463,34 +472,45 @@ CRITERIA: dict[str, dict[str, Any]] = {
         "label": "Mammalian conservation",
         "short_label": "Mammals",
         "evidence_cols": [
+            "isoform_conservation_frame_mammalian_mean_pident",
             "isoform_conservation_frame_mammalian_frac_intact",
             "isoform_conservation_frame_mammalian_start_codon_conserved",
             "isoform_conservation_frame_mammalian_n_species_aligned",
             "isoform_conservation_frame_mammalian_n_species_intact_frame",
-            "isoform_conservation_frame_mammalian_mean_pident",
             "isoform_conservation_frame_mammalian_deepest_species",
             "isoform_conservation_frame_mammalian_max_depth",
+            "isoform_conservation_frame_mammalian_canonical_mean_pident",
+            "isoform_conservation_frame_mammalian_canonical_frac_intact",
+            "isoform_conservation_frame_mammalian_canonical_n_species_aligned",
         ],
-        "headline_col": "isoform_conservation_frame_mammalian_frac_intact",
-        "interpretation_hint": ("Is the alternative reading frame preserved deeper in mammals?"),
+        "headline_col": "isoform_conservation_frame_mammalian_mean_pident",
+        "interpretation_hint": (
+            "Is the alternative reading frame conserved deeper in mammals? Score on "
+            "mean_pident (mean amino-acid % identity to mammalian orthologs); "
+            "frac_intact is context. Compare to the _canonical_ twins for a "
+            "within-gene baseline."
+        ),
     },
     "E3_phylop_coding_selection": {
         "axis": "E",
         "label": "PhyloP coding selection",
         "short_label": "PhyloP",
         "evidence_cols": [
-            "isoform_conservation_phylop_at_tis",
             "isoform_conservation_phylop_unique_region_mean",
             "isoform_conservation_phylop_shared_region_mean",
             "isoform_conservation_phylop_enrichment",
+            "isoform_conservation_phylop_at_tis",
             "isoform_conservation_phylop_kozak_mean",
             "isoform_conservation_phastcons_unique_region_mean",
+            "isoform_conservation_phastcons_shared_region_mean",
             "isoform_conservation_phastcons_at_tis",
+            "isoform_conservation_phastcons_kozak_mean",
         ],
         "headline_col": "isoform_conservation_phylop_unique_region_mean",
         "interpretation_hint": (
-            "Does the unique region show purifying selection by phyloP? Compare "
-            "to shared region for enrichment."
+            "Does the unique coding region show purifying selection by phyloP "
+            "(absolute mean ≥ ~2 indicates strong constraint)? The shared region "
+            "and enrichment ratio are context only, not the basis for the call."
         ),
     },
     "E4_multi_cell_line": {
@@ -528,20 +548,31 @@ CRITERIA: dict[str, dict[str, Any]] = {
         "label": "Initiation efficiency",
         "short_label": "Init. eff.",
         "evidence_cols": [
-            "ribo_pvalue",
-            "tis_pvalue",
-            "fisher_qvalue",
             "expr_HeLa_initiation_efficiency",
             "expr_K562_initiation_efficiency",
             "expr_U2OS_initiation_efficiency",
             "expr_RPE1_Async_initiation_efficiency",
             "expr_RPE1_Que_initiation_efficiency",
             "expr_RPE1_Sen_initiation_efficiency",
+            "canonical_expr_HeLa_initiation_efficiency",
+            "canonical_expr_K562_initiation_efficiency",
+            "canonical_expr_U2OS_initiation_efficiency",
+            "canonical_expr_RPE1_Async_initiation_efficiency",
+            "canonical_expr_RPE1_Que_initiation_efficiency",
+            "canonical_expr_RPE1_Sen_initiation_efficiency",
+            "ribo_pvalue",
+            "tis_pvalue",
+            "fisher_qvalue",
         ],
-        "headline_col": "fisher_qvalue",
+        # Computed headline: the maximum per-cell-line initiation efficiency
+        # (TIS counts / gene RNA-seq counts ratio) across the six samples — see
+        # ``_MAX_INITIATION_EFFICIENCY`` handling in ``slice_criterion``.
+        "headline_col": _MAX_INITIATION_EFFICIENCY,
         "interpretation_hint": (
-            "Is the Ribo-TISH signal strong enough that this TIS is reproducibly "
-            "initiating? Lower fisher_qvalue is better."
+            "How efficiently is this TIS initiated? Each per-cell-line value is the "
+            "TIS read counts / gene RNA-seq counts ratio; the headline is the max "
+            "across cell lines. Compare to the canonical_ twins for a within-gene "
+            "baseline."
         ),
     },
     "E6_mass_spec": {
@@ -569,11 +600,31 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_structure_plddt_diffregion_mean",
             "isoform_structure_plddt_diffregion_std",
             "isoform_structure_plddt_delta_shared",
+            "cmp_biophysics_pI_unique",
+            "cmp_biophysics_pI_shared",
+            "cmp_biophysics_pI_ratio",
+            "cmp_biophysics_gravy_unique",
+            "cmp_biophysics_gravy_shared",
+            "cmp_biophysics_gravy_ratio",
+            "cmp_biophysics_disorder_unique",
+            "cmp_biophysics_disorder_shared",
+            "cmp_biophysics_disorder_ratio",
+            "cmp_biophysics_fraction_charged_unique",
+            "cmp_biophysics_fraction_charged_shared",
+            "cmp_biophysics_fraction_charged_ratio",
+            "cmp_biophysics_fraction_disorder_promoting_unique",
+            "cmp_biophysics_fraction_disorder_promoting_shared",
+            "cmp_biophysics_fraction_disorder_promoting_ratio",
+            "cmp_biophysics_gravy_delta",
+            "cmp_biophysics_fraction_charged_delta",
+            "cmp_biophysics_disorder_delta",
         ],
         "headline_col": "isoform_structure_plddt_diffregion_mean",
         "interpretation_hint": (
-            "Does the unique region fold confidently (Boltz pLDDT)? Higher "
-            "diffregion_mean means more structured."
+            "Does the unique region fold confidently (Boltz pLDDT) AND look "
+            "biophysically distinct from the canonical core? Higher diffregion_mean "
+            "means more structured; the cmp_biophysics unique-vs-shared deltas and "
+            "ratios (GRAVY, fraction_charged, disorder) report distinctness."
         ),
     },
     "F2_localization_change": {
@@ -586,10 +637,21 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "cmp_localization_deeploc_prediction_isoform",
             "canonical_localization_deeploc_prediction",
             "isoform_localization_deeploc_prediction",
+            "cmp_localization_deeploc_signals_changed",
+            "cmp_localization_deeploc_signals_canonical",
+            "cmp_localization_deeploc_signals_isoform",
+            "cmp_localization_deeploc_membrane_changed",
+            "cmp_localization_deeploc_membrane_canonical",
+            "cmp_localization_deeploc_membrane_isoform",
+            "canonical_localization_deeploc_signals",
+            "isoform_localization_deeploc_signals",
+            "canonical_localization_deeploc_membrane",
+            "isoform_localization_deeploc_membrane",
         ],
         "headline_col": "cmp_localization_deeploc_prediction_changed",
         "interpretation_hint": (
-            "Does DeepLoc predict a different subcellular location for the isoform vs canonical?"
+            "Do the isoform's localization features change vs canonical "
+            "(DeepLoc prediction / sorting signals / membrane association)?"
         ),
     },
     "F3_domain_change": {
@@ -609,14 +671,30 @@ CRITERIA: dict[str, dict[str, Any]] = {
         "label": "Targeting change",
         "short_label": "Targeting",
         "evidence_cols": [
-            "canonical_localization_deeploc_signals",
-            "isoform_localization_deeploc_signals",
-            "canonical_localization_deeploc_membrane",
-            "isoform_localization_deeploc_membrane",
+            "cmp_signalp_signalp_prediction_changed",
+            "cmp_signalp_signalp_prediction_canonical",
+            "cmp_signalp_signalp_prediction_isoform",
+            "cmp_signalp_signalp_probability_delta",
+            "cmp_signalp_signalp_cleavage_site_changed",
+            "cmp_signalp_signalp_cleavage_site_canonical",
+            "cmp_signalp_signalp_cleavage_site_isoform",
+            "cmp_targetp_targetp_prediction_changed",
+            "cmp_targetp_targetp_prediction_canonical",
+            "cmp_targetp_targetp_prediction_isoform",
+            "cmp_targetp_targetp_probability_delta",
+            "cmp_targetp_targetp_sp_prob_delta",
+            "cmp_targetp_targetp_mtp_prob_delta",
+            "cmp_targetp_targetp_cleavage_site_changed",
+            "canonical_signalp_signalp_prediction",
+            "isoform_signalp_signalp_prediction",
+            "canonical_targetp_targetp_prediction",
+            "isoform_targetp_targetp_prediction",
         ],
-        "headline_col": None,
+        "headline_col": "cmp_signalp_signalp_prediction_changed",
         "interpretation_hint": (
-            "Do targeting signals (NLS, signal peptide, etc.) differ between canonical and isoform?"
+            "Do N-terminal sorting signals differ between canonical and isoform — a "
+            "secretory signal peptide (SignalP) or a mitochondrial/chloroplast "
+            "transit peptide (TargetP)?"
         ),
     },
     "F5_pathogenic_variant_enrichment": {
@@ -624,18 +702,27 @@ CRITERIA: dict[str, dict[str, Any]] = {
         "label": "Germline tolerance",
         "short_label": "Germline",
         "evidence_cols": [
-            "isoform_varianteffect_n_scorable_in_unique_gnomad",
-            "isoform_varianteffect_n_damaging_in_unique_gnomad",
-            "isoform_varianteffect_n_lof_in_unique_gnomad",
-            "isoform_varianteffect_mean_delta_llr_unique_gnomad",
-            "isoform_varianteffect_min_delta_llr_unique_gnomad",
-            "isoform_varianteffect_mean_am_pathogenicity_unique_gnomad",
+            "isoform_variant_intersection_gnomad_depletion_ratio",
+            "isoform_variant_intersection_n_gnomad_in_unique_region",
+            "isoform_variant_intersection_n_gnomad_in_shared_region",
+            "isoform_variant_intersection_unique_region_nt",
+            "isoform_variant_intersection_shared_region_nt",
+            "isoform_plm_vep_constraint_enrichment",
+            "isoform_plm_vep_mean_llr_unique_region",
+            "isoform_plm_vep_mean_llr_shared_region",
+            "isoform_plm_vep_n_constrained_positions_unique",
+            "isoform_plm_vep_n_constrained_positions_shared",
+            "isoform_plm_vep_status",
         ],
         "evidence_hits_col": "isoform_variant_intersection_hits",
-        "headline_col": "isoform_varianteffect_n_damaging_in_unique_gnomad",
+        "headline_col": "isoform_variant_intersection_gnomad_depletion_ratio",
         "interpretation_hint": (
-            "Do germline (gnomAD) variants in the unique region carry damaging "
-            "predicted effects (ESM-2 ΔLLR / AlphaMissense)?"
+            "Is the unique region under germline constraint? Two independent "
+            "signals: (1) gnomad_depletion_ratio < 1 means germline variation "
+            "AVOIDS the unique region (density-normalized vs shared core); "
+            "(2) ESM-2 constraint_enrichment high means residues there are "
+            "predicted intolerant to substitution. This measures tolerance/"
+            "constraint, not damaging-variant burden."
         ),
     },
     "F6_clinical_variant_overlap": {
@@ -643,17 +730,23 @@ CRITERIA: dict[str, dict[str, Any]] = {
         "label": "Disease variant overlap",
         "short_label": "Disease",
         "evidence_cols": [
-            "isoform_variant_intersection_n_total",
+            "isoform_variant_intersection_disease_enrichment_ratio",
             "isoform_variant_intersection_n_disease_in_unique_region",
             "isoform_variant_intersection_n_disease_in_shared_region",
             "isoform_variant_intersection_n_pathogenic_in_unique_region",
+            "isoform_variant_intersection_n_pathogenic_in_shared_region",
+            "isoform_variant_intersection_unique_region_nt",
+            "isoform_variant_intersection_shared_region_nt",
+            "isoform_variant_intersection_n_total",
             "isoform_variant_intersection_n_dropped_outside_coding",
         ],
         "evidence_hits_col": "isoform_variant_intersection_hits",
-        "headline_col": "isoform_variant_intersection_n_disease_in_unique_region",
+        "headline_col": "isoform_variant_intersection_disease_enrichment_ratio",
         "interpretation_hint": (
-            "How many disease variants (ClinVar + COSMIC) overlap the isoform's "
-            "unique coding region?"
+            "Do disease variants (ClinVar + COSMIC) CONCENTRATE in the isoform's "
+            "unique coding region? disease_enrichment_ratio > 1 means the unique "
+            "region carries a higher disease-variant density than the shared core; "
+            "the raw unique/shared disease and pathogenic counts are context."
         ),
     },
 }
@@ -722,6 +815,31 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "Max evolutionary depth (mammals)",
         "format": "int",
     },
+    # E1/E2 — canonical (within-gene baseline) twins
+    "isoform_conservation_frame_primate_canonical_mean_pident": {
+        "label": "Canonical mean % identity to primate orthologs",
+        "format": "percent",
+    },
+    "isoform_conservation_frame_primate_canonical_frac_intact": {
+        "label": "Canonical fraction of primates with intact ORF",
+        "format": "percent",
+    },
+    "isoform_conservation_frame_primate_canonical_n_species_aligned": {
+        "label": "Canonical primate species aligned",
+        "format": "int",
+    },
+    "isoform_conservation_frame_mammalian_canonical_mean_pident": {
+        "label": "Canonical mean % identity to mammalian orthologs",
+        "format": "percent",
+    },
+    "isoform_conservation_frame_mammalian_canonical_frac_intact": {
+        "label": "Canonical fraction of mammals with intact ORF",
+        "format": "percent",
+    },
+    "isoform_conservation_frame_mammalian_canonical_n_species_aligned": {
+        "label": "Canonical mammalian species aligned",
+        "format": "int",
+    },
     # E3 — phyloP / phastCons
     "isoform_conservation_phylop_at_tis": {
         "label": "PhyloP score at TIS",
@@ -747,8 +865,16 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "phastCons mean over unique region",
         "format": "float3",
     },
+    "isoform_conservation_phastcons_shared_region_mean": {
+        "label": "phastCons mean over shared region",
+        "format": "float3",
+    },
     "isoform_conservation_phastcons_at_tis": {
         "label": "phastCons at TIS",
+        "format": "float3",
+    },
+    "isoform_conservation_phastcons_kozak_mean": {
+        "label": "phastCons mean over Kozak window",
         "format": "float3",
     },
     # E5 — initiation efficiency stats
@@ -781,6 +907,49 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
     },
     "isoform_structure_plddt_delta_shared": {
         "label": "Δ pLDDT (isoform vs canonical, shared region)",
+        "format": "float3",
+    },
+    # F1 — biophysical distinctness (unique vs shared region)
+    "cmp_biophysics_gravy_delta": {"label": "Δ GRAVY (isoform − canonical)", "format": "float3"},
+    "cmp_biophysics_fraction_charged_delta": {
+        "label": "Δ fraction charged (isoform − canonical)",
+        "format": "float3",
+    },
+    "cmp_biophysics_disorder_delta": {
+        "label": "Δ disorder (isoform − canonical)",
+        "format": "float3",
+    },
+    "cmp_biophysics_pI_unique": {"label": "pI over unique region", "format": "float3"},
+    "cmp_biophysics_pI_shared": {"label": "pI over shared region", "format": "float3"},
+    "cmp_biophysics_pI_ratio": {"label": "pI unique/shared ratio", "format": "float3"},
+    "cmp_biophysics_gravy_unique": {"label": "GRAVY over unique region", "format": "float3"},
+    "cmp_biophysics_gravy_shared": {"label": "GRAVY over shared region", "format": "float3"},
+    "cmp_biophysics_gravy_ratio": {"label": "GRAVY unique/shared ratio", "format": "float3"},
+    "cmp_biophysics_disorder_unique": {"label": "Disorder over unique region", "format": "float3"},
+    "cmp_biophysics_disorder_shared": {"label": "Disorder over shared region", "format": "float3"},
+    "cmp_biophysics_disorder_ratio": {"label": "Disorder unique/shared ratio", "format": "float3"},
+    "cmp_biophysics_fraction_charged_unique": {
+        "label": "Fraction charged over unique region",
+        "format": "float3",
+    },
+    "cmp_biophysics_fraction_charged_shared": {
+        "label": "Fraction charged over shared region",
+        "format": "float3",
+    },
+    "cmp_biophysics_fraction_charged_ratio": {
+        "label": "Fraction charged unique/shared ratio",
+        "format": "float3",
+    },
+    "cmp_biophysics_fraction_disorder_promoting_unique": {
+        "label": "Disorder-promoting fraction over unique region",
+        "format": "float3",
+    },
+    "cmp_biophysics_fraction_disorder_promoting_shared": {
+        "label": "Disorder-promoting fraction over shared region",
+        "format": "float3",
+    },
+    "cmp_biophysics_fraction_disorder_promoting_ratio": {
+        "label": "Disorder-promoting fraction unique/shared ratio",
         "format": "float3",
     },
     # F2/F4 — localization
@@ -820,6 +989,103 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "Membrane state (isoform)",
         "format": "str",
     },
+    "cmp_localization_deeploc_signals_changed": {
+        "label": "Sorting signals change",
+        "format": "bool",
+    },
+    "cmp_localization_deeploc_signals_canonical": {
+        "label": "Canonical sorting signals",
+        "format": "str",
+    },
+    "cmp_localization_deeploc_signals_isoform": {
+        "label": "Isoform sorting signals",
+        "format": "str",
+    },
+    "cmp_localization_deeploc_membrane_changed": {
+        "label": "Membrane association changes",
+        "format": "bool",
+    },
+    "cmp_localization_deeploc_membrane_canonical": {
+        "label": "Canonical membrane state",
+        "format": "str",
+    },
+    "cmp_localization_deeploc_membrane_isoform": {
+        "label": "Isoform membrane state",
+        "format": "str",
+    },
+    # F4 — SignalP / TargetP N-terminal sorting signals
+    "cmp_signalp_signalp_prediction_changed": {
+        "label": "Signal-peptide prediction changes",
+        "format": "bool",
+    },
+    "cmp_signalp_signalp_prediction_canonical": {
+        "label": "Canonical SignalP prediction",
+        "format": "str",
+    },
+    "cmp_signalp_signalp_prediction_isoform": {
+        "label": "Isoform SignalP prediction",
+        "format": "str",
+    },
+    "cmp_signalp_signalp_probability_delta": {
+        "label": "Δ SignalP probability (isoform − canonical)",
+        "format": "float3",
+    },
+    "cmp_signalp_signalp_cleavage_site_changed": {
+        "label": "Signal-peptide cleavage site changes",
+        "format": "bool",
+    },
+    "cmp_signalp_signalp_cleavage_site_canonical": {
+        "label": "Canonical SignalP cleavage site",
+        "format": "str",
+    },
+    "cmp_signalp_signalp_cleavage_site_isoform": {
+        "label": "Isoform SignalP cleavage site",
+        "format": "str",
+    },
+    "canonical_signalp_signalp_prediction": {
+        "label": "SignalP prediction (canonical)",
+        "format": "str",
+    },
+    "isoform_signalp_signalp_prediction": {
+        "label": "SignalP prediction (isoform)",
+        "format": "str",
+    },
+    "cmp_targetp_targetp_prediction_changed": {
+        "label": "Transit-peptide prediction changes",
+        "format": "bool",
+    },
+    "cmp_targetp_targetp_prediction_canonical": {
+        "label": "Canonical TargetP prediction",
+        "format": "str",
+    },
+    "cmp_targetp_targetp_prediction_isoform": {
+        "label": "Isoform TargetP prediction",
+        "format": "str",
+    },
+    "cmp_targetp_targetp_probability_delta": {
+        "label": "Δ TargetP probability (isoform − canonical)",
+        "format": "float3",
+    },
+    "cmp_targetp_targetp_sp_prob_delta": {
+        "label": "Δ TargetP signal-peptide prob",
+        "format": "float3",
+    },
+    "cmp_targetp_targetp_mtp_prob_delta": {
+        "label": "Δ TargetP mitochondrial-transit prob",
+        "format": "float3",
+    },
+    "cmp_targetp_targetp_cleavage_site_changed": {
+        "label": "Transit-peptide cleavage site changes",
+        "format": "bool",
+    },
+    "canonical_targetp_targetp_prediction": {
+        "label": "TargetP prediction (canonical)",
+        "format": "str",
+    },
+    "isoform_targetp_targetp_prediction": {
+        "label": "TargetP prediction (isoform)",
+        "format": "str",
+    },
     # F3 — InterProScan domains
     "isoform_interproscan_summary": {"label": "InterProScan summary", "format": "json"},
     "cmp_interproscan_n_hits_in_diff_region": {
@@ -827,6 +1093,52 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "format": "int",
     },
     # F5/F6 — variant intersection + variant effect
+    "isoform_variant_intersection_gnomad_depletion_ratio": {
+        "label": "gnomAD depletion ratio (unique/shared density)",
+        "format": "float3",
+    },
+    "isoform_variant_intersection_disease_enrichment_ratio": {
+        "label": "Disease enrichment ratio (unique/shared density)",
+        "format": "float3",
+    },
+    "isoform_variant_intersection_unique_region_nt": {
+        "label": "Unique region length (nt)",
+        "format": "int",
+    },
+    "isoform_variant_intersection_shared_region_nt": {
+        "label": "Shared region length (nt)",
+        "format": "int",
+    },
+    "isoform_variant_intersection_n_gnomad_in_unique_region": {
+        "label": "gnomAD variants in unique region",
+        "format": "int",
+    },
+    "isoform_variant_intersection_n_gnomad_in_shared_region": {
+        "label": "gnomAD variants in shared region",
+        "format": "int",
+    },
+    # F5 — ESM-2 (PLM VEP) constraint
+    "isoform_plm_vep_status": {"label": "PLM VEP status", "format": "str"},
+    "isoform_plm_vep_constraint_enrichment": {
+        "label": "ESM-2 constraint enrichment (unique vs shared)",
+        "format": "float3",
+    },
+    "isoform_plm_vep_mean_llr_unique_region": {
+        "label": "Mean ESM-2 LLR over unique region",
+        "format": "float3",
+    },
+    "isoform_plm_vep_mean_llr_shared_region": {
+        "label": "Mean ESM-2 LLR over shared region",
+        "format": "float3",
+    },
+    "isoform_plm_vep_n_constrained_positions_unique": {
+        "label": "ESM-2 constrained positions (unique)",
+        "format": "int",
+    },
+    "isoform_plm_vep_n_constrained_positions_shared": {
+        "label": "ESM-2 constrained positions (shared)",
+        "format": "int",
+    },
     "isoform_variant_intersection_n_total": {
         "label": "Total clinical variants over isoform",
         "format": "int",
@@ -903,6 +1215,10 @@ for _sample in ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"):
     CRITERIA_METRIC_LABELS[f"expr_{_sample}_raw_count"] = {
         "label": f"{_display}: raw count",
         "format": "int",
+    }
+    CRITERIA_METRIC_LABELS[f"canonical_expr_{_sample}_initiation_efficiency"] = {
+        "label": f"{_display}: canonical initiation efficiency",
+        "format": "float3",
     }
 
 
@@ -997,8 +1313,18 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
 
     evidence = {col: raw.get(col) for col in cfg["evidence_cols"]}
     headline_col = cfg.get("headline_col")
-    headline = raw.get(headline_col) if headline_col else None
-    headline_fmt = CRITERIA_METRIC_LABELS.get(headline_col, {}).get("format", "str")
+    if headline_col == _MAX_INITIATION_EFFICIENCY:
+        # Max per-cell-line initiation efficiency (TIS counts / gene RNA-seq
+        # counts ratio) across the six samples; None if no sample is scorable.
+        vals = [
+            raw.get(f"expr_{s}_initiation_efficiency") for s in _INITIATION_EFFICIENCY_SAMPLES
+        ]
+        vals = [v for v in vals if v is not None and not (isinstance(v, float) and math.isnan(v))]
+        headline = max(vals) if vals else None
+        headline_fmt = "float3"
+    else:
+        headline = raw.get(headline_col) if headline_col else None
+        headline_fmt = CRITERIA_METRIC_LABELS.get(headline_col, {}).get("format", "str")
 
     hits: list[dict[str, Any]] = []
     n_hits_total = 0
@@ -1011,12 +1337,19 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
                 all_hits = [h for h in raw_hits if isinstance(h, dict)]
                 n_hits_total = len(all_hits)
                 # Cap at MAX_HITS to keep the LLM prompt under the 200k token limit.
-                # For variant hits (F5 / F6), prefer pathogenic + damaging first so the
-                # truncated view still surfaces the clinically relevant cases.
+                # F5/F6 are unique-region claims, so prioritise unique-region hits
+                # first (then pathogenic/damaging within that), ensuring the
+                # truncated view always surfaces the region the criterion is about.
                 MAX_HITS = 30
+                # Criteria whose claim is about the isoform-unique region.
+                unique_region_criteria = {
+                    "F5_pathogenic_variant_enrichment",
+                    "F6_clinical_variant_overlap",
+                }
+                prioritize_unique = criterion_id in unique_region_criteria
                 if n_hits_total > MAX_HITS:
 
-                    def _priority(h: dict[str, Any]) -> int:
+                    def _clinsig_rank(h: dict[str, Any]) -> int:
                         sig = str(h.get("clinical_significance") or "").lower()
                         if "pathogenic" in sig and "likely" not in sig:
                             return 0  # Pathogenic
@@ -1029,6 +1362,13 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
                         if "benign" in sig:
                             return 5
                         return 3  # other / unknown
+
+                    def _priority(h: dict[str, Any]) -> tuple[int, int]:
+                        # Lead with unique-region membership for unique-region
+                        # criteria so those hits survive truncation; clinical
+                        # significance is the secondary sort within each bucket.
+                        in_unique = 0 if (prioritize_unique and h.get("in_isoform_unique")) else 1
+                        return (in_unique, _clinsig_rank(h))
 
                     hits = sorted(all_hits, key=_priority)[:MAX_HITS]
                 else:

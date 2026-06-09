@@ -153,8 +153,8 @@
         mod[Domain architecture][InterProScan 6 (Pfam etc.) domain hits — positional, with diff-region gain / loss],
         mod[Proteomic detectability][In-silico tryptic digest (≤1 missed cleavage, 7–30 aa), uniqueness flag vs. canonical, optional PepQuery2 hit],
         mod[Signal / targeting peptides][SignalP 6.0 signal-peptide call + TargetP 2.0 SP / mTP / cTP targeting prediction],
-        mod[Evolutionary conservation][Zoonomia phyloP (cactus241way) + phastCons (100way) BigWig at TIS codon / Kozak / unique region; HAL reading-frame integrity],
-        mod[Per-variant effect][AlphaMissense + ESM-2 650M masked-marginal ΔLLR on each unique-region clinical variant; gnomAD tolerance gate],
+        mod[Evolutionary conservation][Zoonomia phyloP (cactus241way) + phastCons (100way) BigWig at TIS codon / Kozak / unique region; HAL reading-frame integrity + AA percent identity],
+        mod[Per-variant effect][AlphaMissense + ESM-2 650M masked-marginal ΔLLR per unique-region variant; ESM-2 constraint + gnomAD depletion / disease density per region],
       )
 
       #v(8pt)
@@ -306,7 +306,8 @@ tables by taking the union of distinct
 $("gene symbol", "transcript", "ORF genomic span", "start codon")$ tuples
 across samples and attaching, to each such tuple, a vector of
 cell-line-specific expression metrics (raw count, RPM, one-sided
-significance, and Ribo-TISH initiation efficiency score) carried forward
+significance, and initiation efficiency — the ratio of the TIS read count
+to the gene's RNA-seq count) carried forward
 from whichever sample(s) observed the event. Here the ORF genomic span is
 the full start-to-stop coordinate range emitted by Ribo-TISH (`GenomePos`).
 Events observed in only a single cell line were retained but flagged with
@@ -577,8 +578,12 @@ within the protein — were joined back onto the input records by sequence
 identity. The per-protein annotation records the positional hit list and a
 summary with a `status` field, so that a protein with zero domains (`ok`,
 empty list) is distinguished from a protein whose scan did not complete.
-Domain gain or loss in the differential region feeds functional criterion
-F3 (§5).
+For functional criterion F3 (§5) we count only _real_ functional domains
+— hits carrying a genuine InterPro accession, excluding disorder- and
+structure-only signatures (MobiDB-lite, coils, low-complexity, SignalP,
+Phobius, TMHMM) — and require that such a domain start inside the
+differential region and be absent from the other form's domain set,
+rather than merely repositioned.
 
 == Signal and targeting peptides
 
@@ -622,11 +627,14 @@ the placental-mammal radiation. The unique-region exon intervals are
 extracted from the Zoonomia Cactus alignment HAL with `hal2maf`, and for
 each aligned species the method tests start-codon conservation, scans for
 frameshifting indels and premature stop codons, and records amino-acid
-percent identity. Per-species calls are aggregated into the fraction of
-primate and of mammalian species with an intact frame, and the
+percent identity. Per-species calls are aggregated into the mean
+amino-acid percent identity, the fraction of primate and of mammalian
+species with an intact frame, and the
 deepest-diverging species (with its phylogenetic depth read from the HAL's
-own species tree) whose frame remains intact. These two aggregates feed
-existence criteria E1 and E2 (§5). The method distinguishes `not_run` (no
+own species tree) whose frame remains intact. The primate and mammalian
+mean percent identities feed existence criteria E1 and E2 (§5), with the
+intact-frame fraction carried alongside as context. The method
+distinguishes `not_run` (no
 HAL available), `no_skeleton` / `no_unique_region` (no region to query),
 `no_alignment` (the region did not align), and `ok`.
 
@@ -683,11 +691,28 @@ language-model LLR. Because gnomAD is a population-tolerance catalogue
 rather than a disease one, a predicted-damaging gnomAD variant observed at
 an allele frequency at or above $10^(-3)$ is gated out of the damaging
 flag (ACMG allele-frequency benign evidence); ClinVar and COSMIC variants
-are never gated. Damaging counts are reported separately for germline
-(gnomAD) and disease (ClinVar + COSMIC) sources, since the predictors are
-source-independent; these source-split, unique-region counts feed
-functional criteria F5 (germline-damaging enrichment) and F6 (disease
-overlap) respectively (§5).
+are never gated. These per-variant damaging scores are retained as
+context, reported separately for germline (gnomAD) and disease
+(ClinVar + COSMIC) sources.
+
+The signals that feed functional criteria F5 and F6, however, are
+_densities_, not raw counts, so that the comparison between the
+isoform-unique and canonical-shared regions is normalized by region size.
+A dedicated genomic-intersection method tags each clinical variant by its
+membership in the isoform-unique versus canonical-shared exon intervals
+(from the assembly layer's transcript-skeleton walker) and exposes the
+nucleotide length of each region. From these it derives two ratios:
+a germline _depletion ratio_,
+$(n_"gnomAD,unique" \/ "nt"_"unique")\/(n_"gnomAD,shared" \/ "nt"_"shared")$,
+where a value below one means common germline variation _avoids_ the
+unique region (purifying constraint), and a disease _enrichment ratio_,
+$(n_"disease,unique" \/ "nt"_"unique")\/(n_"disease,shared" \/ "nt"_"shared")$,
+where a value above one means ClinVar / COSMIC variants _concentrate_ in
+the unique region. Either ratio is `None` when a denominator is zero or
+missing. These two densities, together with the ESM-2 constraint signal
+below, are the basis for F5 (germline tolerance / constraint) and F6
+(disease density enrichment) respectively (§5); the earlier
+damaging-count formulation is superseded.
 
 A separate language-model module (`plm_vep`) records the ESM-2
 sequence-_constraint_ profile of the proteins themselves — the mean
@@ -695,7 +720,8 @@ wild-type-residue log-probability (a constraint signal, with no alternate
 allele) over the isoform-unique and canonical-shared regions, their
 enrichment ratio, and the count of strongly-constrained positions in each
 region — distinct from the per-variant $Delta "LLR"$ scores above, which
-carry the allele change.
+carry the allele change. The unique/shared constraint enrichment ratio
+is one of the two inputs to F5.
 
 == ORF classification and initiation-context descriptors
 
@@ -746,17 +772,27 @@ per-axis _evaluable_ count, so that a low score driven by missing data is
 distinguishable from one driven by genuine non-evidence. The six existence
 criteria are:
 
-- *E1 — primate frame conservation*: the fraction of primate species with
-  an intact reading frame over the unique region (from the reading-frame
-  integrity method, §3.4) is at or above a threshold.
-- *E2 — mammalian frame conservation*: the same, over the mammalian
-  radiation.
+- *E1 — primate coding conservation*: the mean amino-acid percent
+  identity of the isoform-unique region across the primate radiation
+  (from the reading-frame integrity method, §3.4) is at or above a
+  threshold ($"E1" gt.eq 0.80$, provisional). The fraction of primate
+  species with an intact reading frame is retained as context for the
+  reason string but is no longer the score basis.
+- *E2 — mammalian coding conservation*: the same, over the mammalian
+  radiation, on mean amino-acid percent identity
+  ($"E2" gt.eq 0.50$, provisional).
 - *E3 — coding-level nucleotide selection*: the mean phyloP over the
-  isoform-unique region exceeds a coding-selection threshold.
+  isoform-unique region is at or above an absolute purifying-selection
+  threshold ($"E3" gt.eq 2.0$, strong purifying selection). The
+  criterion is an absolute statement about the unique region's coding
+  conservation; the unique-versus-shared enrichment ratio is reported as
+  context only and the threshold does not imply the unique region is more
+  conserved than the shared core.
 - *E4 — multi-cell-line support*: the TIS is detected in at least a
-  minimum number of cell lines.
-- *E5 — initiation efficiency*: the maximum per-cell-line Ribo-TISH
-  initiation-efficiency score exceeds a threshold.
+  minimum number of cell lines ($gt.eq 3$).
+- *E5 — initiation efficiency*: the maximum per-cell-line initiation
+  efficiency (the ratio of a TIS's read count to its gene's RNA-seq
+  count) exceeds a threshold.
 - *E6 — mass-spectrometric validation*: at least one isoform-unique
   tryptic peptide is matched in public MS spectra by a pre-computed
   PepQuery2 @pepquery search. In-silico detectability alone is _not_
@@ -764,33 +800,61 @@ criteria are:
 
 The six functional criteria are:
 
-- *F1 — structured differential region*: the mean predicted-structure
-  pLDDT over the differential region exceeds a threshold (`None` until the
-  structure cache is populated).
-- *F2 — localization change*: the comparator flags a categorical shift in
-  DeepLoc subcellular localization between canonical and isoform.
-- *F3 — domain gain / loss*: an InterProScan domain hit _starts_ inside the
-  differential region (§3.5).
+- *F1 — structured, biophysically distinct differential region*: the
+  differential region is both folded and physicochemically distinct from
+  the canonical. The criterion is `True` only when the mean
+  predicted-structure pLDDT over the differential region is at or above
+  $0.70$ _and_ a biophysical-distinctness flag is set — the latter when
+  the canonical-versus-isoform comparison shows a GRAVY delta
+  $gt.eq 0.3$, a charged-fraction delta $gt.eq 0.05$, or a disorder delta
+  $gt.eq 0.05$ (provisional cutoffs). It is `None` when the structure
+  prediction is unavailable or the biophysical comparison is missing; the
+  reason names which half passed.
+- *F2 — localization change*: the comparator flags a change in any
+  localization feature (DeepLoc primary-compartment prediction, sorting
+  signals, or membrane-type call) between canonical and isoform.
+- *F3 — domain gain / loss*: at least one _real_ InterPro functional
+  domain (a hit carrying a genuine InterPro accession, excluding
+  disorder- and structure-only signatures such as MobiDB-lite, coils,
+  low-complexity, SignalP, Phobius, and TMHMM) starts inside the
+  differential region and is absent from the other form's domain set
+  (§3.5), rather than merely repositioned.
 - *F4 — targeting change*: SignalP or TargetP disagrees on the canonical
   versus the isoform (§3.6).
-- *F5 — germline-damaging enrichment*: at least a minimum number of
-  predicted-damaging germline (gnomAD) variants fall in the
-  isoform-unique region (per-variant effect scoring, §4.5).
-- *F6 — disease-variant overlap*: at least one disease (ClinVar / COSMIC)
-  variant falls in the isoform-unique region (clinical genomic
-  intersection).
+- *F5 — germline tolerance / constraint*: the isoform-unique region shows
+  germline constraint by either of two independent signals — an ESM-2
+  unique/shared constraint enrichment at or above a threshold ($2.0$,
+  provisional), or a gnomAD germline depletion ratio below a threshold
+  ($0.80$, provisional), the latter indicating that common germline
+  variation avoids the unique region (per-variant effect scoring, §4.5).
+  It is `None` only when both inputs are missing.
+- *F6 — disease density enrichment*: the disease (ClinVar / COSMIC)
+  variant density of the isoform-unique region, relative to the
+  canonical-shared region, is at or above one ($"F6" gt.eq 1.0$,
+  zero-point), so that disease variants concentrate in the unique region
+  rather than merely being present (clinical genomic intersection). It is
+  `None` when the enrichment ratio is undefined.
 
 Two boolean flags, `existence_high_confidence` and
 `functional_high_confidence`, mark isoforms whose score reaches a
-high-confidence cutoff. The production thresholds used to score the
-shipped dataset are set as run-script overrides:
-$"E1" gt.eq 0.3$, $"E2" gt.eq 0.2$, $"E3" gt.eq 1.0$, an
-existence high-confidence cutoff of 3, and a functional high-confidence
-cutoff of 2 (the configuration defaults are higher — $0.5$ / $0.3$ for the
-frame fractions and 5 / 3 for the high-confidence cutoffs). At these
-production cutoffs the high-confidence flags are weakly discriminating on
-the present single-cohort dataset and should be read together with the raw
-score and evaluable count.
+high-confidence cutoff: an existence score of at least five satisfied
+criteria, and a functional score of at least three. These cutoffs and the
+$gt.eq 3$ cell-line threshold for E4 are fixed; they are no longer relaxed
+by run-script overrides, so the curated 13-gene set is scored under the
+same thresholds as a genome-wide run would be.
+
+Thresholds fall into two classes. _Principled anchors_ are fixed on
+biological grounds and are not tuned to any dataset: the E3 phyloP cutoff
+of $2.0$ (strong purifying selection), the F1 pLDDT cutoff of $0.70$, the
+F6 disease-enrichment zero-point of $1.0$, the $gt.eq 3$ cell-line
+requirement for E4, and the existence / functional high-confidence cutoffs
+of five and three. _Provisional thresholds_ — the E1 / E2 percent-identity
+cutoffs ($0.80$ / $0.50$), the F5 constraint-enrichment ($2.0$) and
+depletion-ratio ($0.80$) cutoffs, and the F1 biophysical-distinctness
+deltas — are config-driven placeholders pending calibration on a
+genome-wide run; the curated 13-gene cohort validates the scoring _logic_
+rather than these calibration points, since a reviewer-selected gene set
+is not representative of the genome-wide distribution.
 
 = Differential annotation table
 
@@ -808,7 +872,8 @@ fall into four groups:
    Kozak window.
 2. *Per-sample expression*: for each cell line, the raw read count,
    RPM-normalized count, one-sided initiation-significance p-value, and
-   Ribo-TISH initiation-efficiency score, laid out as wide columns
+   initiation efficiency (TIS read count over gene RNA-seq count), laid
+   out as wide columns
    (`expr_{cell_line}_{metric}`) so that cross-cell-line comparisons
    translate to column arithmetic.
 3. *Canonical annotations*: for each protein-level annotation method,

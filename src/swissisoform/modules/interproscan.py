@@ -39,6 +39,49 @@ def _protein_hash(protein: str) -> str:
     return hashlib.sha1(seq.encode("ascii"), usedforsecurity=False).hexdigest()
 
 
+# Member databases that report disorder / coiled-coil / signal-peptide /
+# transmembrane / low-complexity regions rather than true functional
+# domains. A "real functional domain" must additionally carry an InterPro
+# cross-reference, so these are excluded from real-domain counting (F3).
+# Matched case-insensitively against the hit ``db`` field.
+DISORDER_STRUCTURAL_DBS = frozenset(
+    {
+        "mobidb-lite",
+        "coils",
+        "low_complexity",
+        "signalp",
+        "phobius",
+        "tmhmm",
+    }
+)
+
+
+def is_real_domain(hit: dict[str, Any]) -> bool:
+    """Whether an InterProScan hit represents a real functional domain.
+
+    A real functional domain has a real InterPro cross-reference
+    (``interpro_id``) AND comes from a member DB that is not in the
+    disorder / structural-only set (MobiDB-lite, Coils, low_complexity,
+    SignalP, Phobius, TMHMM). The comparator uses this to count only
+    genuine domain gain/loss for F3, ignoring disorder/coiled-coil noise.
+
+    Args:
+        hit: One entry from an interproscan ``hits`` list.
+
+    Returns:
+        ``True`` if the hit is a real functional domain, else ``False``.
+    """
+    interpro_id = hit.get("interpro_id")
+    if not interpro_id or interpro_id in ("-", ""):
+        return False
+    db = str(hit.get("db", "")).strip().lower()
+    return db not in DISORDER_STRUCTURAL_DBS
+
+
+# Alias — the comparator imports this name for the F3 real-domain count.
+is_real_functional_domain = is_real_domain
+
+
 # Default install location used by scripts/setup/setup_databases.py interproscan.
 DEFAULT_INTERPROSCAN_DIR = (
     Path(__file__).resolve().parents[3] / "data" / "reference" / "interproscan"

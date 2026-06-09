@@ -600,19 +600,23 @@ def _fmt_num(v, pct=False):
 # criterion modal so a reader knows how to interpret the evidence below it.
 CRITERION_ABOUT = {
     "E1_primate_conservation": (
-        "Does the isoform-unique region keep an intact reading frame across "
-        "primates? A conserved ORF in close relatives argues the alternative "
-        "protein is real, not a sequencing or annotation artifact."
+        "How well is the isoform-unique region conserved at the amino-acid level "
+        "across primates (mean percent identity)? High AA identity in close "
+        "relatives argues the alternative protein is real and translated, not a "
+        "sequencing or annotation artifact. (Reading-frame intactness is shown "
+        "as context.)"
     ),
     "E2_mammalian_conservation": (
-        "The same reading-frame test across mammals. Frame intactness over "
+        "The same amino-acid identity test across mammals. Conservation over "
         "deeper evolutionary distance is stronger evidence the ORF is under "
-        "selection to be translated."
+        "selection to be translated. (Reading-frame intactness is shown as "
+        "context.)"
     ),
     "E3_phylop_coding_selection": (
-        "phyloP / phastCons measure per-base evolutionary constraint. Higher "
-        "conservation in the unique region than in the shared core means the "
-        "differential sequence itself is selected — evidence it does something."
+        "phyloP / phastCons measure per-base evolutionary constraint. A high "
+        "absolute phyloP over the differential region means the sequence itself "
+        "is under strong purifying selection — evidence it is coding and does "
+        "something. (Enrichment over the shared core is shown as context only.)"
     ),
     "E4_multi_cell_line": (
         "Is the alternative start used in more than one cell line? Reproducible "
@@ -636,14 +640,15 @@ CRITERION_ABOUT = {
         "to be functional."
     ),
     "F2_localization_change": (
-        "Does the predicted subcellular localization (DeepLoc) differ between "
-        "the canonical and the isoform? A re-localized protein acts in a "
+        "Do the predicted localization features (DeepLoc prediction, sorting "
+        "signals, or membrane association) differ between the canonical and the "
+        "isoform? A protein with changed localization features acts in a "
         "different cellular context."
     ),
     "F3_domain_change": (
-        "Do annotated InterPro domains or short linear motifs fall in the "
-        "differential region? Gaining or losing a domain changes function "
-        "directly."
+        "Does the isoform gain or lose a real InterPro functional domain in the "
+        "differential region (disorder/structural-only signatures excluded)? "
+        "Gaining or losing a domain changes function directly."
     ),
     "F4_targeting_change": (
         "Do N-terminal targeting signals (SignalP secretion, TargetP "
@@ -651,16 +656,18 @@ CRITERION_ABOUT = {
         "N-terminal changes most directly add or remove targeting peptides."
     ),
     "F5_pathogenic_variant_enrichment": (
-        "Does healthy human germline variation (gnomAD) avoid this region, and is "
-        "it intrinsically constrained (ESM-2)? Depletion of population variation "
-        "plus high sequence constraint mean the region resists change — it is "
-        "functionally important. gnomAD is a tolerance catalogue, not a disease "
-        "one; disease/cancer variants (ClinVar / COSMIC) live in F6."
+        "Does healthy human germline variation (gnomAD) avoid this region "
+        "(depletion ratio < 1×), and is it intrinsically constrained (ESM-2 "
+        "constraint enrichment)? Depletion of population variation plus high "
+        "sequence constraint mean the region resists change — it is functionally "
+        "important. gnomAD is a tolerance catalogue, not a disease one; "
+        "disease/cancer variants (ClinVar / COSMIC) live in F6."
     ),
     "F6_clinical_variant_overlap": (
-        "Is there a burden of clinical (ClinVar / COSMIC) variants in the "
-        "differential region versus the shared core? Disease variants "
-        "concentrating in the unique region tie it to phenotype."
+        "Are disease (ClinVar / COSMIC) variants enriched per nucleotide in the "
+        "differential region versus the shared core (disease enrichment ratio ≥ "
+        "1×)? Disease variants concentrating in the unique region tie it to "
+        "phenotype."
     ),
 }
 
@@ -754,7 +761,7 @@ METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
     # Clinical burden
     "All variants": ("m-clinical", "ClinVar / gnomAD / COSMIC variants intersecting each region."),
     "Disease variants": ("m-clinical", "ClinVar + COSMIC (disease/cancer) variants in each region — gnomAD (population/tolerance) is excluded; it feeds F5's constraint, not disease burden."),
-    "gnomAD variants": ("m-clinical", "gnomAD (healthy-population/germline) variants per region. Depletion in the differential region (<1× enrichment) = it resists germline variation = constrained."),
+    "gnomAD variants": ("m-clinical", "gnomAD (healthy-population/germline) variants per nucleotide per region. Depletion in the differential region (depletion ratio <1×) = it resists germline variation = constrained."),
     "Pathogenic": ("m-clinical", "Pathogenic / likely-pathogenic variants in each region."),
     "Clinical/observed variants": ("m-clinical", "ClinVar / gnomAD / COSMIC variants intersecting the region."),
     "Pathogenic variants": ("m-clinical", "Pathogenic / likely-pathogenic variants in the region."),
@@ -834,11 +841,11 @@ def criterion_evidence_for(iso) -> dict:
         # ORF; the bare columns score the isoform-unique region only.
         pre = f"isoform_conservation_frame_{clade}"
         specs = [
+            ("Mean AA identity", "mean_pident", True),
             ("Frame intact (fraction of species)", "frac_intact", True),
             ("Species aligned", "n_species_aligned", False),
             ("Species frame-intact", "n_species_intact_frame", False),
             ("Start codon conserved", "start_codon_conserved", True),
-            ("Mean AA identity", "mean_pident", True),
             ("Deepest intact species", "deepest_species", False),
             ("Phylo depth (MRCA)", "max_depth", False),
         ]
@@ -859,9 +866,12 @@ def criterion_evidence_for(iso) -> dict:
         if not compare_rows:
             return None
         return {
-            "title": f"Reading-frame conservation · {clade}",
-            "subtitle": "full canonical ORF vs the differential ORF, across the clade",
-            "cmp_headers": ["Frame metric", "Canonical ORF", "Differential ORF"],
+            "title": f"Sequence conservation · {clade}",
+            "subtitle": (
+                "mean AA identity over the differential ORF is the score basis; "
+                "frame intactness across the clade is context"
+            ),
+            "cmp_headers": ["Conservation metric", "Canonical ORF", "Differential ORF"],
             "col_classes": CANON_ISO,
             "compare_rows": compare_rows,
         }
@@ -892,9 +902,13 @@ def criterion_evidence_for(iso) -> dict:
         if not compare_rows:
             return None
         return {
-            "title": "Per-base conservation · differential vs shared region",
-            "subtitle": "mean over each region (enrichment = differential / conserved)",
-            "cmp_headers": ["Track", "Differential", "Shared", "Enrichment"],
+            "title": "Per-base conservation · differential region",
+            "subtitle": (
+                "absolute mean phyloP over the differential region is the score "
+                "basis (high = strong purifying selection); the shared column and "
+                "enrichment are context, not the claim"
+            ),
+            "cmp_headers": ["Track", "Differential", "Shared", "vs shared"],
             "col_classes": DIFF_SHARED_3,
             "compare_rows": compare_rows,
         }
@@ -1170,7 +1184,11 @@ def criterion_evidence_for(iso) -> dict:
         )
         return {
             "title": "Subcellular localization (DeepLoc)",
-            "subtitle": "compartment changed" if changed else "no compartment change",
+            "subtitle": (
+                "localization features changed (prediction/signals/membrane)"
+                if changed
+                else "no localization-feature change"
+            ),
             "cmp_headers": ["Property", "Canonical", "Isoform"],
             "col_classes": CANON_ISO,
             "compare_rows": compare_rows,
@@ -1302,13 +1320,23 @@ def criterion_evidence_for(iso) -> dict:
     def sec_germline_tolerance():
         # gnomAD = germline population variation, a *tolerance* readout. Depletion
         # in the differential region vs the shared core = healthy human variation
-        # avoids it = the region is constrained. Enrichment < 1× = constrained;
-        # > 1× = tolerated. (Disease variants live in F6.)
-        unique_len = getattr(iso, "diff_end", None) or len(
-            getattr(iso, "differential_sequence", "") or ""
+        # avoids it = the region is constrained. Depletion ratio < 1× =
+        # constrained; > 1× = tolerated. (Disease variants live in F6.)
+        # Density denominator is the nt length of each region (emitted by the
+        # variant_intersection module), not AA length — fall back to the AA-len
+        # ratio only when the nt columns predate this row.
+        unique_nt = _maybe_int(g("isoform_variant_intersection_unique_region_nt"))
+        shared_nt = _maybe_int(g("isoform_variant_intersection_shared_region_nt"))
+        depletion = _maybe_float(g("isoform_variant_intersection_gnomad_depletion_ratio"))
+
+        unique_len = unique_nt or (
+            (getattr(iso, "diff_end", None) or len(getattr(iso, "differential_sequence", "") or ""))
+            * 3
         )
-        shared_len = (getattr(iso, "isoform_len", None) if is_trunc
-                      else getattr(iso, "canonical_len", None))
+        shared_len = shared_nt or (
+            ((getattr(iso, "isoform_len", None) if is_trunc
+              else getattr(iso, "canonical_len", None)) or 0) * 3
+        )
 
         def _enrich(nu, ns):
             if nu is None or ns is None or not unique_len or not shared_len or ns == 0:
@@ -1318,28 +1346,34 @@ def criterion_evidence_for(iso) -> dict:
 
         diff = _fmt_num(g("isoform_variant_intersection_n_gnomad_in_unique_region"))
         cons = _fmt_num(g("isoform_variant_intersection_n_gnomad_in_shared_region"))
-        if diff is None and cons is None:
+        if diff is None and cons is None and depletion is None:
             return None
-        try:
-            r = _enrich(
-                float(diff) if diff is not None else None,
-                float(cons) if cons is not None else None,
-            )
-        except (TypeError, ValueError):
-            r = None
+        if depletion is None:
+            try:
+                depletion = _enrich(
+                    float(diff) if diff is not None else None,
+                    float(cons) if cons is not None else None,
+                )
+            except (TypeError, ValueError):
+                depletion = None
         row = {
             "label": "gnomAD variants",
-            "cols": [diff or "—", cons or "—", f"{r:.2g}×" if r is not None else "—"],
-            "hot": False,
+            "cols": [
+                diff or "—",
+                cons or "—",
+                f"{depletion:.2g}×" if depletion is not None else "—",
+            ],
+            "hot": bool(depletion is not None and depletion < 1),
             **_term("gnomAD variants"),
         }
         return {
             "title": "Germline tolerance · differential vs shared region",
             "subtitle": (
-                "gnomAD (population) variant density per region — depletion (<1×) "
-                "means healthy human variation avoids the region (constrained)"
+                "gnomAD (population) variant density per nucleotide — depletion "
+                "ratio < 1× means healthy human variation avoids the region "
+                "(constrained), the F5 basis alongside ESM-2 constraint"
             ),
-            "cmp_headers": ["Variant set", "Differential", "Shared", "Enrichment"],
+            "cmp_headers": ["Variant set", "Differential", "Shared", "Depletion ratio"],
             "col_classes": DIFF_SHARED_3,
             "compare_rows": [row],
         }
@@ -1467,16 +1501,23 @@ def criterion_evidence_for(iso) -> dict:
         }
 
     def sec_clinical_burden():
-        # Region lengths (aa) for length-normalized density. The differential
-        # region is the unique N-terminus; the shared region is whichever whole
-        # protein it is shared with (canonical for extensions, isoform for
-        # truncations).
-        unique_len = getattr(iso, "diff_end", None) or len(
-            getattr(iso, "differential_sequence", "") or ""
+        # Region lengths (nt) for length-normalized density — emitted by the
+        # variant_intersection module. The differential region is the unique
+        # N-terminus; the shared region is whichever whole protein it is shared
+        # with (canonical for extensions, isoform for truncations). Fall back to
+        # AA-length×3 only when the nt columns predate this row.
+        unique_nt = _maybe_int(g("isoform_variant_intersection_unique_region_nt"))
+        shared_nt = _maybe_int(g("isoform_variant_intersection_shared_region_nt"))
+        unique_len = unique_nt or (
+            (getattr(iso, "diff_end", None) or len(getattr(iso, "differential_sequence", "") or ""))
+            * 3
         )
         can_len = getattr(iso, "canonical_len", None)
         iso_len = getattr(iso, "isoform_len", None)
-        shared_len = iso_len if is_trunc else can_len
+        shared_len = shared_nt or (((iso_len if is_trunc else can_len) or 0) * 3)
+        disease_ratio = _maybe_float(
+            g("isoform_variant_intersection_disease_enrichment_ratio")
+        )
 
         def _n(key):
             v = _fmt_num(g(key))
@@ -1507,7 +1548,12 @@ def criterion_evidence_for(iso) -> dict:
             nu, ns = _n(uk), _n(sk)
             if nu is None and ns is None:
                 continue
-            r = _enrich(nu, ns)
+            # Prefer the module's disease enrichment ratio for the disease row
+            # (it is the F6 basis); fall back to the locally-computed density.
+            if label == "Disease variants" and disease_ratio is not None:
+                r = disease_ratio
+            else:
+                r = _enrich(nu, ns)
             crows.append(
                 {
                     "label": label,
@@ -1525,8 +1571,9 @@ def criterion_evidence_for(iso) -> dict:
         return {
             "title": "Clinical-variant burden · differential vs shared region",
             "subtitle": (
-                "counts per region; ratio is length-normalized (variants per residue, "
-                "differential ÷ conserved — >1× = concentrated in the differential region)"
+                "counts per region; ratio is density-normalized (variants per "
+                "nucleotide, differential ÷ shared — ≥1× = disease variants "
+                "concentrate in the differential region, the F6 basis)"
             ),
             "cmp_headers": ["Variant set", "Differential", "Shared", "Enrichment"],
             "col_classes": DIFF_SHARED_3,

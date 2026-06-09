@@ -173,14 +173,10 @@ def build_config(min_cell_lines: int = 3) -> PipelineConfig:
         halstats_binary=str(HALSTATS_BIN) if HAL_SIF.exists() else "halStats",
         hal_ref_genome="Homo_sapiens",
     )
-    cfg.scoring = ScoringConfig(
-        primate_frac_intact_min=0.3,
-        mammalian_frac_intact_min=0.2,
-        phylop_coding_min=1.0,
-        min_cell_lines=min_cell_lines,
-        existence_high_threshold=3,
-        functional_high_threshold=2,
-    )
+    # Use ScoringConfig defaults for the high-confidence cutoffs (5/3) and the
+    # principled E3/E4 anchors; the 13-gene set validates scoring LOGIC, not
+    # calibration, so no per-run override of those thresholds.
+    cfg.scoring = ScoringConfig(min_cell_lines=min_cell_lines)
     return cfg
 
 

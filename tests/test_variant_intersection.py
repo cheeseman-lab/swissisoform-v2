@@ -153,6 +153,63 @@ class TestClinicalHitsShareAugmented:
         assert out["hits"][0]["in_isoform_unique"] is True
 
 
+class TestRegionDensityRatios:
+    """New contract — region nt lengths + per-nt density ratios."""
+
+    def test_region_nt_lengths(self):
+        # unique=[900,930) → 30 nt; shared=[1000,1030) → 30 nt
+        mod = VariantIntersectionModule()
+        site = _site(
+            orf_exons=[(900, 930), (1000, 1030)],
+            canonical_orf_exons=[(1000, 1030)],
+            hits=[_hit(910)],
+        )
+        out = mod.annotate_site(site)
+        assert out["unique_region_nt"] == 30
+        assert out["shared_region_nt"] == 30
+
+    def test_gnomad_depletion_ratio(self):
+        # gnomAD: unique has 1 in 30 nt, shared has 2 in 30 nt → ratio = 0.5
+        mod = VariantIntersectionModule()
+        site = _site(
+            orf_exons=[(900, 930), (1000, 1030)],
+            canonical_orf_exons=[(1000, 1030)],
+            hits=[
+                _hit(910, source="gnomAD"),
+                _hit(1010, source="gnomAD"),
+                _hit(1015, source="gnomAD"),
+            ],
+        )
+        out = mod.annotate_site(site)
+        assert out["gnomad_depletion_ratio"] == 0.5
+
+    def test_disease_enrichment_ratio(self):
+        # disease (clinvar): unique 2 in 30 nt, shared 1 in 30 nt → ratio = 2.0
+        mod = VariantIntersectionModule()
+        site = _site(
+            orf_exons=[(900, 930), (1000, 1030)],
+            canonical_orf_exons=[(1000, 1030)],
+            hits=[
+                _hit(910, source="clinvar"),
+                _hit(915, source="clinvar"),
+                _hit(1010, source="clinvar"),
+            ],
+        )
+        out = mod.annotate_site(site)
+        assert out["disease_enrichment_ratio"] == 2.0
+
+    def test_ratio_none_when_shared_density_zero(self):
+        # gnomAD only in unique; shared region exists but has 0 gnomAD → None
+        mod = VariantIntersectionModule()
+        site = _site(
+            orf_exons=[(900, 930), (1000, 1030)],
+            canonical_orf_exons=[(1000, 1030)],
+            hits=[_hit(910, source="gnomAD")],
+        )
+        out = mod.annotate_site(site)
+        assert out["gnomad_depletion_ratio"] is None
+
+
 class TestMetadata:
     def test_module_name(self):
         assert VariantIntersectionModule.MODULE_NAME == "variant_intersection"
@@ -165,6 +222,13 @@ class TestMetadata:
         assert "variant_intersection_n_in_unique_region" in cols
         assert "variant_intersection_n_pathogenic_in_unique_region" in cols
         assert "variant_intersection_summary" in cols
+
+    def test_new_region_density_columns(self):
+        cols = VariantIntersectionModule.OUTPUT_COLUMNS
+        assert "variant_intersection_unique_region_nt" in cols
+        assert "variant_intersection_shared_region_nt" in cols
+        assert "variant_intersection_gnomad_depletion_ratio" in cols
+        assert "variant_intersection_disease_enrichment_ratio" in cols
 
 
 class TestRunWrapper:

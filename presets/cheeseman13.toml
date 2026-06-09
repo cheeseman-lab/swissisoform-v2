@@ -3,10 +3,11 @@
 # against the combined catalog to pull its sequence; the canonical Annotated
 # rows for these genes are kept automatically. Runs multi-sample.
 run_name = "cheeseman_13gene"
-# E4 threshold. Kept at 1 for this test run (E4 is degenerate/always-True at 1).
-# Raise to 2-3 for a real reproducibility bar — scoring-only, does not filter
-# which isoforms are included (the [[isoforms]] picks are explicit).
-min_cell_lines = 1
+# E4 threshold inherits the ScoringConfig default (min_cell_lines = 3): the
+# 13-gene set validates scoring LOGIC, not calibration, so it must use the
+# real reproducibility bar rather than a degenerate always-True threshold.
+# Scoring-only — does not filter which isoforms are included (the [[isoforms]]
+# picks are explicit).
 
 [[isoforms]]
 gene = "CBX1"

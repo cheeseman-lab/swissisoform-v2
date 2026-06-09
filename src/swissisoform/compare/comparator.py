@@ -36,7 +36,19 @@ from typing import Any
 from swissisoform.compare.paired import PairedComparison
 from swissisoform.models import Gene, ORFType, TranslationInitiationSite
 
+try:
+    from swissisoform.modules.interproscan import is_real_functional_domain
+except ImportError:  # interproscan helper not yet available — degrade to "all real"
+    def is_real_functional_domain(hit: dict[str, Any]) -> bool:
+        """Fallback: treat every InterProScan hit as a real domain."""
+        return True
+
 logger = logging.getLogger(__name__)
+
+# Modules whose hits are isoform-existence evidence and therefore must never
+# be sourced from the canonical (lost-region) pane on truncations: a canonical
+# tryptic peptide in the lost region says nothing about the isoform existing.
+_ISOFORM_EVIDENCE_MODULES = {"massspec"}
 
 # ORF types for which the shared-region sequence equals a whole pane
 # (canonical for extensions, isoform for truncations), allowing Scope-A
@@ -243,11 +255,12 @@ class Comparator:
             isoform_ann = site.isoform_annotations.get(module_name, {})
             diff_ann = site.diff_annotations.get(module_name, {})
             site.comparison[module_name] = self._compare_module(
-                canonical_ann, isoform_ann, diff_ann, site
+                module_name, canonical_ann, isoform_ann, diff_ann, site
             )
 
     def _compare_module(
         self,
+        module_name: str,
         canonical: dict[str, Any],
         isoform: dict[str, Any],
         diff: dict[str, Any],
@@ -262,7 +275,7 @@ class Comparator:
         # Positional subsetting: filter to diff region coords.
         hits = isoform.get("hits")
         if isinstance(hits, list):
-            subset, source_pane = self._subset_hits(hits, canonical, site)
+            subset, source_pane = self._subset_hits(module_name, hits, canonical, site)
             result["hits_in_diff_region"] = subset
             result["n_hits_in_diff_region"] = len(subset)
             if source_pane is not None:
@@ -272,6 +285,14 @@ class Comparator:
             # of counting an empty list as a confident negative.
             result["hits_canonical_status"] = _summary_status(canonical)
             result["hits_isoform_status"] = _summary_status(isoform)
+
+        # F3: count REAL InterPro domains that start in the diff region and are
+        # absent from the other form's hit set (a genuine gain/loss, not a
+        # coordinate shift of a domain present on both panes).
+        if module_name == "interproscan":
+            result["n_real_domains_changed_in_diff_region"] = (
+                self._n_real_domains_changed(canonical, isoform, site)
+            )
 
         # Scope-A enrichment: diff-region annotations vs. shared-region.
         if diff:
@@ -283,6 +304,7 @@ class Comparator:
 
     def _subset_hits(
         self,
+        module_name: str,
         isoform_hits: list[dict[str, Any]],
         canonical_ann: dict[str, Any],
         site: TranslationInitiationSite,
@@ -293,6 +315,12 @@ class Comparator:
         the isoform's hits. For truncations (diff in canonical frame), the
         lost region's hits come from the canonical's hit list, so filter
         those instead and return source_pane='canonical'.
+
+        Isoform-existence modules (``massspec``) are the exception on
+        truncations: a canonical tryptic peptide in the lost N-terminal
+        region is evidence the *canonical* form exists, not the isoform, so
+        we never return canonical-pane peptides as the isoform's diff-region
+        hits — the subset is empty and source_pane stays ``'isoform'``.
         """
         diff_region = site.diff_region
         if diff_region is None:
@@ -300,6 +328,9 @@ class Comparator:
 
         # Truncation: diff lives in canonical coordinates → filter canonical hits
         if diff_region.canonical_start is not None and diff_region.canonical_end is not None:
+            # E6: don't credit the isoform with canonical lost-region peptides.
+            if module_name in _ISOFORM_EVIDENCE_MODULES:
+                return [], "isoform"
             canonical_hits = canonical_ann.get("hits", [])
             if isinstance(canonical_hits, list):
                 subset = _hits_overlapping(
@@ -327,6 +358,65 @@ class Comparator:
             return subset, "isoform"
 
         return [], None
+
+    def _n_real_domains_changed(
+        self,
+        canonical: dict[str, Any],
+        isoform: dict[str, Any],
+        site: TranslationInitiationSite,
+    ) -> int | None:
+        """Count real InterPro domains gained/lost within the diff region.
+
+        A domain counts when it (a) is a *real* functional domain
+        (``is_real_functional_domain``), (b) *starts in* the diff region of
+        the relevant pane, and (c) is *absent* from the other pane's
+        real-domain set — keyed by InterPro id (falling back to signature
+        name). This excludes domains that merely shifted coordinates because
+        the protein got longer/shorter: HORMA in a MAD2L1 truncation appears
+        on both panes at offset positions, so it is *not* counted.
+
+        Pane selection mirrors ``_subset_hits``:
+        - extensions / uORFs (diff in isoform frame) → gains on the isoform,
+          absent from canonical.
+        - truncations (diff in canonical frame) → losses on the canonical,
+          absent from isoform.
+
+        Returns ``None`` when either pane's scan didn't run (status not ok),
+        so F3 can distinguish "no domains changed" from "couldn't tell".
+        """
+        if _summary_status(canonical) != "ok" or _summary_status(isoform) != "ok":
+            return None
+        diff_region = site.diff_region
+        if diff_region is None:
+            return None
+
+        canonical_hits = [h for h in canonical.get("hits", []) if is_real_functional_domain(h)]
+        isoform_hits = [h for h in isoform.get("hits", []) if is_real_functional_domain(h)]
+
+        def _domain_key(hit: dict[str, Any]) -> str:
+            return hit.get("interpro_id") or hit.get("name") or ""
+
+        def _starts_in(hit: dict[str, Any], start: int, end: int) -> bool:
+            pos = hit.get("pos")
+            return isinstance(pos, int) and start <= pos < end
+
+        # Truncation: lost domains live on the canonical pane, in canonical coords.
+        if diff_region.canonical_start is not None and diff_region.canonical_end is not None:
+            this_hits, other_hits = canonical_hits, isoform_hits
+            start, end = diff_region.canonical_start, diff_region.canonical_end
+        # Extension / uORF / altORF: gained domains live on the isoform pane.
+        elif diff_region.isoform_start is not None and diff_region.isoform_end is not None:
+            this_hits, other_hits = isoform_hits, canonical_hits
+            start, end = diff_region.isoform_start, diff_region.isoform_end
+        else:
+            return None
+
+        other_keys = {_domain_key(h) for h in other_hits}
+        return sum(
+            1
+            for h in this_hits
+            if _starts_in(h, start, end) and _domain_key(h) not in other_keys
+        )
 
     def _shared_annotations(
         self,

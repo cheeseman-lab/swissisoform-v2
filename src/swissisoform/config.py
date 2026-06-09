@@ -124,39 +124,65 @@ class ScoringConfig:
             ``functional_high_confidence``.
         truncation_max_aa: Maximum truncation length still considered
             potentially functional (downstream consumers only).
-        primate_frac_intact_min: E1 threshold — minimum fraction of
-            primate species with intact reading frame.
-        mammalian_frac_intact_min: E2 threshold — same for mammalian
-            radiation.
-        phylop_coding_min: E3 threshold — minimum mean PhyloP over the
-            unique region to count as under coding-level selection.
+        primate_frac_intact_min: Context display only — fraction of primate
+            species with intact reading frame. No longer the E1 score basis.
+        mammalian_frac_intact_min: Context display only — same for mammalian
+            radiation. No longer the E2 score basis.
+        e1_pident_min: E1 threshold — minimum primate mean AA percent-identity
+            over the unique region.
+        e2_pident_min: E2 threshold — minimum mammalian mean AA percent-identity.
+        e3_phylop_min: E3 threshold — minimum absolute mean PhyloP over the
+            unique region (strong purifying selection).
+        phylop_coding_min: Legacy E3 alias retained for context display.
         initiation_efficiency_min: E5 threshold — minimum ribosome
             initiation efficiency across any cell line.
         massspec_unique_peptides_min: E6 threshold — minimum number of
             peptides uniquely assigned to the isoform.
+        f5_constraint_enrichment_min: F5 threshold — minimum ESM-2 constraint
+            enrichment (unique vs shared) to call germline constraint.
+        f5_depletion_ratio_max: F5 threshold — gnomAD depletion ratio below
+            which germline variation is judged to avoid the unique region.
+        f6_disease_enrichment_min: F6 threshold — disease-variant density
+            enrichment (unique vs shared) zero-point.
+        f1_gravy_delta_min: F1 distinctness — |Δ GRAVY| cutoff.
+        f1_fraction_charged_delta_min: F1 distinctness — |Δ fraction charged|.
+        f1_disorder_delta_min: F1 distinctness — |Δ disorder| cutoff.
     """
 
     min_cell_lines: int = 3
     existence_high_threshold: int = 5
     functional_high_threshold: int = 3
     truncation_max_aa: int = 200
+    # Context display only — primate/mammalian frame-intact fractions are no
+    # longer the E1/E2 score basis (mean_pident is). Kept for reason strings.
     primate_frac_intact_min: float = 0.5
     mammalian_frac_intact_min: float = 0.3
+    # E3 principled anchor: absolute mean PhyloP over the unique region, strong
+    # purifying selection. Replaces the unique-vs-shared framing.
+    e3_phylop_min: float = 2.0
     phylop_coding_min: float = 1.0
     initiation_efficiency_min: float = 0.01
     massspec_unique_peptides_min: int = 1
+    # F6 principled anchor: disease-variant density enrichment zero-point.
+    f6_disease_enrichment_min: float = 1.0
+    # E1/E2 score on AA percent-identity over the unique region.
+    e1_pident_min: float = 0.80  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    e2_pident_min: float = 0.50  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    # F5 germline tolerance/constraint thresholds.
+    f5_constraint_enrichment_min: float = 2.0  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    f5_depletion_ratio_max: float = 0.80  # CALIBRATE ON GENOME-WIDE RUN — provisional
     # F1 threshold for mean pLDDT over the differential region. Scale
     # matches whatever the structure backend emits: Boltz-2 emits 0–1
     # (so use 0.70); AlphaFold-style backends emit 0–100 (use 70.0).
     f1_plddt_threshold: float = 0.70
-    # F5: minimum predicted-damaging variants in the isoform-unique region to
-    # call the criterion True. Damaging = AlphaMissense likely_pathogenic OR
-    # ESM-2 ΔLLR ≤ f5_llr_damaging_threshold (per-variant evidence from
-    # VariantEffectModule). Avoids scoring on isolated singletons.
+    # F1 biophysical-distinctness cutoffs (any one satisfied → distinct).
+    f1_gravy_delta_min: float = 0.3  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    f1_fraction_charged_delta_min: float = 0.05  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    f1_disorder_delta_min: float = 0.05  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    # Dormant per-variant damaging cutoffs (VariantEffectModule still reads
+    # f5_llr_damaging_threshold for ΔLLR labeling; F5 scoring no longer uses
+    # these — see f5_constraint_enrichment_min / f5_depletion_ratio_max).
     f5_min_pathogenic_in_unique: int = 1
-    # F5: ESM-2 masked-marginal ΔLLR = logP(alt) − logP(wt) cutoff below which
-    # a substitution counts as damaging. −7.5 matches the threshold used for
-    # the analogous LLR in Brandes et al. (2023).
     f5_llr_damaging_threshold: float = -7.5
 
 

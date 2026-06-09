@@ -83,10 +83,11 @@ def test_slice_extracts_value_and_reason_from_scoring() -> None:
 
 
 def test_slice_extracts_headline_from_raw() -> None:
+    # E1 headline is now mean_pident (frac_intact is context only).
     sl = ber.slice_criterion(
         {
             "tis_id": "x",
-            "_raw": {"isoform_conservation_frame_primate_frac_intact": 0.96},
+            "_raw": {"isoform_conservation_frame_primate_mean_pident": 0.96},
         },
         "E1_primate_conservation",
     )
@@ -95,14 +96,16 @@ def test_slice_extracts_headline_from_raw() -> None:
 
 def test_slice_extracts_all_evidence_cols() -> None:
     raw = {
-        "isoform_conservation_frame_primate_frac_intact": 0.96,
+        "isoform_conservation_frame_primate_mean_pident": 0.96,
+        "isoform_conservation_frame_primate_frac_intact": 0.88,
         "isoform_conservation_frame_primate_n_species_aligned": 25,
         "isoform_conservation_frame_primate_deepest_species": "Callithrix_jacchus",
         # Should not be picked up:
         "isoform_conservation_frame_mammalian_frac_intact": 0.05,
     }
     sl = ber.slice_criterion({"_raw": raw}, "E1_primate_conservation")
-    assert sl["evidence"]["isoform_conservation_frame_primate_frac_intact"] == 0.96
+    assert sl["evidence"]["isoform_conservation_frame_primate_mean_pident"] == 0.96
+    assert sl["evidence"]["isoform_conservation_frame_primate_frac_intact"] == 0.88
     assert sl["evidence"]["isoform_conservation_frame_primate_n_species_aligned"] == 25
     # Cross-criterion col not present:
     assert "isoform_conservation_frame_mammalian_frac_intact" not in sl["evidence"]
@@ -125,17 +128,19 @@ def test_real_trnt1_record_e1_e2_e3() -> None:
     assert "isoform_conservation_phylop_unique_region_mean" in e3["evidence"]
 
 
-def test_f5_extracts_pathogenic_variants_as_hits() -> None:
-    """F5 has evidence_hits_col — must populate hits list."""
+def test_f5_extracts_variants_as_hits() -> None:
+    """F5 has evidence_hits_col — must populate hits list; headline is the
+    gnomAD depletion ratio (germline tolerance/constraint), not a damaging count.
+    """
     iso = {
         "_raw": {
             "isoform_variant_intersection_hits": [
                 {"variant_id": "V1", "clinical_significance": "Pathogenic"},
                 {"variant_id": "V2"},
             ],
-            "isoform_varianteffect_n_damaging_in_unique_gnomad": 1,
+            "isoform_variant_intersection_gnomad_depletion_ratio": 0.5,
         },
     }
     sl = ber.slice_criterion(iso, "F5_pathogenic_variant_enrichment")
     assert len(sl["hits"]) == 2
-    assert sl["headline"] == 1
+    assert sl["headline"] == 0.5

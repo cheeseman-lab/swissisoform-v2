@@ -80,9 +80,12 @@
       <dd>
         Per-base evolutionary constraint from the Zoonomia 241-mammal alignment.
         phyloP scores acceleration/conservation at single sites; phastCons scores the
-        probability a base is in a conserved element. We compare the
-        <strong>differential region</strong> against the <strong>shared core</strong> —
-        higher constraint in the unique region means it is selected.
+        probability a base is in a conserved element. E3 reads the
+        <strong>absolute</strong> mean phyloP over the differential region — a value
+        above the strong-purifying-selection threshold means the unique coding sequence
+        is itself under constraint. The enrichment versus the shared core is shown as
+        <em>context only</em>; the call does not require the unique region to beat the
+        shared core.
       </dd>
 
       <dt id="m-frame">Frame conservation (primate / mammalian)</dt>
@@ -121,9 +124,11 @@
       <dd>
         Subcellular-localization (DeepLoc) and N-terminal targeting-signal predictors
         (SignalP = secretion, TargetP = mitochondrial/chloroplast transit). We run them
-        on canonical <em>and</em> isoform; a changed prediction means the isoform is
-        routed differently. N-terminal changes most directly add or remove targeting
-        peptides.
+        on canonical <em>and</em> isoform. F2 fires when any DeepLoc
+        <strong>localization feature changes</strong> — the predicted compartment, the
+        detected sorting signals, or the membrane-association call — so a re-routed
+        protein is caught even when the headline compartment label is unchanged.
+        N-terminal changes most directly add or remove targeting peptides (F4).
       </dd>
 
       <dt id="m-domains">InterProScan domains &amp; motifs</dt>
@@ -159,14 +164,76 @@
         phase separation).
       </dd>
 
-      <dt id="m-clinical">Clinical variants</dt>
+      <dt id="m-clinical">Clinical &amp; population variants</dt>
       <dd>
-        ClinVar / gnomAD / COSMIC variants intersected with the differential region.
-        Burden of pathogenic variants in the unique region (vs the shared core) ties the
-        isoform to phenotype. Loss-of-function consequences (frameshift, stop-gain) are
-        clinically relevant independently of any missense pathogenicity score.
+        ClinVar / COSMIC (disease / cancer) and gnomAD (healthy-population) variants
+        intersected with the differential region. We count variants per region and
+        divide by the region's <strong>nucleotide length</strong> (not amino-acid
+        length) to get a density, then compare the unique region against the shared
+        core. Two directional signals fall out:
+        <strong>F5 — germline tolerance &amp; constraint</strong> asks whether gnomAD
+        germline variation <em>avoids</em> the unique region (a depletion ratio below 1
+        means population variation is depleted there, i.e. the region is constrained),
+        reinforced by ESM-2 sequence constraint; and
+        <strong>F6 — disease density enrichment</strong> asks whether ClinVar / COSMIC
+        disease variants <em>concentrate</em> in the unique region versus the shared
+        core (an enrichment ratio at or above 1). gnomAD is a tolerance catalogue and
+        feeds F5 only; it never counts as disease burden. Loss-of-function consequences
+        (frameshift, stop-gain) are clinically relevant independently of any missense
+        pathogenicity score.
       </dd>
     </dl>
+  </section>
+
+  <!-- Methodology & validation -->
+  <section class="about-sec">
+    <h2>How a criterion is decided</h2>
+    <p>
+      Every criterion follows the same four-step shape, so the table reads
+      consistently across all twelve:
+    </p>
+    <ol class="about-list">
+      <li>
+        <strong>Claim</strong> — the criterion states one falsifiable thing about the
+        isoform (e.g. "the differential region is under coding-level purifying
+        selection").
+      </li>
+      <li>
+        <strong>Canonical-vs-isoform comparison</strong> — the same predictor is run on
+        both the canonical protein and the alternative isoform, and the evidence shown
+        is the <em>difference</em> between them: the differential region against the
+        shared core, or the canonical start against the alternative start. A metric in
+        isolation is never the basis for a call.
+      </li>
+      <li>
+        <strong>Score</strong> — the comparison is reduced to ✓ / ✗ / – against a fixed
+        threshold. A criterion whose inputs could not be computed returns
+        <strong>– (not evaluable)</strong> and is excluded from the denominator, so
+        missing data never counts against an isoform.
+      </li>
+      <li>
+        <strong>Directionality</strong> — for the constraint and disease axes the sign
+        of the signal is what matters. Germline tolerance (F5) reads in the
+        <em>depletion</em> direction: healthy-population (gnomAD) variation
+        <em>avoiding</em> the unique region, plus high ESM-2 sequence constraint,
+        argues the region is functionally load-bearing. Disease overlap (F6) reads in
+        the <em>enrichment</em> direction: ClinVar / COSMIC variants <em>concentrating</em>
+        in the unique region (per nucleotide) versus the shared core ties it to
+        phenotype. These two databases are kept separate — gnomAD is a tolerance
+        catalogue, never disease burden.
+      </li>
+    </ol>
+    <p>
+      <strong>Thresholds &amp; validation.</strong> A few cutoffs are
+      <strong>principled anchors</strong> fixed on first principles — strong purifying
+      selection (absolute phyloP ≥ 2.0) for E3, the disease-density zero-point
+      (enrichment ≥ 1.0) for F6, reproducibility across ≥ 3 cell lines for E4, and the
+      structure-confidence floor (pLDDT ≥ 0.70) for F1. The remaining cutoffs are
+      <strong>provisional</strong> and pending calibration on a genome-wide run; the
+      curated gene set shown here validates the <em>logic</em> of each criterion, not
+      the exact numeric thresholds, which are deliberately not tuned to make a small
+      reviewer-picked set look good.
+    </p>
   </section>
 </div>
 {% endblock %}

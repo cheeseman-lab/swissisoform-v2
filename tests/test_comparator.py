@@ -219,6 +219,185 @@ class TestPositionalSubset:
         assert cmp["hits_in_diff_region"][0]["variant_id"] == "v_in_lost"
         assert cmp["hits_source_pane"] == "canonical"
 
+    def test_truncation_massspec_does_not_credit_canonical_peptides(self):
+        """E6 fix: canonical lost-region peptides are NOT isoform existence evidence.
+
+        On a truncation, massspec (an isoform-existence module) must return an
+        empty diff-region subset with source_pane='isoform' — a canonical
+        tryptic peptide in the lost N-terminus evidences the canonical form,
+        not the isoform.
+        """
+        gene = _make_gene(
+            "MMPQRSTUVWX",
+            tis_sites=[
+                _make_site(
+                    orf_type=ORFType.TRUNCATED,
+                    isoform_protein="STUVWX",
+                    diff_region=DifferentialRegion(
+                        canonical_start=0,
+                        canonical_end=5,
+                        sequence="MMPQR",
+                        confidence="tail_verified",
+                    ),
+                    isoform_annotations={"massspec": {"hits": [], "summary": {}}},
+                )
+            ],
+            canonical_annotations={
+                "massspec": {
+                    "hits": [
+                        {"pos": 2, "end": 3, "peptide": "PQR"},
+                    ],
+                    "summary": {"total": 1},
+                }
+            },
+        )
+        Comparator().compare([gene])
+        cmp = gene.tis_sites[0].comparison["massspec"]
+        assert cmp["n_hits_in_diff_region"] == 0
+        assert cmp["hits_in_diff_region"] == []
+        assert cmp["hits_source_pane"] == "isoform"
+
+
+# ---------------------------------------------------------------------------
+# F3 — real InterPro domain gain/loss in the diff region
+# ---------------------------------------------------------------------------
+
+
+def _ips_hit(pos: int, *, name: str, interpro_id: str | None, db: str = "Pfam") -> dict:
+    return {"pos": pos, "end": pos + 20, "name": name, "interpro_id": interpro_id, "db": db}
+
+
+class TestRealDomainsChanged:
+    def test_gained_real_domain_on_extension(self):
+        """A real InterPro domain starting in the isoform diff region, absent
+        from canonical, counts as one gained domain.
+        """
+        gene = _make_gene(
+            "MAAAAAA",
+            tis_sites=[
+                _make_site(
+                    orf_type=ORFType.EXTENDED,
+                    isoform_protein="MXXYYZZZKMAAAAAA",
+                    diff_region=DifferentialRegion(
+                        isoform_start=0,
+                        isoform_end=9,
+                        sequence="MXXYYZZZK",
+                        confidence="tail_verified",
+                    ),
+                    isoform_annotations={
+                        "interproscan": {
+                            "hits": [_ips_hit(2, name="PF_new", interpro_id="IPR_NEW")],
+                            "summary": {"status": "ok"},
+                        }
+                    },
+                )
+            ],
+            canonical_annotations={
+                "interproscan": {"hits": [], "summary": {"status": "ok"}}
+            },
+        )
+        Comparator().compare([gene])
+        cmp = gene.tis_sites[0].comparison["interproscan"]
+        assert cmp["n_real_domains_changed_in_diff_region"] == 1
+        assert cmp["hits_canonical_status"] == "ok"
+
+    def test_repositioned_domain_not_counted(self):
+        """A domain present on both panes (by InterPro id) is repositioned, not
+        gained/lost → not counted.
+        """
+        gene = _make_gene(
+            "MAAAAAA",
+            tis_sites=[
+                _make_site(
+                    orf_type=ORFType.EXTENDED,
+                    isoform_protein="MXXYYZZZKMAAAAAA",
+                    diff_region=DifferentialRegion(
+                        isoform_start=0,
+                        isoform_end=9,
+                        sequence="MXXYYZZZK",
+                        confidence="tail_verified",
+                    ),
+                    isoform_annotations={
+                        "interproscan": {
+                            "hits": [_ips_hit(2, name="PF_same", interpro_id="IPR_SAME")],
+                            "summary": {"status": "ok"},
+                        }
+                    },
+                )
+            ],
+            canonical_annotations={
+                "interproscan": {
+                    "hits": [_ips_hit(0, name="PF_same", interpro_id="IPR_SAME")],
+                    "summary": {"status": "ok"},
+                }
+            },
+        )
+        Comparator().compare([gene])
+        cmp = gene.tis_sites[0].comparison["interproscan"]
+        assert cmp["n_real_domains_changed_in_diff_region"] == 0
+
+    def test_disorder_only_hit_not_a_real_domain(self):
+        """A MobiDB-lite (disorder) hit in the diff region is not a real domain."""
+        gene = _make_gene(
+            "MAAAAAA",
+            tis_sites=[
+                _make_site(
+                    orf_type=ORFType.EXTENDED,
+                    isoform_protein="MXXYYZZZKMAAAAAA",
+                    diff_region=DifferentialRegion(
+                        isoform_start=0,
+                        isoform_end=9,
+                        sequence="MXXYYZZZK",
+                        confidence="tail_verified",
+                    ),
+                    isoform_annotations={
+                        "interproscan": {
+                            "hits": [
+                                _ips_hit(2, name="disorder", interpro_id=None, db="MobiDB-lite")
+                            ],
+                            "summary": {"status": "ok"},
+                        }
+                    },
+                )
+            ],
+            canonical_annotations={
+                "interproscan": {"hits": [], "summary": {"status": "ok"}}
+            },
+        )
+        Comparator().compare([gene])
+        cmp = gene.tis_sites[0].comparison["interproscan"]
+        assert cmp["n_real_domains_changed_in_diff_region"] == 0
+
+    def test_status_not_ok_gives_none(self):
+        """When a pane's IPS scan didn't complete, the count is None."""
+        gene = _make_gene(
+            "MAAAAAA",
+            tis_sites=[
+                _make_site(
+                    orf_type=ORFType.EXTENDED,
+                    isoform_protein="MXXYYZZZKMAAAAAA",
+                    diff_region=DifferentialRegion(
+                        isoform_start=0,
+                        isoform_end=9,
+                        sequence="MXXYYZZZK",
+                        confidence="tail_verified",
+                    ),
+                    isoform_annotations={
+                        "interproscan": {
+                            "hits": [_ips_hit(2, name="PF_new", interpro_id="IPR_NEW")],
+                            "summary": {"status": "no_cache"},
+                        }
+                    },
+                )
+            ],
+            canonical_annotations={
+                "interproscan": {"hits": [], "summary": {"status": "ok"}}
+            },
+        )
+        Comparator().compare([gene])
+        cmp = gene.tis_sites[0].comparison["interproscan"]
+        assert cmp["n_real_domains_changed_in_diff_region"] is None
+
 
 # ---------------------------------------------------------------------------
 # Scope-A enrichment

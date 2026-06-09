@@ -15,17 +15,18 @@ driven by missing data apart from one driven by genuine non-evidence.
 
 Criteria that depend on modules whose caches are not yet populated
 (structure, PLM VEP) return ``None`` at evaluation time based on the
-annotation status.  F5 scores per-variant damaging-effect evidence
-(ESM-2 ΔLLR + AlphaMissense) over the isoform-unique region, read from
-``varianteffect`` (built by ``VariantEffectModule``).
+annotation status.  F5 scores germline tolerance / constraint over the
+isoform-unique region (ESM-2 constraint enrichment + gnomAD depletion).
 
 Criteria
 --------
 
 Existence:
-    E1 primate reading-frame conservation (``conservation_frame``)
-    E2 mammalian reading-frame conservation (``conservation_frame``)
-    E3 PhyloP unique-region mean above coding-selection threshold
+    E1 primate amino-acid identity over the unique region
+       (``conservation_frame.primate_mean_pident``)
+    E2 mammalian amino-acid identity over the unique region
+       (``conservation_frame.mammalian_mean_pident``)
+    E3 absolute PhyloP unique-region mean above coding-selection threshold
        (``conservation``)
     E4 Multi-cell-line support (``site.expression``)
     E5 Ribosome initiation efficiency threshold (``site.expression``)
@@ -35,14 +36,17 @@ Existence:
        detectability alone is NOT treated as evidence.
 
 Functional impact:
-    F1 Structured extension pLDDT (``structure``)
-    F2 Localization change (``comparison['localization']``)
-    F3 Domain gain / loss (``comparison['interproscan']``)
+    F1 Structured + biophysically-distinct differential region
+       (``structure`` pLDDT AND ``comparison['biophysics']`` deltas)
+    F2 Localization features changed (``comparison['localization']``)
+    F3 Real InterPro domain gained / lost in the diff region
+       (``comparison['interproscan']``)
     F4 Targeting change (``comparison['signalp']`` / ``comparison['targetp']``)
-    F5 Predicted-damaging variant enrichment in the unique region
-       (per-variant ESM-2 ΔLLR + AlphaMissense; ``varianteffect``)
-    F6 Clinical variant overlap in unique region
-       (``variant_intersection``)
+    F5 Germline tolerance / constraint over the unique region
+       (ESM-2 ``plm_vep`` constraint enrichment OR gnomAD depletion via
+       ``variant_intersection``)
+    F6 Disease-variant density enrichment in unique region vs shared core
+       (``variant_intersection.disease_enrichment_ratio``)
 """
 
 from __future__ import annotations
@@ -104,47 +108,71 @@ def _status_ok(ann: dict[str, Any] | None) -> bool:
 def _e1_primate_conservation(
     site: TranslationInitiationSite, cfg: ScoringConfig
 ) -> CriterionResult:
-    """E1: fraction of primate species with intact reading frame exceeds threshold."""
+    """E1: primate amino-acid identity over the unique region exceeds threshold.
+
+    Scored on ``primate_mean_pident`` (mean AA percent identity of the aligned
+    primate orthologs), not ``frac_intact`` — pident measures sequence
+    conservation directly, whereas frac_intact only counts species with an
+    intact frame. ``frac_intact`` is still surfaced in the reason as context.
+    """
     ann = _annotation(site, "conservation_frame")
     if not _status_ok(ann):
         return CriterionResult("E1_primate_conservation", None, "conservation_frame not run")
-    val = ann.get("primate_frac_intact") if ann else None
+    val = ann.get("primate_mean_pident") if ann else None
     if val is None:
-        return CriterionResult("E1_primate_conservation", None, "primate_frac_intact unavailable")
-    passed = val >= cfg.primate_frac_intact_min
+        return CriterionResult(
+            "E1_primate_conservation", None, "primate_mean_pident unavailable"
+        )
+    passed = val >= cfg.e1_pident_min
+    frac = ann.get("primate_frac_intact")
+    frac_str = f"{frac:.2f}" if isinstance(frac, (int, float)) else "n/a"
     return CriterionResult(
         "E1_primate_conservation",
         passed,
-        f"frac_intact={val:.2f} (threshold {cfg.primate_frac_intact_min})",
+        f"mean_pident={val:.2f} (threshold {cfg.e1_pident_min}); frac_intact={frac_str}",
     )
 
 
 def _e2_mammalian_conservation(
     site: TranslationInitiationSite, cfg: ScoringConfig
 ) -> CriterionResult:
-    """E2: fraction of mammalian species with intact reading frame exceeds threshold."""
+    """E2: mammalian amino-acid identity over the unique region exceeds threshold.
+
+    Scored on ``mammalian_mean_pident`` (mean AA percent identity across the
+    aligned mammalian orthologs), not ``frac_intact``. ``frac_intact`` is kept
+    in the reason as context.
+    """
     ann = _annotation(site, "conservation_frame")
     if not _status_ok(ann):
         return CriterionResult(
             "E2_mammalian_conservation", None, "conservation_frame not run"
         )
-    val = ann.get("mammalian_frac_intact") if ann else None
+    val = ann.get("mammalian_mean_pident") if ann else None
     if val is None:
         return CriterionResult(
-            "E2_mammalian_conservation", None, "mammalian_frac_intact unavailable"
+            "E2_mammalian_conservation", None, "mammalian_mean_pident unavailable"
         )
-    passed = val >= cfg.mammalian_frac_intact_min
+    passed = val >= cfg.e2_pident_min
+    frac = ann.get("mammalian_frac_intact")
+    frac_str = f"{frac:.2f}" if isinstance(frac, (int, float)) else "n/a"
     return CriterionResult(
         "E2_mammalian_conservation",
         passed,
-        f"frac_intact={val:.2f} (threshold {cfg.mammalian_frac_intact_min})",
+        f"mean_pident={val:.2f} (threshold {cfg.e2_pident_min}); frac_intact={frac_str}",
     )
 
 
 def _e3_phylop_coding_selection(
     site: TranslationInitiationSite, cfg: ScoringConfig
 ) -> CriterionResult:
-    """E3: PhyloP mean over the unique region exceeds coding-selection threshold."""
+    """E3: absolute PhyloP over the unique region indicates purifying selection.
+
+    Scored on the *absolute* mean PhyloP of the unique region exceeding
+    ``cfg.e3_phylop_min`` (strong purifying selection at coding level). This is
+    NOT a unique-vs-shared comparison — the claim is that the unique region is
+    itself under coding-level constraint. ``phylop_enrichment`` (unique/shared)
+    is reported as context only.
+    """
     ann = _annotation(site, "conservation")
     if ann is None:
         return CriterionResult("E3_phylop_coding_selection", None, "conservation not run")
@@ -159,11 +187,14 @@ def _e3_phylop_coding_selection(
         return CriterionResult(
             "E3_phylop_coding_selection", None, "phylop_unique_region_mean unavailable"
         )
-    passed = val >= cfg.phylop_coding_min
+    passed = val >= cfg.e3_phylop_min
+    enrich = ann.get("phylop_enrichment")
+    enrich_str = f"{enrich:.2f}" if isinstance(enrich, (int, float)) else "n/a"
     return CriterionResult(
         "E3_phylop_coding_selection",
         passed,
-        f"phylop={val:.2f} (threshold {cfg.phylop_coding_min})",
+        f"phylop_unique={val:.2f} (threshold {cfg.e3_phylop_min}); "
+        f"enrichment={enrich_str} (context)",
     )
 
 
@@ -277,9 +308,16 @@ def _f1_structured_extension(
       (``status='uniform_plddt'``) — region-level statistics from a
       uniform fill aren't a real per-region measurement.
 
-    Otherwise returns ``True`` when the mean pLDDT over the differential
-    region is >= ``cfg.f1_plddt_threshold``, ``False`` otherwise. The
-    threshold's scale must match the backend (Boltz-2 emits 0–1,
+    ``True`` requires BOTH halves: the diff region is well-folded
+    (mean pLDDT >= ``cfg.f1_plddt_threshold``) AND it is biophysically
+    distinct from the shared core. Distinctness is read from the biophysics
+    comparator deltas — any of ``|gravy_delta|``, ``|fraction_charged_delta|``,
+    ``|disorder_delta|`` exceeding its provisional cutoff. A structured-but-
+    biophysically-identical addition is not counted as a functional change.
+
+    Returns ``None`` when structure status is not ``ok`` (cache empty /
+    too long / failed / uniform fill) OR the biophysics comparison is missing.
+    The threshold's scale must match the backend (Boltz-2 emits 0–1,
     AlphaFold-style emits 0–100).
     """
     ann = _annotation(site, "structure")
@@ -297,19 +335,49 @@ def _f1_structured_extension(
         return CriterionResult(
             "F1_structured_extension", None, "plddt_diffregion_mean unavailable"
         )
+
+    bio = site.comparison.get("biophysics")
+    if not isinstance(bio, dict):
+        return CriterionResult(
+            "F1_structured_extension", None, "biophysics comparison missing"
+        )
+    # Provisional distinctness cutoffs — CALIBRATE ON GENOME-WIDE RUN.
+    gravy_d = bio.get("gravy_delta")
+    charged_d = bio.get("fraction_charged_delta")
+    disorder_d = bio.get("disorder_delta")
+    distinct_flags = []
+    if isinstance(gravy_d, (int, float)) and abs(gravy_d) >= 0.3:
+        distinct_flags.append("gravy")
+    if isinstance(charged_d, (int, float)) and abs(charged_d) >= 0.05:
+        distinct_flags.append("charged")
+    if isinstance(disorder_d, (int, float)) and abs(disorder_d) >= 0.05:
+        distinct_flags.append("disorder")
+    distinct = len(distinct_flags) > 0
+
     threshold = cfg.f1_plddt_threshold
-    passed = plddt >= threshold
+    folded = plddt >= threshold
+    passed = folded and distinct
+    folded_str = "folded" if folded else "unfolded"
+    distinct_str = ",".join(distinct_flags) if distinct_flags else "none"
     return CriterionResult(
         "F1_structured_extension",
         passed,
-        f"plddt_diffregion_mean={plddt:.3f} (threshold {threshold})",
+        f"plddt_diffregion_mean={plddt:.3f} ({folded_str}, threshold {threshold}); "
+        f"biophysically_distinct={distinct_str}",
     )
 
 
 def _f2_localization_change(
     site: TranslationInitiationSite, cfg: ScoringConfig  # noqa: ARG001
 ) -> CriterionResult:
-    """F2: isoform's predicted subcellular location differs from canonical."""
+    """F2: isoform's localization features differ from canonical.
+
+    Reads the DeepLoc comparator and ORs over its categorical change flags —
+    prediction (top compartment), signals (sorting signals), and membrane
+    association. The criterion is "localization features changed", not strictly
+    "the predicted compartment changed", since a signals/membrane shift is
+    functionally meaningful even without a top-compartment flip.
+    """
     cmp = site.comparison.get("localization")
     if not isinstance(cmp, dict):
         return CriterionResult(
@@ -320,43 +388,49 @@ def _f2_localization_change(
     if not changed_keys:
         # Distinguish "comparator ran, no change" from "no comparator data"
         if any(k.endswith("_changed") for k in cmp):
-            return CriterionResult("F2_localization_change", False, "no change flagged")
+            return CriterionResult(
+                "F2_localization_change",
+                False,
+                "localization features unchanged (prediction/signals/membrane)",
+            )
         return CriterionResult(
             "F2_localization_change", None, "no *_changed fields emitted"
         )
     return CriterionResult(
-        "F2_localization_change", True, f"changed: {','.join(sorted(changed_keys))}"
+        "F2_localization_change",
+        True,
+        f"localization features changed (prediction/signals/membrane): "
+        f"{','.join(sorted(changed_keys))}",
     )
 
 
 def _f3_domain_change(
     site: TranslationInitiationSite, cfg: ScoringConfig  # noqa: ARG001
 ) -> CriterionResult:
-    """F3: domain gain/loss — InterProScan hit STARTS in the differential region.
+    """F3: domain gain/loss — a REAL InterPro domain is gained or lost in the diff region.
 
-    Symmetric across ORF types — the metric asks "is there a domain in the
-    differential region?" and the interpretation flips by direction:
+    Symmetric across ORF types — the metric asks "is a functional domain
+    gained or lost in the differential region?" and the interpretation flips
+    by direction:
 
-    * extension/uORF/altORF — diff region is added; an InterProScan hit
-      starting there represents a GAINED domain.
-    * truncation — diff region is lost; a hit starting there represents a
-      LOST canonical domain.
+    * extension/uORF/altORF — diff region is added; a real domain starting
+      there and absent from the canonical hit set is a GAINED domain.
+    * truncation — diff region is lost; a real domain starting there and
+      absent from the isoform hit set is a LOST canonical domain.
 
-    The comparator's positional subset emits every domain whose interval
-    *overlaps* the diff region; for long domains a 1–2 aa boundary touch
-    counts as overlap, which would call a body domain a "domain in the diff
-    region" spuriously. This criterion tightens the rule to: the hit's
-    ``pos`` (its start residue) must fall inside the diff window. For
-    extensions the diff window is in isoform-frame; for truncations it's in
-    canonical-frame — the comparator's ``hits_source_pane`` field tells us
-    which side we're looking at.
+    Scored on ``cmp_interproscan_n_real_domains_changed_in_diff_region`` — the
+    count the comparator emits of *filtered* real-InterPro domains (those with
+    a real ``interpro_id`` and a non-disorder/non-structural database) that
+    start in the diff region AND are absent from the other form's hit set
+    (genuinely gained or lost, not merely repositioned).
 
     Returns ``None`` when:
 
     - the comparator data is missing (precompute not run), or
     - the source pane's InterProScan ``summary.status`` (surfaced by the
       comparator as ``hits_canonical_status``) is not ``ok`` — the
-      canonical hit list we count domains from didn't actually complete.
+      canonical hit list we count domains from didn't actually complete, or
+    - the comparator did not emit the real-domain count.
     """
     cmp = site.comparison.get("interproscan")
     if not isinstance(cmp, dict):
@@ -368,41 +442,25 @@ def _f3_domain_change(
         return CriterionResult(
             "F3_domain_change", None, f"interproscan status={canonical_status}"
         )
-    hits = cmp.get("hits_in_diff_region")
-    if not isinstance(hits, list):
+    n = cmp.get("n_real_domains_changed_in_diff_region")
+    if n is None:
         return CriterionResult(
-            "F3_domain_change", None, "hits_in_diff_region unavailable"
+            "F3_domain_change",
+            None,
+            "n_real_domains_changed_in_diff_region unavailable",
         )
-
-    dr = site.diff_region
-    pane = cmp.get("hits_source_pane")
-    if dr is None or pane is None:
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
         return CriterionResult(
-            "F3_domain_change", None, "diff_region or source pane unavailable"
+            "F3_domain_change",
+            None,
+            f"n_real_domains_changed_in_diff_region not numeric ({n!r})",
         )
-    if pane == "isoform":
-        start, end = dr.isoform_start, dr.isoform_end
-    elif pane == "canonical":
-        start, end = dr.canonical_start, dr.canonical_end
-    else:
-        return CriterionResult(
-            "F3_domain_change", None, f"unknown hits_source_pane={pane!r}"
-        )
-    if start is None or end is None:
-        return CriterionResult(
-            "F3_domain_change", None, "diff coords missing for the source pane"
-        )
-
-    n_starting = sum(
-        1
-        for h in hits
-        if isinstance(h.get("pos"), int) and start <= h["pos"] < end
-    )
     return CriterionResult(
         "F3_domain_change",
-        n_starting > 0,
-        f"n_interproscan_hits_starting_in_diff_region={n_starting} "
-        f"(of {len(hits)} overlapping)",
+        n >= 1,
+        f"n_real_domains_changed_in_diff_region={n}",
     )
 
 
@@ -448,89 +506,98 @@ def _f4_targeting_change(
 def _f5_pathogenic_variant_enrichment(
     site: TranslationInitiationSite, cfg: ScoringConfig
 ) -> CriterionResult:
-    """F5: predicted-damaging variant enrichment in the isoform-unique region.
+    """F5: germline tolerance / constraint over the isoform-unique region.
 
-    Scores per-variant, not on region means. Reads ``varianteffect`` (built by
-    ``VariantEffectModule``), which attaches two complementary predictors to
-    every clinical variant in the unique region:
+    Two complementary, independent signals that the unique region is under
+    selective constraint in healthy humans:
 
-    - ESM-2 masked-marginal ΔLLR = ``logP(alt) − logP(wt)`` at the variant's
-      residue, and
-    - AlphaMissense calibrated missense pathogenicity.
+    - **ESM-2 constraint enrichment** (``plm_vep.constraint_enrichment``,
+      unique/shared mean LLR ratio) — the protein language model finds the
+      unique region's residues more constrained than the shared core.
+    - **gnomAD depletion** (``variant_intersection.gnomad_depletion_ratio``,
+      per-nt density of common variation unique/shared) — germline variation
+      AVOIDS the unique region (a depletion ratio below 1 means constraint).
 
-    A variant counts as damaging on either of two independent branches: a
-    **loss-of-function** consequence (frameshift / stop-gained / splice /
-    start-lost), **or** a missense call — AlphaMissense ``likely_pathogenic``
-    or ΔLLR ≤ ``cfg.f5_llr_damaging_threshold``. LoF variants are counted as
-    scorable even though no missense predictor scores them, so F5 is not blocked
-    when the only unique-region variants are frameshifts / stop-gains.
-
-    Returns:
-        ``None`` when ``varianteffect`` didn't run or no scorable variant
-        (missense with a predictor, or a LoF) falls in the unique region — there
-        is nothing to evaluate. ``True`` when at least
-        ``cfg.f5_min_pathogenic_in_unique`` such variants are damaging,
-        ``False`` when scorable variants exist but too few are damaging.
+    ``True`` when EITHER ``constraint_enrichment >= cfg.f5_constraint_enrichment_min``
+    OR ``gnomad_depletion_ratio < cfg.f5_depletion_ratio_max``. ``None`` only
+    when BOTH inputs are missing/unevaluable; otherwise ``False`` when neither
+    branch fires. This is germline tolerance/constraint — NOT a count of
+    "damaging" variants.
     """
-    ve = _annotation(site, "varianteffect")
-    if not _status_ok(ve):
-        return CriterionResult(
-            "F5_pathogenic_variant_enrichment", None, "varianteffect not run"
-        )
+    plm = _annotation(site, "plm_vep")
+    vi = _annotation(site, "variant_intersection")
 
-    n_scorable_raw = ve.get("n_scorable_in_unique_gnomad") if ve else None
-    n_damaging_raw = ve.get("n_damaging_in_unique_gnomad") if ve else None
-    try:
-        n_scorable = int(n_scorable_raw) if n_scorable_raw is not None else 0
-        n_damaging = int(n_damaging_raw) if n_damaging_raw is not None else 0
-    except (TypeError, ValueError):
-        return CriterionResult(
-            "F5_pathogenic_variant_enrichment",
-            None,
-            f"varianteffect counts not numeric ({n_scorable_raw!r}, {n_damaging_raw!r})",
-        )
+    constraint = plm.get("constraint_enrichment") if isinstance(plm, dict) else None
+    if not isinstance(constraint, (int, float)) or (
+        isinstance(plm, dict) and plm.get("status") != "ok"
+    ):
+        constraint = None
 
-    if n_scorable == 0:
+    depletion = vi.get("gnomad_depletion_ratio") if isinstance(vi, dict) else None
+    if not isinstance(depletion, (int, float)):
+        depletion = None
+
+    # The criterion *name* stays "F5_pathogenic_variant_enrichment" for
+    # backward compatibility with the viewer / grounding units that key on it;
+    # the *intent* is germline tolerance / constraint (see docstring).
+    if constraint is None and depletion is None:
         return CriterionResult(
             "F5_pathogenic_variant_enrichment",
             None,
-            "no scorable variants (missense or LoF) in unique region",
+            "no plm_vep constraint_enrichment or gnomad_depletion_ratio",
         )
 
-    passed = n_damaging >= cfg.f5_min_pathogenic_in_unique
-    n_am_path = ve.get("n_am_pathogenic_in_unique_gnomad")
-    n_lof = ve.get("n_lof_in_unique_gnomad")
-    mean_delta = ve.get("mean_delta_llr_unique_gnomad")
-    mean_delta_str = f"{mean_delta:.2f}" if isinstance(mean_delta, (int, float)) else "n/a"
+    constrained = constraint is not None and constraint >= cfg.f5_constraint_enrichment_min
+    depleted = depletion is not None and depletion < cfg.f5_depletion_ratio_max
+    passed = constrained or depleted
+
+    constraint_str = f"{constraint:.2f}" if constraint is not None else "n/a"
+    depletion_str = f"{depletion:.2f}" if depletion is not None else "n/a"
     return CriterionResult(
         "F5_pathogenic_variant_enrichment",
         passed,
         (
-            f"n_damaging={n_damaging}/{n_scorable} in unique "
-            f"(≥{cfg.f5_min_pathogenic_in_unique}); "
-            f"n_lof={n_lof}; n_am_pathogenic={n_am_path}; mean_ΔLLR={mean_delta_str}"
+            f"constraint_enrichment={constraint_str} "
+            f"(≥{cfg.f5_constraint_enrichment_min}); "
+            f"gnomad_depletion_ratio={depletion_str} "
+            f"(<{cfg.f5_depletion_ratio_max})"
         ),
     )
 
 
 def _f6_clinical_variant_overlap(
-    site: TranslationInitiationSite, cfg: ScoringConfig  # noqa: ARG001
+    site: TranslationInitiationSite, cfg: ScoringConfig
 ) -> CriterionResult:
-    """F6: any disease variant sits in the isoform-unique region."""
+    """F6: disease variants concentrate in the isoform-unique region.
+
+    Scored on the per-nt density enrichment of disease variants (ClinVar +
+    COSMIC) in the unique region vs the shared core
+    (``variant_intersection.disease_enrichment_ratio``). ``True`` when the
+    ratio is >= ``cfg.f6_disease_enrichment_min`` (1.0 — disease variation is
+    at least as dense in the unique region as the shared core). This replaces
+    the old mere-presence test, which fired on a single variant regardless of
+    the shared-core background. ``None`` when the ratio is missing (e.g. zero
+    region length or no shared-region disease density). Raw unique/shared
+    disease counts are reported as context.
+    """
     ann = _annotation(site, "variant_intersection")
     if not _status_ok(ann):
         return CriterionResult(
             "F6_clinical_variant_overlap", None, "variant_intersection not run"
         )
-    n = ann.get("n_disease_in_unique_region") if ann else None
-    if n is None:
+    ratio = ann.get("disease_enrichment_ratio") if ann else None
+    if not isinstance(ratio, (int, float)):
         return CriterionResult(
-            "F6_clinical_variant_overlap", None, "n_disease_in_unique_region unavailable"
+            "F6_clinical_variant_overlap", None, "disease_enrichment_ratio unavailable"
         )
+    n_unique = ann.get("n_disease_in_unique_region")
+    n_shared = ann.get("n_disease_in_shared_region")
     return CriterionResult(
         "F6_clinical_variant_overlap",
-        n > 0,
-        f"n_disease_variants_in_unique={n}",
+        ratio >= cfg.f6_disease_enrichment_min,
+        f"disease_enrichment_ratio={ratio:.2f} "
+        f"(≥{cfg.f6_disease_enrichment_min}); "
+        f"disease unique={n_unique}, shared={n_shared}",
     )
 
 
