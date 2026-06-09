@@ -72,115 +72,394 @@
     </div>
   </section>
 
-  <!-- Metric glossary -->
+  <!-- Detailed per-metric reference -->
   <section class="about-sec">
     <h2>The metrics behind the criteria</h2>
+    <p>
+      Every measurement that feeds an E or F score is described below: <em>what it
+      measures</em>, <em>how it is calculated</em> (formula, algorithm, or tool and
+      version), and a citation where one exists. Entries are grouped by the axis and
+      module they support. Where a threshold is provisional and pending genome-wide
+      calibration, this is stated explicitly.
+    </p>
+
+    <!-- ============================================================= -->
+    <h3 class="about-axis-h">Evolutionary conservation (E1 · E2 · E3)</h3>
     <dl class="about-glossary">
-      <dt id="m-phylop">phyloP / phastCons</dt>
+
+      <!-- m-phylop is the original anchor; kept as the parent for the conservation group -->
+      <dt id="m-phylop">phyloP per-base constraint</dt>
       <dd>
-        Per-base evolutionary constraint from the Zoonomia 241-mammal alignment.
-        phyloP scores acceleration/conservation at single sites; phastCons scores the
-        probability a base is in a conserved element. E3 reads the
-        <strong>absolute</strong> mean phyloP over the differential region — a value
-        above the strong-purifying-selection threshold means the unique coding sequence
-        is itself under constraint. The enrichment versus the shared core is shown as
-        <em>context only</em>; the call does not require the unique region to beat the
-        shared core.
+        <p><b>What it measures.</b> Basewise evolutionary constraint at single-nucleotide resolution: how much slower (purifying selection) or faster (acceleration) a position is evolving than the neutral expectation, measured directly in genomic coordinates over the isoform's own ORF.</p>
+        <p><b>How it's calculated.</b> phyloP scores are read from the pre-computed <span class="about-code">cactus241way</span> BigWig track derived from the Zoonomia 241-mammal Cactus whole-genome alignment. The conservation method (§3.4, "Evolutionary conservation") queries the track at the initiation codon (3 nt) and across the 13-nt Kozak window, and — using the per-ORF genomic exon intervals from the assembly layer's transcript-skeleton walker — computes length-weighted mean phyloP over the isoform-unique region, the canonical-shared region, and the unique/shared enrichment ratio. The mean phyloP over the unique region is the value scored by existence criterion E3 (threshold ≥ 2.0, a principled anchor for strong purifying selection; the enrichment ratio is context only). A <span class="about-code">status</span> field distinguishes <span class="about-code">ok</span>, <span class="about-code">not_run</span> (no track/config), and <span class="about-code">no_skeleton</span> (ORF intervals unavailable) so a genuine zero is not confused with a missing measurement.</p>
+        <p class="about-cite">Refs: phyloP [phylop], Zoonomia [zoonomia]</p>
       </dd>
 
-      <dt id="m-frame">Frame conservation (primate / mammalian)</dt>
+      <dt id="m-phastcons">phastCons per-base constraint</dt>
       <dd>
-        We extract the differential ORF across primate and mammalian genomes and test
-        whether the reading frame stays intact (no frameshift, no premature stop, start
-        codon preserved). "Phylo depth (MRCA)" reports how deep the deepest still-intact
-        species sits — deeper = older selection on the ORF.
+        <p><b>What it measures.</b> The probability that each nucleotide belongs to a conserved element, a complementary (element-based, phylo-HMM) view of constraint alongside phyloP's per-site rate test.</p>
+        <p><b>How it's calculated.</b> phastCons scores are read from the pre-computed UCSC <span class="about-code">phastCons100way</span> BigWig track (100-vertebrate alignment). As with phyloP (§3.4), the method queries the track at the initiation codon (3 nt) and the 13-nt Kozak window, and computes length-weighted mean scores over the isoform-unique region, the canonical-shared region, and their enrichment ratio using the per-ORF genomic exon intervals. phastCons is carried as context and is not the basis of an E-criterion (E3 scores phyloP). The same <span class="about-code">ok</span> / <span class="about-code">not_run</span> / <span class="about-code">no_skeleton</span> status applies.</p>
+        <p class="about-cite">Refs: phastCons [phastcons]</p>
       </dd>
 
-      <dt id="m-initiation">Initiation efficiency &amp; Kozak context</dt>
-      <dd>
-        How strongly ribosomes initiate at the alternative start relative to background,
-        per cell line (CPM + p-value). The Kozak context (−9..+4 around the ATG) and its
-        Hamming distance to the consensus indicate whether the sequence favours
-        initiation.
+      <!-- m-frame is the original anchor; kept as the parent for the reading-frame group -->
+      <dt id="m-frame">Reading-frame conservation — mean amino-acid percent identity (mean_pident)</dt>
+      <dd id="m-frame-pident">
+        <p><b>What it measures.</b> The degree to which the isoform-unique open reading frame is preserved as a translatable coding frame across the placental-mammal radiation, summarized as the mean amino-acid percent identity of the unique region across aligned species. This is the <b>scored</b> reading-frame metric and feeds existence criteria E1 (primates) and E2 (mammals).</p>
+        <p><b>How it's calculated.</b> Per §3.4 ("Reading-frame integrity"), the unique-region exon intervals are extracted from the Zoonomia Cactus alignment HAL with <span class="about-code">hal2maf</span> (see <a href="#m-hal2maf">hal2maf</a>). For each aligned species the method tests start-codon conservation, scans for frameshifting indels and premature stop codons, and records the species' amino-acid percent identity to the human ORF. Per-species identities are aggregated separately over the primate and mammalian species sets into a mean percent identity. E1 requires the primate mean ≥ 0.80 and E2 the mammalian mean ≥ 0.50 (both provisional, pending genome-wide calibration). Status values: <span class="about-code">not_run</span> (no HAL), <span class="about-code">no_skeleton</span> / <span class="about-code">no_unique_region</span> (no region to query), <span class="about-code">no_alignment</span> (region did not align), <span class="about-code">ok</span>.</p>
+        <p class="about-cite">Refs: Zoonomia [zoonomia]</p>
       </dd>
 
-      <dt id="m-massspec">Mass spec</dt>
+      <dt id="m-frame-frac-intact">Reading-frame conservation — fraction of species with intact frame (frac_intact)</dt>
       <dd>
-        In-silico tryptic digest of the differential region, matched against detected
-        peptides (PepQuery). A peptide unique to the isoform region is direct proof of
-        translation.
+        <p><b>What it measures.</b> The fraction of aligned primate species (and, separately, mammalian species) in which the isoform-unique ORF retains an intact, frameshift- and premature-stop-free reading frame. Context for E1/E2, not the score basis.</p>
+        <p><b>How it's calculated.</b> Per §3.4, after each species is classified as frame-intact or disrupted (via the start-codon test plus the frameshift-indel and premature-stop scans on its <span class="about-code">hal2maf</span>-extracted alignment), the intact calls are aggregated into the fraction of primate and of mammalian species with an intact frame. The methods note explicitly that this intact-frame fraction is "retained as context for the reason string but is no longer the score basis" — E1/E2 are scored on mean percent identity (m-frame-pident), and frac_intact accompanies them in the reason text.</p>
+        <p class="about-cite">Refs: Zoonomia [zoonomia]</p>
       </dd>
 
-      <dt id="m-structure">pLDDT &amp; structure (Boltz)</dt>
+      <dt id="m-frame-nspecies">Reading-frame conservation — number of species aligned (n_species_aligned)</dt>
       <dd>
-        Per-residue model confidence (0–100) from a Boltz structure prediction. High
-        pLDDT in the differential region implies it folds into ordered structure rather
-        than disorder. We also report TM-score / RMSD between canonical and isoform
-        folds. A "uniform-pLDDT" status flags a placeholder structure — treat as
-        unreliable.
+        <p><b>What it measures.</b> How many species the unique region could actually be assessed in — the support behind the per-species frame aggregates. A low count signals that the percent-identity and intact-frame summaries rest on few observations.</p>
+        <p><b>How it's calculated.</b> Per §3.4, it is the count of species rows returned by the <span class="about-code">hal2maf</span> extraction over the unique-region intervals that aligned and were analyzed (start-codon, frameshift, premature-stop, percent-identity tests run per species). Species sets are drawn from the curated primate and mammalian lists; species with no alignment over the region are not counted.</p>
+        <p class="about-cite">Refs: Zoonomia [zoonomia]</p>
       </dd>
 
-      <dt id="m-localization">DeepLoc / SignalP / TargetP</dt>
+      <dt id="m-frame-startcodon">Reading-frame conservation — start-codon conservation</dt>
       <dd>
-        Subcellular-localization (DeepLoc) and N-terminal targeting-signal predictors
-        (SignalP = secretion, TargetP = mitochondrial/chloroplast transit). We run them
-        on canonical <em>and</em> isoform. F2 fires when any DeepLoc
-        <strong>localization feature changes</strong> — the predicted compartment, the
-        detected sorting signals, or the membrane-association call — so a re-routed
-        protein is caught even when the headline compartment label is unchanged.
-        N-terminal changes most directly add or remove targeting peptides (F4).
+        <p><b>What it measures.</b> Whether the isoform's initiation codon is itself conserved in each aligned species — evidence that the alternative TIS, not just the downstream frame, is evolutionarily maintained.</p>
+        <p><b>How it's calculated.</b> Per §3.4, for each aligned species the method "tests start-codon conservation" on the <span class="about-code">hal2maf</span>-extracted MAF of the unique region: it inspects the orthologous trinucleotide at the initiation position and records whether it is preserved. This per-species start-codon call contributes to the frame-intactness classification that drives frac_intact and feeds the percent-identity aggregation.</p>
+        <p class="about-cite">Refs: Zoonomia [zoonomia]</p>
       </dd>
 
-      <dt id="m-domains">InterProScan domains &amp; motifs</dt>
+      <dt id="m-frame-deepest">Reading-frame conservation — deepest-intact species / phylogenetic depth</dt>
       <dd>
-        Annotated protein domains (InterPro) and short linear motifs that fall inside the
-        differential region. Gaining or losing a domain is a direct functional change.
+        <p><b>What it measures.</b> How far back the isoform-unique ORF's coding frame can be traced: the most deeply diverging species in which the frame remains intact, with its phylogenetic depth — a single readout of the evolutionary age of the alternative ORF.</p>
+        <p><b>How it's calculated.</b> Per §3.4, among species whose frame the method classifies as intact, it selects the deepest-diverging one and reports its phylogenetic depth, "read from the HAL's own species tree" (parsed from the Cactus HAL rather than a hard-coded tree, so it tracks the alignment release). Reported per radiation (primate and mammalian) as a deepest-intact species plus depth.</p>
+        <p class="about-cite">Refs: Zoonomia [zoonomia]</p>
       </dd>
 
-      <dt id="m-esm2">ESM-2 ΔLLR (sequence constraint)</dt>
+      <dt id="m-hal2maf">hal2maf alignment extraction</dt>
       <dd>
-        A protein language model scores how "surprised" it is by each residue (masked-
-        marginal log-likelihood ratio). Averaged over the unique vs shared region, it
-        measures constraint in the isoform's own reading frame — so it works on
-        extensions where AlphaMissense cannot.
+        <p><b>What it measures.</b> Not a score itself — the extraction step that supplies the per-species multiple alignment of the isoform-unique region on which all reading-frame metrics (m-frame-pident, m-frame-frac-intact, m-frame-startcodon, m-frame-deepest) are computed.</p>
+        <p><b>How it's calculated.</b> Per §3.4, the unique-region exon intervals (from the assembly layer's transcript-skeleton walker) are passed to <span class="about-code">hal2maf</span>, which slices the Zoonomia Cactus alignment HAL into a per-species multiple alignment format (MAF) block over exactly those genomic intervals. The resulting MAF is then analyzed species-by-species for start-codon conservation, frameshifts, premature stops, and amino-acid percent identity. When no HAL is available the method reports <span class="about-code">not_run</span>; an empty alignment over the region yields <span class="about-code">no_alignment</span>.</p>
+        <p class="about-cite">Refs: Zoonomia [zoonomia]</p>
+      </dd>
+    </dl>
+
+    <!-- ============================================================= -->
+    <h3 class="about-axis-h">Initiation &amp; expression (E4 · E5)</h3>
+    <dl class="about-glossary">
+
+      <!-- m-initiation is the original anchor; kept as the parent for the initiation group -->
+      <dt id="m-initiation">Initiation efficiency (TIS counts / gene RNA-seq counts)</dt>
+      <dd id="m-initiation-efficiency">
+        <p><b>What it measures.</b> How productively ribosomes initiate at an alternative start codon relative to the transcriptional output of its gene, per cell line. This is the signal behind existence criterion <span class="about-code">E5</span>. It is a <em>normalized ratio of read counts</em> — not a bounded probability and not the Ribo-TISH enrichment p-value; values are not capped at 1 and should be read as a relative initiation rate, not a percentage.</p>
+        <p><b>How it's calculated.</b> For each TIS in a sample, the Ribo-TISH raw initiation read count (<code>TISCounts</code>) is divided by that gene's matched RNA-seq read count, the latter taken from the gene-level HTSeq-count table for the sample (§Cross-cell-line aggregation defines initiation efficiency as "the ratio of the TIS read count to the gene's RNA-seq count"). The ratio is carried per cell line through the aggregation step; <span class="about-code">E5</span> tests the <em>maximum</em> per-cell-line initiation efficiency against a (provisional, calibration-pending) threshold (§Evidence scoring). Distinct from CPM/RPM below, which normalize against the sample's total mapped reads rather than the gene's own RNA-seq depth.</p>
+        <p class="about-cite">Refs: Ribo-TISH [ribotish], HTSeq-count [htseq]</p>
       </dd>
 
-      <dt id="m-alphamissense">AlphaMissense <span class="about-warn-chip">canonical frame only</span></dt>
+      <dt id="m-cpm">CPM / RPM (depth-normalized TIS count)</dt>
       <dd>
-        Precomputed missense-pathogenicity for every canonical-protein amino-acid change.
-        Valid on <strong>truncations</strong> (canonical-coding lost region), but
-        <strong>N/A on extensions</strong> — those positions are not in the canonical
-        frame, so AlphaMissense has no score for them. It is also missense-only: it never
-        sees frameshift or stop-gain (loss-of-function) variants, which are assessed
-        separately.
+        <p><b>What it measures.</b> The Ribo-TISH initiation read count for a TIS normalized to sequencing depth, so that initiation events are comparable across the six cell lines despite differing library sizes. Used as the expression-level filter input and reported per cell line in the output table.</p>
+        <p><b>How it's calculated.</b> Each TIS's raw read count (<code>TISCounts</code>) is divided by the total number of uniquely-mapped RNA-seq reads in the matched sample — a single grand-total constant summed over all genes in that sample's HTSeq-count table — and scaled to reads per million (§Ribosome-profiling). This RPM value drives the low-expression filter: events with RPM below 0.1 are marked <code>LowReadcounts</code> and dropped (§significance filtering). Unlike initiation efficiency, the denominator is the whole-sample mapped-read total, not the per-gene RNA-seq count.</p>
+        <p class="about-cite">Refs: Ribo-TISH [ribotish], HTSeq-count [htseq]</p>
       </dd>
 
-      <dt id="m-biophysics">Biophysics</dt>
+      <dt id="m-tis-significance">TIS-enrichment p-value, frame-preference p-value &amp; Fisher q-value</dt>
       <dd>
-        Whole-region physicochemical properties of the differential vs shared sequence:
-        isoelectric point, hydropathy (GRAVY), charge, disorder, low-complexity and
-        prion-like fraction, LLPS / π–π propensity, aromaticity, instability, entropy. A
-        biophysically distinct region is more likely to confer a distinct function (e.g.
-        phase separation).
+        <p><b>What it measures.</b> The statistical confidence that an initiation event is a real, frame-coherent ribosome pile-up rather than background. These are the three significance criteria that gate every alternative TIS into the analysis.</p>
+        <p><b>How it's calculated.</b> Ribo-TISH emits, per candidate TIS: a two-sided <em>TIS-enrichment</em> p-value comparing the ribosome-footprint pile-up at the candidate codon against local background; a <em>frame-preference</em> p-value testing whether reads concentrate in the codon's reading frame; and a <em>Fisher-combined</em> q-value integrating the two (§Ribosome-profiling). The significance filter marks an event <code>NotSignificant</code> unless all three pass: TIS-enrichment p ≤ 0.01, frame-preference p ≤ 0.01, and Fisher q ≤ 0.05 (§significance filtering). All thresholds are exposed as configurable parameters. The output table additionally carries a one-sided initiation-significance p-value per cell line (§Differential annotation table).</p>
+        <p class="about-cite">Refs: Ribo-TISH [ribotish]</p>
       </dd>
 
-      <dt id="m-clinical">Clinical &amp; population variants</dt>
+      <dt id="m-cellline-reproducibility">Cell-line reproducibility count (E4)</dt>
       <dd>
-        ClinVar / COSMIC (disease / cancer) and gnomAD (healthy-population) variants
-        intersected with the differential region. We count variants per region and
-        divide by the region's <strong>nucleotide length</strong> (not amino-acid
-        length) to get a density, then compare the unique region against the shared
-        core. Two directional signals fall out:
-        <strong>F5 — germline tolerance &amp; constraint</strong> asks whether gnomAD
-        germline variation <em>avoids</em> the unique region (a depletion ratio below 1
-        means population variation is depleted there, i.e. the region is constrained),
-        reinforced by ESM-2 sequence constraint; and
-        <strong>F6 — disease density enrichment</strong> asks whether ClinVar / COSMIC
-        disease variants <em>concentrate</em> in the unique region versus the shared
-        core (an enrichment ratio at or above 1). gnomAD is a tolerance catalogue and
-        feeds F5 only; it never counts as disease burden. Loss-of-function consequences
-        (frameshift, stop-gain) are clinically relevant independently of any missense
-        pathogenicity score.
+        <p><b>What it measures.</b> In how many of the six independently-processed cell lines the same alternative TIS is detected — a reproducibility signal for existence criterion <span class="about-code">E4</span>. Recurrence across cell lines argues against a single-sample artifact.</p>
+        <p><b>How it's calculated.</b> Each cell line (HeLa, K562, U2OS, and RPE1 asynchronous / quiescent / senescent) is filtered independently; the cross-cell-line combine then takes the union of distinct (gene symbol, transcript, ORF genomic span, start codon) tuples and attaches a per-cell-line expression vector, with zero-filled entries for non-observing samples (§Cross-cell-line aggregation). <span class="about-code">E4</span> counts the cell lines in which the TIS was observed and fires when that count is at least 3 (§Evidence scoring). The ≥ 3 cutoff is a fixed, principled anchor — not a provisional/calibration-pending threshold — and is not relaxed by run-script overrides.</p>
+        <p class="about-cite">Refs: Ribo-TISH [ribotish], GENCODE v49 [gencode]</p>
+      </dd>
+
+      <dt id="m-kozak-context">Kozak context window</dt>
+      <dd>
+        <p><b>What it measures.</b> The 13-nucleotide sequence context around an alternative initiation codon — the determinant of how favourably a ribosome recognizes that start. Supplies the raw window for the Kozak strength scores below and the GC content reported per TIS.</p>
+        <p><b>How it's calculated.</b> For each TIS a 13-nt mRNA window spanning positions −9 to +4 is extracted, with the initiation codon occupying positions 9–11 (0-indexed). Extraction is strand-aware: on the plus strand the window is read directly from the primary-assembly GRCh38 FASTA; on the minus strand the reverse-complement of the corresponding plus-strand interval is taken so the string reads 5′→3′ in mRNA orientation (§Kozak-context extraction). The window is populated whether the start is ATG or a near-cognate (CTG/GTG/TTG/ACG/AAG), and the initiation trinucleotide at positions 9–11 is preserved independently in the TIS record. The initiation-context method also records the GC content of this window and the start trinucleotide (§ORF/initiation-context).</p>
+        <p class="about-cite">Refs: Kozak [kozak]</p>
+      </dd>
+
+      <dt id="m-kozak-hamming">Kozak strength (Hamming distances to consensus)</dt>
+      <dd>
+        <p><b>What it measures.</b> How closely the 13-nt context matches the optimal Kozak consensus — a proxy for initiation strength. A smaller Hamming distance means a stronger, more consensus-like start.</p>
+        <p><b>How it's calculated.</b> The extracted window is scored against the consensus <code>gccgccRccATGG</code> under three weighting schemes derived from Kozak (§ORF/initiation-context): (1) a <em>full-length</em> Hamming distance over all 13 positions; (2) a <em>major-position</em> Hamming distance restricted to the two strongly-conserved positions, −3 and +4; and (3) a <em>partial-weighting</em> score applying weight 1.0 to the major positions and 0.1 to the minor positions. The <code>R</code> at position −3 denotes the purine consensus (A or G). All three are reported per TIS as a site-level annotation.</p>
+        <p class="about-cite">Refs: Kozak [kozak]</p>
+      </dd>
+    </dl>
+
+    <!-- ============================================================= -->
+    <h3 class="about-axis-h">In-silico proteomic detectability (E6)</h3>
+    <dl class="about-glossary">
+
+      <!-- m-massspec is the original anchor; kept as the parent for the mass-spec group -->
+      <dt id="m-massspec">In-silico tryptic peptide enumeration (isoform-unique)</dt>
+      <dd id="m-massspec-tryptic">
+        <p><b>What it measures.</b> Which tryptic peptides the alternative isoform could yield in a mass-spectrometry experiment, and which of those peptides are <i>unique</i> to the isoform — i.e. do not occur anywhere in the canonical protein's own tryptic digest. Unique peptides are the candidate observations that could, in principle, distinguish the alternative isoform from the canonical in a proteomics experiment, so the uniqueness flag is the primary handle for downstream experimental validation.</p>
+        <p><b>How it's calculated.</b> Per §"In-silico proteomic detectability": the protein sequence is digested in silico by cleaving after every lysine (K) or arginine (R) that is not immediately followed by proline (the KP / RP exceptions), allowing up to one missed cleavage. Peptides shorter than 7 or longer than 30 residues — outside the typical tandem-MS observation range — are discarded. Each retained peptide is recorded with its sequence, start position, end position, length, and a boolean uniqueness flag set by testing whether that peptide sequence occurs anywhere in the canonical protein's tryptic digest (unique = absent from canonical). For the canonical protein annotation, uniqueness is undefined (there is no alternative sequence to compare against) and is recorded as <span class="about-code">None</span> rather than <span class="about-code">False</span>, to distinguish the semantically-undefined case from an empirically-negative one.</p>
+        <p class="about-cite">Refs: — (in-silico digest; no external tool)</p>
+      </dd>
+
+      <dt id="m-massspec-pepquery">PepQuery2 spectral validation</dt>
+      <dd>
+        <p><b>What it measures.</b> Whether an enumerated peptide has actually been observed in real mass spectra, elevating it from "in-silico detectable" to "experimentally validated." This is the empirical evidence that the alternative isoform's region is translated and present at the protein level.</p>
+        <p><b>How it's calculated.</b> Per §"In-silico proteomic detectability": in-silico detectability alone is <i>not</i> treated as evidence. When pre-computed PepQuery2 validation results are provided, each enumerated peptide already observed in a reanalysis of public proteomics datasets is additionally flagged as experimentally validated. The E6 evidence criterion fires when at least one isoform-unique tryptic peptide is matched in public MS spectra by the PepQuery2 search; E6 is reported as <span class="about-code">None</span> (not <span class="about-code">False</span>) until the PepQuery2 precompute exists. PepQuery2 performs unrestricted (open) peptide-spectrum matching against public MS datasets and scores significance against a reference proteome, so an isoform-unique peptide passing PepQuery2 is direct proof of translation.</p>
+        <p class="about-cite">Refs: PepQuery2 [pepquery]</p>
+      </dd>
+
+      <dt id="m-massspec-truncation-lostregion">Truncations: no credit for canonical lost-region peptides</dt>
+      <dd>
+        <p><b>What it measures.</b> A correctness guard ensuring that, for truncated isoforms, mass-spec detectability evidence reflects only sequence the isoform actually contains — never the canonical region that the truncation deletes.</p>
+        <p><b>How it's calculated.</b> Per §"In-silico proteomic detectability": the digest and the isoform-uniqueness test are computed on the alternative isoform's own sequence. A truncation's differential region is the <i>canonical</i> lost region (the residues absent from the isoform), so peptides from that lost region are by construction part of the canonical digest and the isoform cannot generate them. Because uniqueness is defined as "absent from the canonical digest," lost-region peptides can never be flagged isoform-unique, and a truncation therefore receives no proteomic-detectability credit for canonical lost-region peptides — only peptides present in the (shorter) isoform sequence are enumerated and tested.</p>
+        <p class="about-cite">Refs: — (consequence of the digest/uniqueness definition)</p>
+      </dd>
+    </dl>
+
+    <!-- ============================================================= -->
+    <h3 class="about-axis-h">Structure &amp; biophysics (F1)</h3>
+    <dl class="about-glossary">
+
+      <!-- m-structure is the original anchor; kept as the parent for the structure metric -->
+      <dt id="m-structure">Differential-region pLDDT (predicted fold confidence)</dt>
+      <dd id="m-plddt">
+        <p><b>What it measures.</b> Whether the isoform's <span class="about-code">differential region</span> — the stretch of sequence that distinguishes the alternative isoform from its canonical counterpart — is predicted to adopt a folded, ordered structure rather than being disordered. It is the structural half of the F1 functional criterion ("structured, biophysically distinct differential region").</p>
+        <p><b>How it's calculated.</b> A per-residue predicted-structure confidence (pLDDT) is computed for the protein, and the <i>mean pLDDT over the residues of the differential region</i> is taken (§"Evidence scoring", F1). Confidence is expressed on a 0–1 scale; the F1 criterion is satisfied (on its structural half) when this mean is at or above <b>0.70</b>. The 0.70 cutoff is a <i>principled anchor</i> fixed on biological grounds, not tuned to any dataset (§"Evidence scoring", threshold classes). When the structure prediction is unavailable the criterion returns <span class="about-code">None</span>, with the reason naming the missing half. (The methods source specifies the pLDDT metric and 0.70 anchor but does not name a specific structure-prediction tool or version, so none is asserted here.)</p>
+        <p class="about-cite">Refs: —</p>
+      </dd>
+
+      <dt id="m-biophysical-distinctness">Biophysical distinctness (F1 flag)</dt>
+      <dd>
+        <p><b>What it measures.</b> Whether the isoform is physicochemically distinct from the canonical protein, i.e. the canonical→isoform comparison crosses a meaningful threshold on at least one global descriptor. This is the biophysical half of F1; F1 is <span class="about-code">True</span> only when both this flag is set <i>and</i> the differential-region pLDDT ≥ 0.70.</p>
+        <p><b>How it's calculated.</b> From the canonical-versus-isoform comparison of the eighteen biophysical descriptors, the flag is set when any of three deltas crosses its cutoff (§"Evidence scoring", F1; §"Biophysical descriptors"): a GRAVY delta ≥ 0.3, a charged-fraction delta ≥ 0.05, or a disorder delta ≥ 0.05. These three deltas are <i>provisional</i> distinctness cutoffs — config-driven placeholders pending calibration on a genome-wide run, not principled anchors (§"Evidence scoring", threshold classes). When the biophysical comparison is missing the F1 criterion returns <span class="about-code">None</span>.</p>
+        <p class="about-cite">Refs: BioPython [biopython], Kyte–Doolittle hydropathy [kd], TOP-IDP disorder scale [topidp]</p>
+      </dd>
+
+      <dt id="m-pi">Isoelectric point (pI)</dt>
+      <dd>
+        <p><b>What it measures.</b> The pH at which the polypeptide carries no net charge — a global summary of its acidic/basic character. Compared canonical vs isoform as a scalar delta.</p>
+        <p><b>How it's calculated.</b> pI is computed from an EMBOSS-style pK table by binary search over pH until the net charge is zero (§"Biophysical descriptors"), one of the eighteen per-sequence descriptors.</p>
+        <p class="about-cite">Refs: —</p>
+      </dd>
+
+      <dt id="m-gravy">GRAVY (Kyte–Doolittle hydropathy)</dt>
+      <dd>
+        <p><b>What it measures.</b> Overall hydrophobicity/hydrophilicity of the protein — positive values indicate hydrophobic, negative hydrophilic. The GRAVY delta (≥ 0.3) is one of the three triggers of the F1 biophysical-distinctness flag.</p>
+        <p><b>How it's calculated.</b> The mean of the Kyte–Doolittle hydropathy index over all residues (Grand Average of Hydropathy) (§"Biophysical descriptors"). A per-residue hydropathy vector is also retained alongside the scalar for downstream positional comparisons.</p>
+        <p class="about-cite">Refs: Kyte–Doolittle hydropathy index [kd]</p>
+      </dd>
+
+      <dt id="m-disorder">Disorder propensity (TOP-IDP) &amp; fraction of disorder-promoting residues</dt>
+      <dd>
+        <p><b>What it measures.</b> The predicted intrinsic disorder of the polypeptide — how likely it is to lack a fixed fold. The disorder delta (≥ 0.05) is one of the three triggers of the F1 biophysical-distinctness flag, complementing the structural pLDDT signal.</p>
+        <p><b>How it's calculated.</b> A TOP-IDP disorder-propensity score is computed from the intrinsic-disorder amino-acid propensity scale of Campen et al., applied residue-by-residue (§"Biophysical descriptors"). A companion descriptor reports the fraction of disorder-promoting residues. The propensity table was implemented directly against the published residue-level values; a per-residue disorder-propensity vector is retained for positional comparisons.</p>
+        <p class="about-cite">Refs: TOP-IDP scale, Campen et al. [topidp]</p>
+      </dd>
+
+      <dt id="m-fraction-charged">Fraction of charged residues</dt>
+      <dd>
+        <p><b>What it measures.</b> The proportion of residues bearing a formal charge (acidic + basic), a determinant of solubility, interaction surfaces, and disorder. The charged-fraction delta (≥ 0.05) is one of the three triggers of the F1 biophysical-distinctness flag.</p>
+        <p><b>How it's calculated.</b> Count of charged residues divided by sequence length, one of the eighteen per-sequence descriptors (§"Biophysical descriptors").</p>
+        <p class="about-cite">Refs: —</p>
+      </dd>
+
+      <dt id="m-instability-index">Instability index</dt>
+      <dd>
+        <p><b>What it measures.</b> A sequence-derived prediction of in-vitro protein stability based on dipeptide composition.</p>
+        <p><b>How it's calculated.</b> Computed with BioPython's ProtParam module (§"Biophysical descriptors").</p>
+        <p class="about-cite">Refs: BioPython ProtParam [biopython]</p>
+      </dd>
+
+      <dt id="m-aromatic-fraction">Aromatic fraction</dt>
+      <dd>
+        <p><b>What it measures.</b> The proportion of aromatic residues (F/Y/W), relevant to π–π stacking, binding pockets, and phase-separation propensity.</p>
+        <p><b>How it's calculated.</b> Aromatic-residue count divided by sequence length, one of the eighteen per-sequence descriptors (§"Biophysical descriptors").</p>
+        <p class="about-cite">Refs: —</p>
+      </dd>
+
+      <dt id="m-llps">LLPS propensity (composite)</dt>
+      <dd>
+        <p><b>What it measures.</b> Liquid–liquid phase-separation propensity — the tendency of the protein to drive or partition into biomolecular condensates.</p>
+        <p><b>How it's calculated.</b> Reported as a composite score combining three sequence-derived components — prion-like-domain content (Q/N/G/S/Y fraction), π–π interaction propensity (F/Y/W/R/H/Q/N), and RG/FG-motif density — together with disorder and low-complexity fraction, under fixed weights (§"Biophysical descriptors"). The three components are emitted alongside the composite. The component propensity tables were implemented directly against published residue-level values.</p>
+        <p class="about-cite">Refs: —</p>
+      </dd>
+
+      <!-- m-biophysics is the original anchor; kept as the parent for the sequence-complexity / biophysics group -->
+      <dt id="m-biophysics">Sequence-complexity descriptors</dt>
+      <dd id="m-sequence-complexity">
+        <p><b>What it measures.</b> The compositional complexity of the sequence — distinguishing complex globular sequence from low-complexity / repetitive regions that often co-occur with disorder and condensate biology. These complexity descriptors sit alongside the other seventeen biophysical descriptors (pI, GRAVY, charge, disorder, aromaticity, instability, LLPS) that together define the F1 biophysical-distinctness comparison.</p>
+        <p><b>How it's calculated.</b> A family of descriptors (§"Biophysical descriptors"): whole-sequence Shannon entropy and its mean over a sliding 20-residue window; a normalized-complexity score; the fraction of residues in low-complexity regions (Shannon entropy below 2.2 bits over a sliding 12-residue window); the amino-acid diversity of the N-terminal window; and the longest homopolymer run. The Shannon-entropy complexity family was implemented directly from residue-level definitions.</p>
+        <p class="about-cite">Refs: —</p>
+      </dd>
+    </dl>
+
+    <!-- ============================================================= -->
+    <h3 class="about-axis-h">Localization &amp; targeting (F2 · F4)</h3>
+    <dl class="about-glossary">
+
+      <!-- m-localization is the original anchor; kept as the parent for the localization group -->
+      <dt id="m-localization">DeepLoc 2.1 — subcellular compartment</dt>
+      <dd id="m-deeploc-compartment">
+        <p><b>What it measures.</b> The predicted primary subcellular localization of a protein (one of ten compartments — nucleus, cytoplasm, mitochondrion, etc.), computed independently for the canonical protein and for each alternative-TIS isoform so that a re-routed N-terminus can be detected.</p>
+        <p><b>How it's calculated.</b> Sequences are scored with <span class="about-code">DeepLoc 2.1</span> in its "Fast" mode (§"Subcellular localization"). Because DeepLoc's dependencies are pinned to a Python 3.8 stack that conflicts with the rest of the pipeline, it is run inside an isolated conda environment whose stdout the main pipeline consumes. To amortize the fixed cost of ESM embedding, all unique canonical and isoform sequences in a batch are written to a single FASTA, DeepLoc is invoked once, and the per-sequence predictions (primary localization plus the signal-peptide / NLS / mitochondrial / peroxisomal sub-predictions and a membrane-type call) are joined back onto records by sequence identity. A protein-hash-keyed lookup memoizes, so identical sequences across genes or cell lines are predicted exactly once per run. Per-residue ESM embeddings are discarded; only the final categorical and probabilistic outputs are stored.</p>
+        <p class="about-cite">Refs: DeepLoc 2.1 [deeploc]</p>
+      </dd>
+
+      <dt id="m-deeploc-features-f2">DeepLoc localization-feature change (F2)</dt>
+      <dd>
+        <p><b>What it measures.</b> Functional criterion <span class="about-code">F2</span> — whether the alternative isoform is predicted to localize or associate differently from the canonical protein. Labelled "localization features changed."</p>
+        <p><b>How it's calculated.</b> The comparator diffs the DeepLoc outputs of the canonical protein against the isoform and fires F2 if <em>any</em> localization feature differs: the primary-compartment prediction, the detected sorting signals (signal-peptide / NLS / mitochondrial / peroxisomal sub-predictions), or the membrane-type call (§"Evidence criteria", F2). Keying on the full feature set rather than the single headline compartment label catches a re-routed protein even when the top compartment is unchanged.</p>
+        <p class="about-cite">Refs: DeepLoc 2.1 [deeploc]</p>
+      </dd>
+
+      <dt id="m-signalp">SignalP 6.0 — signal peptide</dt>
+      <dd>
+        <p><b>What it measures.</b> Presence and type of an N-terminal secretory signal peptide, predicted per protein (canonical and isoform) — the kind of N-terminal feature an alternative TIS most directly adds or removes.</p>
+        <p><b>How it's calculated.</b> Sequences are scored with <span class="about-code">SignalP 6.0</span>, which predicts the five signal-peptide types using a protein language model (§"Signal and targeting peptides"). It is run once over the batch of unique sequences in its own pinned environment and joined back by sequence identity; for each protein the predicted class, the class probabilities, and the predicted cleavage site are recorded.</p>
+        <p class="about-cite">Refs: SignalP 6.0 [signalp6]</p>
+      </dd>
+
+      <dt id="m-targetp">TargetP 2.0 — transit/targeting peptide</dt>
+      <dd>
+        <p><b>What it measures.</b> The broader N-terminal targeting class of a protein (canonical and isoform): signal peptide (SP), mitochondrial transit peptide (mTP), or chloroplast transit peptide (cTP), with the predicted cleavage site where present.</p>
+        <p><b>How it's calculated.</b> Sequences are scored with <span class="about-code">TargetP 2.0</span> (§"Signal and targeting peptides"), run once over the batch of unique sequences in its own pinned environment and joined back by sequence identity. For each protein the predicted class, the class probabilities, and the cleavage site are recorded. Running TargetP alongside SignalP lets the targeting criterion catch a gained or lost signal that either tool alone would miss.</p>
+        <p class="about-cite">Refs: TargetP 2.0 [targetp2]</p>
+      </dd>
+
+      <dt id="m-targeting-f4">Targeting-signal change (F4)</dt>
+      <dd>
+        <p><b>What it measures.</b> Functional criterion <span class="about-code">F4</span> — whether the alternative N-terminus gains or loses an N-terminal targeting peptide relative to the canonical protein.</p>
+        <p><b>How it's calculated.</b> F4 fires when <span class="about-code">SignalP 6.0</span> or <span class="about-code">TargetP 2.0</span> disagrees on the canonical versus the isoform call (§"Evidence criteria", F4; §3.6). Combining both predictors gives complementary coverage — secretory signal peptides (SignalP) and the mitochondrial / chloroplast transit classes (TargetP) — so a targeting change either tool alone would miss is still detected.</p>
+        <p class="about-cite">Refs: SignalP 6.0 [signalp6], TargetP 2.0 [targetp2]</p>
+      </dd>
+    </dl>
+
+    <!-- ============================================================= -->
+    <h3 class="about-axis-h">Domains &amp; motifs (F3)</h3>
+    <dl class="about-glossary">
+
+      <!-- m-domains is the original anchor; kept as the parent for the domains/motifs group -->
+      <dt id="m-domains">InterProScan member-DB signatures → InterPro entries</dt>
+      <dd id="m-interproscan-signatures">
+        <p><b>What it measures.</b> The protein-domain architecture of each canonical and isoform protein: which functional, sequence, and structural signatures occur, and at what positional span within the protein.</p>
+        <p><b>How it's calculated.</b> Domains are annotated with <span class="about-code">InterProScan 6</span>, run as a Nextflow pipeline that aggregates member-database signatures (Pfam and others) into integrated InterPro entries. To amortize the large per-invocation startup cost, all unique canonical and isoform sequences in a batch are written to a single FASTA, InterProScan is invoked once, and each resulting hit — carrying its member database, signature accession, optional InterPro cross-reference, and start/end coordinates within the protein — is joined back onto the input records by sequence identity. The per-protein record stores the positional hit list plus a summary with a <span class="about-code">status</span> field, so a protein with zero domains (<span class="about-code">ok</span>, empty list) is distinguished from one whose scan did not complete.</p>
+        <p class="about-cite">Refs: InterProScan [interproscan]</p>
+      </dd>
+
+      <dt id="m-f3-domain-gain-loss">F3 — real functional domain gained or lost in the differential region</dt>
+      <dd>
+        <p><b>What it measures.</b> Whether the alternative TIS event adds or removes a genuine functional protein domain in the region that differs between the isoform and the other form — the F3 functional-impact criterion.</p>
+        <p><b>How it's calculated.</b> From the InterProScan hit lists of both forms, F3 counts only <i>real</i> functional domains: hits carrying a genuine InterPro accession, explicitly excluding disorder- and structure-only signatures (MobiDB-lite, coils/coiled-coil, low-complexity, SignalP, Phobius, TMHMM). A domain qualifies only when it <i>starts inside the differential region</i> and is <i>absent from the other form's domain set</i> — i.e. truly gained or lost, not merely shifted in position because the N-terminus moved. Domains present in both forms but repositioned do not count.</p>
+        <p class="about-cite">Refs: InterProScan [interproscan]</p>
+      </dd>
+
+      <dt id="m-elm-linear-motifs">ELM-style linear-motif (SLiM) scanning</dt>
+      <dd>
+        <p><b>What it measures.</b> Short linear motifs (SLiMs) — compact regulatory/binding sequence patterns — present in each protein and their positions, used to detect motifs gained or lost in the differential region.</p>
+        <p><b>How it's calculated.</b> SLiMs are identified by regular-expression search against fourteen canonical patterns curated from the ELM database and earlier SLiM literature: CDK-substrate consensus (<span class="about-code">[ST]P</span>), ATM/ATR-substrate consensus (<span class="about-code">[ST]Q</span>), 14-3-3 Mode I and Mode II binding motifs, EB1 SxIP microtubule-plus-end-tracking, RGG methylation/RNA-binding, SH3-domain class-I and class-II binding, heme-regulatory motif (<span class="about-code">C[^C].{2}C[^C]H</span>), cytochrome-<i>c</i> heme-binding (CXXCH), PCNA-interacting PIP-box and APIM, C2H2 zinc-finger, and RING-finger E3-ligase consensus. Each hit is recorded with its start/end coordinates, the literal matching substring, and the motif name; the summary reports per-motif-type density (hits per residue) and the number of residues involved in overlapping hits.</p>
+        <p class="about-cite">Refs: ELM database [elm]</p>
+      </dd>
+    </dl>
+
+    <!-- ============================================================= -->
+    <h3 class="about-axis-h">Variant effect &amp; burden (F5 · F6)</h3>
+    <dl class="about-glossary">
+
+      <dt id="m-f5-gnomad-depletion">F5 — gnomAD germline depletion ratio</dt>
+      <dd>
+        <p><b>What it measures.</b> Whether common germline variation <i>avoids</i> the isoform-unique region — a population-genetics signal of purifying constraint. It is one of the two independent inputs that can satisfy functional criterion F5 (germline tolerance / constraint).</p>
+        <p><b>How it's calculated.</b> A genomic-intersection step tags every gnomAD v4.1 exome variant by membership in the isoform-unique versus canonical-shared exon intervals (from the assembly layer's transcript-skeleton walker) and exposes the nucleotide length of each region. The depletion ratio is the per-nucleotide variant density of the unique region divided by that of the shared region: <span class="about-code">(n<sub>gnomAD,unique</sub> / nt<sub>unique</sub>) / (n<sub>gnomAD,shared</sub> / nt<sub>shared</sub>)</span>. A value <b>below 1</b> means common variation is depleted from (avoids) the unique region. The ratio is undefined (<span class="about-code">None</span>) when a denominator is zero. F5 is satisfied when this ratio falls below <b>0.80</b> — a <i>provisional</i> threshold, a config-driven placeholder pending calibration on a genome-wide run, not a principled anchor (§"Per-variant effect scoring", §"Evidence scoring framework"). gnomAD v4.1 exomes are preprocessed from per-chromosome VCFs (PASS records, canonical-transcript VEP, non-null gene symbol) into a gene-indexed parquet read by PyArrow filter pushdown (§"Clinical variant burden").</p>
+        <p class="about-cite">Refs: gnomAD v4.1 [gnomad]</p>
+      </dd>
+
+      <dt id="m-f5-esm2-constraint">F5 — ESM-2 sequence-constraint enrichment</dt>
+      <dd>
+        <p><b>What it measures.</b> Whether the residues of the isoform-unique region are more constrained by a protein language model than the canonical-shared region — i.e. the language model finds the unique-region sequence less substitutable. This is the second independent signal that can satisfy F5.</p>
+        <p><b>How it's calculated.</b> A dedicated language-model module (<span class="about-code">plm_vep</span>) records the ESM-2 650M sequence-<i>constraint</i> profile of the protein itself: the mean wild-type-residue log-probability (the model's log-likelihood of the residue actually present, with <i>no</i> alternate allele) taken over the isoform-unique and canonical-shared regions, plus the count of strongly-constrained positions in each. The constraint enrichment is the unique-region mean log-probability profile relative to the shared region. F5 is satisfied when this enrichment is at or above <b>2.0</b> — a <i>provisional</i> threshold pending genome-wide calibration, not a principled anchor. This constraint signal is distinct from the per-variant ΔLLR scores (which carry an allele change); it scores the wild-type sequence alone (§"Per-variant effect scoring", §"Evidence scoring framework").</p>
+        <p class="about-cite">Refs: ESM-2 [esm2]</p>
+      </dd>
+
+      <!-- m-esm2 is the original anchor; kept as the parent for the per-variant ESM-2 metric -->
+      <dt id="m-esm2">Per-variant ESM-2 ΔLLR (masked-marginal effect)</dt>
+      <dd id="m-esm2-llr">
+        <p><b>What it measures.</b> The predicted tolerability of a specific amino-acid substitution under a protein language model — how much less likely the alternate residue is than the wild-type residue at that position. More negative ΔLLR indicates a substitution the model tolerates less well. It contributes to the per-variant "damaging" flag (reported as germline/disease context), separate from the F5 constraint profile above.</p>
+        <p><b>How it's calculated.</b> ESM-2 650M supplies a masked-marginal change in log-likelihood, <span class="about-code">ΔLLR = log P(alt) − log P(wt)</span>, evaluated at the variant's residue from the per-position amino-acid distribution of a single full-protein forward pass (cached on disk by protein hash). A missense variant is flagged damaging when its ΔLLR is at or below <b>−7.5</b> — the threshold Brandes et al. use for the analogous language-model LLR — or when AlphaMissense calls it <span class="about-code">likely_pathogenic</span>. Loss-of-function consequences (frameshift, stop-gained, splice, start-lost) are damaging on their own, since neither missense predictor sees them. A predicted-damaging gnomAD variant at allele frequency ≥ 10<sup>−3</sup> is gated out of the damaging flag (ACMG allele-frequency benign evidence); ClinVar and COSMIC variants are never gated (§"Per-variant effect scoring").</p>
+        <p class="about-cite">Refs: ESM-2 [esm2], Brandes et al. [brandes]</p>
+      </dd>
+
+      <!-- m-alphamissense is the original anchor (preserved) -->
+      <dt id="m-alphamissense">AlphaMissense pathogenicity <span class="about-warn-chip">canonical frame only</span></dt>
+      <dd>
+        <p><b>What it measures.</b> DeepMind's calibrated missense pathogenicity for a substitution — a 0–1 score with a <span class="about-code">likely_pathogenic</span> / <span class="about-code">ambiguous</span> / <span class="about-code">likely_benign</span> class. Used as one branch of the per-variant damaging flag.</p>
+        <p><b>How it's calculated.</b> The score and class are looked up by genomic coordinate from the AlphaMissense hg38 table. <b>Critical frame caveat:</b> AlphaMissense is defined in the frame of the <i>canonical</i> transcript, so it applies to shared-region variants and to truncation-unique variants (which still lie within the canonical CDS) but is <b>N/A for extension-unique variants</b>, which fall outside the canonical CDS entirely and are re-framed by the alternative TIS. A missense variant is flagged damaging when AlphaMissense calls it <span class="about-code">likely_pathogenic</span> or its ESM-2 ΔLLR ≤ −7.5 (§"Per-variant effect scoring").</p>
+        <p class="about-cite">Refs: AlphaMissense [alphamissense]</p>
+      </dd>
+
+      <dt id="m-f6-disease-enrichment">F6 — disease density enrichment (ClinVar + COSMIC)</dt>
+      <dd>
+        <p><b>What it measures.</b> Whether known disease variants <i>concentrate</i> in the isoform-unique region rather than merely being present — i.e. whether the unique N-terminus is a disease hotspot relative to the shared core. This is functional criterion F6.</p>
+        <p><b>How it's calculated.</b> The same genomic-intersection step tags each disease variant (ClinVar + COSMIC) by membership in the isoform-unique versus canonical-shared exon intervals and exposes each region's nucleotide length. The enrichment ratio is the per-nucleotide disease-variant density of the unique region over that of the shared region: <span class="about-code">(n<sub>disease,unique</sub> / nt<sub>unique</sub>) / (n<sub>disease,shared</sub> / nt<sub>shared</sub>)</span>. F6 is satisfied when this ratio is at or above <b>1.0</b> — a <i>principled anchor</i> (a fixed zero-point: density-equal is the natural neutral line), not a tuned threshold. The ratio is <span class="about-code">None</span> when undefined (zero/missing denominator). ClinVar comes from the GRCh38-filtered <span class="about-code">variant_summary.txt.gz</span> (VCF-format allele columns, genomic plus-strand); COSMIC v102 (GRCh38) from the Sanger Genome Screens Mutant / NonCoding / Targeted Screens distributions, both as filter-pushdown parquet (§"Clinical variant burden", §"Per-variant effect scoring", §"Evidence scoring framework").</p>
+        <p class="about-cite">Refs: ClinVar [clinvar], COSMIC v102 [cosmic]</p>
+      </dd>
+
+      <!-- m-clinical is the original anchor; kept as the parent for the consequence-validation metric -->
+      <dt id="m-clinical">Codon-level consequence validation (isoform frame)</dt>
+      <dd id="m-codon-consequence">
+        <p><b>What it measures.</b> The true molecular consequence of each queried variant <i>in the alternative isoform's reading frame</i> — because source-database HGVSp strings are written in the canonical frame and are invalid for alternative-TIS events, which can re-frame the protein (extensions) or delete the N-terminus (truncations, uORFs). This is what makes every downstream variant count (F5/F6, LoF gating) frame-correct.</p>
+        <p><b>How it's calculated.</b> A dedicated validator re-maps each variant from its genomic position to an isoform-specific coding position using the GTF-derived CDS exon-boundary table for the TIS's transcript. The mapping is strand-aware: on the plus strand, genomic positions within CDS exons get sequential 0-indexed coding positions 5′→3′; on the minus strand, exons are walked in descending genomic order, positions traversed high-to-low, and ref/alt bases complemented before codon assembly. For SNVs, the codon containing the variant is extracted from the isoform's reference coding sequence, translated, and compared with the mutant-codon translation to assign one of <span class="about-code">synonymous_variant</span>, <span class="about-code">missense_variant</span>, <span class="about-code">stop_gained</span>, <span class="about-code">stop_lost</span>, <span class="about-code">reference_mismatch</span>. In-frame indels become <span class="about-code">inframe_insertion</span> / <span class="about-code">inframe_deletion</span> by length differential; frameshifts are labelled <span class="about-code">frameshift_variant</span>; equal-length multi-base substitutions are labelled <span class="about-code">mnv</span> without single-codon translation (deferred). The downstream LoF gate keys on the exact <span class="about-code">stop_gained</span>, <span class="about-code">stop_lost</span>, and <span class="about-code">frameshift_variant</span> terms. Variants outside the isoform's coding interval (upstream of truncated starts, downstream of extended stops, intronic) get protein position <span class="about-code">None</span> but are retained for re-validation against other transcripts and still counted in the per-protein summary (§"Clinical variant burden and codon-level consequence validation").</p>
+        <p class="about-cite">Refs: gnomAD [gnomad], ClinVar [clinvar], COSMIC [cosmic]</p>
+      </dd>
+    </dl>
+
+    <!-- ============================================================= -->
+    <h3 class="about-axis-h">Evidence-scoring framework</h3>
+    <dl class="about-glossary">
+
+      <dt id="m-evidence-scoring">Evidence scoring (dual-axis E1–E6 / F1–F6)</dt>
+      <dd>
+        <p><b>What it measures.</b> A per-TIS summary that condenses every annotation above into two independent scores. The <span class="about-code">existence</span> axis (E1–E6) asks whether the alternative isoform is a real biological entity; the <span class="about-code">functional</span> axis (F1–F6) asks whether it changes protein function. The two are deliberately decoupled — a well-supported isoform can be functionally inert, and vice versa.</p>
+        <p><b>How it's calculated.</b> The framework runs <em>after</em> the comparator, because most criteria read a canonical-versus-isoform (or, for genomic criteria, an isoform-unique-versus-canonical-shared-region) comparison rather than a raw annotation value. Each axis score is the count of satisfied criteria among its six. The criteria are evaluated independently and then summed; there is no weighting (§"Evidence scoring").</p>
+        <p class="about-cite">Refs: SwissIsoform methods §Evidence scoring</p>
+      </dd>
+
+      <dt id="m-evidence-tristate">Tri-state criteria (True / False / None)</dt>
+      <dd>
+        <p><b>What it measures.</b> Whether each individual criterion is satisfied, genuinely unsatisfied, or simply not assessable — so that a low score caused by missing upstream data is distinguishable from one caused by real absence of evidence.</p>
+        <p><b>How it's calculated.</b> Every criterion returns <span class="about-code">True</span> (evidence present), <span class="about-code">False</span> (evidence genuinely absent), or <span class="about-code">None</span> (cannot be evaluated — the upstream annotation module did not run or did not emit the required field). <span class="about-code">None</span> results are excluded from <em>both</em> the score numerator <em>and</em> the per-axis <span class="about-code">evaluable</span> count. The evaluable count is therefore the number of criteria on that axis that returned True or False, and the score is the number that returned True (§"Evidence scoring").</p>
+        <p class="about-cite">Refs: SwissIsoform methods §Evidence scoring</p>
+      </dd>
+
+      <dt id="m-evidence-existence-axis">Existence axis (E1–E6)</dt>
+      <dd>
+        <p><b>What it measures.</b> Six independent lines of evidence that the alternative TIS produces a real isoform: cross-species coding conservation, nucleotide-level selection, reproducibility across cell lines, initiation strength, and proteomic detection.</p>
+        <p><b>How it's calculated.</b> Each criterion thresholds one upstream measurement over the isoform-unique region. <span class="about-code">E1</span> — mean amino-acid percent identity across the primate radiation (reading-frame integrity method, §3.4) ≥ 0.80 (provisional). <span class="about-code">E2</span> — the same over the mammalian radiation ≥ 0.50 (provisional). <span class="about-code">E3</span> — mean phyloP over the isoform-unique region ≥ 2.0 (absolute strong-purifying-selection statement; the unique-vs-shared enrichment ratio is reported only as context). <span class="about-code">E4</span> — TIS detected in ≥ 3 cell lines. <span class="about-code">E5</span> — maximum per-cell-line initiation efficiency (TIS read count / gene RNA-seq count) exceeds a threshold. <span class="about-code">E6</span> — at least one isoform-unique tryptic peptide matched in public MS spectra by a pre-computed PepQuery2 search; in-silico detectability alone does not count, and E6 is <span class="about-code">None</span> until the PepQuery2 precompute exists (§"Evidence scoring").</p>
+        <p class="about-cite">Refs: Zoonomia [zoonomia], phyloP [phylop], PepQuery2 [pepquery]; SwissIsoform methods §Evidence scoring (E1–E6)</p>
+      </dd>
+
+      <dt id="m-evidence-functional-axis">Functional axis (F1–F6)</dt>
+      <dd>
+        <p><b>What it measures.</b> Six independent lines of evidence that the isoform-unique region alters protein function: a structured/biophysically distinct differential region, localization change, domain gain or loss, targeting-signal change, germline tolerance/constraint, and disease-variant density enrichment.</p>
+        <p><b>How it's calculated.</b> <span class="about-code">F1</span> — <span class="about-code">True</span> only when mean predicted-structure pLDDT over the differential region ≥ 0.70 <em>and</em> a biophysical-distinctness flag is set (GRAVY delta ≥ 0.3, charged-fraction delta ≥ 0.05, or disorder delta ≥ 0.05; provisional cutoffs); <span class="about-code">None</span> if the structure prediction or biophysical comparison is missing. <span class="about-code">F2</span> — comparator flags a change in any localization feature (DeepLoc primary compartment, sorting signals, or membrane-type call). <span class="about-code">F3</span> — at least one <em>real</em> InterPro domain (genuine InterPro accession, excluding disorder/structure-only signatures such as MobiDB-lite, coils, low-complexity, SignalP, Phobius, TMHMM) starts inside the differential region and is absent from the other form (§3.5), rather than merely repositioned. <span class="about-code">F4</span> — SignalP or TargetP disagrees between canonical and isoform (§3.6). <span class="about-code">F5</span> — isoform-unique region shows germline constraint by either signal: ESM-2 unique/shared constraint enrichment ≥ 2.0 (provisional) or gnomAD germline depletion ratio < 0.80 (provisional, per-variant effect scoring, §4.5); <span class="about-code">None</span> only when both inputs are missing. <span class="about-code">F6</span> — disease (ClinVar/COSMIC) variant density of the unique region relative to the canonical-shared region ≥ 1.0 (zero-point); <span class="about-code">None</span> when the ratio is undefined (§"Evidence scoring").</p>
+        <p class="about-cite">Refs: AlphaMissense [alphamissense], ESM-2 [esm2], DeepLoc [deeploc], InterProScan [interproscan], SignalP-6 [signalp6], TargetP-2 [targetp2], gnomAD [gnomad], ClinVar [clinvar], COSMIC [cosmic]; SwissIsoform methods §Evidence scoring (F1–F6)</p>
+      </dd>
+
+      <dt id="m-evidence-cutoffs">High-confidence cutoffs (existence ≥ 5, functional ≥ 3)</dt>
+      <dd>
+        <p><b>What it measures.</b> Two boolean flags — <span class="about-code">existence_high_confidence</span> and <span class="about-code">functional_high_confidence</span> — that mark isoforms reaching a per-axis confidence bar.</p>
+        <p><b>How it's calculated.</b> <span class="about-code">existence_high_confidence</span> is set when the existence score is ≥ 5 satisfied criteria; <span class="about-code">functional_high_confidence</span> when the functional score is ≥ 3. The cutoffs apply to the satisfied-criterion count gated on the evaluable count (None criteria do not count toward the threshold). These cutoffs and the ≥ 3 cell-line threshold for E4 are <em>fixed</em> — they are no longer relaxed by run-script overrides, so the curated 13-gene set is scored under the same thresholds a genome-wide run would use (§"Evidence scoring").</p>
+        <p class="about-cite">Refs: SwissIsoform methods §Evidence scoring</p>
+      </dd>
+
+      <dt id="m-evidence-thresholds">Threshold provenance (principled anchors vs provisional)</dt>
+      <dd>
+        <p><b>What it measures.</b> Which scoring thresholds are biologically fixed versus config-driven placeholders awaiting calibration — so a reader knows which numbers are load-bearing and which may move.</p>
+        <p><b>How it's calculated.</b> <em>Principled anchors</em> are fixed on biological grounds and not tuned to any dataset: the E3 phyloP cutoff of 2.0 (strong purifying selection), the F1 pLDDT cutoff of 0.70, the F6 disease-enrichment zero-point of 1.0, the ≥ 3 cell-line requirement for E4, and the existence/functional high-confidence cutoffs of 5 and 3. <em>Provisional thresholds</em> are config-driven placeholders pending calibration on a genome-wide run: the E1/E2 percent-identity cutoffs (0.80 / 0.50), the F5 constraint-enrichment (2.0) and depletion-ratio (0.80) cutoffs, and the F1 biophysical-distinctness deltas. The curated 13-gene cohort validates the scoring <em>logic</em>, not these calibration points, since a reviewer-selected gene set is not representative of the genome-wide distribution (§"Evidence scoring").</p>
+        <p class="about-cite">Refs: SwissIsoform methods §Evidence scoring</p>
       </dd>
     </dl>
   </section>
@@ -234,6 +513,35 @@
       the exact numeric thresholds, which are deliberately not tuned to make a small
       reviewer-picked set look good.
     </p>
+  </section>
+
+  <!-- References -->
+  <section class="about-sec">
+    <h2>References</h2>
+    <ol class="about-refs">
+      <li id="ref-alphamissense">Cheng J, Novati G, Pan J, et al. Accurate proteome-wide missense variant effect prediction with AlphaMissense. <em>Science</em> 381:eadg7492 (2023). doi:10.1126/science.adg7492.</li>
+      <li id="ref-biopython">Cock PJA, Antao T, Chang JT, et al. Biopython: freely available Python tools for computational molecular biology and bioinformatics. <em>Bioinformatics</em> 25(11):1422–1423 (2009). doi:10.1093/bioinformatics/btp163.</li>
+      <li id="ref-brandes">Brandes N, Goldman G, Wang CH, Ye CJ, Ntranos V. Genome-wide prediction of disease variant effects with a deep protein language model. <em>Nature Genetics</em> 55(9):1512–1522 (2023). doi:10.1038/s41588-023-01465-0.</li>
+      <li id="ref-clinvar">Landrum MJ, Chitipiralla S, Brown GR, et al. ClinVar: improvements to accessing data. <em>Nucleic Acids Research</em> 48(D1):D835–D844 (2020). doi:10.1093/nar/gkz972.</li>
+      <li id="ref-cosmic">Sondka Z, Dhir NB, Carvalho-Silva D, et al. COSMIC: a curated database of somatic variants and clinical data for cancer. <em>Nucleic Acids Research</em> 52(D1):D1210–D1217 (2024). doi:10.1093/nar/gkad986.</li>
+      <li id="ref-deeploc">Thumuluri V, Almagro Armenteros JJ, Johansen AR, Nielsen H, Winther O. DeepLoc 2.0: multi-label subcellular localization prediction using protein language models. <em>Nucleic Acids Research</em> 50(W1):W228–W234 (2022). doi:10.1093/nar/gkac278.</li>
+      <li id="ref-elm">Kumar M, Gouw M, Michael S, et al. ELM — the Eukaryotic Linear Motif resource in 2020. <em>Nucleic Acids Research</em> 48(D1):D296–D306 (2020). doi:10.1093/nar/gkz1030.</li>
+      <li id="ref-esm2">Lin Z, Akin H, Rao R, et al. Evolutionary-scale prediction of atomic-level protein structure with a language model. <em>Science</em> 379(6637):1123–1130 (2023). doi:10.1126/science.ade2574.</li>
+      <li id="ref-gencode">Frankish A, Diekhans M, Jungreis I, et al. GENCODE 2021. <em>Nucleic Acids Research</em> 49(D1):D916–D923 (2021). doi:10.1093/nar/gkaa1087.</li>
+      <li id="ref-gnomad">Chen S, Francioli LC, Goodrich JK, et al. A genomic mutational constraint map using variation in 76,156 human genomes. <em>Nature</em> 625(7993):92–100 (2024). doi:10.1038/s41586-023-06045-0.</li>
+      <li id="ref-htseq">Anders S, Pyl PT, Huber W. HTSeq — a Python framework to work with high-throughput sequencing data. <em>Bioinformatics</em> 31(2):166–169 (2015). doi:10.1093/bioinformatics/btu638.</li>
+      <li id="ref-interproscan">Jones P, Binns D, Chang H-Y, et al. InterProScan 5: genome-scale protein function classification. <em>Bioinformatics</em> 30(9):1236–1240 (2014). doi:10.1093/bioinformatics/btu031.</li>
+      <li id="ref-kd">Kyte J, Doolittle RF. A simple method for displaying the hydropathic character of a protein. <em>Journal of Molecular Biology</em> 157(1):105–132 (1982). doi:10.1016/0022-2836(82)90515-0.</li>
+      <li id="ref-kozak">Kozak M. An analysis of 5′-noncoding sequences from 699 vertebrate messenger RNAs. <em>Nucleic Acids Research</em> 15(20):8125–8148 (1987). doi:10.1093/nar/15.20.8125.</li>
+      <li id="ref-pepquery">Wen B, Zhang B. PepQuery2 democratizes public MS proteomics data for rapid peptide searching. <em>Nature Communications</em> 14(1):2213 (2023). doi:10.1038/s41467-023-37462-4.</li>
+      <li id="ref-phastcons">Siepel A, Bejerano G, Pedersen JS, et al. Evolutionarily conserved elements in vertebrate, insect, worm, and yeast genomes. <em>Genome Research</em> 15(8):1034–1050 (2005). doi:10.1101/gr.3715005.</li>
+      <li id="ref-phylop">Pollard KS, Hubisz MJ, Rosenbloom KR, Siepel A. Detection of nonneutral substitution rates on mammalian phylogenies. <em>Genome Research</em> 20(1):110–121 (2010). doi:10.1101/gr.097857.109.</li>
+      <li id="ref-ribotish">Zhang P, He D, Xu Y, et al. Genome-wide identification of translation initiation sites by ribosome profiling. <em>Nature Communications</em> 8(1):1749 (2017). doi:10.1038/s41467-017-01981-8.</li>
+      <li id="ref-signalp6">Teufel F, Almagro Armenteros JJ, Johansen AR, et al. SignalP 6.0 predicts all five types of signal peptides using protein language models. <em>Nature Biotechnology</em> 40(7):1023–1025 (2022). doi:10.1038/s41587-021-01156-3.</li>
+      <li id="ref-targetp2">Almagro Armenteros JJ, Salvatore M, Emanuelsson O, et al. Detecting sequence signals in targeting peptides using deep learning. <em>Life Science Alliance</em> 2(5):e201900429 (2019). doi:10.26508/lsa.201900429.</li>
+      <li id="ref-topidp">Campen A, Williams RM, Brown CJ, Meng J, Uversky VN, Dunker AK. TOP-IDP-scale: a new amino acid scale measuring propensity for intrinsic disorder. <em>Protein &amp; Peptide Letters</em> 15(9):956–963 (2008). doi:10.2174/092986608785849164.</li>
+      <li id="ref-zoonomia">Christmas MJ, Kaplow IM, Genereux DP, et al. Evolutionary constraint and innovation across hundreds of placental mammals. <em>Science</em> 380(6643):eabn3943 (2023). doi:10.1126/science.abn3943.</li>
+    </ol>
   </section>
 </div>
 {% endblock %}
