@@ -39,7 +39,7 @@ import pandas as pd
 
 from swissisoform.assembly import assemble_genes
 from swissisoform.clinical.validate import ConsequenceValidator
-from swissisoform.combine import combine_filtered_samples
+from swissisoform.combine import combine_filtered_samples, dedupe_unique_proteins
 from swissisoform.compare.comparator import compare_genes
 from swissisoform.config import (
     ClinicalConfig,
@@ -100,6 +100,9 @@ HELA_RNASEQ = [
 SAMPLE_MANIFEST = DATA / "ribotish_sample_manifest.csv"
 REPLICATE_MANIFEST = DATA / "ribotish_replicate_manifest.csv"
 COMBINED_PARQUET = OUT / "filtered" / "all_samples_combined.parquet"
+# One row per unique protein (stop-stripped AASeq), deduped from the full
+# combined table — the genome-wide "what to fold / embed" set.
+UNIQUE_TIS_PARQUET = OUT / "filtered" / "unique_tis_deduped.parquet"
 
 # Reference DBs (optional — modules degrade gracefully when absent)
 GNOMAD_DB = DATA / "gnomad" / "gnomad_v4.1_exome.parquet"
@@ -200,6 +203,16 @@ def load_single_sample(cell_line: str, reference: UpstreamReference) -> pd.DataF
     return final
 
 
+def _write_unique_tis(combined: pd.DataFrame) -> None:
+    """Materialize the unique-protein dedup of the *full* combined table."""
+    unique = dedupe_unique_proteins(combined)
+    UNIQUE_TIS_PARQUET.parent.mkdir(parents=True, exist_ok=True)
+    unique.to_parquet(UNIQUE_TIS_PARQUET, index=False)
+    logger.info(
+        "Wrote unique-protein parquet: %s (%d proteins)", UNIQUE_TIS_PARQUET, len(unique)
+    )
+
+
 def load_combined(
     cell_lines: list[str],
     reference: UpstreamReference,
@@ -215,6 +228,9 @@ def load_combined(
     if COMBINED_PARQUET.exists() and not force_rebuild:
         logger.info("Loading cached combined parquet: %s", COMBINED_PARQUET)
         combined = pd.read_parquet(COMBINED_PARQUET)
+        # Dedup is a function of the full combined set; (re)build if absent.
+        if not UNIQUE_TIS_PARQUET.exists():
+            _write_unique_tis(combined)
         if set(cell_lines) != set(ALL_CELL_LINES):
             present_cols = [
                 f"present_{cl}" for cl in cell_lines
@@ -252,6 +268,7 @@ def load_combined(
     COMBINED_PARQUET.parent.mkdir(parents=True, exist_ok=True)
     combined.to_parquet(COMBINED_PARQUET, index=False)
     logger.info("Wrote combined parquet: %s (%d rows)", COMBINED_PARQUET, len(combined))
+    _write_unique_tis(combined)
     return combined
 
 
