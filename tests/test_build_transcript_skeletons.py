@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from scripts.site import build_transcript_skeletons as bts
+from swissisoform.site import skeletons as bts
 
 
 def _make_synthetic_gtf(tmp_path: Path) -> Path:
