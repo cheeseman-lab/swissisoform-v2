@@ -20,8 +20,9 @@ impact)** criteria.
 4. Assembles `Gene` / `TIS` domain objects — per-Tid canonical pick, ORF
    typing, differential-region coordinates, Kozak context, ORF→genomic exon
    mapping.
-5. Annotates canonical and each isoform protein with ~21 modules, **compares**
-   the two symmetrically, and **scores** the dual evidence axes.
+5. Annotates canonical and each isoform protein, **compares** the two
+   symmetrically, and **scores** the dual evidence axes — 12 evidence buckets
+   (E1–E6 existence, F1–F6 functional).
 6. Writes a **paired parquet** (`canonical_<module>_<field>` +
    `isoform_<module>_<field>` per row) consumed by the website viewer,
    collaborator exports, and a per-init-site genome-LM skeleton.
@@ -41,13 +42,13 @@ Ribo-TISH predict_all.txt  (per cell line)
   assemble_genes()         DataFrame → Gene + TIS objects             (assembly.py, coords.py, contract.py)
         │                  canonical pick · ORF type · diff region · ORF exons
         ▼
-  AnnotationPipeline.run() modules on canonical + each isoform        (pipeline.py, modules/)
+  AnnotationPipeline.run() annotators on canonical + each isoform     (pipeline.py, modules/, clinical/, structure/, plm/, conservation_frame/, evidence/)
         │
         ▼
   compare_genes()          symmetric canonical-vs-isoform diff        (compare/)
         │
         ▼
-  EvidenceScoringModule    E1–E6 existence · F1–F6 functional         (modules/scoring.py)
+  EvidenceScoringModule    E1–E6 existence · F1–F6 functional         (modules/scoring.py over evidence/)
         │
         ▼
   all_paired.parquet  ──►  website viewer · exports · init-site skeleton
@@ -153,31 +154,45 @@ src/swissisoform/
   merging.py           # legacy cross-cell-line merge / canonical pairing helpers
   cli.py / __main__.py # manifest-based entry point (python -m swissisoform run)
 
-  modules/             # the ~21 annotation modules + base protocols (base.py):
-                       #   biophysics, motifs, clinical, conservation,
-                       #   conservation_frame, localization, signalp, targetp,
-                       #   interproscan, massspec, plm_vep, varianteffect,
-                       #   variant_intersection, scoring, core_identity,
-                       #   initiation_context, structure, generef
-                       #   (+ dormant conservation_homology)
-  clinical/            # VariantFetcher (gnomAD/ClinVar/COSMIC), ConsequenceValidator,
-                       #   AlphaMissense lookup
+  evidence/            # the 12 evidence buckets — one folder per criterion, each
+                       #   with a high-level score(site, cfg) function:
+                       #     E1 e1_primate_conservation   E2 e2_mammalian_conservation
+                       #     E3 e3_phylop_selection       E4 e4_reproducibility
+                       #     E5 e5_initiation_efficiency  E6 e6_mass_spec
+                       #     F1 f1_structure              F2 f2_localization
+                       #     F3 f3_domains                F4 f4_targeting
+                       #     F5 f5_germline_constraint    F6 f6_disease_enrichment
+                       #   Bucket-specific plumbing lives in the folder: E6 (massspec),
+                       #   F2 (localization), F3 (interproscan), F4 (signalp + targetp).
+                       #   common.py = CriterionResult + helpers; __init__.py exposes
+                       #   EXISTENCE_CRITERIA / FUNCTIONAL_CRITERIA.
+  modules/             # SHARED single-file annotators + base protocols (base.py):
+                       #   biophysics, motifs, conservation, varianteffect,
+                       #   variant_intersection, core_identity, initiation_context,
+                       #   generef (+ dormant conservation_homology); plus
+                       #   scoring.py — the EvidenceScoringModule orchestrator that
+                       #   consumes evidence/
+  clinical/            # capability folder (module.py + impl): VariantFetcher
+                       #   (gnomAD/ClinVar/COSMIC), ConsequenceValidator, AlphaMissense
+  structure/           # capability folder (module.py + impl): Boltz-2 / Chai-1
+                       #   folding + structure comparison
+  plm/                 # capability folder (module.py + impl): ESM-2 masked-marginal
+                       #   embedding cache (embed, cli)
+  conservation_frame/  # capability folder (module.py + impl): MAF/HAL reading-frame
+                       #   integrity (maf, frame, species, hal, tree)
   compare/             # paired canonical-vs-isoform comparison
-  conservation_frame/  # MAF/HAL reading-frame integrity subpackage (maf, frame,
-                       #   species, hal, tree)
   io/                  # ribotish, gtf, parquet, rnaseq, canonical loaders
-  plm/                 # ESM-2 masked-marginal embedding cache (embed, cli)
-  structure/           # Boltz-2 / Chai-1 folding + structure comparison
   site/                # website-data build layer: evidence, llm, skeletons
   export/              # collaborator artifacts: bed, xlsx, structures, folding_colors
   setup/               # reference-DB + generef builders (databases, generef)
 
-scripts/                       # thin CLI drivers over src
+scripts/                       # thin CLI drivers over src (+ run.py, the one fat driver)
   run.py                       # the preset/gene/isoform driver (also --emit-fasta)
+  export/                      # all export CLIs: export_alt_regions_bed,
+                               #   export_structures, export_xlsx, build_folding_colors,
+                               #   build_init_site_skeleton (genome-LM skeleton parquet)
   site/                        # build_evidence_records, build_transcript_skeletons,
                                #   run_llm_interpretation (+ prompts/)
-  analysis/                    # export_alt_regions_bed, export_structures, export_xlsx
-  export/build_init_site_skeleton.py   # per-init-site genome-LM skeleton parquet
   setup/                       # download_references.sh, download_zoonomia_*,
                                #   setup_databases.py, fetch_generef.py, *.sbatch
   slurm/                       # run.sbatch (orchestrator) + run_plm_embed / run_fold /
@@ -195,41 +210,62 @@ docs/                          # methods (typst) + code-review specs
 
 ---
 
-## Annotation modules
+## Evidence buckets
 
-Modules implement one of three protocols (`src/swissisoform/modules/base.py`):
-**ProteinModule** (`annotate(protein) → dict`, run on canonical *and* each
-isoform), **SiteModule** (`annotate_site(tis) → dict`, needs TIS metadata), or
-gene-level. Output is **scalar** (whole-protein aggregate) or **positional**
-(`{"hits": [{name, pos, end, …}], "summary": {…}}`); the comparator filters
-positional hits to the differential-region coordinates.
+The pipeline is organised around **12 evidence buckets** — six **existence**
+criteria (E1–E6: is this isoform a real biological entity?) and six
+**functional-impact** criteria (F1–F6: does it change protein function?). Each
+bucket is a self-contained subpackage in `src/swissisoform/evidence/` exposing a
+high-level `score(site, cfg) → CriterionResult`; `CriterionResult.value` is
+`True` (evidence present), `False` (absent), or `None` (cannot evaluate —
+upstream data missing). `EvidenceScoringModule` (`modules/scoring.py`) runs them
+over every TIS via `EXISTENCE_CRITERIA` / `FUNCTIONAL_CRITERIA`.
 
-| Module | Protocol | Source / method | Mode |
-|--------|----------|-----------------|------|
-| `biophysics` | Protein | pI, GRAVY, hydrophobicity, disorder/LLPS heuristics | inline |
-| `motifs` | Protein | regex motif scan → positional hits | inline |
-| `localization` | Protein | DeepLoc 2 prediction + signals + membrane | lookup |
-| `clinical` | Protein | gnomAD + ClinVar + COSMIC, codon-validated by `ConsequenceValidator` | inline fetch / cache |
-| `signalp` | Protein | SignalP 6 signal-peptide prediction | lookup |
-| `targetp` | Protein | TargetP 2 N-terminal targeting peptide | lookup |
-| `interproscan` | Protein | InterProScan 6 domains/families | lookup |
-| `massspec` | Protein | tryptic digest + optional PepQuery2 validation | inline + optional lookup |
-| `conservation` | Site | Zoonomia 241-mammal PhyloP + PhastCons BigWig | BigWig lookup |
-| `conservation_frame` | Site | primate + mammalian reading-frame integrity over the Cactus HAL | HAL query |
-| `varianteffect` | Site | per-variant effect annotation in isoform frame | inline |
-| `variant_intersection` | Site | tags clinical hits by isoform-unique vs. shared ORF region | inline |
-| `plm_vep` | Site | ESM-2 650M masked-marginal LLR, unique-vs-shared enrichment | lookup (GPU cache) |
-| `structure` | Site | Boltz-2 / Chai-1 structure metrics (pLDDT, etc.) | lookup (GPU cache) |
-| `core_identity` | Site | ORF-type + TIS metadata | inline |
-| `initiation_context` | Site | Kozak context, Hamming distance to `ACCATGG` | inline |
-| `generef` | Gene-level | external gene reference context | lookup |
-| `scoring` | aggregator | dual-axis **E1–E6 existence** + **F1–F6 functional** evidence | inline over all sites |
+Each bucket reads annotations that the **plumbing** — shared annotators in
+`modules/` and the capability folders (`clinical/`, `structure/`, `plm/`,
+`conservation_frame/`) — has already attached to the site. For four buckets the
+plumbing now lives **inside the bucket folder** (E6, F2, F3, F4).
+
+| Bucket | What it scores | Plumbing |
+|--------|----------------|----------|
+| **E1** primate conservation | primate AA % identity over the unique region | `conservation_frame/` (MAF/HAL frame integrity) |
+| **E2** mammalian conservation | mammalian AA % identity over the unique region | `conservation_frame/` |
+| **E3** PhyloP selection | absolute unique-region PhyloP above coding-selection threshold | `modules/conservation.py` (Zoonomia 241-mammal BigWig) |
+| **E4** reproducibility | TIS detected in ≥ `min_cell_lines` cell lines | `site.expression` |
+| **E5** initiation efficiency | max per-cell-line Ribo-TISH initiation efficiency above threshold | `site.expression` |
+| **E6** mass spec | PepQuery2-validated unique peptide matches public MS spectra | `evidence/e6_mass_spec/massspec.py` (tryptic digest + PepQuery2) |
+| **F1** structure | diff-region pLDDT (structured gain / loss) | `structure/` (Boltz-2 / Chai-1) + `modules/biophysics.py` |
+| **F2** localization | DeepLoc compartment / signals / membrane change | `evidence/f2_localization/localization.py` (DeepLoc 2) |
+| **F3** domains | real InterPro domain gained / lost in the diff region | `evidence/f3_domains/interproscan.py` (InterProScan 6) |
+| **F4** targeting | SignalP / TargetP category change canonical vs. isoform | `evidence/f4_targeting/signalp.py` + `targetp.py` |
+| **F5** germline constraint | ESM-2 constraint enrichment OR gnomAD depletion over the unique region | `modules/varianteffect.py` + `clinical/` (via `plm_vep` / `variant_intersection`) |
+| **F6** disease enrichment | ClinVar + COSMIC density enrichment in the unique region | `modules/varianteffect.py` + `clinical/` (via `variant_intersection`) |
+
+### Underlying annotators
+
+Buckets never compute raw biology themselves — they read the annotations these
+annotators attach. Each implements one of three protocols
+(`src/swissisoform/modules/base.py`): **ProteinModule** (`annotate(protein) →
+dict`, run on canonical *and* each isoform), **SiteModule** (`annotate_site(tis)
+→ dict`, needs TIS metadata), or gene-level. Output is **scalar** (whole-protein
+aggregate) or **positional** (`{"hits": [{name, pos, end, …}], "summary": {…}}`);
+the comparator filters positional hits to the differential-region coordinates.
+
+Shared single-file annotators live in `modules/`: `biophysics`, `motifs`,
+`conservation`, `varianteffect`, `variant_intersection`, `core_identity`,
+`initiation_context`, `generef`. Heavier annotators are capability folders that
+own a `module.py` plus their implementation: `clinical/`
+(gnomAD/ClinVar/COSMIC + `ConsequenceValidator` + AlphaMissense), `structure/`
+(Boltz-2 / Chai-1, GPU cache), `plm/` (ESM-2 650M masked-marginal LLR, GPU
+cache), `conservation_frame/` (primate/mammalian frame integrity over the
+Cactus HAL). The bucket-owned annotators (`massspec`, `localization`,
+`interproscan`, `signalp`, `targetp`) live under their `evidence/` folder.
 
 > The old homology-based conservation (DIAMOND/blastp vs. SwissProt) is retained
-> dormant as `conservation_homology.py`, not wired into the pipeline.
+> dormant as `modules/conservation_homology.py`, not wired into the pipeline.
 
-**Contract** — every module: defines `MODULE_NAME` / `OUTPUT_COLUMNS` / `SCOPE`;
-keeps a backward-compatible `run(tis_sites)` wrapper; never drops sites
+**Contract** — every annotator: defines `MODULE_NAME` / `OUTPUT_COLUMNS` /
+`SCOPE`; keeps a backward-compatible `run(tis_sites)` wrapper; never drops sites
 (`len(output) == len(input)`); uses `None` for values it genuinely cannot
 compute (never silent defaults).
 
