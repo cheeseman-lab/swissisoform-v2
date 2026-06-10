@@ -5,7 +5,7 @@ cross-cell-line combined catalog, emit a BED12 record covering the
 isoform-unique region (strand-aware, intron-aware).
 
 Usage:
-    python scripts/analysis/export_alt_regions_bed.py [--genes ...] [--out PATH]
+    python scripts/export/export_alt_regions_bed.py [--genes ...] [--out PATH]
 """
 from __future__ import annotations
 

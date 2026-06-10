@@ -308,7 +308,7 @@ def _colors_index(colors_dir_str: str) -> frozenset[str]:
     """Set of precomputed colour-map filenames in ``<structures>/colors/``.
 
     Maps are named ``<gene>__<side>__<segment>.colors.json`` by
-    ``scripts/build_folding_colors.py`` — the same gene + tis-segment used for
+    ``scripts/export/build_folding_colors.py`` — the same gene + tis-segment used for
     CIF lookup, so the page can resolve them deterministically.
     """
     colors_dir = Path(colors_dir_str)

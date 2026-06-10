@@ -5,7 +5,7 @@ per-residue palette the website's 3Dmol.js viewer applies (whole protein by
 pLDDT, differential region on a diverging ramp).
 
 Usage:
-    python scripts/build_folding_colors.py \
+    python scripts/export/build_folding_colors.py \
         --parquet data/output/cheeseman_13gene/all_paired.parquet \
         --structures data/output/cheeseman_13gene/structures
 """

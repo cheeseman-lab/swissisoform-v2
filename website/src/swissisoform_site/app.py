@@ -302,7 +302,7 @@ def create_app() -> Flask:
         """Serve precomputed per-residue colour maps from ``<DATA_DIR>/structures/colors/``.
 
         The 3Dmol folding viewer fetches these and applies them — the diff-region
-        recolouring is decided offline (scripts/build_folding_colors.py), not live.
+        recolouring is decided offline (scripts/export/build_folding_colors.py), not live.
         """
         root = data_dir() / "structures" / "colors"
         if not (root / filename).is_file():

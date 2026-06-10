@@ -3,7 +3,7 @@
  *   window.swissFolding(divId, cifUrl, colorsUrl)
  *     Mounts a rotatable 3Dmol viewer in #divId, loads the CIF, and colours each
  *     residue from the precomputed map at colorsUrl ({resi: "#rrggbb"}). The
- *     colours are decided offline by scripts/build_folding_colors.py (pLDDT ramp
+ *     colours are decided offline by scripts/export/build_folding_colors.py (pLDDT ramp
  *     on the whole protein, a diverging ramp on the differential region) — the
  *     viewer is a dumb display, it does not recolour. Falls back to a plain
  *     pLDDT b-factor gradient if the colour map can't be fetched.

@@ -4,8 +4,8 @@ Logic lives in ``swissisoform.export.xlsx``. Writes a .xlsx with three sheets
 (isoforms, data_dictionary, key_columns) from a paired-TIS parquet.
 
 Usage:
-    python scripts/analysis/export_xlsx.py --run cheeseman_12gene
-    python scripts/analysis/export_xlsx.py --parquet path/to/all_paired.parquet --out out.xlsx
+    python scripts/export/export_xlsx.py --run cheeseman_12gene
+    python scripts/export/export_xlsx.py --parquet path/to/all_paired.parquet --out out.xlsx
 """
 
 from __future__ import annotations

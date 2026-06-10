@@ -1,4 +1,4 @@
-"""Build the per-init-site genome-LM training skeleton.
+r"""Build the per-init-site genome-LM training skeleton.
 
 One row per genomic initiation site (``chrom:gstart:strand:codon``) — the
 natural unit for a DNA foundation model (Evo2 / AlphaGenome). Carries
