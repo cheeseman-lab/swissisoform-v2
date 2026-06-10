@@ -24,7 +24,7 @@ from flask import (
     send_from_directory,
     url_for,
 )
-from scripts.site.build_evidence_records import (
+from swissisoform.site.evidence import (
     CRITERIA_METRIC_LABELS,
     format_metric,
     slice_criterion,

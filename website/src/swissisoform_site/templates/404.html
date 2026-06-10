@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Not found — SwissIsoform v2{% endblock %}
+
+{% block content %}
+<section class="max-w-xl mx-auto py-12 text-center">
+  <h1 class="text-2xl font-semibold mb-2">Not found</h1>
+  <p class="text-sm text-slate-600 mb-4">{{ message or "No record matched that URL." }}</p>
+  <a href="{{ url_for('index') }}" class="text-indigo-600 hover:underline text-sm">← Back to gene index</a>
+</section>
+{% endblock %}

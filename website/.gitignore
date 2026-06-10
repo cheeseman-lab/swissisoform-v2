@@ -1,0 +1,29 @@
+# Python build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Local server logs
+tmp_server.log
+*.log
+
+# Local scratch (snapshot harness, rendered previews)
+.cache/
+
+# Data is populated by the deploy recipe — see data/README.md.
+# Keep the directory + its README, but ignore everything else (real files
+# and symlinks alike).
+data/*
+!data/.gitkeep
+!data/README.md
+
+# Deploy build artifacts staged by prepare_deploy.sh (the recipe itself is tracked)
+scripts/
+# Main-package module staged into the build context (src/swissisoform_site/ is tracked;
+# the staged src/swissisoform/ copy of swissisoform.site.evidence is a build artifact)
+src/swissisoform/

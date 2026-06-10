@@ -1,0 +1,16 @@
+# Railway uses this INSTEAD of .gitignore to decide what to upload as the build
+# context. The build needs data/ and scripts/ (staged by prepare_deploy.sh) —
+# those are gitignored so they stay out of git, but they MUST be uploaded here.
+# So this file excludes only junk and deliberately does NOT exclude data/ or scripts/.
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.DS_Store
+*.log
+.cache/
