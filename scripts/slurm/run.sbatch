@@ -9,28 +9,31 @@
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 
-# Unified entry point (orchestrator). One command runs the whole pipeline end
-# to end, spawning the GPU precompute jobs in the middle and waiting on them:
+# Canonical pipeline orchestrator. Runs the whole pipeline end to end, spawning
+# the GPU precompute jobs in the middle and waiting on them, with per-stage
+# wall-clock timing printed at the end:
 #
-#   Stage A  python scripts/run.py <args> --emit-fasta  (CPU: write proteins.fa)
-#   Stage B  sbatch --wait run_plm_embed + run_fold      (GPU: populate caches)
-#   Stage C  python scripts/run.py <args>                (CPU: annotate + score + paired parquet)
+#   prepare   python scripts/run.py <args> --emit-fasta   (CPU: write proteins.fa)
+#   gpu       sbatch --wait run_plm_embed + run_fold       (GPU: populate fold/PLM caches)
+#   annotate  python scripts/run.py <args>                 (CPU: annotate + score + paired parquet)
 #
-# All arguments after the script name are forwarded verbatim to run.py.
+# Modes (consumed here; everything else forwards verbatim to run.py):
+#   --clear-cache     wipe data/cache/{plm_esm2,structure,pepquery,tmp} first
+#                     (forces full regeneration — use for a clean, confident rebuild)
+#   --annotate-only   skip the GPU stage and reuse the WARM fold/PLM caches
+#                     (fast surgical re-run; no re-folding). Equivalent caches must exist.
+#
+# With no run.py args, defaults to the single canonical run: --preset cheeseman13.
 #
 # Usage (from repo root, after `mkdir -p logs`):
-#   sbatch scripts/slurm/run.sbatch --preset cheeseman13
-#   sbatch scripts/slurm/run.sbatch --genes TP53 EIF4G1 --run-name my_run
-#   sbatch scripts/slurm/run.sbatch --preset cheeseman13 --no-gpu   # skip Stage B
+#   sbatch scripts/slurm/run.sbatch                              # full cheeseman13 (GPU)
+#   sbatch scripts/slurm/run.sbatch --clear-cache               # clean rebuild from scratch
+#   sbatch scripts/slurm/run.sbatch --annotate-only             # reuse caches, no folding
+#   sbatch scripts/slurm/run.sbatch --annotate-only --skip-modules clinical   # surgical
 #
-# Tradeoff: this orchestrator holds its CPU allocation while the GPU jobs run,
-# and Stages A and C both load references + assemble (the upstream CPU work runs
-# twice). Fine for diagnostics; graduate to a Slurm dependency chain
-# (run.py --emit-fasta -> afterok -> run.py annotate-only) if Boltz wait-time on
-# a held node becomes a courtesy problem.
+# After this finishes, build the site with: bash scripts/build_website.sh
 
 set -euo pipefail
-
 cd /lab/barcheese01/mdiberna/swissisoform-v2
 
 eval "$(conda shell.bash hook)"
@@ -42,13 +45,24 @@ export JAVA_CMD="$CONDA_PREFIX/bin/java"
 export NXF_HOME="$PWD/.nextflow"
 export NXF_SINGULARITY_CACHEDIR="$PWD/.singularity_cache"
 
-RUN_ARGS=("$@")
-# Per-job FASTA so concurrent orchestrator runs never clobber one shared file.
-FASTA="data/cache/run_${SLURM_JOB_ID:-local}/proteins.fa"
+# ── Parse orchestrator flags out of the argument list ───────────────────────
+clear_cache=0
+annotate_only=0
+RUN_ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        --clear-cache)   clear_cache=1 ;;
+        --annotate-only) annotate_only=1 ;;
+        *)               RUN_ARGS+=("$arg") ;;
+    esac
+done
+# Default to the single canonical run when no input mode is given.
+if [[ ${#RUN_ARGS[@]} -eq 0 ]]; then
+    RUN_ARGS=(--preset cheeseman13)
+fi
 
-# GPU caches are needed unless the run disables both GPU modules — either via
-# --no-gpu or via --skip-modules listing both plm_vep and structure.
-skip_gpu=0
+# --no-gpu / both-GPU-modules-skipped also implies no GPU stage.
+skip_gpu=$annotate_only
 if [[ " ${RUN_ARGS[*]} " == *" --no-gpu "* ]]; then
     skip_gpu=1
 elif [[ " ${RUN_ARGS[*]} " == *"--skip-modules"* \
@@ -56,40 +70,75 @@ elif [[ " ${RUN_ARGS[*]} " == *"--skip-modules"* \
     skip_gpu=1
 fi
 
-echo "[$(date -u +%FT%TZ)] Stage A — emit $FASTA for: ${RUN_ARGS[*]:-<defaults>}"
-python scripts/run.py "${RUN_ARGS[@]}" --fasta-out "$FASTA" --emit-fasta
+FASTA="data/cache/run_${SLURM_JOB_ID:-local}/proteins.fa"
 
-if (( skip_gpu )); then
-    echo "[$(date -u +%FT%TZ)] Stage B — skipped (GPU modules disabled)"
-else
-    echo "[$(date -u +%FT%TZ)] Stage B — GPU precompute"
-    plm_id=$(sbatch --parsable scripts/slurm/run_plm_embed.sbatch "$FASTA")
-    fold_id=$(sbatch --parsable scripts/slurm/run_fold.sbatch "$FASTA" boltz)
-    echo "[$(date -u +%FT%TZ)]   submitted plm=$plm_id fold=$fold_id"
-    # If this orchestrator dies (failure / timeout / scancel), cancel both GPU
-    # jobs so neither is left orphaned on the cluster.
-    trap 'scancel "$plm_id" "$fold_id" 2>/dev/null || true' EXIT
-    # Block until both jobs leave the queue (failing squeue in the condition is
-    # fine — set -e does not fire on a loop test).
-    while squeue -h -j "${plm_id},${fold_id}" -o '%i' 2>/dev/null | grep -q '[0-9]'; do
-        sleep 30
-    done
-    sleep 10   # let sacct accounting settle to a terminal state
-    # Require BOTH jobs COMPLETED — otherwise Stage C would annotate on partial caches.
-    gpu_ok=1
-    for jid in "$plm_id" "$fold_id"; do
-        st=$(sacct -n -X -j "$jid" -o State 2>/dev/null | head -1 | tr -d ' ')
-        echo "[$(date -u +%FT%TZ)]   job $jid: ${st:-UNKNOWN}"
-        [[ "$st" == "COMPLETED" ]] || gpu_ok=0
-    done
-    trap - EXIT
-    if (( ! gpu_ok )); then
-        echo "GPU precompute did not complete cleanly; aborting before annotation." >&2
-        scancel "$plm_id" "$fold_id" 2>/dev/null || true
-        exit 1
-    fi
+# ── Per-stage timing ────────────────────────────────────────────────────────
+declare -A STAGE_SECS
+_stamp() { echo "[$(date -u +%FT%TZ)] $*"; }
+run_stage() {  # run_stage <name> <command...>
+    local name="$1"; shift
+    local t0=$SECONDS
+    _stamp "STAGE START: $name"
+    "$@"
+    local took=$((SECONDS - t0))
+    STAGE_SECS[$name]=$took
+    _stamp "STAGE END:   $name  (${took}s)"
+}
+
+_stamp "run: args='${RUN_ARGS[*]}'  clear_cache=$clear_cache  annotate_only=$annotate_only  skip_gpu=$skip_gpu"
+
+# ── (optional) clear caches for a clean, confident rebuild ──────────────────
+if (( clear_cache )); then
+    run_stage clear-cache bash -c '
+        rm -rf data/cache/plm_esm2 data/cache/structure data/cache/pepquery data/cache/tmp
+        echo "  wiped data/cache/{plm_esm2,structure,pepquery,tmp}"'
 fi
 
-echo "[$(date -u +%FT%TZ)] Stage C — full annotation pipeline"
-python scripts/run.py "${RUN_ARGS[@]}" --fasta-out "$FASTA"
-echo "[$(date -u +%FT%TZ)] done."
+# ── prepare (CPU): emit the deduped proteins FASTA ──────────────────────────
+run_stage prepare python scripts/run.py "${RUN_ARGS[@]}" --fasta-out "$FASTA" --emit-fasta
+
+# ── gpu (populate fold + PLM caches), unless skipped ────────────────────────
+if (( skip_gpu )); then
+    _stamp "STAGE SKIP:  gpu (annotate-only / --no-gpu / both GPU modules skipped — reusing warm caches)"
+else
+    gpu_stage() {
+        plm_id=$(sbatch --parsable scripts/slurm/run_plm_embed.sbatch "$FASTA")
+        fold_id=$(sbatch --parsable scripts/slurm/run_fold.sbatch "$FASTA" boltz)
+        _stamp "  submitted plm=$plm_id fold=$fold_id"
+        # Cancel both GPU jobs if this orchestrator dies, so neither is orphaned.
+        trap 'scancel "$plm_id" "$fold_id" 2>/dev/null || true' EXIT
+        while squeue -h -j "${plm_id},${fold_id}" -o '%i' 2>/dev/null | grep -q '[0-9]'; do
+            sleep 30
+        done
+        sleep 10   # let sacct settle to a terminal state
+        local gpu_ok=1 jid st
+        for jid in "$plm_id" "$fold_id"; do
+            st=$(sacct -n -X -j "$jid" -o State 2>/dev/null | head -1 | tr -d ' ')
+            _stamp "  job $jid: ${st:-UNKNOWN}"
+            [[ "$st" == "COMPLETED" ]] || gpu_ok=0
+        done
+        trap - EXIT
+        if (( ! gpu_ok )); then
+            echo "GPU precompute did not complete cleanly; aborting before annotation." >&2
+            scancel "$plm_id" "$fold_id" 2>/dev/null || true
+            exit 1
+        fi
+    }
+    run_stage gpu gpu_stage
+fi
+
+# ── annotate (CPU): full pipeline → paired parquet ──────────────────────────
+run_stage annotate python scripts/run.py "${RUN_ARGS[@]}" --fasta-out "$FASTA"
+
+# ── timing summary ──────────────────────────────────────────────────────────
+echo
+_stamp "TIMING SUMMARY (wall-clock per stage):"
+total=0
+for name in clear-cache prepare gpu annotate; do
+    secs=${STAGE_SECS[$name]:-}
+    [[ -z "$secs" ]] && continue
+    printf '  %-12s %6ds  (%dm%02ds)\n' "$name" "$secs" $((secs/60)) $((secs%60))
+    total=$((total + secs))
+done
+printf '  %-12s %6ds  (%dm%02ds)\n' "TOTAL" "$total" $((total/60)) $((total%60))
+_stamp "done. Next: bash scripts/build_website.sh   (rebuild website/data from data/output/cheeseman_13gene/)"
