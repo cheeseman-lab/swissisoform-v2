@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -267,7 +268,6 @@ def precompute_interproscan(
         the pipeline subprocess fails.
     """
     import shutil as _shutil
-    import subprocess
     import tempfile
     from pathlib import Path as _P
 
