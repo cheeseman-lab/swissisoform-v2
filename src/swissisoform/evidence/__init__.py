@@ -1,8 +1,25 @@
 """Evidence-scoring buckets — dual-axis existence (E1–E6) + functional (F1–F6).
 
-Each bucket is a self-contained subpackage exposing a ``score(site, cfg)``
+Each bucket is a subpackage exposing a ``score(site, cfg) -> CriterionResult``
 function. ``EXISTENCE_CRITERIA`` / ``FUNCTIONAL_CRITERIA`` collect them in the
 canonical order consumed by ``EvidenceScoringModule``.
+
+Bucket-specific plumbing (the annotator that produces the evidence) lives in the
+bucket folder; genuinely shared plumbing stays as infrastructure packages::
+
+    Bucket                      Plumbing
+    E1 primate conservation     conservation_frame            (shared E1/E2)
+    E2 mammalian conservation   conservation_frame            (shared E1/E2)
+    E3 phylop selection         modules.conservation
+    E4 reproducibility          site.expression               (shared E4/E5)
+    E5 initiation efficiency    site.expression               (shared E4/E5)
+    E6 mass spec                evidence/e6_mass_spec          (owns it)
+    F1 structure                structure + modules.biophysics
+    F2 localization             evidence/f2_localization       (owns it)
+    F3 domains                  evidence/f3_domains            (owns it)
+    F4 targeting                evidence/f4_targeting           (owns it)
+    F5 germline constraint      modules.varianteffect + clinical (shared F5/F6)
+    F6 disease enrichment       modules.variant_intersection + clinical (shared F5/F6)
 """
 
 from __future__ import annotations
