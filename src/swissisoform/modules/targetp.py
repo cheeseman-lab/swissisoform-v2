@@ -103,7 +103,9 @@ def precompute_targetp(
         organism,
     )
 
-    tmpdir = _P(tempfile.mkdtemp(prefix="targetp_", dir=".")).resolve()
+    _scratch = _P(".cache/tmp")
+    _scratch.mkdir(parents=True, exist_ok=True)
+    tmpdir = _P(tempfile.mkdtemp(prefix="targetp_", dir=_scratch)).resolve()
     fasta = tmpdir / "input.fa"
     prefix = tmpdir / "result"
     with open(fasta, "w") as fh:

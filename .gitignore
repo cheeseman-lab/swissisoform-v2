@@ -29,7 +29,8 @@ logs/*
 !logs/.gitkeep
 # Runtime caches (PepQuery2 validated-peptide JSON, etc.)
 data/cache/
-# Tempdirs from precompute_* when a run exits without cleanup
+.cache/
+# Tempdirs from precompute_* when a run exits without cleanup (now under .cache/tmp)
 pepquery_*/
 deeploc_*/
 signalp_*/

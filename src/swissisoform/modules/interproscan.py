@@ -308,7 +308,9 @@ def precompute_interproscan(
         applications,
     )
 
-    tmpdir = _P(tempfile.mkdtemp(prefix="interproscan_", dir=".")).resolve()
+    _scratch = _P(".cache/tmp")
+    _scratch.mkdir(parents=True, exist_ok=True)
+    tmpdir = _P(tempfile.mkdtemp(prefix="interproscan_", dir=_scratch)).resolve()
     fasta = tmpdir / "input.fa"
     outdir = tmpdir / "out"
     outdir.mkdir()

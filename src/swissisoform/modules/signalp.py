@@ -102,7 +102,9 @@ def precompute_signalp(
         mode,
     )
 
-    tmpdir = _P(tempfile.mkdtemp(prefix="signalp_", dir="."))
+    _scratch = _P(".cache/tmp")
+    _scratch.mkdir(parents=True, exist_ok=True)
+    tmpdir = _P(tempfile.mkdtemp(prefix="signalp_", dir=_scratch))
     fasta = tmpdir / "input.fa"
     outdir = tmpdir / "out"
     outdir.mkdir()
