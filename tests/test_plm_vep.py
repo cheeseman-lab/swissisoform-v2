@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from swissisoform.modules.plm_vep import PLMVEPModule
+from swissisoform.plm.module import PLMVEPModule
 from swissisoform.plm.embed import (
     load_cache,
     precompute_plm_esm2,

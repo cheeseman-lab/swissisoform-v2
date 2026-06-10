@@ -38,6 +38,7 @@ from pathlib import Path
 import pandas as pd
 
 from swissisoform.assembly import assemble_genes
+from swissisoform.clinical.module import ClinicalModule
 from swissisoform.clinical.validate import ConsequenceValidator
 from swissisoform.combine import combine_filtered_samples, dedupe_unique_proteins
 from swissisoform.compare.comparator import compare_genes
@@ -47,12 +48,11 @@ from swissisoform.config import (
     PipelineConfig,
     ScoringConfig,
 )
+from swissisoform.conservation_frame.module import ConservationFrameModule
 from swissisoform.io.parquet import paired_tis_dataframe
 from swissisoform.io.rnaseq import load_sample_manifest
 from swissisoform.modules.biophysics import BiophysicsModule
-from swissisoform.modules.clinical import ClinicalModule
 from swissisoform.modules.conservation import ConservationModule
-from swissisoform.modules.conservation_frame import ConservationFrameModule
 from swissisoform.modules.core_identity import CoreIdentityModule
 from swissisoform.modules.generef import GeneRefModule
 from swissisoform.modules.initiation_context import InitiationContextModule
@@ -64,14 +64,14 @@ from swissisoform.modules.massspec import (
     precompute_pepquery,
 )
 from swissisoform.modules.motifs import MotifsModule
-from swissisoform.modules.plm_vep import PLMVEPModule
 from swissisoform.modules.scoring import EvidenceScoringModule
 from swissisoform.modules.signalp import SignalPModule, precompute_signalp
-from swissisoform.modules.structure import StructureModule
 from swissisoform.modules.targetp import TargetPModule, precompute_targetp
 from swissisoform.modules.variant_intersection import VariantIntersectionModule
 from swissisoform.modules.varianteffect import VariantEffectModule
 from swissisoform.pipeline import AnnotationPipeline, UpstreamReference, run_sample
+from swissisoform.plm.module import PLMVEPModule
+from swissisoform.structure.module import StructureModule
 
 logging.basicConfig(
     level=logging.INFO,

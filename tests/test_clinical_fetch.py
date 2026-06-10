@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from swissisoform.clinical.fetch import VariantFetcher, _clinvar_review_stars
 from swissisoform.config import PipelineConfig
-from swissisoform.modules.clinical import ClinicalModule
+from swissisoform.clinical.module import ClinicalModule
 
 
 class TestClinVarReviewStars:

@@ -8,7 +8,7 @@ import pytest
 
 from swissisoform.config import PipelineConfig
 from swissisoform.models import TranslationInitiationSite
-from swissisoform.modules.clinical import ClinicalModule, parse_hgvsp_position
+from swissisoform.clinical.module import ClinicalModule, parse_hgvsp_position
 
 SAMPLE_VARIANTS: dict[str, list[dict]] = {
     "TESTGENE_POS": [

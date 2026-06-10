@@ -39,6 +39,7 @@ from typing import Any
 import pandas as pd
 
 from swissisoform.assembly import assemble_genes
+from swissisoform.clinical.module import ClinicalModule
 from swissisoform.clinical.validate import ConsequenceValidator
 from swissisoform.combine import combine_filtered_samples
 from swissisoform.compare import compare_genes
@@ -50,7 +51,6 @@ from swissisoform.config import (
 from swissisoform.io.parquet import paired_tis_dataframe
 from swissisoform.models import Gene
 from swissisoform.modules.biophysics import BiophysicsModule
-from swissisoform.modules.clinical import ClinicalModule
 from swissisoform.modules.conservation import ConservationModule
 from swissisoform.modules.core_identity import CoreIdentityModule
 from swissisoform.modules.initiation_context import InitiationContextModule

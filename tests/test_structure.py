@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from swissisoform.modules.structure import StructureModule
+from swissisoform.structure.module import StructureModule
 from swissisoform.structure.compare import compare_confidence
 from swissisoform.structure.fold import (
     cache_path,

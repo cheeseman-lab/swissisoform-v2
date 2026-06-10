@@ -1,7 +1,7 @@
 r"""Module: Variant Intersection — per-TIS isoform-frame variant calling.
 
 Post-processes the raw variant list attached to a TIS by
-:class:`swissisoform.modules.clinical.ClinicalModule` and:
+:class:`swissisoform.clinical.module.ClinicalModule` and:
 
 1. Re-validates each variant in the *isoform*'s reading frame using the
    TIS's ``orf_exons`` (via

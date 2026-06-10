@@ -3,7 +3,7 @@
 Pure-Python MAF parsing + frame analysis (``maf``, ``frame``), plus a
 ``hal2maf`` subprocess wrapper (``hal``) that gracefully returns
 ``None`` when the binary or the Zoonomia HAL aren't available. Wired
-into a SiteModule by ``swissisoform.modules.conservation_frame``.
+into a SiteModule by ``swissisoform.conservation_frame.module``.
 
 Spec: ``docs/reviews/conservation_path12_spec.md``.
 """

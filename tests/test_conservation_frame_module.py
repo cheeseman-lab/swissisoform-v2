@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from swissisoform.config import ConservationConfig, PipelineConfig
 from swissisoform.models import ORFType, TranslationInitiationSite
-from swissisoform.modules.conservation_frame import (
+from swissisoform.conservation_frame.module import (
     ConservationFrameModule,
     _revcomp_maf,
 )

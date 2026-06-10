@@ -28,7 +28,7 @@ from typing import Any
 import pandas as pd
 import requests
 
-from swissisoform.modules.clinical import parse_hgvsp_position
+from swissisoform.clinical.module import parse_hgvsp_position
 
 logger = logging.getLogger(__name__)
 
