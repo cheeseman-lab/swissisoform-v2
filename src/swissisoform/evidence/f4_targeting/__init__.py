@@ -6,7 +6,17 @@ from typing import Any
 
 from swissisoform.config import ScoringConfig
 from swissisoform.evidence.common import CriterionResult
+from swissisoform.evidence.f4_targeting.signalp import SignalPModule, precompute_signalp
+from swissisoform.evidence.f4_targeting.targetp import TargetPModule, precompute_targetp
 from swissisoform.models import TranslationInitiationSite
+
+__all__ = [
+    "score",
+    "SignalPModule",
+    "precompute_signalp",
+    "TargetPModule",
+    "precompute_targetp",
+]
 
 
 def score(

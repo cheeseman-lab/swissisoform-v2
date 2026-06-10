@@ -4,7 +4,21 @@ from __future__ import annotations
 
 from swissisoform.config import ScoringConfig
 from swissisoform.evidence.common import CriterionResult
+from swissisoform.evidence.f3_domains.interproscan import (
+    InterProScanModule,
+    is_real_domain,
+    is_real_functional_domain,
+    precompute_interproscan,
+)
 from swissisoform.models import TranslationInitiationSite
+
+__all__ = [
+    "score",
+    "InterProScanModule",
+    "precompute_interproscan",
+    "is_real_domain",
+    "is_real_functional_domain",
+]
 
 
 def score(

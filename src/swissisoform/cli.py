@@ -48,14 +48,14 @@ from swissisoform.config import (
     ConservationConfig,
     PipelineConfig,
 )
+from swissisoform.evidence.e6_mass_spec import MassSpecModule
+from swissisoform.evidence.f2_localization import LocalizationModule, precompute_deeploc
 from swissisoform.io.parquet import paired_tis_dataframe
 from swissisoform.models import Gene
 from swissisoform.modules.biophysics import BiophysicsModule
 from swissisoform.modules.conservation import ConservationModule
 from swissisoform.modules.core_identity import CoreIdentityModule
 from swissisoform.modules.initiation_context import InitiationContextModule
-from swissisoform.modules.localization import LocalizationModule, precompute_deeploc
-from swissisoform.modules.massspec import MassSpecModule
 from swissisoform.modules.motifs import MotifsModule
 from swissisoform.pipeline import AnnotationPipeline, UpstreamReference, run_sample
 

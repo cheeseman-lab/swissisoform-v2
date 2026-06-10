@@ -4,7 +4,19 @@ from __future__ import annotations
 
 from swissisoform.config import ScoringConfig
 from swissisoform.evidence.common import CriterionResult, _annotation
+from swissisoform.evidence.e6_mass_spec.massspec import (
+    MassSpecModule,
+    collect_unique_peptides,
+    precompute_pepquery,
+)
 from swissisoform.models import TranslationInitiationSite
+
+__all__ = [
+    "score",
+    "MassSpecModule",
+    "collect_unique_peptides",
+    "precompute_pepquery",
+]
 
 
 def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResult:

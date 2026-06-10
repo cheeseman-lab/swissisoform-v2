@@ -84,7 +84,7 @@ is_real_functional_domain = is_real_domain
 
 # Default install location used by scripts/setup/setup_databases.py interproscan.
 DEFAULT_INTERPROSCAN_DIR = (
-    Path(__file__).resolve().parents[3] / "data" / "reference" / "interproscan"
+    Path(__file__).resolve().parents[4] / "data" / "reference" / "interproscan"
 )
 # Comma-separated set of member-DB applications.  When ``None``, IPS6
 # uses its default non-ML app set (Pfam, SMART, CDD, PANTHER, etc.).

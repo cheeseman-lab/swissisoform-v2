@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from swissisoform.modules.massspec import MassSpecModule
+from swissisoform.evidence.e6_mass_spec.massspec import MassSpecModule
 
 
 class TestMassSpecModule:
@@ -194,7 +194,7 @@ class TestMassSpecModule:
         queried" — and E6 returned None instead of False for TRNT1 / CDC34 /
         SRSF2.
         """
-        from swissisoform.modules.massspec import _regroup_by_gene
+        from swissisoform.evidence.e6_mass_spec.massspec import _regroup_by_gene
         peptide_to_genes = {
             "PEPONE": {"GENE_A"},
             "PEPTWO": {"GENE_A", "GENE_B"},

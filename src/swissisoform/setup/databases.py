@@ -870,7 +870,8 @@ def setup_pepquery(refresh: bool = False) -> None:
 
     PepQuery2 is a plain Java 11+ CLI.  System Java is already on PATH
     on this cluster, so we skip the conda-env indirection used for
-    DeepLoc and just stage the jar.  :func:`swissisoform.modules.massspec.precompute_pepquery`
+    DeepLoc and just stage the jar.
+    :func:`swissisoform.evidence.e6_mass_spec.precompute_pepquery`
     invokes it via ``java -jar <PEPQUERY_JAR>``.
 
     ``-b <dataset>`` at query time pulls MS/MS spectra from PepQueryDB

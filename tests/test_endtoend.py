@@ -27,13 +27,13 @@ from swissisoform.models import Gene, ORFType
 from swissisoform.modules.biophysics import BiophysicsModule
 from swissisoform.modules.core_identity import CoreIdentityModule
 from swissisoform.modules.initiation_context import InitiationContextModule
-from swissisoform.modules.interproscan import (
+from swissisoform.evidence.f3_domains.interproscan import (
     InterProScanModule,
     precompute_interproscan,
 )
 from swissisoform.modules.motifs import MotifsModule
-from swissisoform.modules.signalp import SignalPModule, precompute_signalp
-from swissisoform.modules.targetp import TargetPModule, precompute_targetp
+from swissisoform.evidence.f4_targeting.signalp import SignalPModule, precompute_signalp
+from swissisoform.evidence.f4_targeting.targetp import TargetPModule, precompute_targetp
 from swissisoform.pipeline import AnnotationPipeline, UpstreamReference, run_sample
 
 # ---------------------------------------------------------------------------

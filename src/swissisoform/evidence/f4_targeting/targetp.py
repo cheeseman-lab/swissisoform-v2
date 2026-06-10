@@ -45,7 +45,7 @@ def _protein_hash(protein: str) -> str:
 # Default install location used by scripts/setup/setup_databases.py targetp.
 # Callers can override via ``install_dir`` below.
 DEFAULT_TARGETP_DIR = (
-    Path(__file__).resolve().parents[3] / "data" / "reference" / "targetp" / "targetp-2.0"
+    Path(__file__).resolve().parents[4] / "data" / "reference" / "targetp" / "targetp-2.0"
 )
 
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from swissisoform.modules.signalp import SignalPModule, _protein_hash
+from swissisoform.evidence.f4_targeting.signalp import SignalPModule, _protein_hash
 
 
 class TestSignalPModule:

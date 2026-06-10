@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from swissisoform.config import ScoringConfig
 from swissisoform.evidence.common import CriterionResult
+from swissisoform.evidence.f2_localization.localization import (
+    LocalizationModule,
+    precompute_deeploc,
+)
 from swissisoform.models import TranslationInitiationSite
+
+__all__ = [
+    "score",
+    "LocalizationModule",
+    "precompute_deeploc",
+]
 
 
 def score(

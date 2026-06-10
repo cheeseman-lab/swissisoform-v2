@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_PEPQUERY_JAR = (
-    Path(__file__).resolve().parents[3]
+    Path(__file__).resolve().parents[4]
     / "data" / "reference" / "pepquery" / "pepquery-2.0.2" / "pepquery-2.0.2.jar"
 )
 

@@ -49,6 +49,19 @@ from swissisoform.config import (
     ScoringConfig,
 )
 from swissisoform.conservation_frame.module import ConservationFrameModule
+from swissisoform.evidence.e6_mass_spec import (
+    MassSpecModule,
+    collect_unique_peptides,
+    precompute_pepquery,
+)
+from swissisoform.evidence.f2_localization import LocalizationModule, precompute_deeploc
+from swissisoform.evidence.f3_domains import InterProScanModule, precompute_interproscan
+from swissisoform.evidence.f4_targeting import (
+    SignalPModule,
+    TargetPModule,
+    precompute_signalp,
+    precompute_targetp,
+)
 from swissisoform.io.parquet import paired_tis_dataframe
 from swissisoform.io.rnaseq import load_sample_manifest
 from swissisoform.modules.biophysics import BiophysicsModule
@@ -56,17 +69,8 @@ from swissisoform.modules.conservation import ConservationModule
 from swissisoform.modules.core_identity import CoreIdentityModule
 from swissisoform.modules.generef import GeneRefModule
 from swissisoform.modules.initiation_context import InitiationContextModule
-from swissisoform.modules.interproscan import InterProScanModule, precompute_interproscan
-from swissisoform.modules.localization import LocalizationModule, precompute_deeploc
-from swissisoform.modules.massspec import (
-    MassSpecModule,
-    collect_unique_peptides,
-    precompute_pepquery,
-)
 from swissisoform.modules.motifs import MotifsModule
 from swissisoform.modules.scoring import EvidenceScoringModule
-from swissisoform.modules.signalp import SignalPModule, precompute_signalp
-from swissisoform.modules.targetp import TargetPModule, precompute_targetp
 from swissisoform.modules.variant_intersection import VariantIntersectionModule
 from swissisoform.modules.varianteffect import VariantEffectModule
 from swissisoform.pipeline import AnnotationPipeline, UpstreamReference, run_sample

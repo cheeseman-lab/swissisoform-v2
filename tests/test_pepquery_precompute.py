@@ -8,7 +8,7 @@ and output parsing.
 from __future__ import annotations
 
 from swissisoform.models import Gene, ORFType, TranslationInitiationSite
-from swissisoform.modules.massspec import (
+from swissisoform.evidence.e6_mass_spec.massspec import (
     _parse_pepquery_output,
     _pepquery_cache_key,
     _regroup_by_gene,
