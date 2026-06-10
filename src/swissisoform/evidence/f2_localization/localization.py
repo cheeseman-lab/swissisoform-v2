@@ -96,8 +96,10 @@ def precompute_deeploc(
         device,
     )
 
-    # Write FASTA in cwd (shared-HPC policy: no /tmp)
-    tmpdir = _P(tempfile.mkdtemp(prefix="deeploc_", dir="."))
+    # One cache root for all transient scratch (never the repo root or /tmp).
+    _scratch = _P(__file__).resolve().parents[4] / "data" / "cache" / "tmp"
+    _scratch.mkdir(parents=True, exist_ok=True)
+    tmpdir = _P(tempfile.mkdtemp(prefix="deeploc_", dir=_scratch))
     fasta = tmpdir / "input.fa"
     outdir = tmpdir / "out"
     outdir.mkdir()

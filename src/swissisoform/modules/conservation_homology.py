@@ -22,6 +22,9 @@ from swissisoform.models import TranslationInitiationSite
 
 logger = logging.getLogger(__name__)
 
+# One cache root for all transient scratch (never the repo root or /tmp).
+_SCRATCH_ROOT = Path(__file__).resolve().parents[3] / "data" / "cache" / "tmp"
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -341,7 +344,8 @@ class ConservationHomologyModule:
             ``None`` if the subprocess failed — caller should treat this as
             "could not run" rather than "no homologs found".
         """
-        tmp_dir = tempfile.mkdtemp(dir=".")
+        _SCRATCH_ROOT.mkdir(parents=True, exist_ok=True)
+        tmp_dir = tempfile.mkdtemp(dir=_SCRATCH_ROOT)
         try:
             # Write query FASTA
             query_fasta = os.path.join(tmp_dir, "query.fasta")
@@ -491,7 +495,8 @@ class ConservationHomologyModule:
             return 0
 
         qid_to_seq = {f"q{i}": s for i, s in enumerate(unique_seqs)}
-        tmp_dir = tempfile.mkdtemp(dir=".")
+        _SCRATCH_ROOT.mkdir(parents=True, exist_ok=True)
+        tmp_dir = tempfile.mkdtemp(dir=_SCRATCH_ROOT)
         per_query: dict[str, list[dict[str, Any]]] = {qid: [] for qid in qid_to_seq}
         try:
             query_fasta = os.path.join(tmp_dir, "query.fasta")

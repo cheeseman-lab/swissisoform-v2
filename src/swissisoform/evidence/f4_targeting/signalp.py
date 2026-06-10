@@ -102,7 +102,8 @@ def precompute_signalp(
         mode,
     )
 
-    _scratch = _P(".cache/tmp")
+    # One cache root for all transient scratch (never the repo root or /tmp).
+    _scratch = _P(__file__).resolve().parents[4] / "data" / "cache" / "tmp"
     _scratch.mkdir(parents=True, exist_ok=True)
     tmpdir = _P(tempfile.mkdtemp(prefix="signalp_", dir=_scratch))
     fasta = tmpdir / "input.fa"

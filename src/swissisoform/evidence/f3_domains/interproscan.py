@@ -308,9 +308,31 @@ def precompute_interproscan(
         applications,
     )
 
-    _scratch = _P(".cache/tmp")
+    # One cache root for all transient scratch (never the repo root or /tmp).
+    _scratch = _P(__file__).resolve().parents[4] / "data" / "cache" / "tmp"
     _scratch.mkdir(parents=True, exist_ok=True)
     tmpdir = _P(tempfile.mkdtemp(prefix="interproscan_", dir=_scratch)).resolve()
+    try:
+        return _run_interproscan(tmpdir, hash_to_seq, applications, nf_version,
+                                 profile, datadir, data_version)
+    finally:
+        # Always remove the scratch tree, on every return path and on exception.
+        _shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _run_interproscan(
+    tmpdir: Path,
+    hash_to_seq: dict[str, str],
+    applications: str,
+    nf_version: str,
+    profile: str,
+    datadir: Path,
+    data_version: str,
+) -> dict[str, dict[str, Any]]:
+    """Run the InterProScan Nextflow pipeline in ``tmpdir`` and parse its TSV.
+
+    Cleanup of ``tmpdir`` is the caller's responsibility (a ``finally``).
+    """
     fasta = tmpdir / "input.fa"
     outdir = tmpdir / "out"
     outdir.mkdir()
@@ -357,10 +379,6 @@ def precompute_interproscan(
                 "calculatedMatches.json fallback (combine step skipped)",
                 len(fallback),
             )
-            try:
-                _shutil.rmtree(tmpdir)
-            except OSError:
-                pass
             return fallback
         return {}
 
@@ -432,11 +450,6 @@ def precompute_interproscan(
                 "n_interpro": len(interpro_ids),
             },
         }
-
-    try:
-        _shutil.rmtree(tmpdir)
-    except OSError:
-        logger.warning("precompute_interproscan: failed to remove tempdir %s", tmpdir)
 
     return result
 

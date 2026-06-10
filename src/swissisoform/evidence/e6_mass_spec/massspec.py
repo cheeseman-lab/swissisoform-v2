@@ -17,6 +17,7 @@ import json
 import logging
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,10 @@ DEFAULT_PEPQUERY_JAR = (
     Path(__file__).resolve().parents[4]
     / "data" / "reference" / "pepquery" / "pepquery-2.0.2" / "pepquery-2.0.2.jar"
 )
+
+# All transient pipeline scratch lives under one cache root (never the repo root
+# or system /tmp — shared HPC). PepQuery downloads hundreds of MB of spectra here.
+_SCRATCH_ROOT = Path(__file__).resolve().parents[4] / "data" / "cache" / "tmp"
 
 
 class MassSpecModule:
@@ -454,76 +459,89 @@ def precompute_pepquery(
         )
         return {}
 
-    import tempfile
-
-    tmpdir = Path(tempfile.mkdtemp(prefix="pepquery_", dir="."))
-    peptides_file = tmpdir / "peptides.txt"
-    outdir = tmpdir / "out"
-    outdir.mkdir()
-    with open(peptides_file, "w") as fh:
-        fh.write("\n".join(peptides_sorted) + "\n")
-
-    cmd = [
-        java_bin,
-        "-jar",
-        str(jar),
-        "-b",
-        dataset,
-        "-db",
-        reference_db,
-        "-hc",
-        "-i",
-        str(peptides_file),
-        "-o",
-        str(outdir),
-    ]
-    if extra_args:
-        cmd.extend(extra_args)
-
-    logger.info("precompute_pepquery: %s", " ".join(cmd))
+    _SCRATCH_ROOT.mkdir(parents=True, exist_ok=True)
+    tmpdir = Path(tempfile.mkdtemp(prefix="pepquery_", dir=_SCRATCH_ROOT))
     try:
-        proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        if proc.stdout:
-            logger.info("pepquery stdout (tail):\n%s", proc.stdout[-1000:])
-        if proc.stderr:
-            logger.info("pepquery stderr (tail):\n%s", proc.stderr[-1000:])
-    except subprocess.CalledProcessError as exc:
-        logger.error(
-            "precompute_pepquery: pepquery exited %d. stderr=%s",
-            exc.returncode,
-            (exc.stderr or "")[-1000:],
-        )
-        return {}
+        peptides_file = tmpdir / "peptides.txt"
+        outdir = tmpdir / "out"
+        outdir.mkdir()
+        with open(peptides_file, "w") as fh:
+            fh.write("\n".join(peptides_sorted) + "\n")
 
-    validated_peptides = _parse_pepquery_output(outdir)
-    logger.info(
-        "precompute_pepquery: %d / %d peptides validated",
-        len(validated_peptides),
-        len(peptides_sorted),
-    )
+        cmd = [
+            java_bin,
+            "-jar",
+            str(jar),
+            "-b",
+            dataset,
+            "-db",
+            reference_db,
+            "-hc",
+            "-i",
+            str(peptides_file),
+            "-o",
+            str(outdir),
+        ]
+        if extra_args:
+            cmd.extend(extra_args)
 
-    if cache_path:
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(cache_path, "w") as fh:
-            json.dump(sorted(validated_peptides), fh)
-        logger.info("precompute_pepquery: cached → %s", cache_path)
-
-    # Only clean up the tempdir when we successfully parsed validated
-    # peptides.  On zero-hit runs (parser miss, broken Java, misconfigured
-    # datasets) we keep the ``pepquery_*`` tree so the user can inspect
-    # ``out/<dataset>/psm_rank.txt`` and ``detail.txt`` directly.
-    if validated_peptides:
+        logger.info("precompute_pepquery: %s", " ".join(cmd))
         try:
-            shutil.rmtree(tmpdir)
-        except OSError:
-            logger.warning("precompute_pepquery: failed to remove %s", tmpdir)
-    else:
+            proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            if proc.stdout:
+                logger.info("pepquery stdout (tail):\n%s", proc.stdout[-1000:])
+            if proc.stderr:
+                logger.info("pepquery stderr (tail):\n%s", proc.stderr[-1000:])
+        except subprocess.CalledProcessError as exc:
+            logger.error(
+                "precompute_pepquery: pepquery exited %d. stderr=%s",
+                exc.returncode,
+                (exc.stderr or "")[-1000:],
+            )
+            return {}
+
+        validated_peptides = _parse_pepquery_output(outdir)
         logger.info(
-            "precompute_pepquery: 0 peptides validated — keeping %s for inspection",
-            tmpdir,
+            "precompute_pepquery: %d / %d peptides validated",
+            len(validated_peptides),
+            len(peptides_sorted),
         )
 
-    return _regroup_by_gene(validated_peptides, peptide_to_genes)
+        if cache_path:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(cache_path, "w") as fh:
+                json.dump(sorted(validated_peptides), fh)
+            logger.info("precompute_pepquery: cached → %s", cache_path)
+
+        # On a zero-hit run, preserve only the small text reports
+        # (psm_rank.txt / detail.txt — a few KB) next to the cache so the run
+        # stays debuggable. Never the multi-hundred-MB spectra tree.
+        if not validated_peptides and cache_path:
+            _save_pepquery_reports(outdir, cache_path.with_name(f"{cache_key}_reports"))
+
+        return _regroup_by_gene(validated_peptides, peptide_to_genes)
+    finally:
+        # Always remove the scratch tree — even on exception or early return.
+        # Leaving it (especially under the old ``dir="."`` repo root) is how
+        # orphaned multi-hundred-MB ``pepquery_*`` dirs accumulated.
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _save_pepquery_reports(outdir: Path, dest: Path) -> None:
+    """Copy PepQuery's small text reports to ``dest`` for post-hoc inspection.
+
+    Only the rank/detail tables (a few KB each) — never the spectra tree.
+    """
+    reports = list(outdir.rglob("psm_rank.txt")) + list(outdir.rglob("detail.txt"))
+    if not reports:
+        return
+    dest.mkdir(parents=True, exist_ok=True)
+    for f in reports:
+        try:
+            shutil.copy2(f, dest / f.name)
+        except OSError:
+            pass
+    logger.info("precompute_pepquery: 0 validated — saved reports to %s", dest)
 
 
 def _regroup_by_gene(
