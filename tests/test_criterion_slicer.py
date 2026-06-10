@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.site import build_evidence_records as ber
+from swissisoform.site import evidence as ber
 
 
 def test_criteria_dict_has_exactly_12_entries() -> None:

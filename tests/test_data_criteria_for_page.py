@@ -16,7 +16,7 @@ def test_criteria_for_page_has_12_entries() -> None:
 
 def test_criteria_for_page_ids_match_ber() -> None:
     """Page config must align with CRITERIA in build_evidence_records."""
-    from scripts.site.build_evidence_records import CRITERIA
+    from swissisoform.site.evidence import CRITERIA
 
     assert {c["id"] for c in CRITERIA_FOR_PAGE} == set(CRITERIA)
 

@@ -7,25 +7,20 @@ ANTHROPIC_API_KEY / missing prompts directory.
 
 from __future__ import annotations
 
-import importlib.util
 import json
-import sys
 from pathlib import Path
 from types import ModuleType
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-SCRIPT_PATH = ROOT / "scripts/site/run_llm_interpretation.py"
 
 
 def _load_module() -> ModuleType:
-    """Load the script as a module by path (avoids needing scripts/ on sys.path)."""
-    spec = importlib.util.spec_from_file_location("run_llm_interpretation", SCRIPT_PATH)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["run_llm_interpretation"] = module
-    spec.loader.exec_module(module)
-    return module
+    """Load the LLM-interpretation logic module."""
+    from swissisoform.site import llm
+
+    return llm
 
 
 @pytest.fixture
@@ -330,7 +325,7 @@ def _ISO_FIXTURE_RECORD() -> dict:
 
 def test_criteria_pass_dry_run_emits_one_call_per_criterion(monkeypatch, tmp_path, capsys):
     """Criteria pass iterates over 12 criteria × N isoforms."""
-    from scripts.site import run_llm_interpretation as rli
+    from swissisoform.site import llm as rli
 
     records_dir = tmp_path / "records"
     records_dir.mkdir()
@@ -354,7 +349,7 @@ def test_criteria_pass_dry_run_emits_one_call_per_criterion(monkeypatch, tmp_pat
 
 
 def test_synthesis_pass_refuses_without_prereqs(monkeypatch, tmp_path):
-    from scripts.site import run_llm_interpretation as rli
+    from swissisoform.site import llm as rli
 
     records_dir = tmp_path / "records"
     records_dir.mkdir()
@@ -389,7 +384,7 @@ def test_synthesis_pass_refuses_without_prereqs(monkeypatch, tmp_path):
 
 def test_criteria_pass_skips_isoforms_with_existing_output(monkeypatch, tmp_path, capsys):
     """Re-running the criteria pass without --force is a no-op for done isoforms."""
-    from scripts.site import run_llm_interpretation as rli
+    from swissisoform.site import llm as rli
 
     records_dir = tmp_path / "records"
     records_dir.mkdir()
@@ -421,7 +416,7 @@ def test_criteria_pass_skips_isoforms_with_existing_output(monkeypatch, tmp_path
 
 def test_synthesis_input_record_pulls_criteria_reads(monkeypatch, tmp_path):
     """synthesis._build_synthesis_record reads criteria.json into criteria_reads."""
-    from scripts.site import run_llm_interpretation as rli
+    from swissisoform.site import llm as rli
 
     tis_slug = "chr1-100-ATG-ENST_A"
     base = tmp_path / tis_slug

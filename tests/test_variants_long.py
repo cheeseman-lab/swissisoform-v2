@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from scripts.site import build_evidence_records as ber
+from swissisoform.site import evidence as ber
 
 
 def _two_row_parquet(tmp_path: Path) -> Path:
