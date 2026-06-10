@@ -12,33 +12,39 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-sys.path.insert(0, str(ROOT / "scripts"))  # so `import run` (scripts/run.py) resolves
 
-import run  # noqa: E402, I001
+from swissisoform import runner  # noqa: E402, I001
+from swissisoform.assembly import assemble_genes  # noqa: E402
 from swissisoform.export.folding_colors import build_folding_colors  # noqa: E402
 from swissisoform.export.structures import export_structures  # noqa: E402
+from swissisoform.pipeline import UpstreamReference  # noqa: E402
+from swissisoform.references import (  # noqa: E402
+    ALL_CELL_LINES,
+    GENOME,
+    GTF,
+    PRESETS,
+    PROTEIN,
+    build_config,
+)
 
 
 def assemble_for_preset(preset_name: str):
-    """Reproduce run.py's load + assemble for *preset_name*; return (spec, genes)."""
-    spec = run.PRESETS[preset_name]
-    ref = run.UpstreamReference.load(
-        gtf_path=run.GTF, genome_fasta=run.GENOME, protein_fasta=run.PROTEIN
-    )
+    """Reproduce the runner's load + assemble for *preset_name*; return (spec, genes)."""
+    spec = PRESETS[preset_name]
+    ref = UpstreamReference.load(gtf_path=GTF, genome_fasta=GENOME, protein_fasta=PROTEIN)
     if "isoforms" in spec:
-        combined = run.load_combined(run.ALL_CELL_LINES, ref, run.build_config())
-        final, gene_names = run.restrict_to_isoforms(
-            combined, run.load_isoform_picks(spec["isoforms"])
+        combined = runner.load_combined(ALL_CELL_LINES, ref, build_config())
+        final, gene_names = runner.restrict_to_isoforms(
+            combined, runner.load_isoform_picks(spec["isoforms"])
         )
     else:
-        final = run.load_single_sample(spec.get("cell_lines", ["HeLa"])[0], ref)
+        final = runner.load_single_sample(spec.get("cell_lines", ["HeLa"])[0], ref)
         gene_names = spec["genes"]
-    genes = run.assemble_genes(
-        final, gene_names=gene_names, genome_fasta=run.GENOME, exon_skeletons=ref.exon_skeletons
+    genes = assemble_genes(
+        final, gene_names=gene_names, genome_fasta=GENOME, exon_skeletons=ref.exon_skeletons
     )
     return spec, genes
 
@@ -47,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    p.add_argument("--preset", required=True, choices=sorted(run.PRESETS))
+    p.add_argument("--preset", required=True, choices=sorted(PRESETS))
     args = p.parse_args(argv)
 
     spec, genes = assemble_for_preset(args.preset)
