@@ -7,8 +7,21 @@ TranslationInitiationSite, Gene, CellLineExpression, and VariantAnnotation.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any, Literal
+
+from swissisoform.contract import ORFType, orf_type_from_ribotish
+
+__all__ = [
+    "ORFType",
+    "orf_type_from_ribotish",
+    "DiffRegionConfidence",
+    "TranscriptCoordinates",
+    "CellLineExpression",
+    "DifferentialRegion",
+    "TranslationInitiationSite",
+    "Gene",
+    "VariantAnnotation",
+]
 
 # Confidence tiers for DifferentialRegion.
 # - "exact": canonical diff (annotated → empty; uORF/altORF/internal/3utr → entire isoform)
@@ -18,52 +31,6 @@ from typing import Any, Literal
 DiffRegionConfidence = Literal[
     "exact", "tail_verified", "length_fallback", "whole_isoform_fallback"
 ]
-
-
-class ORFType(Enum):
-    """Classification of open reading frame types relative to canonical CDS."""
-
-    ANNOTATED = "annotated"
-    EXTENDED = "extended"
-    TRUNCATED = "truncated"
-    UORF = "uorf"
-    UOORF = "uoorf"
-    INTERNAL_OUT_OF_FRAME = "internal_oof"
-    THREE_UTR_ORF = "3utr_orf"
-    ALT_ORF = "alt_orf"
-
-
-def orf_type_from_ribotish(tis_type: str) -> ORFType:
-    """Map a Ribo-TISH TisType string to an ORFType enum value.
-
-    Ribo-TISH produces 16 compound type strings like "Extended:CDSFrameOverlap"
-    or "5'UTR:Known". This function normalizes them to the 8-value ORFType enum.
-
-    Args:
-        tis_type: Raw TisType string from Ribo-TISH predict_all.txt.
-
-    Returns:
-        Corresponding ORFType enum member.
-    """
-    if tis_type.startswith("Annotated"):
-        return ORFType.ANNOTATED
-    if tis_type.startswith("Truncated"):
-        return ORFType.TRUNCATED
-    if tis_type.startswith("Extended"):
-        return ORFType.EXTENDED
-    if tis_type.startswith("Internal"):
-        return ORFType.INTERNAL_OUT_OF_FRAME
-    if tis_type.startswith("5'UTR"):
-        if "CDSFrameOverlap" in tis_type:
-            return ORFType.UOORF
-        return ORFType.UORF
-    if tis_type.startswith("3'UTR"):
-        return ORFType.THREE_UTR_ORF
-    if tis_type.startswith("Novel"):
-        if "CDSFrameOverlap" in tis_type:
-            return ORFType.UOORF
-        return ORFType.ALT_ORF
-    return ORFType.ALT_ORF
 
 
 @dataclass
