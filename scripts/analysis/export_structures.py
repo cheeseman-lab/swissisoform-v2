@@ -1,13 +1,9 @@
-"""Export named, viewable Boltz structures (.cif) for a run's isoforms.
+"""Thin CLI for the named-structure export.
 
-Boltz caches structures by sequence sha1 (data/cache/structure/boltz/<hash>/
-model.cif), which is unusable for a human. This re-assembles a preset's genes,
-maps each isoform (and its canonical) protein to its cache entry by hash, and
-copies the model.cif into data/output/<run_name>/structures/ with names like
-``CBX1__extended__953aa__chr17-48071434--CTG.cif`` — plus a manifest.tsv.
-
-Open the resulting .cif in ChimeraX (`open file.cif`, colour by B-factor =
-pLDDT), PyMOL, or the Mol* web viewer (molstar.org/viewer, drag-and-drop).
+Logic lives in ``swissisoform.export.structures``. Re-assembles a preset's
+genes (via scripts/run.py), copies each isoform/canonical's cached Boltz
+model.cif into ``data/output/<run_name>/structures/`` under human-readable
+names, then precomputes the per-residue folding colour maps.
 
 Usage:
     python scripts/analysis/export_structures.py --preset cheeseman12
@@ -17,32 +13,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import csv
-import re
-import shutil
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))  # so `import run` (scripts/run.py) resolves
 
-import build_folding_colors  # noqa: E402, I001
 import run  # noqa: E402, I001
-from swissisoform.plm.embed import protein_hash  # noqa: E402
-
-BOLTZ = ROOT / "data" / "cache" / "structure" / "boltz"
-
-
-def _safe(s: str) -> str:
-    return re.sub(r"[^A-Za-z0-9._-]", "-", s)
-
-
-def _cif_for(seq: str | None) -> Path | None:
-    """Locate the cached Boltz model.cif for a protein sequence, or None."""
-    if not seq:
-        return None
-    cif = BOLTZ / protein_hash(seq.rstrip("*").upper()) / "model.cif"
-    return cif if cif.exists() else None
+from swissisoform.export.folding_colors import build_folding_colors  # noqa: E402
+from swissisoform.export.structures import export_structures  # noqa: E402
 
 
 def assemble_for_preset(preset_name: str):
@@ -75,44 +54,8 @@ def main(argv: list[str] | None = None) -> int:
     spec, genes = assemble_for_preset(args.preset)
     run_name = spec.get("run_name", args.preset)
     outdir = ROOT / "data" / "output" / run_name / "structures"
-    outdir.mkdir(parents=True, exist_ok=True)
 
-    manifest: list[dict] = []
-    n_iso = n_can = n_missing = 0
-    seen_canonical: set[str] = set()
-
-    for gene in sorted(genes, key=lambda g: g.gene_name):
-        if gene.canonical_protein and gene.gene_name not in seen_canonical:
-            seen_canonical.add(gene.gene_name)
-            cif = _cif_for(gene.canonical_protein)
-            if cif:
-                aa = len(gene.canonical_protein.rstrip("*"))
-                name = f"{gene.gene_name}__canonical__{aa}aa.cif"
-                shutil.copyfile(cif, outdir / name)
-                n_can += 1
-                manifest.append({"file": name, "gene": gene.gene_name, "kind": "canonical",
-                                 "orf_type": "", "aa_len": aa, "tis_id": ""})
-        for site in gene.tis_sites:
-            if not site.isoform_protein:
-                continue
-            cif = _cif_for(site.isoform_protein)
-            aa = len(site.isoform_protein.rstrip("*"))
-            ot = site.orf_type.value
-            name = f"{gene.gene_name}__{ot}__{aa}aa__{_safe(site.tis_id)}.cif"
-            if cif:
-                shutil.copyfile(cif, outdir / name)
-                n_iso += 1
-                manifest.append({"file": name, "gene": gene.gene_name, "kind": "isoform",
-                                 "orf_type": ot, "aa_len": aa, "tis_id": site.tis_id})
-            else:
-                n_missing += 1
-
-    man_path = outdir / "manifest.tsv"
-    with open(man_path, "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=["file", "gene", "kind", "orf_type", "aa_len", "tis_id"],
-                           delimiter="\t")
-        w.writeheader()
-        w.writerows(manifest)
+    n_iso, n_can, n_missing, man_path = export_structures(genes, outdir)
 
     print(f"wrote {n_iso} isoform + {n_can} canonical .cif → {outdir}")
     print(f"  manifest: {man_path}")
@@ -124,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
     parquet = ROOT / "data" / "output" / run_name / "all_paired.parquet"
     if parquet.is_file():
         print(f"building folding colour maps from {parquet.name}…")
-        build_folding_colors.main(["--parquet", str(parquet), "--structures", str(outdir)])
+        build_folding_colors(parquet, outdir)
     else:
         print(f"  (skipped colour maps: {parquet} not found — run scripts/run.py first)")
     return 0
