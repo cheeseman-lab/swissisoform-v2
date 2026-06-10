@@ -410,7 +410,7 @@ def summarise(out_dir: Path) -> None:
 # ──────────────────────────────────────────────────────────────────────────
 # V2 per-criterion config. Each entry drives
 # (a) the slicer (what raw cols to pull) and (b) the UI tile (label, headline).
-# Verified against the real cheeseman_12gene parquet column schema.
+# Verified against the real cheeseman_13gene parquet column schema.
 # ──────────────────────────────────────────────────────────────────────────
 
 CRITERIA: dict[str, dict[str, Any]] = {

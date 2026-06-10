@@ -19,9 +19,9 @@
 # All arguments after the script name are forwarded verbatim to run.py.
 #
 # Usage (from repo root, after `mkdir -p logs`):
-#   sbatch scripts/slurm/run.sbatch --preset 5gene
+#   sbatch scripts/slurm/run.sbatch --preset cheeseman13
 #   sbatch scripts/slurm/run.sbatch --genes TP53 EIF4G1 --run-name my_run
-#   sbatch scripts/slurm/run.sbatch --preset 5gene --no-gpu   # skip Stage B
+#   sbatch scripts/slurm/run.sbatch --preset cheeseman13 --no-gpu   # skip Stage B
 #
 # Tradeoff: this orchestrator holds its CPU allocation while the GPU jobs run,
 # and Stages A and C both load references + assemble (the upstream CPU work runs

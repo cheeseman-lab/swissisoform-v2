@@ -6,8 +6,7 @@ model.cif into ``data/output/<run_name>/structures/`` under human-readable
 names, then precomputes the per-residue folding colour maps.
 
 Usage:
-    python scripts/export/export_structures.py --preset cheeseman12
-    python scripts/export/export_structures.py --preset 5gene
+    python scripts/export/export_structures.py --preset cheeseman13
 """
 
 from __future__ import annotations

@@ -433,13 +433,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--records",
         type=Path,
-        default=ROOT / "data/output/cheeseman_12gene/llm_evidence",
+        default=ROOT / "data/output/cheeseman_13gene/llm_evidence",
         help="Directory of per-gene evidence record JSON files (default: %(default)s).",
     )
     parser.add_argument(
         "--out",
         type=Path,
-        default=ROOT / "data/output/cheeseman_12gene/llm",
+        default=ROOT / "data/output/cheeseman_13gene/llm",
         help="Directory for LLM output JSON files (default: %(default)s).",
     )
     parser.add_argument("--model", default=DEFAULT_MODEL, help="Anthropic model id.")

@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-REAL_PARQUET = REPO_ROOT / "data" / "output" / "cheeseman_12gene" / "all_paired.parquet"
+REAL_PARQUET = REPO_ROOT / "data" / "output" / "cheeseman_13gene" / "all_paired.parquet"
 
 
 def _load_module():
@@ -46,9 +46,9 @@ def real_outputs(tmp_path_factory):
     return out_dir
 
 
-def test_all_12_gene_files_have_top_level_keys(real_outputs):
+def test_all_13_gene_files_have_top_level_keys(real_outputs):
     files = sorted(real_outputs.glob("*.json"))
-    assert len(files) == 12, f"Expected 12 gene files, got {len(files)}"
+    assert len(files) == 13, f"Expected 13 gene files, got {len(files)}"
     for fp in files:
         rec = json.loads(fp.read_text(encoding="utf-8"))
         assert set(rec.keys()) == {"gene", "isoforms"}, f"{fp.name}: bad top-level keys"

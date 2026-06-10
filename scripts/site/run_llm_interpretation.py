@@ -1,7 +1,7 @@
 r"""Thin CLI for the per-gene LLM interpretation runner.
 
 Logic lives in ``swissisoform.site.llm``. Reads
-`data/output/cheeseman_12gene/llm_evidence/{gene}.json` (produced by
+`data/output/cheeseman_13gene/llm_evidence/{gene}.json` (produced by
 `build_evidence_records.py`), composes a prompt from `prompts/system.txt` +
 the evidence JSON + `prompts/output_schema.json`, calls the Anthropic API,
 validates + writes the structured output to `llm/{gene}.json`.
@@ -12,8 +12,8 @@ network calls.
 
 Usage:
     python scripts/site/run_llm_interpretation.py \
-      --records data/output/cheeseman_12gene/llm_evidence/ \
-      --out data/output/cheeseman_12gene/llm/
+      --records data/output/cheeseman_13gene/llm_evidence/ \
+      --out data/output/cheeseman_13gene/llm/
 
     python scripts/site/run_llm_interpretation.py --dry-run --gene TRNT1
 """

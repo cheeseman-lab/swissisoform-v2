@@ -168,8 +168,8 @@ def test_effect_damaging_is_nullable_bool_dtype(tmp_path: Path) -> None:
 
 
 def test_variants_long_real_parquet_smoke() -> None:
-    """Smoke test against the real cheeseman_12gene parquet if it's present."""
-    real = Path("data/output/cheeseman_12gene/all_paired.parquet")
+    """Smoke test against the real cheeseman_13gene parquet if it's present."""
+    real = Path("data/output/cheeseman_13gene/all_paired.parquet")
     if not real.exists():
         pytest.skip("real parquet not present in this environment")
     import tempfile

@@ -6,8 +6,8 @@ arbitrary gene subset, isoform subset, or the full catalog.
 
 Usage examples:
 
-    # Smoke test on 5 diagnostic genes (HeLa-only single sample)
-    python scripts/run.py --preset 5gene
+    # Run the full 13-gene reviewer-picked isoform set
+    python scripts/run.py --preset cheeseman13
 
     # 12 reviewer-picked genes across all 6 cell lines
     python scripts/run.py --genes CBX1 CDC34 ... --run-name 12gene_manual
@@ -171,11 +171,22 @@ def resolve_gene_selection(
         return gene_names, restricted
     if args.all:
         return None, None
-    if "5gene" in PRESETS:
-        logger.info("No input mode specified; defaulting to --preset 5gene")
-        args.preset = "5gene"
-        return PRESETS["5gene"]["genes"], None
-    raise RuntimeError("No input mode specified and no '5gene' preset available")
+    if "cheeseman13" in PRESETS:
+        logger.info("No input mode specified; defaulting to --preset cheeseman13")
+        args.preset = "cheeseman13"
+        spec = PRESETS["cheeseman13"]
+        if "isoforms" in spec:
+            if combined is None:
+                raise RuntimeError(
+                    "default preset cheeseman13 selects isoforms but no combined "
+                    "catalog is loaded (isoform presets run multi-sample)"
+                )
+            restricted, gene_names = restrict_to_isoforms(
+                combined, load_isoform_picks(spec["isoforms"]),
+            )
+            return gene_names, restricted
+        return spec["genes"], None
+    raise RuntimeError("No input mode specified and no 'cheeseman13' preset available")
 
 
 def derive_run_name(args: argparse.Namespace, gene_names: list[str] | None) -> str:

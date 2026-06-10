@@ -1,6 +1,6 @@
 """Smoke tests for the SwissIsoform v2 Flask viewer.
 
-Requires the cheeseman_12gene parquet to be visible at
+Requires the cheeseman_13gene parquet to be visible at
 ``website/data/all_paired.parquet`` (either real file or a symlink — the
 website README documents the layout). Tests skip cleanly if it isn't there.
 """
@@ -84,7 +84,7 @@ def test_api_data_json(client):
     r = client.get("/api/data.json")
     assert r.status_code == 200
     payload = json.loads(r.data)
-    # The cheeseman_12gene parquet ships with 12 genes.
+    # The cheeseman_13gene parquet ships with 13 genes.
     assert len(payload) >= 12
     for gene in [
         "CBX1",
@@ -127,7 +127,7 @@ def test_transcript_skeleton_loaded_for_known_transcript():
         sys.path.insert(0, str(WEBSITE_SRC))
     from swissisoform_site.data import load_transcript_skeletons
 
-    skel_path = Path("data/output/cheeseman_12gene/transcript_skeletons.parquet")
+    skel_path = Path("data/output/cheeseman_13gene/transcript_skeletons.parquet")
     if not skel_path.exists():
         pytest.skip("skeleton parquet not present")
     sk = load_transcript_skeletons(skel_path)
@@ -282,7 +282,7 @@ def test_isoform_page_truncation_marks_differential_region(client):
     """For a truncation, the folding legend names the differential region."""
     from swissisoform_site.data import tis_slug as make_slug
 
-    # TRNT1 first isoform is a truncation in the cheeseman_12gene parquet.
+    # TRNT1 first isoform is a truncation in the cheeseman_13gene parquet.
     r = client.get("/genes/TRNT1/isoforms/" + make_slug("chr3:3129127:+:ATG:ENST00000434583.5"))
     assert r.status_code == 200
     body = r.data
