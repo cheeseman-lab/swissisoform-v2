@@ -32,7 +32,6 @@ import argparse
 import logging
 import sys
 import time
-import tomllib
 from pathlib import Path
 
 import pandas as pd
@@ -42,12 +41,7 @@ from swissisoform.clinical.module import ClinicalModule
 from swissisoform.clinical.validate import ConsequenceValidator
 from swissisoform.combine import combine_filtered_samples, dedupe_unique_proteins
 from swissisoform.compare.comparator import compare_genes
-from swissisoform.config import (
-    ClinicalConfig,
-    ConservationConfig,
-    PipelineConfig,
-    ScoringConfig,
-)
+from swissisoform.config import PipelineConfig
 from swissisoform.conservation_frame.module import ConservationFrameModule
 from swissisoform.evidence.e6_mass_spec import (
     MassSpecModule,
@@ -75,6 +69,21 @@ from swissisoform.modules.variant_intersection import VariantIntersectionModule
 from swissisoform.modules.varianteffect import VariantEffectModule
 from swissisoform.pipeline import AnnotationPipeline, UpstreamReference, run_sample
 from swissisoform.plm.module import PLMVEPModule
+from swissisoform.references import (
+    ALL_CELL_LINES,
+    ALL_GENE_MODULES,
+    ALL_PROTEIN_MODULES,
+    ALL_SITE_MODULES,
+    GENOME,
+    GTF,
+    OUT,
+    PRESETS,
+    PRESETS_DIR,
+    PROTEIN,
+    ROOT,
+    build_config,
+    load_presets,
+)
 from swissisoform.structure.module import StructureModule
 
 logging.basicConfig(
@@ -83,108 +92,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger("run")
 
-# ── Paths ────────────────────────────────────────────────────────────────
-
-ROOT = Path(__file__).resolve().parent.parent
-DATA = ROOT / "data" / "reference"
-OUT = ROOT / "data" / "output"
-
-GTF = DATA / "gencode.v49.primary_assembly.annotation.gtf"
-GENOME = DATA / "Gencode_v49_GRCh38.primary_assembly.genome.fa"
-PROTEIN = DATA / "gencode.v49.pc_translations.fa"
-
 # Single-sample mode (5-gene diagnostic)
-HELA_PREDICT = DATA / "HeLa_TIS_predict_all.txt"
+HELA_PREDICT = ROOT / "data" / "reference" / "HeLa_TIS_predict_all.txt"
 HELA_RNASEQ = [
-    DATA / "rnaseq_counts/GATCAG_8_htseqcount.txt",
-    DATA / "rnaseq_counts/CACGGT_9_htseqcount.txt",
+    ROOT / "data" / "reference" / "rnaseq_counts/GATCAG_8_htseqcount.txt",
+    ROOT / "data" / "reference" / "rnaseq_counts/CACGGT_9_htseqcount.txt",
 ]
 
 # Multi-sample mode (production)
-SAMPLE_MANIFEST = DATA / "ribotish_sample_manifest.csv"
-REPLICATE_MANIFEST = DATA / "ribotish_replicate_manifest.csv"
+SAMPLE_MANIFEST = ROOT / "data" / "reference" / "ribotish_sample_manifest.csv"
+REPLICATE_MANIFEST = ROOT / "data" / "reference" / "ribotish_replicate_manifest.csv"
 COMBINED_PARQUET = OUT / "filtered" / "all_samples_combined.parquet"
 # One row per unique protein (stop-stripped AASeq), deduped from the full
 # combined table — the genome-wide "what to fold / embed" set.
 UNIQUE_TIS_PARQUET = OUT / "filtered" / "unique_tis_deduped.parquet"
 
-# Reference DBs (optional — modules degrade gracefully when absent)
-GNOMAD_DB = DATA / "gnomad" / "gnomad_v4.1_exome.parquet"
-CLINVAR_DB = DATA / "clinvar" / "variant_summary.parquet"
-COSMIC_DB = DATA / "cosmic" / "cosmic_variants.parquet"
-ALPHAMISSENSE_DB = DATA / "alphamissense" / "AlphaMissense_hg38.tsv.gz"
-GENEREF_JSON = DATA / "generef" / "generef.json"
-PHYLOP_BW = DATA / "zoonomia" / "cactus241way.phyloP.bw"
-PHASTCONS_BW = DATA / "zoonomia" / "hg38.phastCons100way.bw"
-HAL_FILE = DATA / "zoonomia" / "241-mammalian-2020v2.hal"
-HAL_SIF = DATA / "zoonomia" / "singularity" / "cactus.sif"
-HAL2MAF_BIN = ROOT / "scripts" / "bin" / "hal2maf"
-HALSTATS_BIN = ROOT / "scripts" / "bin" / "halStats"
-
-ALL_CELL_LINES = ["HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"]
-
-# Presets — auto-discovered from presets/*.toml at the repo root. Each TOML is a
-# self-contained named run: either `genes = [...]` (+ optional cell_lines) or an
-# inline `[[isoforms]]` array of {gene, tid, genome_pos, start_codon} picks, plus
-# run_name / min_cell_lines. Drop a new .toml in presets/ to add a named run.
-PRESETS_DIR = ROOT / "presets"
-
-
-def load_presets() -> dict[str, dict]:
-    """Load every presets/*.toml into {name: spec}; the preset name is the stem."""
-    presets: dict[str, dict] = {}
-    if PRESETS_DIR.is_dir():
-        for f in sorted(PRESETS_DIR.glob("*.toml")):
-            with open(f, "rb") as fh:
-                presets[f.stem] = tomllib.load(fh)
-    return presets
-
-
-PRESETS = load_presets()
-
-ALL_PROTEIN_MODULES = [
-    "biophysics", "motifs", "massspec", "clinical",
-    "localization", "signalp", "targetp", "interproscan",
-]
-ALL_SITE_MODULES = [
-    "core_identity", "initiation_context", "conservation", "conservation_frame",
-    "variant_intersection", "plm_vep", "varianteffect", "structure",
-]
-ALL_GENE_MODULES = ["generef"]
-
-
-# ── Configuration ────────────────────────────────────────────────────────
-
-
-def build_config(min_cell_lines: int = 3) -> PipelineConfig:
-    """Build PipelineConfig populated with local DB paths when available.
-
-    Args:
-        min_cell_lines: ScoringConfig.min_cell_lines. Default 3 for
-            production multi-cell-line runs; presets override to 1 for
-            single-sample diagnostics.
-    """
-    cfg = PipelineConfig()
-    cfg.clinical = ClinicalConfig(
-        gnomad_db=GNOMAD_DB if GNOMAD_DB.exists() else None,
-        clinvar_db=CLINVAR_DB if CLINVAR_DB.exists() else None,
-        cosmic_db=COSMIC_DB if COSMIC_DB.exists() else None,
-        alphamissense_db=ALPHAMISSENSE_DB if ALPHAMISSENSE_DB.exists() else None,
-    )
-    cfg.conservation = ConservationConfig(
-        phylop_bigwig=PHYLOP_BW if PHYLOP_BW.exists() else None,
-        phastcons_bigwig=PHASTCONS_BW if PHASTCONS_BW.exists() else None,
-        hal_path=HAL_FILE if HAL_FILE.exists() else None,
-        hal_tree_newick=None,
-        hal2maf_binary=str(HAL2MAF_BIN) if HAL_SIF.exists() else "hal2maf",
-        halstats_binary=str(HALSTATS_BIN) if HAL_SIF.exists() else "halStats",
-        hal_ref_genome="Homo_sapiens",
-    )
-    # Use ScoringConfig defaults for the high-confidence cutoffs (5/3) and the
-    # principled E3/E4 anchors; the 13-gene set validates scoring LOGIC, not
-    # calibration, so no per-run override of those thresholds.
-    cfg.scoring = ScoringConfig(min_cell_lines=min_cell_lines)
-    return cfg
+GENEREF_JSON = ROOT / "data" / "reference" / "generef" / "generef.json"
 
 
 # ── Data loading ─────────────────────────────────────────────────────────
