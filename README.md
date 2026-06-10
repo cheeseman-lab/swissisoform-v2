@@ -58,8 +58,8 @@ Ribo-TISH predict_all.txt  (per cell line)
 
 ## Entry points
 
-Two CLIs exist today; they share the `src/swissisoform` core but are separate
-front doors.
+`scripts/run.py` is the sole CLI — a thin front-end over the `src/swissisoform`
+core.
 
 ### `scripts/run.py` — preset / gene-list / isoform driver
 
@@ -68,17 +68,15 @@ assembles domain objects, runs every annotation module, compares, scores, and
 writes the paired output.
 
 ```bash
-# 5-gene diagnostic (HeLa only, single-sample path)
-python scripts/run.py --preset 5gene
+# The canonical run — 13 reviewer-picked isoforms across all cell lines
+# (presets/cheeseman13.toml). Also the default when no mode flag is given.
+python scripts/run.py --preset cheeseman13
 
 # A subset of genes across all 6 cell lines
 python scripts/run.py --genes TP53 EIF4G1 MYC --run-name my_run
 
 # Genes from a file (one HGNC symbol per line, '#' comments ok)
 python scripts/run.py --gene-list genes.txt
-
-# A curated set of specific isoforms — a named preset (presets/cheeseman13.toml)
-python scripts/run.py --preset cheeseman13
 
 # …or an ad-hoc isoform file (parquet/CSV with Tid, GenomePos, StartCodon)
 python scripts/run.py --isoforms picks.csv --run-name my_isoforms
@@ -93,7 +91,7 @@ python scripts/run.py --genes TP53 --skip-modules clinical,conservation
 
 | Mode | Flag | Selects |
 |------|------|---------|
-| Preset | `--preset <name>` | A named run from `presets/<name>.toml` — `5gene`, `cheeseman12`, `cheeseman13` |
+| Preset | `--preset <name>` | A named run from `presets/<name>.toml` — `cheeseman13` (the canonical run, also the default) |
 | Genes | `--genes SYM …` | Named HGNC symbols |
 | Gene list | `--gene-list FILE` | One symbol per line |
 | Isoforms | `--isoforms FILE` | Ad-hoc TIS picks (parquet/CSV with `Tid`,`GenomePos`,`StartCodon`) |
@@ -108,27 +106,9 @@ TIS) plus one `<gene>_paired.parquet` per gene. Run
 `python scripts/run.py --help` for the full flag list.
 
 > To run **everything as one Slurm job — including GPU precompute** — use the
-> orchestrator `sbatch scripts/slurm/run.sbatch --preset 5gene`: it emits the
+> orchestrator `sbatch scripts/slurm/run.sbatch --preset cheeseman13`: it emits the
 > FASTA, spawns the ESM-2 + folding jobs, waits, then runs the full pipeline.
 > All args after the script name are forwarded to `run.py`.
-
-### `python -m swissisoform run …` — manifest-based CLI
-
-`src/swissisoform/cli.py` drives the same end-to-end flow from explicit
-manifests rather than presets — per-sample upstream → combine → assemble →
-precompute → annotate → compare → paired parquet, with `--workers` controlling
-per-sample and gene-parallel sections.
-
-```bash
-python -m swissisoform run \
-    --sample-manifest    data/reference/ribotish_sample_manifest.csv \
-    --replicate-manifest data/reference/ribotish_replicate_manifest.csv \
-    --gtf                data/reference/gencode.v49.primary_assembly.annotation.gtf \
-    --genome             data/reference/Gencode_v49_GRCh38.primary_assembly.genome.fa \
-    --protein-fasta      data/reference/gencode.v49.pc_translations.fa \
-    --output             data/output/full_run \
-    --workers 8
-```
 
 ---
 
@@ -136,8 +116,10 @@ python -m swissisoform run \
 
 All pipeline logic lives in `src/swissisoform/`. **Scripts are thin CLI
 drivers** — argparse + a call into `src` — a deliberate convention from the
-recent refactor (`scripts/run.py` is the one fat exception, as the orchestrating
-driver). Everything substantive is importable from the package.
+recent refactor. `scripts/run.py` is no exception: it builds a `RunSpec` and
+calls `runner.run()`; the orchestration itself lives in
+`src/swissisoform/runner.py`. Everything substantive is importable from the
+package.
 
 ```
 src/swissisoform/
@@ -146,13 +128,15 @@ src/swissisoform/
   contract.py          # CANONICAL-VS-ALTERNATIVE CONTRACT: ORFType,
                        #   orf_type_from_ribotish, diff_region_rule
   config.py            # PipelineConfig (+ per-module configs)
+  references.py        # shared paths/config/presets resolution
+  runner.py            # RunSpec + prepare/annotate/run orchestration (scripts/run.py
+                       #   is a thin front-end over this)
   pipeline.py          # run_sample (upstream filter+impute) + AnnotationPipeline
   combine.py           # cross-cell-line dedup union of filtered samples
   assembly.py          # filtered DataFrame → Gene + TIS objects
   filtering.py         # 5-step TIS filter (coTISja port)
   coords.py            # ORF→genomic exon mapping; interval set algebra
   merging.py           # legacy cross-cell-line merge / canonical pairing helpers
-  cli.py / __main__.py # manifest-based entry point (python -m swissisoform run)
 
   evidence/            # the 12 evidence buckets — one folder per criterion, each
                        #   with a high-level score(site, cfg) function:
@@ -186,8 +170,9 @@ src/swissisoform/
   export/              # collaborator artifacts: bed, xlsx, structures, folding_colors
   setup/               # reference-DB + generef builders (databases, generef)
 
-scripts/                       # thin CLI drivers over src (+ run.py, the one fat driver)
-  run.py                       # the preset/gene/isoform driver (also --emit-fasta)
+scripts/                       # thin CLI drivers over src
+  run.py                       # the preset/gene/isoform front-end (RunSpec → runner.run;
+                               #   also --emit-fasta)
   export/                      # all export CLIs: export_alt_regions_bed,
                                #   export_structures, export_xlsx, build_folding_colors,
                                #   build_init_site_skeleton (genome-LM skeleton parquet)
@@ -198,12 +183,11 @@ scripts/                       # thin CLI drivers over src (+ run.py, the one fa
   slurm/                       # run.sbatch (orchestrator) + run_plm_embed / run_fold /
                                #   run_small_e2e
 
-presets/                       # named runs (auto-discovered *.toml): 5gene,
-                               #   cheeseman12, cheeseman13
+presets/                       # named runs (auto-discovered *.toml): cheeseman13
 website/                       # standalone Flask viewer (see below)
 tests/                         # pytest (~770 tests); regression/ = snapshot harness
 data/reference/                # gitignored — primary-source reference DBs
-data/output/                   # gitignored except the checked-in 5gene_e2e fixture
+data/output/                   # gitignored — run outputs
 data/cache/                    # gitignored — proteins.fa + per-module precompute caches
 docs/                          # methods (typst) + code-review specs
 ```
@@ -290,8 +274,9 @@ python scripts/setup/setup_databases.py deeploc      # ~10 min (conda env + weig
 python scripts/setup/setup_databases.py gnomad       # ~4-6 h  (heavy — ~90 M variants)
 # Conservation tracks (Zoonomia 241-mammal): scripts/setup/download_zoonomia_*.sh
 
-# 4. Run the 5-gene E2E smoke test (HeLa, writes paired parquet)
-python scripts/run.py --preset 5gene
+# 4. Run the canonical cheeseman13 pipeline (all cell lines, writes paired parquet)
+python scripts/run.py --preset cheeseman13
+# (fast check: add --emit-fasta to stop after writing data/cache/proteins.fa)
 
 # 5. Run tests
 pytest
@@ -307,16 +292,16 @@ single Slurm job (emit FASTA → spawn GPU jobs → wait → full run):
 
 ```bash
 mkdir -p logs
-sbatch scripts/slurm/run.sbatch --preset 5gene
+sbatch scripts/slurm/run.sbatch --preset cheeseman13
 ```
 
 Or step by step:
 
 ```bash
-python scripts/run.py --preset 5gene --emit-fasta                 # data/cache/proteins.fa
+python scripts/run.py --preset cheeseman13 --emit-fasta           # data/cache/proteins.fa
 sbatch scripts/slurm/run_plm_embed.sbatch data/cache/proteins.fa  # ESM-2 650M → data/cache/plm_esm2/
 sbatch scripts/slurm/run_fold.sbatch      data/cache/proteins.fa boltz  # → data/cache/structure/
-python scripts/run.py --preset 5gene                              # caches now found
+python scripts/run.py --preset cheeseman13                        # caches now found
 ```
 
 If the caches are empty the modules return empty cleanly — use `--no-gpu` to

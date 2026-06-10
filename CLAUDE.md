@@ -26,7 +26,7 @@ load predict_all.txt + GTF
   → (final_df, dropped_df) per sample
 ```
 
-**Multi-cell-line design decision:** upstream runs per cell line, independently. The pipeline writes one `{sample}_TIS_filtered.csv` per sample. **No cross-sample merging at this layer.** Cross-cell-line comparison is a *downstream* concern (assembly → annotation → comparator → `merging.py`). This matches smaffa's design and decouples filtering from differential analysis.
+**Multi-cell-line design decision:** upstream runs per cell line, independently. The pipeline writes one `{sample}_TIS_filtered.parquet` per sample. **No cross-sample merging at this layer.** Cross-cell-line comparison is a *downstream* concern (assembly → annotation → comparator → `merging.py`). This matches smaffa's design and decouples filtering from differential analysis.
 
 **Audit (validated then retired 2026-05-26):** `tests/test_smaffa_audit.py` compared our HeLa output row-for-row against `data/reference/smaffa_filtered_audit/` (ours ⊆ smaffa; difference = the uncanonical drop). Final run: 8 passed. The test + the 38M reference were then removed — re-derivable from smaffa source (`/lab/barcheese01/smaffa/coTISja/`) if ever needed.
 
@@ -49,7 +49,7 @@ load predict_all.txt + GTF
 | `Gencode_v49_GRCh38.primary_assembly.genome.fa` | smaffa (replaced the chr3-only dev FASTA) | Imputation — start-codon trinucleotides |
 
 **Scripts:**
-- `scripts/run.py --all` — drives the manifest end-to-end, produces `data/output/filtered/{sample}_TIS_filtered.csv` for all 6 cell lines. (Unified driver; the old `run_upstream_all.py` is folded into it.)
+- `scripts/run.py` — thin front-end that builds a `RunSpec` and calls `runner.run()` (`src/swissisoform/runner.py`: `prepare`/`annotate`/`run`). Drives the pipeline end-to-end and produces `data/output/filtered/{sample}_TIS_filtered.parquet` per cell line.
 
 **Explicit: Ribo-TISH itself is the long-term swappable piece.** This upstream port locks us in to coTISja's filter + imputation contract, not to Ribo-TISH. Any future TIS caller can produce the same filtered-DataFrame schema and feed the rest of the pipeline unchanged.
 
@@ -124,21 +124,21 @@ All 9 modules implemented. Data model supports symmetric canonical/isoform annot
 | 4d. Conservation Path 1/2 | Primate + mammalian reading-frame integrity module (MAF parse, frame analysis, `hal2maf` wrapper, species lists, Cactus species-tree depth). Pure logic fully tested; active on download of Zoonomia HAL. | **Done (2026-04-21)** |
 | 4e. Clinical genomic intersection | `VariantIntersectionModule` (SiteModule): tags each clinical hit with genomic membership in isoform-unique / shared ORF region, emits aggregate + pathogenic-in-unique counts. Uses `orf_exons` + `canonical_orf_exons`. | **Done (2026-04-21)** |
 | 4f. Evidence scoring framework | `EvidenceScoringModule`: dual-axis E1–E7 (existence) + F1–F6 (functional impact). Each criterion returns True / False / None so unbuilt-module criteria (structure/functional/VEP/proteomics) gracefully report unavailability. Wires up to `conservation_frame`, `conservation`, `massspec`, `variant_intersection`, `comparison["localization"]` today. | **Done (2026-04-21)** |
-| 5. CLI | `__main__.py` entry point | **Done** |
-| 6. Evidence scoring | Dual-axis E1–E7 / F1–F6 scoring framework | Pending |
+| 5. CLI | `scripts/run.py` thin front-end (RunSpec → `runner.run`) | **Done** |
 | 7. Functional / Structure / VEP stubs | Precompute+lookup modules (InterProScan, Chai-1, AlphaMissense) returning None until data exists | Pending |
 | 4g. PLM VEP (ESM-2 LLR) | `PLMVEPModule` (SiteModule) + `swissisoform.plm.embed` cache (`<hash>.npz`, on-disk). Masked-marginal LLR per residue, unique vs shared region enrichment using `diff_region` coords (canonical-space for truncations, isoform-space otherwise). Precompute via `scripts/slurm/run_plm_embed.sbatch` (ESM-2 650M, A6000). InterPLM SAE feature path stubbed (cache stashes layer-18 embeddings) — feature module is a follow-up. | **Done (2026-04-28)** |
 | 8. Full end-to-end | All modules on real data, all 6 cell lines | Pending |
 
-### End-to-End Test Genes (5-gene diagnostic set)
+### Canonical validation set — cheeseman13
 
-| Gene | Strand | ORF types | Exons | Intron-crossing | Key axis |
-|------|--------|-----------|-------|-----------------|----------|
-| TP53 | - | Ext, Trunc, uORF | 11 | Yes (1 intron) | Minus strand + multi-ORF |
-| EIF4G1 | + | uORF, Trunc | 33 | Yes (26 introns) | Many exons + extreme length range |
-| VEGFA | + | Trunc, Novel | 8 | No | Known biology + within-exon truncation |
-| CTNND1 | + | Trunc, Internal, uORF | 21 | Yes (2 introns) | Cross-transcript ORF mismatch |
-| PPP1R15A | + | uORF, Ext | 3 | No | Small gene + uORF edge case |
+The canonical validation set is `cheeseman13`: 13 reviewer-picked isoforms
+defined in `presets/cheeseman13.toml`. Run end-to-end via
+`python scripts/run.py --preset cheeseman13` (also the default with no mode
+flag). Integration is gated by the snapshot regression harness
+`tests/regression/snapshot_paired.py` (`capture` writes a baseline fingerprint
+of `all_paired.parquet`; `compare` asserts a later run is unchanged), not a
+pytest E2E — `tests/test_endtoend.py` has been deleted, and pytest now covers
+fast unit tests only.
 
 ### Conservation rewrite (2026-04-21)
 
@@ -178,7 +178,7 @@ HAL-dependent path emits `status="not_run"` until the download lands.
     (23) lists in UCSC assembly names; refinable via `halStats --genomes`.
   - `hal.py` — `hal2maf` subprocess wrapper with graceful `None` on
     missing binary / HAL / non-zero exit.
-- `modules/conservation_frame.py` — `ConservationFrameModule` (SiteModule)
+- `conservation_frame/module.py` — `ConservationFrameModule` (SiteModule)
   consumes `TIS.orf_exons` and `TIS.canonical_orf_exons`, queries the
   unique region via `hal2maf`, reports primate/mammalian aggregates.
   Distinguishes `not_run` / `no_skeleton` / `no_unique_region` /
