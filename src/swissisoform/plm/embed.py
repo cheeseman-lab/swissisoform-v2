@@ -1,20 +1,28 @@
-"""ESM-2 embedding extraction + masked-marginal LLR (per protein).
+"""ESM-C embedding extraction + masked-marginal LLR (per protein).
 
-Precompute is GPU-expensive (~1-30s per protein for ESM-2 650M). Results
-are cached on disk as ``.npz`` files keyed by the sha1 of the
-stop-stripped, uppercased protein sequence so duplicates dedupe and
-re-runs are no-ops.
+Precompute is GPU-expensive (one full forward + L masked forwards per
+protein). Results are cached on disk as ``.npz`` files keyed by the sha1
+of the stop-stripped, uppercased protein sequence so duplicates dedupe
+and re-runs are no-ops.
 
 Cache layout (under ``cache_dir``)::
 
     cache_dir/
-      <hash>.npz                # llr: (L,), embedding: (L, hidden_dim)
+      <hash>.npz                # llr: (L,), aa_logprobs: (L, 20), embedding: (L, hidden)
       manifest.tsv              # hash<TAB>seq  (audit log)
 
-The :func:`precompute_plm_esm2` entrypoint is the only public surface.
-It dedupes inputs, reads existing cache files, and (optionally) runs
-ESM-2 inline or via a conda-env subprocess for the missing hashes.
-Tests pre-populate the cache, so no GPU dep is required for unit tests.
+Model: ESM-C (EvolutionaryScale / Biohub), selectable by size — ``300m``,
+``600m`` (default), or ``6b`` — via ``model_size``. ESM-C exposes the
+``ESMCForMaskedLM`` architecture, so it loads through the same
+HuggingFace ``AutoModelForMaskedLM`` interface as the old ESM-2 path; the
+masked-marginal LLR machinery is unchanged apart from the model handle,
+tokenizer vocab, and embedding dim (300M→960, 600M→1152, 6B→2560).
+
+The :func:`precompute_plm` entrypoint is the only public surface. It
+dedupes inputs, reads existing cache files, and (optionally) runs ESM-C
+inline for the missing hashes. Tests pre-populate the cache, so no GPU
+dependency is required for unit tests. ``precompute_plm_esm2`` is kept as
+a backward-compatible alias.
 """
 
 from __future__ import annotations
@@ -26,10 +34,17 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL_ID = "facebook/esm2_t33_650M_UR50D"
-DEFAULT_LAYER = 33  # last layer for ESM-2 650M
-DEFAULT_INTERPLM_LAYER = 18  # SAE-trained layer (Elana/InterPLM-esm2-650m)
-DEFAULT_CACHE_DIR = Path(__file__).resolve().parents[3] / "data" / "cache" / "plm_esm2"
+# ESM-C model sizes → HuggingFace repo ids (Biohub). Default 600M fits an
+# A6000-20GB and matches the old ESM-2 650M footprint. 6B is much heavier
+# (and may require Forge / a larger GPU) but is offered for completeness.
+ESMC_MODEL_IDS: dict[str, str] = {
+    "300m": "biohub/ESMC-300M",
+    "600m": "biohub/ESMC-600M",
+    "6b": "biohub/ESMC-6B",
+}
+DEFAULT_MODEL_SIZE = "600m"
+DEFAULT_MODEL_ID = ESMC_MODEL_IDS[DEFAULT_MODEL_SIZE]
+DEFAULT_CACHE_DIR = Path(__file__).resolve().parents[3] / "data" / "cache" / "plm_esmc"
 PLM_CONDA_ENV = "swissisoform-v2-plm"
 
 # Fixed column order for the per-position masked-marginal distribution stored as
@@ -37,6 +52,22 @@ PLM_CONDA_ENV = "swissisoform-v2-plm"
 # lookup: ``aa_logprobs[pos, AA_TO_COL[alt]] - aa_logprobs[pos, AA_TO_COL[ref]]``.
 STANDARD_AA = "ACDEFGHIKLMNPQRSTVWY"
 AA_TO_COL: dict[str, int] = {aa: i for i, aa in enumerate(STANDARD_AA)}
+
+
+def resolve_model_id(model_size: str | None = None, model_id: str | None = None) -> str:
+    """Resolve a HuggingFace model id from a size flag or an explicit id.
+
+    ``model_id`` (when given) wins. Otherwise ``model_size`` — one of
+    ``300m`` / ``600m`` / ``6b`` — maps to the matching Biohub repo.
+    """
+    if model_id:
+        return model_id
+    size = (model_size or DEFAULT_MODEL_SIZE).lower()
+    if size not in ESMC_MODEL_IDS:
+        raise ValueError(
+            f"unknown ESM-C model_size {size!r}; choose from {sorted(ESMC_MODEL_IDS)}"
+        )
+    return ESMC_MODEL_IDS[size]
 
 
 def aa_column(aa: str | None) -> int | None:
@@ -63,8 +94,8 @@ def _cache_path(cache_dir: Path, h: str) -> Path:
 def load_cache(h: str, cache_dir: Path | str = DEFAULT_CACHE_DIR) -> dict[str, Any] | None:
     """Load a cached PLM result by protein hash.
 
-    Returns ``{"llr": np.ndarray (L,), "embedding": np.ndarray (L, hidden)}``
-    or ``None`` if the cache file doesn't exist.
+    Returns ``{"llr": (L,), "aa_logprobs": (L, 20), "embedding": (L, hidden)}``
+    (whichever keys are present) or ``None`` if the cache file doesn't exist.
     """
     import numpy as np
 
@@ -79,8 +110,6 @@ def load_cache(h: str, cache_dir: Path | str = DEFAULT_CACHE_DIR) -> dict[str, A
             out["aa_logprobs"] = npz["aa_logprobs"]
         if "embedding" in npz.files:
             out["embedding"] = npz["embedding"]
-        if "embedding_layer18" in npz.files:
-            out["embedding_layer18"] = npz["embedding_layer18"]
     return out or None
 
 
@@ -91,7 +120,6 @@ def _save_cache(
     llr: Any,
     aa_logprobs: Any | None = None,
     embedding: Any | None = None,
-    embedding_layer18: Any | None = None,
 ) -> None:
     import numpy as np
 
@@ -101,8 +129,6 @@ def _save_cache(
         payload["aa_logprobs"] = np.asarray(aa_logprobs, dtype=np.float32)
     if embedding is not None:
         payload["embedding"] = np.asarray(embedding, dtype=np.float16)
-    if embedding_layer18 is not None:
-        payload["embedding_layer18"] = np.asarray(embedding_layer18, dtype=np.float16)
     np.savez_compressed(_cache_path(cache_dir, h), **payload)
 
 
@@ -119,42 +145,48 @@ def _append_manifest(cache_dir: Path, h: str, seq: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Inline ESM-2 forward (per-residue embeddings + masked-marginal LLR)
+# Inline ESM-C forward (per-residue embeddings + masked-marginal LLR)
 # ---------------------------------------------------------------------------
 
 
-def _esm2_forward_one(
+def _hidden_dim(model: Any) -> int:
+    """Hidden size, tolerant of ``hidden_size`` (HF) vs ``d_model`` (ESM-C)."""
+    return int(
+        getattr(model.config, "hidden_size", None)
+        or getattr(model.config, "d_model", 0)
+    )
+
+
+def _esmc_forward_one(
     seq: str,
     model: Any,
     tokenizer: Any,
     device: str,
-    *,
-    extract_layers: tuple[int, ...] = (DEFAULT_LAYER, DEFAULT_INTERPLM_LAYER),
 ) -> dict[str, Any]:
-    """Single forward pass: per-residue embeddings at requested layers + per-position LLR.
+    """Single forward pass: per-residue last-layer embeddings + per-position LLR.
 
     LLR uses masked marginals: mask each position in turn, take the log-prob
-    of the wild-type AA. Constant-time per position, O(L) forward passes per
-    sequence, so this is the hot path. Runs them in batches of size B.
+    of the wild-type AA. O(L) forward passes per sequence (the hot path),
+    batched in chunks of B. Embeddings come from the final hidden layer.
     """
     import numpy as np
     import torch
 
     seq = seq.rstrip("*").upper()
     L = len(seq)
+    hidden_dim = _hidden_dim(model)
     if L == 0:
         return {
             "llr": np.zeros(0, dtype=np.float32),
             "aa_logprobs": np.zeros((0, len(STANDARD_AA)), dtype=np.float32),
-            "embedding": np.zeros((0, model.config.hidden_size), dtype=np.float16),
-            "embedding_layer18": np.zeros((0, model.config.hidden_size), dtype=np.float16),
+            "embedding": np.zeros((0, hidden_dim), dtype=np.float16),
         }
 
     encoded = tokenizer(seq, return_tensors="pt", add_special_tokens=True)
     input_ids = encoded["input_ids"].to(device)  # (1, L+2) — BOS, residues, EOS
     attention_mask = encoded["attention_mask"].to(device)
 
-    # Pass 1: full forward, grab hidden states.
+    # Pass 1: full forward, grab the final hidden layer.
     with torch.no_grad():
         out = model(
             input_ids=input_ids,
@@ -162,9 +194,9 @@ def _esm2_forward_one(
             output_hidden_states=True,
             return_dict=True,
         )
-    hidden = out.hidden_states  # tuple of (1, L+2, hidden) per layer
-    # Strip BOS/EOS — residues live at indices 1..L
-    embeddings = {ly: hidden[ly][0, 1 : L + 1, :].float().cpu().numpy() for ly in extract_layers}
+    # hidden_states is a tuple (embeddings + one per layer); take the last and
+    # strip BOS/EOS — residues live at indices 1..L.
+    embedding = out.hidden_states[-1][0, 1 : L + 1, :].float().cpu().numpy()
 
     # Pass 2: masked marginals for LLR.
     # Build a (L, L+2) batch where row i has position (i+1) replaced by <mask>.
@@ -194,8 +226,6 @@ def _esm2_forward_one(
                 attention_mask=mask_batch_attn[start:stop],
                 return_dict=True,
             )
-        # ESM-2 model has lm_head; if logits aren't returned (encoder-only
-        # AutoModel), fall back to AutoModelForMaskedLM upstream.
         logits = getattr(mlm_out, "logits", None)
         if logits is None:
             raise RuntimeError(
@@ -215,12 +245,17 @@ def _esm2_forward_one(
     return {
         "llr": llr,
         "aa_logprobs": aa_logprobs,
-        "embedding": embeddings.get(DEFAULT_LAYER),
-        "embedding_layer18": embeddings.get(DEFAULT_INTERPLM_LAYER),
+        "embedding": embedding,
     }
 
 
-def _load_esm2(model_id: str, device: str, dtype: str) -> tuple[Any, Any]:
+def _load_esmc(model_id: str, device: str, dtype: str) -> tuple[Any, Any]:
+    """Load an ESM-C model + tokenizer via HuggingFace ``AutoModelForMaskedLM``.
+
+    Requires the Biohub ``esm`` install (which pins a transformers fork with
+    native ``ESMCForMaskedLM`` support):
+    ``pip install esm@git+https://github.com/Biohub/esm.git@main``.
+    """
     import torch
     from transformers import AutoModelForMaskedLM, AutoTokenizer
 
@@ -230,7 +265,8 @@ def _load_esm2(model_id: str, device: str, dtype: str) -> tuple[Any, Any]:
         "float32": torch.float32,
     }.get(dtype, torch.float16)
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = AutoModelForMaskedLM.from_pretrained(model_id, torch_dtype=torch_dtype)
+    # transformers 4.57+ renamed `torch_dtype` → `dtype`.
+    model = AutoModelForMaskedLM.from_pretrained(model_id, dtype=torch_dtype)
     model = model.to(device)
     model.eval()
     return model, tokenizer
@@ -241,10 +277,11 @@ def _load_esm2(model_id: str, device: str, dtype: str) -> tuple[Any, Any]:
 # ---------------------------------------------------------------------------
 
 
-def precompute_plm_esm2(
+def precompute_plm(
     proteins: dict[str, str] | list[str],
     *,
-    model_id: str = DEFAULT_MODEL_ID,
+    model_size: str = DEFAULT_MODEL_SIZE,
+    model_id: str | None = None,
     cache_dir: Path | str = DEFAULT_CACHE_DIR,
     device: str = "cuda",
     dtype: str = "float16",
@@ -252,31 +289,32 @@ def precompute_plm_esm2(
     skip_missing: bool = True,
     require_aa_logprobs: bool = False,
 ) -> dict[str, dict[str, Any]]:
-    """Run (or load cached) ESM-2 embeddings + LLR for a batch of proteins.
+    """Run (or load cached) ESM-C embeddings + LLR for a batch of proteins.
 
     Args:
         proteins: ``{label: sequence}`` or list of sequences. Labels discarded;
             output is keyed on ``protein_hash``.
-        model_id: HuggingFace ESM-2 model ID. Default is 650M.
+        model_size: ESM-C size — ``300m`` / ``600m`` / ``6b``. Default ``600m``.
+        model_id: Explicit HuggingFace repo id; overrides ``model_size``.
         cache_dir: Directory holding ``<hash>.npz`` cache files.
         device: PyTorch device string.
         dtype: Inference precision.
         inline: If True, run any uncached proteins inline (requires torch +
-            transformers). If False, skip uncached entries silently — useful
-            when the GPU job is run separately via ``scripts/slurm/run_plm_embed.sbatch``.
+            the Biohub ``esm``/transformers stack). If False, skip uncached
+            entries silently — used when the GPU job runs separately via
+            ``scripts/slurm/run_plm_embed.sbatch``.
         skip_missing: When True, returns only proteins with a cache file.
             When False, missing entries get ``None`` values.
         require_aa_logprobs: When True, a cache file lacking the per-position
             ``aa_logprobs`` distribution is treated as missing and recomputed.
-            Lets the GPU re-run backfill the allele-specific distribution into
-            legacy caches that only carried the wild-type ``llr``.
 
     Returns:
-        ``{protein_hash: {"llr": np.ndarray, "embedding": np.ndarray | None,
-        "embedding_layer18": np.ndarray | None}}``. Missing entries either
-        absent (skip_missing=True) or have ``None`` values.
+        ``{protein_hash: {"llr": np.ndarray, "aa_logprobs": np.ndarray | None,
+        "embedding": np.ndarray | None}}``. Missing entries either absent
+        (skip_missing=True) or have ``None`` values.
     """
     cache_dir = Path(cache_dir)
+    resolved_id = resolve_model_id(model_size, model_id)
 
     if isinstance(proteins, list):
         proteins = {f"seq_{i}": s for i, s in enumerate(proteins)}
@@ -289,9 +327,10 @@ def precompute_plm_esm2(
         hash_to_seq.setdefault(h, seq.rstrip("*").upper())
 
     logger.info(
-        "precompute_plm_esm2: %d inputs → %d unique sequences (cache=%s, inline=%s)",
+        "precompute_plm: %d inputs → %d unique sequences (model=%s, cache=%s, inline=%s)",
         len(proteins),
         len(hash_to_seq),
+        resolved_id,
         cache_dir,
         inline,
     )
@@ -308,7 +347,7 @@ def precompute_plm_esm2(
 
     if missing:
         logger.info(
-            "precompute_plm_esm2: %d/%d sequences missing from cache",
+            "precompute_plm: %d/%d sequences missing from cache",
             len(missing),
             len(hash_to_seq),
         )
@@ -316,12 +355,12 @@ def precompute_plm_esm2(
     # Pass 2: optionally compute the missing ones inline.
     if missing and inline:
         try:
-            model, tokenizer = _load_esm2(model_id, device, dtype)
+            model, tokenizer = _load_esmc(resolved_id, device, dtype)
         except Exception as exc:  # noqa: BLE001 — graceful fallback when GPU stack absent
             logger.warning(
-                "precompute_plm_esm2: could not load %s (%s); skipping inline compute. "
+                "precompute_plm: could not load %s (%s); skipping inline compute. "
                 "Run scripts/slurm/run_plm_embed.sbatch to populate the cache offline.",
-                model_id,
+                resolved_id,
                 exc,
             )
             model = None
@@ -330,10 +369,10 @@ def precompute_plm_esm2(
         if model is not None and tokenizer is not None:
             for h, seq in missing:
                 try:
-                    payload = _esm2_forward_one(seq, model, tokenizer, device)
+                    payload = _esmc_forward_one(seq, model, tokenizer, device)
                 except Exception as exc:  # noqa: BLE001
                     logger.error(
-                        "precompute_plm_esm2: forward failed for hash=%s len=%d: %s",
+                        "precompute_plm: forward failed for hash=%s len=%d: %s",
                         h,
                         len(seq),
                         exc,
@@ -345,13 +384,16 @@ def precompute_plm_esm2(
                     llr=payload["llr"],
                     aa_logprobs=payload.get("aa_logprobs"),
                     embedding=payload.get("embedding"),
-                    embedding_layer18=payload.get("embedding_layer18"),
                 )
                 _append_manifest(cache_dir, h, seq)
                 result[h] = payload
 
     if not skip_missing:
         for h, _ in missing:
-            result.setdefault(h, {"llr": None, "embedding": None, "embedding_layer18": None})
+            result.setdefault(h, {"llr": None, "aa_logprobs": None, "embedding": None})
 
     return result
+
+
+# Backward-compatible alias for the previous ESM-2 entrypoint name.
+precompute_plm_esm2 = precompute_plm

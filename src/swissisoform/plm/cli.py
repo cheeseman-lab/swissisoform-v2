@@ -1,8 +1,8 @@
 """CLI entrypoint: precompute PLM embeddings + LLR for a FASTA of proteins.
 
 Invoked from ``scripts/slurm/run_plm_embed.sbatch`` on a GPU node. Reads a
-FASTA, dedupes by sequence hash, runs ESM-2 inline, and writes per-
-protein ``.npz`` cache files under ``data/cache/plm_esm2/``.
+FASTA, dedupes by sequence hash, runs ESM-C inline, and writes per-
+protein ``.npz`` cache files under ``data/cache/plm_esmc/``.
 """
 
 from __future__ import annotations
@@ -14,8 +14,9 @@ from pathlib import Path
 
 from swissisoform.plm.embed import (
     DEFAULT_CACHE_DIR,
-    DEFAULT_MODEL_ID,
-    precompute_plm_esm2,
+    DEFAULT_MODEL_SIZE,
+    ESMC_MODEL_IDS,
+    precompute_plm,
 )
 
 
@@ -41,7 +42,7 @@ def _read_fasta(path: Path) -> dict[str, str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run ESM-2 precompute over a FASTA and populate the cache directory."""
+    """Run ESM-C precompute over a FASTA and populate the cache directory."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("fasta", type=Path, help="FASTA of proteins to embed.")
     parser.add_argument(
@@ -50,7 +51,17 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_CACHE_DIR,
         help="Directory to write <hash>.npz files to.",
     )
-    parser.add_argument("--model-id", default=DEFAULT_MODEL_ID)
+    parser.add_argument(
+        "--model-size",
+        choices=sorted(ESMC_MODEL_IDS),
+        default=DEFAULT_MODEL_SIZE,
+        help="ESM-C model size (default %(default)s).",
+    )
+    parser.add_argument(
+        "--model-id",
+        default=None,
+        help="Explicit HuggingFace repo id; overrides --model-size.",
+    )
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--dtype", default="float16")
     parser.add_argument(
@@ -76,8 +87,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"No sequences in {args.fasta}", file=sys.stderr)
         return 2
 
-    res = precompute_plm_esm2(
+    res = precompute_plm(
         seqs,
+        model_size=args.model_size,
         model_id=args.model_id,
         cache_dir=args.cache_dir,
         device=args.device,

@@ -339,11 +339,11 @@ def run_precompute(genes, all_proteins: list[str], skip: set[str]) -> dict:
     )
 
     # PLM VEP + Structure: cache lookup only (populate via sbatch GPU scripts).
-    from swissisoform.plm.embed import precompute_plm_esm2
+    from swissisoform.plm.embed import precompute_plm
     from swissisoform.structure.fold import precompute_fold
 
     preds["plm"] = (
-        precompute_plm_esm2(all_proteins, inline=False) if "plm_vep" not in skip else {}
+        precompute_plm(all_proteins, inline=False) if "plm_vep" not in skip else {}
     )
     preds["structure"] = (
         precompute_fold(all_proteins, backend="boltz", inline=False)

@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=mdiberna_plm_embed
+#SBATCH --job-name=ating_plm_embed
 #SBATCH --partition=nvidia-A6000-20
 #SBATCH --gres=gpu:1
 #SBATCH --nodes=1
@@ -10,21 +10,28 @@
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 
-# Precompute ESM-2 650M per-residue embeddings + masked-marginal LLR
-# for a FASTA of proteins. Caches per-protein .npz under
-# data/cache/plm_esm2/ keyed by sha1(stop-stripped, uppercased seq).
+# Precompute ESM-C per-residue embeddings + masked-marginal LLR for a
+# FASTA of proteins. Caches per-protein .npz under data/cache/plm_esmc/
+# keyed by sha1(stop-stripped, uppercased seq).
 #
 # Usage:
-#   sbatch scripts/slurm/run_plm_embed.sbatch <fasta_path>
-# Or, with default = E2E proteins from data/cache/proteins.fa:
+#   sbatch scripts/slurm/run_plm_embed.sbatch <fasta_path> [300m|600m|6b]
+# Or, with defaults = E2E proteins from data/cache/proteins.fa, model 600m:
 #   sbatch scripts/slurm/run_plm_embed.sbatch
 
 set -euo pipefail
 
-cd /lab/barcheese01/mdiberna/swissisoform-v2
+cd /lab/barcheese01/ating/swissisoform-v2
 
-eval "$(conda shell.bash hook)"
-# The fold env carries torch + fair-esm; fall back to main env.
+# Initialize conda — batch shells don't source ~/.bashrc, so conda isn't on PATH.
+if [ -f "$HOME/miniforge3/etc/profile.d/conda.sh" ]; then
+    source "$HOME/miniforge3/etc/profile.d/conda.sh"
+elif [ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]; then
+    source "$HOME/anaconda3/etc/profile.d/conda.sh"
+else
+    eval "$(conda shell.bash hook)"
+fi
+# Prefer a dedicated fold/plm env if present; else the main project env.
 if conda env list | grep -q "^swissisoform-v2-fold "; then
     conda activate swissisoform-v2-fold
 else
@@ -32,6 +39,7 @@ else
 fi
 
 FASTA="${1:-data/cache/proteins.fa}"
+MODEL_SIZE="${2:-600m}"
 if [[ ! -f "$FASTA" ]]; then
     echo "FASTA not found: $FASTA  (run: python scripts/run.py <mode> --emit-fasta)" >&2
     exit 1
@@ -43,4 +51,4 @@ export HF_HOME="$PWD/.torch_cache/hf"
 export XDG_CACHE_HOME="$PWD/.torch_cache/xdg"
 mkdir -p "$TORCH_HOME" "$HF_HOME" "$XDG_CACHE_HOME"
 
-python -m swissisoform.plm.cli "$FASTA"
+python -m swissisoform.plm.cli "$FASTA" --model-size "$MODEL_SIZE"

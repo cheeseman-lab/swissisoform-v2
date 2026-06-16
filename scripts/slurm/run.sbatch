@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=mdiberna_swissiso_run
+#SBATCH --job-name=ating_swissiso_run
 #SBATCH --partition=20
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -18,7 +18,7 @@
 #   annotate  python scripts/run.py <args>                 (CPU: annotate + score + paired parquet)
 #
 # Modes (consumed here; everything else forwards verbatim to run.py):
-#   --clear-cache     wipe data/cache/{plm_esm2,structure,pepquery,tmp} first
+#   --clear-cache     wipe data/cache/{plm_esmc,structure,pepquery,tmp} first
 #                     (forces full regeneration — use for a clean, confident rebuild)
 #   --annotate-only   skip the GPU stage and reuse the WARM fold/PLM caches
 #                     (fast surgical re-run; no re-folding). Equivalent caches must exist.
@@ -34,7 +34,7 @@
 # After this finishes, build the site with: bash scripts/build_website.sh
 
 set -euo pipefail
-cd /lab/barcheese01/mdiberna/swissisoform-v2
+cd /lab/barcheese01/ating/swissisoform-v2
 
 eval "$(conda shell.bash hook)"
 conda activate swissisoform-v2
@@ -90,8 +90,8 @@ _stamp "run: args='${RUN_ARGS[*]}'  clear_cache=$clear_cache  annotate_only=$ann
 # ── (optional) clear caches for a clean, confident rebuild ──────────────────
 if (( clear_cache )); then
     run_stage clear-cache bash -c '
-        rm -rf data/cache/plm_esm2 data/cache/structure data/cache/pepquery data/cache/tmp
-        echo "  wiped data/cache/{plm_esm2,structure,pepquery,tmp}"'
+        rm -rf data/cache/plm_esmc data/cache/structure data/cache/pepquery data/cache/tmp
+        echo "  wiped data/cache/{plm_esmc,structure,pepquery,tmp}"'
 fi
 
 # ── prepare (CPU): emit the deduped proteins FASTA ──────────────────────────
