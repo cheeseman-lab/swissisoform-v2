@@ -256,6 +256,41 @@ Stub status `region_map_not_implemented` retired — now returns
 |----------|------|---------|
 | Methods | `docs/methods/methods.typ` (+ `methods.bib`) | Publication-ready paper methods section (typst source; renders to `methods.pdf`) |
 | Reviews | `docs/reviews/` | Code-review / gap-analysis documents from external reviewers |
+| Architecture (current state) | `docs/architecture/` | Code-grounded descriptions of subsystems **as they exist** — no planned changes |
+| Plans | `docs/plans/` | Feature/integration plans, each written **against** an architecture doc |
+
+## Working Convention: Scope Before Plan
+
+**Before designing or integrating any new feature, first write down what the
+relevant part of the codebase *currently does* — then, and only then, plan the
+change.** This separation is mandatory and keeps "what is" from getting tangled
+with "what we want."
+
+Two-step workflow:
+
+1. **Scope (current state) → `docs/architecture/`.** Document the existing
+   subsystem the feature touches. Rules:
+   - Describe **only what exists today**. No proposed changes, no "we should,"
+     no aspirational behavior. Planned work goes in step 2, never here.
+   - **Ground every claim in code** with `file:line` references so the doc is
+     reproducible and checkable against source.
+   - Include **how to reproduce/regenerate** any artifact described (the exact
+     command), and the **columns/schema** of every file the subsystem produces.
+   - Date the doc and note the commit/baseline it was verified against.
+   - Prefer updating an existing architecture doc over forking a new one.
+
+2. **Plan (proposed change) → `docs/plans/`.** Only after the scope doc exists.
+   The plan references the architecture doc, states the goal, the chosen
+   insertion point(s), trade-offs, and the concrete edits. Keep current-state
+   facts in the architecture doc; the plan links to them rather than restating.
+
+Rationale: scoping first surfaces the real seams and constraints (where data is
+available, what invariants hold) before committing to a design, and produces a
+durable, reproducible reference that outlives any single change.
+
+Worked example: `docs/architecture/upstream_filtering_and_dedup.md` scopes the
+filter → merge → dedup pipeline (current state) ahead of the splice-aware
+filtering feature, whose plan will live in `docs/plans/`.
 
 ## Source Repos (Read-Only Reference)
 
