@@ -1,0 +1,19 @@
+# Dedicated env for IsoQuant (long-read isoform quantification).
+#
+# Kept separate from `swissisoform-v2` because IsoQuant's conda dependencies
+# (pandas/pysam/gffutils) conflict with that env's pip-pinned scientific stack.
+# Built on demand for the long-read step (run_longread_hela.sbatch activates it).
+#
+# Reproduce:
+#   mamba env create -f environment.isoquant.yml
+#   conda activate isoquant
+name: isoquant
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.11
+  - isoquant>=3.3            # reference-guided long-read isoform quantification
+  - minimap2>=2.26           # splice-aware long-read alignment
+  - k8                       # JS engine for paftools.js (gff2bed → --junc-bed)
+  - samtools>=1.18

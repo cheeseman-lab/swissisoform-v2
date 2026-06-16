@@ -1,0 +1,60 @@
+# Conda environment for SwissIsoform v2.
+#
+# Derived from Matteo's `swissisoform-v2` env so collaborators share one base:
+# a minimal conda layer (Python 3.11.15 + tooling) with the scientific stack
+# installed via pip at Matteo's exact pinned versions, then `pip install -e .`.
+# ADDED for the source-transcript workstream: the sequencing CLI tools
+# (salmon, minimap2, samtools, sra-tools) and short-read QC (fastp).
+#
+# IsoQuant (long-read quant) lives in a SEPARATE env — `environment.isoquant.yml`
+# — because its conda dependencies (pandas/pysam/gffutils) conflict with the
+# pip-pinned versions here. The long-read sbatch activates that env for the
+# quant step only.
+#
+# Reproduce:
+#   bash scripts/setup/create_conda_env.sh [--rebuild]
+#   conda activate swissisoform-v2
+name: swissisoform-v2
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  # --- minimal conda base, matching Matteo's env ---
+  - python=3.11.15
+  - pip=26.0.1
+  - setuptools=82.0.1
+  - wheel=0.46.3
+  - uv=0.11.6
+  - openjdk=17.0.18          # java tools (interproscan / pepquery), as in Matteo's env
+  - typst=0.14.2             # docs rendering, as in Matteo's env
+  # --- sequencing CLI tools ADDED for this workstream (binary, low-conflict) ---
+  - salmon>=1.10             # short-read transcript quantification
+  - minimap2>=2.26           # long-read splice-aware alignment
+  - samtools>=1.18           # BAM sort/index
+  - sra-tools>=3.0           # prefetch + fasterq-dump (GEO/SRA pulls)
+  - fastp>=0.23              # short-read adapter/quality trimming + QC report
+  - pip:
+      # --- Matteo's pinned pip stack (reproducible for collaborators) ---
+      - numpy==2.4.4
+      - pandas==3.0.2
+      - scipy==1.17.1
+      - pyarrow==23.0.1
+      - pysam==0.23.3
+      - pyfaidx==0.9.0.4
+      - pybigwig==0.3.25
+      - biopython==1.87
+      - biotite==1.6.0
+      - biotraj==1.2.2
+      - tmtools==0.3.0
+      - networkx==3.6.1
+      - requests==2.33.1
+      - pyyaml==6.0.3
+      - openpyxl==3.1.5
+      - python-dateutil==2.9.0.post0
+      - six==1.17.0
+      - pytest==9.0.3
+      - pytest-cov==7.1.0
+      - coverage==7.13.5
+      - ruff==0.15.10
+      # editable install of swissisoform from THIS repo (was swissisoform==2.0.0 in Matteo's export)
+      - -e .

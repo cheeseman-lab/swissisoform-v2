@@ -110,6 +110,15 @@ download_and_extract \
     "gencode.v49.pc_translations.fa.gz" \
     "gencode.v49.pc_translations.fa"
 
+# Comprehensive transcriptome FASTA (all transcript sequences). Used to build
+# the decoy-aware salmon index for transcript-level quantification
+# (swissisoform.sourceseq.expression / run_salmon_hela.sbatch).
+# Source: ${GENCODE_FTP}/gencode.v49.transcripts.fa.gz  i.e.
+#   https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_49/gencode.v49.transcripts.fa.gz
+download_and_extract \
+    "gencode.v49.transcripts.fa.gz" \
+    "gencode.v49.transcripts.fa"
+
 download_and_extract \
     "gencode.v49.primary_assembly.annotation.gtf.gz" \
     "gencode.v49.primary_assembly.annotation.gtf"
@@ -124,6 +133,7 @@ echo "========================================"
 REQUIRED_FILES=(
     "GRCh38.primary_assembly.genome.fa"
     "gencode.v49.pc_translations.fa"
+    "gencode.v49.transcripts.fa"
     "gencode.v49.primary_assembly.annotation.gtf"
 )
 

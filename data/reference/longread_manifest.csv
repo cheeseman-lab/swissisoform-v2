@@ -1,0 +1,3 @@
+cell_line,platform,accession,condition,gsm,series
+HeLa,nanopore,SRX26164613,untreated_rep1,GSM8529146,GSE277764
+HeLa,nanopore,SRX26164614,untreated_rep2,GSM8529147,GSE277764
