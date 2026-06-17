@@ -27,9 +27,9 @@ if conda env list | grep -q "^swissisoform-v2-fold "; then
     conda activate swissisoform-v2-fold
 else
     echo "swissisoform-v2-fold env missing — create with:" >&2
-    echo "  conda create -n swissisoform-v2-fold -c conda-forge python=3.11 uv pip -y" >&2
+    echo "  conda create -n swissisoform-v2-fold -c conda-forge python=3.12 uv pip -y" >&2
     echo "  conda activate swissisoform-v2-fold" >&2
-    echo "  uv pip install 'boltz[cuda]' chai_lab tmtools biotite" >&2
+    echo "  uv pip install -e '.[fold]'" >&2
     exit 2
 fi
 
