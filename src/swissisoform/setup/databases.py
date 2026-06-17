@@ -733,7 +733,7 @@ DEEPLOC_TARBALL = DEEPLOC_DIR / DEEPLOC_TARBALL_NAME
 DEEPLOC_ENV_NAME = "swissisoform-v2-deeploc"
 # Source tarball — the DTU DeepLoc release isn't freely redownloadable, so
 # we copy from the sibling swissisoform v1 project where it already lives.
-DEEPLOC_SOURCE = Path("/lab/barcheese01/mdiberna/swissisoform/deeploc-2.1.All.tar.gz")
+DEEPLOC_SOURCE = Path("/lab/barcheese01/ating/swissisoform/deeploc-2.1.All.tar.gz")
 
 
 def _conda_env_exists(name: str) -> bool:

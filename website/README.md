@@ -38,7 +38,7 @@ renders with a "not available" placeholder.
 
 ```bash
 # 1. Populate data/ with a symlink (or copy) of the cheeseman_12gene outputs.
-cd /lab/barcheese01/mdiberna/swissisoform-v2/website
+cd /lab/barcheese01/ating/swissisoform-v2/website
 ln -s ../data/output/cheeseman_12gene/all_paired.parquet data/all_paired.parquet
 ln -s ../data/output/cheeseman_12gene/structures           data/structures
 mkdir -p data/llm  # empty is fine; the site will render placeholders
@@ -60,7 +60,7 @@ Then hit:
 ## Docker
 
 ```bash
-cd /lab/barcheese01/mdiberna/swissisoform-v2/website
+cd /lab/barcheese01/ating/swissisoform-v2/website
 docker build -t swissisoform-site .
 docker run --rm -p 8000:8000 swissisoform-site
 ```

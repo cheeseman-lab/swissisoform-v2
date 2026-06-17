@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=mdiberna_interproscan_setup
+#SBATCH --job-name=ating_interproscan_setup
 #SBATCH --partition=20
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-cd /lab/barcheese01/mdiberna/swissisoform-v2
+cd /lab/barcheese01/ating/swissisoform-v2
 
 eval "$(conda shell.bash hook)"
 conda activate swissisoform-v2

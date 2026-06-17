@@ -20,7 +20,7 @@
 # Deploy is a separate manual step: cd website && railway up --no-gitignore --service swissisoform-viewer
 
 set -euo pipefail
-cd /lab/barcheese01/mdiberna/swissisoform-v2
+cd /lab/barcheese01/ating/swissisoform-v2
 
 eval "$(conda shell.bash hook)"
 conda activate swissisoform-v2
