@@ -364,6 +364,8 @@ class AnnotationPipeline:
                 site.isoform_protein,
                 canonical_protein=site.canonical_protein,
                 gene_name=site.gene_name,
+                orf_type=site.orf_type,
+                diff_region=site.diff_region,
             )
 
         # SiteModules — annotate the isoform start, and (when the module can)

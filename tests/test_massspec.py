@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from swissisoform.evidence.e6_mass_spec.massspec import MassSpecModule
+from swissisoform.assembly import install_initiator_met
+from swissisoform.contract import ORFType
+from swissisoform.evidence.e6_mass_spec.massspec import (
+    MassSpecModule,
+    diagnostic_peptides,
+)
+from swissisoform.models import DifferentialRegion
 
 
 class TestMassSpecModule:
@@ -216,3 +222,106 @@ class TestMassSpecModule:
         result = module.annotate("MAAAAAALLLLLLLRKKKKKKKR*", gene_name="GENE_C")
         assert result["summary"]["pepquery_run"] is True
         assert result["summary"]["validated_peptides"] == 0
+
+
+class TestInstallInitiatorMet:
+    """Part 1 — the initiator-Met install at assembly time."""
+
+    def test_near_cognate_start_gets_met(self):
+        # CBX1 CTG isoform begins with L (Leu) — should become M.
+        assert install_initiator_met("LGATPPGDPTRR") == "MGATPPGDPTRR"
+        # GTG isoform begins with V (Val).
+        assert install_initiator_met("VRDATAATR") == "MRDATAATR"
+
+    def test_atg_start_is_noop(self):
+        assert install_initiator_met("MSRAAAA") == "MSRAAAA"
+
+    def test_trailing_stop_preserved(self):
+        assert install_initiator_met("LGATPP*") == "MGATPP*"
+
+    def test_empty_returns_empty(self):
+        assert install_initiator_met("") == ""
+        assert install_initiator_met("*") == "*"
+
+
+class TestDiagnosticPeptides:
+    """Part 3 — diagnostic-region digest scope + NME variants."""
+
+    # A protein with the CBX1-extension shape: M start, NME-substrate 2nd
+    # residue (G), and tryptic sites so we get several peptides.
+    PROT = "MGATPPGDPTRRKAAAAAAAAKLLLLLLLLLK"
+
+    def test_orf_type_none_is_full_digest_no_nme(self):
+        from swissisoform.evidence.e6_mass_spec.massspec import tryptic_digest
+
+        full = {p["peptide"] for p in tryptic_digest(self.PROT)}
+        out = diagnostic_peptides(self.PROT, orf_type=None)
+        assert {p["peptide"] for p in out} == full
+        assert all(p["nme"] is False for p in out)
+
+    def test_truncated_keeps_only_start_peptides(self):
+        out = diagnostic_peptides(self.PROT, orf_type=ORFType.TRUNCATED)
+        # Every kept peptide starts at the new initiator (pos 0) or is its
+        # Met-excised twin (pos 1) — nothing downstream of the first cleavage.
+        assert {p["pos"] for p in out} <= {0, 1}
+        assert all(p["peptide"].startswith("M") or p["nme"] for p in out)
+
+    def test_extended_keeps_extension_overlap_including_junction(self):
+        # Extension = isoform[0:10]; the junction peptide MGATPPGDPTR (0–11)
+        # overlaps it and must be kept; the downstream KAAAA… peptide must not.
+        dr = DifferentialRegion(isoform_start=0, isoform_end=10)
+        out = diagnostic_peptides(self.PROT, orf_type=ORFType.EXTENDED, diff_region=dr)
+        kept = {p["peptide"] for p in out}
+        assert any(p.startswith("MGATPP") for p in kept)  # junction-spanning
+        assert all(
+            p["pos"] < 10 and p["end"] > 0 for p in out if not p["nme"]
+        )
+
+    def test_extended_without_diff_region_falls_back_to_full(self):
+        full = {
+            p["peptide"]
+            for p in diagnostic_peptides(self.PROT, orf_type=None)
+        }
+        out = diagnostic_peptides(self.PROT, orf_type=ORFType.EXTENDED, diff_region=None)
+        # Same peptide set as a full digest (NME variants aside).
+        assert {p["peptide"] for p in out if not p["nme"]} == full
+
+    def test_whole_isoform_is_full_digest(self):
+        from swissisoform.evidence.e6_mass_spec.massspec import tryptic_digest
+
+        full = {p["peptide"] for p in tryptic_digest(self.PROT)}
+        out = diagnostic_peptides(self.PROT, orf_type=ORFType.UORF)
+        # Whole-isoform ORFs keep the full digest (all unique by definition).
+        assert full <= {p["peptide"] for p in out}
+
+    def test_nme_variant_emitted_for_substrate_second_residue(self):
+        out = diagnostic_peptides(self.PROT, orf_type=ORFType.TRUNCATED)
+        nme = [p for p in out if p["nme"]]
+        assert nme, "expected a Met-excised variant (residue 2 = G)"
+        for p in nme:
+            assert p["pos"] == 1
+            assert not p["peptide"].startswith("M")
+            # The excised twin is one residue shorter than its Met-retained form.
+            assert p["length"] == p["end"] - p["pos"]
+
+    def test_no_nme_when_second_residue_not_substrate(self):
+        # Second residue K is not an NME substrate.
+        prot = "MKAAAAAAAAR"
+        out = diagnostic_peptides(prot, orf_type=ORFType.TRUNCATED)
+        assert all(p["nme"] is False for p in out)
+
+    def test_annotate_passes_orf_context(self, config):
+        """annotate() scoped by orf_type matches the helper's isoform set."""
+        module = MassSpecModule(config)
+        dr = DifferentialRegion(isoform_start=0, isoform_end=10)
+        result = module.annotate(
+            self.PROT, orf_type=ORFType.EXTENDED, diff_region=dr
+        )
+        expected = {
+            p["peptide"]
+            for p in diagnostic_peptides(
+                self.PROT, orf_type=ORFType.EXTENDED, diff_region=dr
+            )
+        }
+        assert {h["peptide"] for h in result["hits"]} == expected
+        assert all("nme" in h for h in result["hits"])

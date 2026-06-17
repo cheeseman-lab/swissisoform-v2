@@ -7,7 +7,12 @@ and output parsing.
 
 from __future__ import annotations
 
-from swissisoform.models import Gene, ORFType, TranslationInitiationSite
+from swissisoform.models import (
+    DifferentialRegion,
+    Gene,
+    ORFType,
+    TranslationInitiationSite,
+)
 from swissisoform.evidence.e6_mass_spec.massspec import (
     _parse_pepquery_output,
     _pepquery_cache_key,
@@ -16,7 +21,14 @@ from swissisoform.evidence.e6_mass_spec.massspec import (
 )
 
 
-def _gene_with_isoform(gene_name: str, canonical: str, isoform: str) -> Gene:
+def _gene_with_isoform(
+    gene_name: str,
+    canonical: str,
+    isoform: str,
+    *,
+    orf_type: ORFType = ORFType.EXTENDED,
+    diff_region: DifferentialRegion | None = None,
+) -> Gene:
     """Build a single-TIS gene for peptide-collection tests."""
     site = TranslationInitiationSite(
         tis_id=f"chr1:100:+:ATG:{gene_name}",
@@ -26,9 +38,10 @@ def _gene_with_isoform(gene_name: str, canonical: str, isoform: str) -> Gene:
         position=100,
         strand="+",
         start_codon="ATG",
-        orf_type=ORFType.EXTENDED,
+        orf_type=orf_type,
         canonical_protein=canonical,
         isoform_protein=isoform,
+        diff_region=diff_region,
     )
     return Gene(
         gene_name=gene_name,
@@ -56,6 +69,45 @@ class TestCollectUniquePeptides:
         gene = _gene_with_isoform("TESTGENE", canonical="MAAAKVVVR", isoform="")
         assert collect_unique_peptides([gene]) == {}
 
+    def test_extension_scoped_to_diff_region(self):
+        # Extension = isoform[0:8] ("MNNNNNNK"). Only peptides overlapping the
+        # extension are collected; the shared core peptides are excluded by
+        # scope (and would be dropped by the set-difference anyway).
+        gene = _gene_with_isoform(
+            "EXTGENE",
+            canonical="MAAAAAAKVVVVVVVR",
+            isoform="MNNNNNNKMAAAAAAKVVVVVVVR",
+            orf_type=ORFType.EXTENDED,
+            diff_region=DifferentialRegion(isoform_start=0, isoform_end=8),
+        )
+        peptides = collect_unique_peptides([gene])
+        assert "MNNNNNNK" in peptides["EXTGENE"]
+        # The shared-core peptide is outside the extension scope.
+        assert "VVVVVVVR" not in peptides["EXTGENE"]
+
+    def test_truncation_collects_only_start_peptide(self):
+        # Truncation: isoform is the canonical C-terminus with a new Met start.
+        # diff_region is canonical-space, so scope falls to pos==0 start peptides.
+        # Second residue G → an NME (Met-excised) variant is also collected.
+        # Canonical's residue at the new start is L (the near-cognate codon
+        # Ribo-TISH would translate); the isoform installs M there, so the
+        # Met-started peptide is genuinely absent from the canonical digest.
+        gene = _gene_with_isoform(
+            "TRUNCGENE",
+            canonical="MZZZZZZZKLGAAAAAAKVVVVVVVR",
+            isoform="MGAAAAAAKVVVVVVVR",
+            orf_type=ORFType.TRUNCATED,
+            diff_region=DifferentialRegion(canonical_start=0, canonical_end=9),
+        )
+        peptides = collect_unique_peptides([gene])
+        peps = peptides.get("TRUNCGENE", set())
+        # Met-retained start peptide is unique vs canonical (canonical's twin
+        # lacks the new Met context); the Met-excised twin GAAAAAAK is also present.
+        assert "MGAAAAAAK" in peps
+        assert "GAAAAAAK" in peps
+        # Downstream shared peptide is out of scope.
+        assert "VVVVVVVR" not in peps
+
 
 class TestCacheKey:
     def test_same_inputs_stable(self):
@@ -68,6 +120,17 @@ class TestCacheKey:
         k_w = _pepquery_cache_key("w", "gencode:human", ["AAAR"])
         k_all = _pepquery_cache_key("all", "gencode:human", ["AAAR"])
         assert k_w != k_all
+
+    def test_mod_change_changes_key(self):
+        # A different modification signature must bust the cache — otherwise a
+        # varMod change would serve a stale hit from the unmodified search.
+        base = _pepquery_cache_key("w", "swissprot:human", ["AAAR"], "1|2|3|")
+        acetyl = _pepquery_cache_key("w", "swissprot:human", ["AAAR"], "1|2,5|3|")
+        assert base != acetyl
+        # Default empty mods_sig stays backward-stable across calls.
+        assert _pepquery_cache_key("w", "swissprot:human", ["AAAR"]) == _pepquery_cache_key(
+            "w", "swissprot:human", ["AAAR"]
+        )
 
 
 class TestParsePepqueryOutput:
