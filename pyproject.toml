@@ -32,12 +32,20 @@ dev = [
 ]
 fold = [
     "torch>=2.0.0",
-    "boltz>=2.2",
-    # "chai_lab",  # optional second structure backend (run_fold.sbatch ... chai)
+    # ESMFold2 (default structure backend) — EvolutionaryScale `esm`, pinned to the
+    # commit validated on GPU; it pulls the Biohub `transformers` fork itself (the fork
+    # registers esmfold2/esmc). Build on a GPU node: `uv pip install -e '.[fold]'`.
+    "esm @ git+https://github.com/evolutionaryscale/esm.git@14d382908b595cd4bfb19394ec8d0d6b4e4b9abb",
+    # Secondary backends (still selectable via run_fold.sbatch ... <backend>); install
+    # alongside as needed — coexistence with `esm` in one env is not yet smoke-tested:
+    # "boltz>=2.2",   # run_fold.sbatch ... boltz
+    # "chai_lab",     # run_fold.sbatch ... chai
 ]
 plm = [
     "torch>=2.0.0",
-    "fair-esm>=2.0",
+    # ESM-C (replaces ESM-2 / fair-esm) — loaded via the Biohub `transformers` fork,
+    # pinned to the commit validated for the ESM-C delta-LLR cache.
+    "transformers @ git+https://github.com/Biohub/transformers.git@ef32577f55da19a4989cd7b22e004dc43a4998cb",
 ]
 
 [tool.setuptools]

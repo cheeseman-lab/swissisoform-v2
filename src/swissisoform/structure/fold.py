@@ -2,12 +2,14 @@
 
 Owns the on-disk cache schema (see :mod:`swissisoform.structure`) and
 the :func:`precompute_fold` entrypoint that fans inputs out to the
-backend chosen by ``backend=`` (Boltz-2 by default, Chai-1 optional).
+backend chosen by ``backend=`` (ESMFold2 by default; Boltz-2 / Chai-1
+selectable).
 
-The backends themselves live in :mod:`swissisoform.structure.boltz` and
-:mod:`swissisoform.structure.chai`. They are imported lazily so this
-module — and the SiteModule that consumes it at pipeline runtime — has
-no hard dependency on torch / boltz / chai_lab.
+The backends themselves live in :mod:`swissisoform.structure.esmfold2`,
+:mod:`swissisoform.structure.boltz` and :mod:`swissisoform.structure.chai`.
+They are imported lazily so this module — and the SiteModule that consumes
+it at pipeline runtime — has no hard dependency on torch / esm / boltz /
+chai_lab.
 """
 
 from __future__ import annotations
@@ -21,7 +23,8 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 DEFAULT_CACHE_DIR = Path(__file__).resolve().parents[3] / "data" / "cache" / "structure"
-DEFAULT_BACKEND = "boltz"
+DEFAULT_BACKEND = "esmfold2"
+BACKENDS = ("esmfold2", "boltz", "chai")
 DEFAULT_MAX_SEQ_LEN = 1024
 FOLD_CONDA_ENV = "swissisoform-v2-fold"
 
@@ -148,7 +151,7 @@ def precompute_fold(
 
     Args:
         proteins: ``{label: seq}`` or list of seqs. Hash-keyed; duplicates dedupe.
-        backend: ``"boltz"`` or ``"chai"``.
+        backend: ``"esmfold2"`` (default), ``"boltz"`` or ``"chai"``.
         cache_dir: Root cache directory (per-backend subdirs underneath).
         max_seq_len: Sequences longer than this skip with ``status="too_long"``.
         inline: When True, run uncached proteins inline (requires the GPU env).
@@ -162,7 +165,7 @@ def precompute_fold(
         ``{protein_hash: load_cache result}``.
     """
     cache_dir = Path(cache_dir)
-    if backend not in ("boltz", "chai"):
+    if backend not in BACKENDS:
         raise ValueError(f"unknown backend {backend!r}")
 
     if isinstance(proteins, list):
@@ -259,6 +262,9 @@ def precompute_fold(
 
 
 def _load_backend(backend: str):
+    if backend == "esmfold2":
+        from swissisoform.structure.esmfold2 import fold_one as fold_one_esmfold2
+        return fold_one_esmfold2
     if backend == "boltz":
         from swissisoform.structure.boltz import fold_one as fold_one_boltz
         return fold_one_boltz

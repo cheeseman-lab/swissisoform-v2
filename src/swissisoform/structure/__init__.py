@@ -1,6 +1,6 @@
 """Structure prediction subpackage.
 
-Houses Boltz-2 / Chai-1 wrappers + structure comparison.
+Houses ESMFold2 (default) / Boltz-2 / Chai-1 wrappers + structure comparison.
 
 Pattern: precompute (GPU, expensive) writes per-protein cache directories
 keyed by sha1(stop-stripped, uppercased seq). The pipeline-side
@@ -11,7 +11,7 @@ Cache layout::
 
     data/cache/structure/<backend>/<hash>/
         model.cif         # top-rank predicted structure
-        confidence.json   # {"plddt": [...L floats 0-100], "ptm": float, "iptm": float | None}
+        confidence.json   # {"plddt": [...L floats 0-1], "ptm": float, "iptm": float | None}
         metrics.json      # {"status": "ok"|"too_long"|"failed"|"oom",
                           #  "backend": str, "length": int,
                           #  "plddt_mean": float, "plddt_std": float, "ptm": float}

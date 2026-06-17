@@ -346,7 +346,7 @@ def run_precompute(genes, all_proteins: list[str], skip: set[str]) -> dict:
         precompute_plm(all_proteins, inline=False) if "plm_vep" not in skip else {}
     )
     preds["structure"] = (
-        precompute_fold(all_proteins, backend="boltz", inline=False)
+        precompute_fold(all_proteins, inline=False)  # backend defaults to DEFAULT_BACKEND
         if "structure" not in skip else {}
     )
 
