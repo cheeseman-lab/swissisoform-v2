@@ -35,7 +35,11 @@ fi
 if conda env list | grep -q "^swissisoform-v2-fold "; then
     conda activate swissisoform-v2-fold
 else
-    conda activate swissisoform-v2
+    echo "swissisoform-v2-plm env missing — create with:" >&2
+    echo "  conda create -n swissisoform-v2-plm -c conda-forge python=3.12 uv pip -y" >&2
+    echo "  conda activate swissisoform-v2-plm" >&2
+    echo "  uv pip install -e '.[plm]'" >&2
+    exit 2
 fi
 
 FASTA="${1:-data/cache/proteins.fa}"

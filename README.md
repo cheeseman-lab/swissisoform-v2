@@ -260,7 +260,7 @@ compute (never silent defaults).
 ```bash
 # 1. Create conda env + install in editable mode
 eval "$(conda shell.bash hook)"
-conda create -n swissisoform-v2 -c conda-forge python=3.11 uv pip -y
+conda create -n swissisoform-v2 -c conda-forge python=3.12 uv pip -y
 conda activate swissisoform-v2
 uv pip install -e ".[dev]"
 
@@ -287,8 +287,34 @@ pytest
 ## GPU precompute
 
 `plm_vep` and `structure` are **cache-lookup** modules — their caches must be
-populated on a GPU node *before* annotation. The orchestrator does it as a
-single Slurm job (emit FASTA → spawn GPU jobs → wait → full run):
+populated on a GPU node *before* annotation.
+
+These run in their own conda envs, separate from the base env (the base env
+stays lightweight; each GPU env pulls only what it needs). Create them **on a
+GPU node** so the CUDA torch wheels resolve correctly:
+
+```bash
+# structure folding (Boltz-2) — run_fold.sbatch
+conda create -n swissisoform-v2-fold -c conda-forge python=3.12 uv pip -y
+conda activate swissisoform-v2-fold
+uv pip install -e ".[fold]"
+# for the optional Chai-1 backend (run_fold.sbatch ... chai): also `uv pip install chai_lab`
+
+# protein-LM embeddings (ESM-2) — run_plm_embed.sbatch
+conda create -n swissisoform-v2-plm -c conda-forge python=3.12 uv pip -y
+conda activate swissisoform-v2-plm
+uv pip install -e ".[plm]"
+```
+
+To upgrade a GPU stack ("the folding trunk"), bump the pin in the matching
+`[fold]` / `[plm]` extra in `pyproject.toml` and re-run its `uv pip install`.
+
+> **Note:** the existing GPU envs were built on Python 3.11; the recipes above
+> target 3.12. Build + smoke-test the 3.12 envs on a GPU node before relying on
+> them — torch/boltz CUDA wheels are the likely failure point.
+
+The orchestrator populates both caches as a single Slurm job (emit FASTA →
+spawn GPU jobs → wait → full run):
 
 ```bash
 mkdir -p logs
