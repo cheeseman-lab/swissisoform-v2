@@ -8,7 +8,9 @@ and re-runs are no-ops.
 Cache layout (under ``cache_dir``)::
 
     cache_dir/
-      <hash>.npz                # llr: (L,), aa_logprobs: (L, 20), embedding: (L, hidden)
+      <hash>.npz                # llr: (L,), aa_logprobs: (L, 20),
+                                # embedding: (L, hidden)  [final layer],
+                                # embedding_sae: (L, hidden)  [SAE-target layer 27]
       manifest.tsv              # hash<TAB>seq  (audit log)
 
 Model: ESM-C (EvolutionaryScale / Biohub), selectable by size — ``300m``,
@@ -46,6 +48,15 @@ DEFAULT_MODEL_SIZE = "600m"
 DEFAULT_MODEL_ID = ESMC_MODEL_IDS[DEFAULT_MODEL_SIZE]
 DEFAULT_CACHE_DIR = Path(__file__).resolve().parents[3] / "data" / "cache" / "plm_esmc"
 PLM_CONDA_ENV = "swissisoform-v2-plm"
+
+# Backbone layer whose residual-stream activation the ESM-C SAE is trained
+# against (``biohub/ESMC-600M-sae-*`` → layer 27). ``output_hidden_states``
+# returns a tuple of length ``n_layers + 1`` (index 0 = embeddings, 1..36 =
+# block outputs for the 600M model), so ``hidden_states[SAE_LAYER]`` is the
+# output of block ``SAE_LAYER`` — the tensor the SAE consumes. Cached as the
+# ``embedding_sae`` key so the SAE encode (plm/sae.py) can run offline without
+# re-running ESM-C.
+SAE_LAYER = 27
 
 # Fixed column order for the per-position masked-marginal distribution stored as
 # ``aa_logprobs`` (L, 20). Allele-specific variant effect is then a pure cache
@@ -94,8 +105,9 @@ def _cache_path(cache_dir: Path, h: str) -> Path:
 def load_cache(h: str, cache_dir: Path | str = DEFAULT_CACHE_DIR) -> dict[str, Any] | None:
     """Load a cached PLM result by protein hash.
 
-    Returns ``{"llr": (L,), "aa_logprobs": (L, 20), "embedding": (L, hidden)}``
-    (whichever keys are present) or ``None`` if the cache file doesn't exist.
+    Returns ``{"llr": (L,), "aa_logprobs": (L, 20), "embedding": (L, hidden),
+    "embedding_sae": (L, hidden)}`` (whichever keys are present) or ``None`` if
+    the cache file doesn't exist.
     """
     import numpy as np
 
@@ -110,6 +122,8 @@ def load_cache(h: str, cache_dir: Path | str = DEFAULT_CACHE_DIR) -> dict[str, A
             out["aa_logprobs"] = npz["aa_logprobs"]
         if "embedding" in npz.files:
             out["embedding"] = npz["embedding"]
+        if "embedding_sae" in npz.files:
+            out["embedding_sae"] = npz["embedding_sae"]
     return out or None
 
 
@@ -120,6 +134,7 @@ def _save_cache(
     llr: Any,
     aa_logprobs: Any | None = None,
     embedding: Any | None = None,
+    embedding_sae: Any | None = None,
 ) -> None:
     import numpy as np
 
@@ -129,6 +144,8 @@ def _save_cache(
         payload["aa_logprobs"] = np.asarray(aa_logprobs, dtype=np.float32)
     if embedding is not None:
         payload["embedding"] = np.asarray(embedding, dtype=np.float16)
+    if embedding_sae is not None:
+        payload["embedding_sae"] = np.asarray(embedding_sae, dtype=np.float16)
     np.savez_compressed(_cache_path(cache_dir, h), **payload)
 
 
@@ -180,6 +197,7 @@ def _esmc_forward_one(
             "llr": np.zeros(0, dtype=np.float32),
             "aa_logprobs": np.zeros((0, len(STANDARD_AA)), dtype=np.float32),
             "embedding": np.zeros((0, hidden_dim), dtype=np.float16),
+            "embedding_sae": np.zeros((0, hidden_dim), dtype=np.float16),
         }
 
     encoded = tokenizer(seq, return_tensors="pt", add_special_tokens=True)
@@ -197,6 +215,12 @@ def _esmc_forward_one(
     # hidden_states is a tuple (embeddings + one per layer); take the last and
     # strip BOS/EOS — residues live at indices 1..L.
     embedding = out.hidden_states[-1][0, 1 : L + 1, :].float().cpu().numpy()
+    # Also keep the SAE-target layer (block 27) — the residual stream the
+    # ESM-C SAE encodes. Same BOS/EOS strip. Computed for free from the same
+    # forward; we were previously discarding every layer but the last.
+    embedding_sae = (
+        out.hidden_states[SAE_LAYER][0, 1 : L + 1, :].float().cpu().numpy()
+    )
 
     # Pass 2: masked marginals for LLR.
     # Build a (L, L+2) batch where row i has position (i+1) replaced by <mask>.
@@ -246,6 +270,7 @@ def _esmc_forward_one(
         "llr": llr,
         "aa_logprobs": aa_logprobs,
         "embedding": embedding,
+        "embedding_sae": embedding_sae,
     }
 
 
@@ -288,6 +313,7 @@ def precompute_plm(
     inline: bool = True,
     skip_missing: bool = True,
     require_aa_logprobs: bool = False,
+    require_embedding_sae: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Run (or load cached) ESM-C embeddings + LLR for a batch of proteins.
 
@@ -307,6 +333,9 @@ def precompute_plm(
             When False, missing entries get ``None`` values.
         require_aa_logprobs: When True, a cache file lacking the per-position
             ``aa_logprobs`` distribution is treated as missing and recomputed.
+        require_embedding_sae: When True, a cache file lacking the SAE-target
+            layer embedding (``embedding_sae``) is treated as missing and
+            recomputed. Used to backfill the key into older cache files.
 
     Returns:
         ``{protein_hash: {"llr": np.ndarray, "aa_logprobs": np.ndarray | None,
@@ -340,7 +369,10 @@ def precompute_plm(
     missing: list[tuple[str, str]] = []
     for h, seq in hash_to_seq.items():
         cached = load_cache(h, cache_dir)
-        if cached is not None and not (require_aa_logprobs and "aa_logprobs" not in cached):
+        stale = (require_aa_logprobs and (cached or {}).get("aa_logprobs") is None) or (
+            require_embedding_sae and (cached or {}).get("embedding_sae") is None
+        )
+        if cached is not None and not stale:
             result[h] = cached
         else:
             missing.append((h, seq))
@@ -384,13 +416,17 @@ def precompute_plm(
                     llr=payload["llr"],
                     aa_logprobs=payload.get("aa_logprobs"),
                     embedding=payload.get("embedding"),
+                    embedding_sae=payload.get("embedding_sae"),
                 )
                 _append_manifest(cache_dir, h, seq)
                 result[h] = payload
 
     if not skip_missing:
         for h, _ in missing:
-            result.setdefault(h, {"llr": None, "aa_logprobs": None, "embedding": None})
+            result.setdefault(
+                h,
+                {"llr": None, "aa_logprobs": None, "embedding": None, "embedding_sae": None},
+            )
 
     return result
 

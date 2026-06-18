@@ -31,14 +31,18 @@ elif [ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]; then
 else
     eval "$(conda shell.bash hook)"
 fi
-# Prefer a dedicated fold/plm env if present; else the main project env.
-if conda env list | grep -q "^swissisoform-v2-fold "; then
+# Prefer a dedicated plm/fold env if present; else the unified project env
+# (swissisoform-v2 is the py3.12 env that carries both ESM-C/plm and esm/fold).
+if conda env list | grep -q "^swissisoform-v2-plm "; then
+    conda activate swissisoform-v2-plm
+elif conda env list | grep -q "^swissisoform-v2-fold "; then
     conda activate swissisoform-v2-fold
+elif conda env list | grep -q "^swissisoform-v2 "; then
+    conda activate swissisoform-v2
 else
-    echo "swissisoform-v2-plm env missing — create with:" >&2
+    echo "No swissisoform-v2[-plm|-fold] env found. Create one with:" >&2
     echo "  conda create -n swissisoform-v2-plm -c conda-forge python=3.12 uv pip -y" >&2
-    echo "  conda activate swissisoform-v2-plm" >&2
-    echo "  uv pip install -e '.[plm]'" >&2
+    echo "  conda activate swissisoform-v2-plm && uv pip install -e '.[plm]'" >&2
     exit 2
 fi
 

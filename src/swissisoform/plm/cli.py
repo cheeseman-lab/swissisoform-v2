@@ -72,6 +72,14 @@ def main(argv: list[str] | None = None) -> int:
         "instead of recomputing them.",
     )
     parser.set_defaults(require_aa_logprobs=True)
+    parser.add_argument(
+        "--no-require-embedding-sae",
+        dest="require_embedding_sae",
+        action="store_false",
+        help="Accept caches lacking the SAE-target layer embedding (embedding_sae) "
+        "instead of recomputing them.",
+    )
+    parser.set_defaults(require_embedding_sae=True)
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -96,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
         dtype=args.dtype,
         inline=True,
         require_aa_logprobs=args.require_aa_logprobs,
+        require_embedding_sae=args.require_embedding_sae,
     )
     print(f"Wrote {len(res)} cache entries to {args.cache_dir}")
     return 0
