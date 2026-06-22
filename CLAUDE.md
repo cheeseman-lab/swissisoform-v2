@@ -323,6 +323,19 @@ Modules produce two kinds of output:
 - **Truncations:** `canonical[0 : abs(delta_aa)]` (the lost region)
 - **uORFs/altORFs:** entire isoform (no shared region)
 
+## Execution Contract — fresh reruns
+
+**The CPU pipeline recomputes from scratch on every run. No step may rely on cached results of a prior run.** Identical inputs → identical outputs, computed fresh; no hidden accumulated state. Speed comes from parallelism and per-unit efficiency, never from skipping work via a results cache (the InterProScan non-reproducibility — 337→107 hits on rebuild — is the cautionary example).
+
+The only persisted artifacts allowed are:
+
+1. **Provisioned reference data** — genome, GTF, `pc_translations`, the clinical parquets (ClinVar / gnomAD / COSMIC), and a future local PepQuery spectra library. These are *inputs* downloaded once via the setup phase; identical regardless of what runs against them.
+2. **GPU precomputes** — ESM/PLM embeddings and Boltz structures, keyed by `protein_hash`. The *sole compute exception*, because they are prohibitively expensive inline; produced by the GPU sbatch scripts and treated as static inputs to the CPU run.
+
+Everything else — PepQuery search, all annotation, scoring, comparison — runs fresh each run.
+
+**PepQuery implication:** the only contract-legal prep is **pre-downloading the spectra library** (reference data). There is no caching shortcut: a real PepQuery speedup requires **sharding the search**, which is a fundamental pipeline architecture change (per-protein Snakemake DAG + a fresh, peptide-sharded PepQuery stage), tracked as its own project — not a quick win. *Known deviation to remove:* `precompute_pepquery`'s on-disk result cache (`data/cache/pepquery/*.json`) is a CPU result cache and violates this contract.
+
 ## Module Contract
 
 All modules must:
