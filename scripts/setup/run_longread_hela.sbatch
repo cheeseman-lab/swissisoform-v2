@@ -31,10 +31,16 @@ OUT=${REF}/longread/HeLa
 mkdir -p "${OUT}/sra"
 
 # --- 1) pull raw ONT reads for every HeLa accession in the manifest ---
+# prefetch resolves each SRX experiment to its SRR run(s) and writes
+# ${OUT}/sra/<SRR>/<SRR>.sra -- so we must dump by the actual .sra files
+# prefetch produced, NOT by the SRX name (which is not a directory). prefetch
+# is idempotent: an already-downloaded run is validated and skipped.
 ACCS=$(awk -F, '$1=="HeLa"{print $3}' "${REF}/longread_manifest.csv")   # SRX accessions
 for SRX in ${ACCS}; do
-  prefetch "${SRX}" -O "${OUT}/sra"                                     # download SRA archive
-  fasterq-dump --threads "${SLURM_CPUS_PER_TASK}" "${OUT}/sra/${SRX}" -O "${OUT}"  # -> FASTQ
+  prefetch "${SRX}" -O "${OUT}/sra"                                     # download SRA archive -> sra/<SRR>/<SRR>.sra
+done
+for SRA in "${OUT}/sra"/*/*.sra; do
+  fasterq-dump --threads "${SLURM_CPUS_PER_TASK}" "${SRA}" -O "${OUT}"  # -> FASTQ
 done
 gzip -f "${OUT}"/*.fastq
 cat "${OUT}"/*.fastq.gz > "${OUT}/HeLa_all.fastq.gz"                    # pool replicates for quant
