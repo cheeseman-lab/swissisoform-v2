@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=mdiberna_fold
+#SBATCH --job-name=swissiso_fold
 #SBATCH --partition=nvidia-A6000-20
 #SBATCH --gres=gpu:1
 #SBATCH --nodes=1
@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-cd /lab/barcheese01/mdiberna/swissisoform-v2
+cd "${SLURM_SUBMIT_DIR:-.}"
 
 eval "$(conda shell.bash hook)"
 if conda env list | grep -q "^swissisoform-v2-fold "; then

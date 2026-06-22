@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=mdiberna_swissiso_run
+#SBATCH --job-name=swissiso_run
 #SBATCH --partition=20
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -34,7 +34,7 @@
 # After this finishes, build the site with: bash scripts/build_website.sh
 
 set -euo pipefail
-cd /lab/barcheese01/mdiberna/swissisoform-v2
+cd "${SLURM_SUBMIT_DIR:-.}"
 
 eval "$(conda shell.bash hook)"
 conda activate swissisoform-v2

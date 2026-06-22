@@ -261,8 +261,8 @@ Stub status `region_map_not_implemented` retired — now returns
 
 | Repo | Path | What It Contributes |
 |------|------|---------------------|
-| swissisoform v1 | `/lab/barcheese01/mdiberna/swissisoform/` | BED parsing, translation, mutations, genome handling |
-| TIAP | `/lab/barcheese01/mdiberna/tiap/` | Modular annotation pipeline (14 modules), pipeline.py pattern |
+| swissisoform v1 | `../swissisoform/` | BED parsing, translation, mutations, genome handling |
+| TIAP | `../tiap/` | Modular annotation pipeline (14 modules), pipeline.py pattern |
 | coTISja | `/lab/barcheese01/smaffa/coTISja/` | Ribo-TISH filtering, Kozak, expression normalization |
 
 ## Input Data
