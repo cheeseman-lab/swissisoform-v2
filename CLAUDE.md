@@ -329,12 +329,12 @@ Modules produce two kinds of output:
 
 The only persisted artifacts allowed are:
 
-1. **Provisioned reference data** — genome, GTF, `pc_translations`, the clinical parquets (ClinVar / gnomAD / COSMIC), and a future local PepQuery spectra library. These are *inputs* downloaded once via the setup phase; identical regardless of what runs against them.
+1. **Provisioned reference data** — genome, GTF, `pc_translations`, the clinical parquets (ClinVar / gnomAD / COSMIC), and the local PepQuery spectra library (`python -m swissisoform.setup.databases pepquery-spectra` mirrors the public PepQueryDB S3 library, ~196 GiB). These are *inputs* downloaded once via the setup phase; identical regardless of what runs against them.
 2. **GPU precomputes** — ESM/PLM embeddings and Boltz structures, keyed by `protein_hash`. The *sole compute exception*, because they are prohibitively expensive inline; produced by the GPU sbatch scripts and treated as static inputs to the CPU run.
 
 Everything else — PepQuery search, all annotation, scoring, comparison — runs fresh each run.
 
-**PepQuery implication:** the only contract-legal prep is **pre-downloading the spectra library** (reference data). There is no caching shortcut: a real PepQuery speedup requires **sharding the search**, which is a fundamental pipeline architecture change (per-protein Snakemake DAG + a fresh, peptide-sharded PepQuery stage), tracked as its own project — not a quick win. *Known deviation to remove:* `precompute_pepquery`'s on-disk result cache (`data/cache/pepquery/*.json`) is a CPU result cache and violates this contract.
+**PepQuery implication:** the only contract-legal prep is **pre-downloading the spectra library** (reference data) — the `pepquery-spectra` setup target mirrors the public PepQueryDB S3 library locally so runs can search it via local `-ms` instead of re-pulling (and deleting) spectra from S3 every search. There is no caching shortcut: a real PepQuery *speedup* still requires **sharding the search**, a fundamental pipeline architecture change (per-protein Snakemake DAG + a fresh, peptide-sharded PepQuery stage over the local library), tracked as its own project — not a quick win. *Known deviations to address:* runtime still uses `-b` (S3) until wired to local `-ms`; and `precompute_pepquery`'s on-disk result cache (`data/cache/pepquery/*.json`) is a CPU result cache that violates this contract.
 
 ## Module Contract
 
