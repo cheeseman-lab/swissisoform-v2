@@ -11,12 +11,12 @@
 #SBATCH --error=logs/%x_%j.err
 
 # Precompute ESM-C per-residue embeddings + masked-marginal LLR for a
-# FASTA of proteins. Caches per-protein .npz under data/cache/plm_esmc/
-# keyed by sha1(stop-stripped, uppercased seq).
+# FASTA of proteins. Caches per-protein .npz under data/cache/plm_esmc/<SIZE>/
+# (e.g. 6B/, 600M/) keyed by sha1(stop-stripped, uppercased seq).
 #
 # Usage:
 #   sbatch scripts/slurm/run_plm_embed.sbatch <fasta_path> [300m|600m|6b]
-# Or, with defaults = E2E proteins from data/cache/proteins.fa, model 600m:
+# Or, with defaults = E2E proteins from data/cache/proteins.fa, model 6b:
 #   sbatch scripts/slurm/run_plm_embed.sbatch
 
 set -euo pipefail
@@ -47,7 +47,7 @@ else
 fi
 
 FASTA="${1:-data/cache/proteins.fa}"
-MODEL_SIZE="${2:-600m}"
+MODEL_SIZE="${2:-6b}"
 if [[ ! -f "$FASTA" ]]; then
     echo "FASTA not found: $FASTA  (run: python scripts/run.py <mode> --emit-fasta)" >&2
     exit 1
@@ -59,4 +59,14 @@ export HF_HOME="$PWD/.torch_cache/hf"
 export XDG_CACHE_HOME="$PWD/.torch_cache/xdg"
 mkdir -p "$TORCH_HOME" "$HF_HOME" "$XDG_CACHE_HOME"
 
-python -m swissisoform.plm.cli "$FASTA" --model-size "$MODEL_SIZE"
+# For 6B, prefer the local clone of the weights (~28 GB already on disk) so the
+# compute node doesn't re-download from HF (and runs offline). Falls back to the
+# HF repo id baked into ESMC_MODEL_IDS if the clone isn't present.
+EXTRA_ARGS=()
+LOCAL_6B="/lab/barcheese01/ating/esm_swissisoform_doc/upstream/hf-ESMC-6B"
+if [[ "$MODEL_SIZE" == "6b" && -d "$LOCAL_6B" ]]; then
+    EXTRA_ARGS+=(--model-id "$LOCAL_6B")
+fi
+
+python -m swissisoform.plm.cli "$FASTA" --model-size "$MODEL_SIZE" \
+    "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"

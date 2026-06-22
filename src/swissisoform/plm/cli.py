@@ -63,7 +63,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Explicit HuggingFace repo id; overrides --model-size.",
     )
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--dtype", default="float16")
+    parser.add_argument(
+        "--dtype", default=None,
+        help="Inference precision; default is size-aware (bf16 for 6B, fp16 else).",
+    )
     parser.add_argument(
         "--no-require-aa-logprobs",
         dest="require_aa_logprobs",

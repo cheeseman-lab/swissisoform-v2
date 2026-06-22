@@ -1,13 +1,15 @@
 """ESM-C SAE encode step — sparse feature activations per residue.
 
-Consumes the layer-27 residual-stream representation cached by
+Consumes the SAE-target-layer residual-stream representation cached by
 :mod:`swissisoform.plm.embed` (the ``embedding_sae`` key) and runs it through the
-ESM-C Top-K sparse autoencoder (``biohub/ESMC-600M-sae-k64-codebook16384``,
-layer 27). This is a cheap encode (one linear layer + Top-K), decoupled from the
-GPU ESM-C forward — it reads the cached representation and never re-runs ESM-C,
-so the SAE can be swapped or re-encoded without touching the embedding cache.
+matching ESM-C Top-K sparse autoencoder (per model size: 6B →
+``biohub/ESMC-6B-sae-layer60-k64-codebook16384`` layer 60; 600M →
+``biohub/ESMC-600M-sae-k64-codebook16384`` layer 27). This is a cheap encode
+(one linear layer + Top-K), decoupled from the GPU ESM-C forward — it reads the
+cached representation and never re-runs ESM-C, so the SAE can be swapped or
+re-encoded without touching the embedding cache.
 
-Cache layout (under ``cache_dir``, default ``data/cache/sae_esmc/``)::
+Cache layout (under ``cache_dir`` — per size, e.g. ``data/cache/sae_esmc/6B/``)::
 
     cache_dir/
       <hash>.npz       # idx: (L, K) int32   — top-K feature indices per residue,
@@ -30,20 +32,37 @@ from pathlib import Path
 from typing import Any
 
 from swissisoform.plm.embed import (
-    DEFAULT_CACHE_DIR as PLM_CACHE_DIR,
-)
-from swissisoform.plm.embed import (
-    SAE_LAYER,
+    DEFAULT_MODEL_SIZE,
     load_cache,
     protein_hash,
+    sae_layer_for,
 )
+from swissisoform.plm.embed import plm_cache_dir as plm_cache_dir_for
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SAE_REPO = "biohub/ESMC-600M-sae-k64-codebook16384"
-DEFAULT_SAE_CACHE_DIR = (
-    Path(__file__).resolve().parents[3] / "data" / "cache" / "sae_esmc"
-)
+# ESM-C SAE repos per model size. The 600M repo bundles all 37 layers; the 6B
+# repo ships only its layer-60 SAE (a single ``layer_60.safetensors``). Both are
+# Top-K k=64, codebook 16384, and load identically (d_model is read from config).
+SAE_REPOS: dict[str, str] = {
+    "600m": "biohub/ESMC-600M-sae-k64-codebook16384",
+    "6b": "biohub/ESMC-6B-sae-layer60-k64-codebook16384",
+}
+_SAE_CACHE_ROOT = Path(__file__).resolve().parents[3] / "data" / "cache" / "sae_esmc"
+
+
+def sae_cache_dir(model_size: str = DEFAULT_MODEL_SIZE) -> Path:
+    """Per-size SAE feature cache dir, e.g. ``data/cache/sae_esmc/6B``."""
+    return _SAE_CACHE_ROOT / (model_size or DEFAULT_MODEL_SIZE).upper()
+
+
+def sae_repo_for(model_size: str = DEFAULT_MODEL_SIZE) -> str:
+    """SAE HuggingFace repo id for a model size."""
+    return SAE_REPOS[(model_size or DEFAULT_MODEL_SIZE).lower()]
+
+
+DEFAULT_SAE_REPO = sae_repo_for(DEFAULT_MODEL_SIZE)
+DEFAULT_SAE_CACHE_DIR = sae_cache_dir(DEFAULT_MODEL_SIZE)
 
 # Lazy singleton: one materialized SAE layer per (repo, layer, device).
 _SAE_LAYERS: dict[tuple[str, int, str], Any] = {}
@@ -157,26 +176,33 @@ def encode_one(embedding_sae: Any, layer: Any) -> dict[str, Any]:
 def precompute_sae(
     proteins: dict[str, str] | list[str],
     *,
-    plm_cache_dir: Path | str = PLM_CACHE_DIR,
-    cache_dir: Path | str = DEFAULT_SAE_CACHE_DIR,
-    sae_repo: str = DEFAULT_SAE_REPO,
-    sae_layer: int = SAE_LAYER,
+    model_size: str = DEFAULT_MODEL_SIZE,
+    plm_cache_dir: Path | str | None = None,
+    cache_dir: Path | str | None = None,
+    sae_repo: str | None = None,
+    sae_layer: int | None = None,
     device: str = "cpu",
     inline: bool = True,
     skip_missing: bool = True,
 ) -> dict[str, dict[str, Any]]:
     """Encode (or load cached) sparse SAE features for a batch of proteins.
 
-    Reads each protein's ``embedding_sae`` (layer-27 rep) from the PLM cache and
-    runs the SAE encode. Pure cache-read + small matmul — no ESM-C inference.
+    Reads each protein's ``embedding_sae`` (the SAE-target layer rep) from the
+    PLM cache and runs the SAE encode. Pure cache-read + small matmul — no ESM-C
+    inference. The SAE repo, target layer, and both cache dirs default to the
+    per-size values for ``model_size`` (so the 6B SAE reads the 6B PLM cache and
+    writes the 6B SAE cache), each overridable.
 
     Args:
         proteins: ``{label: sequence}`` or list of sequences; keyed by hash.
-        plm_cache_dir: Source of ``embedding_sae`` (``data/cache/plm_esmc``).
-        cache_dir: Destination for the sparse-feature ``<hash>.npz`` files.
-        sae_repo: HuggingFace SAE repo id.
-        sae_layer: Backbone layer the SAE is trained against (must match the
-            layer cached as ``embedding_sae``).
+        model_size: ESM-C size selecting SAE repo/layer + cache dirs (default 6b).
+        plm_cache_dir: Source of ``embedding_sae`` (default
+            ``data/cache/plm_esmc/<SIZE>``).
+        cache_dir: Destination for the sparse-feature ``<hash>.npz`` files
+            (default ``data/cache/sae_esmc/<SIZE>``).
+        sae_repo: HuggingFace SAE repo id (default per size).
+        sae_layer: Backbone layer the SAE is trained against (default per size;
+            must match the layer cached as ``embedding_sae``).
         device: Torch device for the encode (CPU is fine; cheap).
         inline: If True, encode uncached proteins now (needs torch + the SAE).
             If False, skip them — used when a GPU/batch job runs separately.
@@ -185,8 +211,13 @@ def precompute_sae(
     Returns:
         ``{protein_hash: {"idx", "val", "recon_loss"}}``.
     """
-    plm_cache_dir = Path(plm_cache_dir)
-    cache_dir = Path(cache_dir)
+    size = (model_size or DEFAULT_MODEL_SIZE).lower()
+    plm_cache_dir = (
+        plm_cache_dir_for(size) if plm_cache_dir is None else Path(plm_cache_dir)
+    )
+    cache_dir = sae_cache_dir(size) if cache_dir is None else Path(cache_dir)
+    sae_repo = sae_repo_for(size) if sae_repo is None else sae_repo
+    sae_layer = sae_layer_for(size) if sae_layer is None else sae_layer
 
     if isinstance(proteins, list):
         proteins = {f"seq_{i}": s for i, s in enumerate(proteins)}
@@ -249,10 +280,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("fasta", type=Path, nargs="?",
                         default=Path("data/cache/proteins.fa"),
                         help="FASTA of proteins to encode (default %(default)s).")
-    parser.add_argument("--plm-cache-dir", type=Path, default=PLM_CACHE_DIR)
-    parser.add_argument("--cache-dir", type=Path, default=DEFAULT_SAE_CACHE_DIR)
-    parser.add_argument("--sae-repo", default=DEFAULT_SAE_REPO)
-    parser.add_argument("--sae-layer", type=int, default=SAE_LAYER)
+    parser.add_argument(
+        "--model-size", default=DEFAULT_MODEL_SIZE,
+        help="ESM-C size selecting SAE repo/layer + cache dirs (default %(default)s).",
+    )
+    parser.add_argument("--plm-cache-dir", type=Path, default=None,
+                        help="Override the per-size PLM cache dir.")
+    parser.add_argument("--cache-dir", type=Path, default=None,
+                        help="Override the per-size SAE feature cache dir.")
+    parser.add_argument("--sae-repo", default=None, help="Override the SAE repo id.")
+    parser.add_argument("--sae-layer", type=int, default=None,
+                        help="Override the SAE target layer.")
     parser.add_argument("--device", default="cpu")
     args = parser.parse_args(argv)
 
@@ -268,7 +306,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     res = precompute_sae(
-        seqs, plm_cache_dir=args.plm_cache_dir, cache_dir=args.cache_dir,
+        seqs, model_size=args.model_size,
+        plm_cache_dir=args.plm_cache_dir, cache_dir=args.cache_dir,
         sae_repo=args.sae_repo, sae_layer=args.sae_layer, device=args.device,
         inline=True,
     )

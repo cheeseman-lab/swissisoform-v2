@@ -1,16 +1,17 @@
-"""ESM Atlas feature descriptions — local index→term cache (PLACEHOLDER for 600M).
+"""ESM Atlas feature descriptions — local index→term cache.
 
 Fetches per-feature functional descriptions from the public Biohub ESM Atlas
-(``https://biohub.ai/esm/protein/api/v1alpha1/features/{idx}``) once and stores
-them locally so the SAE feature module can attach human-readable labels offline
+(``https://biohub.ai/esm/protein/api/v1alpha1/features``) once and stores them
+locally so the SAE feature module can attach human-readable labels offline
 (consistent with the three-phase, no-network-at-annotate-time design).
 
-PROVENANCE / CAVEAT: the Atlas describes the **6B layer-60** SAE dictionary
-(``esmc-6b-2024-12-sae-layer60-k64-codebook16384``). Our features come from the
-**600M layer-27** SAE — a different, independently-trained dictionary — so
-feature #N's Atlas term is NOT guaranteed to match our feature #N. Labels are a
-placeholder until the dictionary decision is made; every attached label carries
-``label_source = ATLAS_PROVENANCE``.
+PROVENANCE: the Atlas describes the **6B layer-60** SAE dictionary
+(``esmc-6b-2024-12-sae-layer60-k64-codebook16384``). When the pipeline runs the
+**6B-layer60** SAE (the default), feature #N IS that dictionary's #N — the labels
+are correct. For any other SAE (e.g. the legacy 600M-layer27 dictionary) the
+indices are NOT aligned, so labels are only a placeholder. Use
+:func:`atlas_provenance` to stamp each label with the right caveat for the SAE
+that produced the feature; every attached label carries that as ``label_source``.
 """
 
 from __future__ import annotations
@@ -24,9 +25,29 @@ logger = logging.getLogger(__name__)
 
 ATLAS_BASE_URL = "https://biohub.ai/esm/protein/api/v1alpha1/features"
 ATLAS_SOURCE_SAE = "esmc-6b-2024-12-sae-layer60-k64-codebook16384"
-ATLAS_PROVENANCE = (
-    f"{ATLAS_SOURCE_SAE} (PLACEHOLDER — not aligned to 600M SAE indices)"
+# The Atlas IS this dictionary. Aligned (correct) provenance vs the placeholder
+# stamp used when a different SAE produced the features.
+ATLAS_PROVENANCE_ALIGNED = ATLAS_SOURCE_SAE
+ATLAS_PROVENANCE_PLACEHOLDER = (
+    f"{ATLAS_SOURCE_SAE} (PLACEHOLDER — not aligned to this SAE's indices)"
 )
+# Back-compat default: the aligned string (pipeline default SAE is 6B-layer60).
+ATLAS_PROVENANCE = ATLAS_PROVENANCE_ALIGNED
+
+
+def atlas_provenance(model_size: str = "6b") -> str:
+    """Label provenance for the SAE that produced the features.
+
+    Aligned (the Atlas describes exactly this dictionary) for the 6B-layer60 SAE;
+    placeholder for any other SAE size, whose indices are not Atlas-aligned.
+    """
+    return (
+        ATLAS_PROVENANCE_ALIGNED
+        if (model_size or "").lower() == "6b"
+        else ATLAS_PROVENANCE_PLACEHOLDER
+    )
+
+
 DEFAULT_CODEBOOK_DIM = 16384
 DEFAULT_ATLAS_PATH = (
     Path(__file__).resolve().parents[3]

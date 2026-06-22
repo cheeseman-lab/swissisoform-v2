@@ -6,8 +6,9 @@ term (label/description) for each. Proteins are identified by their sequence
 hash + length (the per-gene/per-isoform differential view comes from the wired
 pipeline, which carries gene/tis ids).
 
-PLACEHOLDER: terms come from the 6B-layer60 Atlas, not the 600M SAE dictionary
-our features are from — see swissisoform.plm.atlas.ATLAS_PROVENANCE.
+Terms come from the 6B-layer60 ESM-Atlas. With the default 6B SAE these labels
+are correct (the Atlas describes exactly that dictionary); for any other size
+they are a placeholder — see swissisoform.plm.atlas.atlas_provenance.
 
 Usage: python scripts/_sae_top_terms.py
 """
@@ -21,9 +22,13 @@ from pathlib import Path
 
 import numpy as np
 
-from swissisoform.plm.atlas import ATLAS_PROVENANCE, load_atlas
+from swissisoform.plm.atlas import atlas_provenance, load_atlas
+from swissisoform.plm.embed import DEFAULT_MODEL_SIZE
+from swissisoform.plm.sae import sae_cache_dir
 
-SAE_CACHE = Path("data/cache/sae_esmc")
+MODEL_SIZE = DEFAULT_MODEL_SIZE
+SAE_CACHE = sae_cache_dir(MODEL_SIZE)
+PROVENANCE = atlas_provenance(MODEL_SIZE)
 OUT = Path("data/output/cheeseman_13gene/sae_top_terms.csv")
 TOP_N = 5
 
@@ -62,7 +67,7 @@ def main() -> int:
                 "prevalence": prev[fi],
                 "label": term.get("label"),
                 "description": term.get("description"),
-                "label_source": ATLAS_PROVENANCE if term else None,
+                "label_source": PROVENANCE if term else None,
             })
 
     OUT.parent.mkdir(parents=True, exist_ok=True)

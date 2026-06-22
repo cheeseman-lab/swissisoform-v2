@@ -1,21 +1,27 @@
-"""Module: SAE features — interpretable sparse-feature differential (SiteModule).
+"""Module: SAE features — isoform↔canonical feature comparison (SiteModule).
 
 Consumes the per-residue sparse SAE feature codes precomputed by
 :func:`swissisoform.plm.sae.precompute_sae` (cached as ``idx``/``val`` Top-K
-arrays) and asks: *which learned features are differentially active in the
-isoform's unique region vs its shared core?*
+arrays) for **both** the isoform and its canonical protein, and asks two
+questions — the SAE analogue of :class:`~swissisoform.plm.module.PLMVEPModule`'s
+isoform-vs-canonical framing:
 
-Mirrors :class:`~swissisoform.plm.module.PLMVEPModule`'s region split: for
-truncations the diff region is the lost canonical sequence (canonical protein
-space + canonical features); for extensions / uORFs / altORFs it is the new
-isoform sequence (isoform space + isoform features). Per feature it aggregates
-over each region — max activation, mean activation, prevalence (how many region
-residues it fires on) — and ranks features by how much more they cover the
-unique region than the shared core (``delta_density``).
+1. **Categorical changes** — which learned features are *present in one protein
+   but absent in the other* (``features_isoform_only`` /
+   ``features_canonical_only``). A feature is "present" when it fires (is in the
+   residue Top-K) on at least ``min_prevalence`` residues.
+2. **Activation changes** — for features present in *both* (shared), the change in
+   activation going isoform-vs-canonical (``delta_max = isoform.max −
+   canonical.max``, codebase ``isoform − canonical`` convention; positive =
+   stronger in the isoform). The shared deltas reuse
+   :func:`swissisoform.compare.comparator._scalar_deltas`.
 
-Feature *indices* are emitted; human-readable labels are attached separately
-(Step 4, ESM-Atlas — a placeholder dictionary for the 600M SAE). Surfacing is
-descriptive: this is not a scored E/F criterion.
+This is a whole-protein comparison (no positional alignment needed — features are
+compared as protein-level activation profiles). Feature *indices* are emitted;
+human-readable labels come from the ESM-Atlas dictionary, which describes the
+6B-layer60 SAE — so for the default 6B SAE the labels are correct, and only a
+placeholder for other sizes (``model_size``). Surfacing is descriptive: this is
+not a scored E/F criterion.
 """
 
 from __future__ import annotations
@@ -25,93 +31,72 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from swissisoform.compare.comparator import _scalar_deltas
 from swissisoform.config import PipelineConfig
-from swissisoform.models import ORFType, TranslationInitiationSite
-from swissisoform.plm.atlas import ATLAS_PROVENANCE, load_atlas
-from swissisoform.plm.embed import protein_hash
+from swissisoform.models import TranslationInitiationSite
+from swissisoform.plm.atlas import atlas_provenance, load_atlas
+from swissisoform.plm.embed import DEFAULT_MODEL_SIZE, protein_hash
 from swissisoform.plm.sae import DEFAULT_SAE_CACHE_DIR, load_sae_cache
 
 logger = logging.getLogger(__name__)
 
-# Number of top differentially-active features to emit per isoform.
-DEFAULT_TOP_K = 10
-# Density pseudocount so the enrichment ratio is finite for pure-unique features
-# (shared_density == 0). Ranking uses delta_density and is unaffected by it.
-_EPS = 1e-3
+# A feature counts as "present" in a protein when it fires on at least this many
+# residues (i.e. is in the per-residue Top-K). 1 = fires anywhere.
+DEFAULT_MIN_PREVALENCE = 1
 
 
-def _region_indices(
-    site: TranslationInitiationSite,
-) -> tuple[str, list[int], list[int]] | None:
-    """Return ``(space, unique_idx, shared_idx)`` for the diff region.
+def _feature_profile(idx: Any, val: Any, min_prevalence: int) -> dict[int, dict[str, float]]:
+    """Reduce a protein's ``(L, K)`` sparse features to a per-feature profile.
 
-    ``space`` is ``"canonical"`` for truncations (diff region = lost canonical
-    sequence) and ``"isoform"`` otherwise. ``None`` when the diff region has no
-    coordinates in the relevant protein space.
+    Returns ``{feature_index: {"max", "mean", "prevalence"}}`` aggregated over
+    every residue where the feature fires, keeping only features present on at
+    least ``min_prevalence`` residues.
     """
-    dr = site.diff_region
-    if dr is None:
-        return None
-
-    if site.orf_type == ORFType.TRUNCATED:
-        if dr.canonical_start is None or dr.canonical_end is None:
-            return None
-        L = len(site.canonical_protein.rstrip("*"))
-        lo, hi = int(dr.canonical_start), int(dr.canonical_end)
-        space = "canonical"
-    else:
-        if dr.isoform_start is None or dr.isoform_end is None:
-            return None
-        L = len(site.isoform_protein.rstrip("*"))
-        lo, hi = int(dr.isoform_start), int(dr.isoform_end)
-        space = "isoform"
-
-    if L <= 0:
-        return None
-    unique = list(range(max(0, lo), min(L, hi)))
-    unique_set = set(unique)
-    shared = [i for i in range(L) if i not in unique_set]
-    return space, unique, shared
-
-
-def _region_feature_stats(
-    idx: Any, val: Any, residues: list[int]
-) -> dict[int, dict[str, float]]:
-    """Aggregate sparse features over a set of residue rows.
-
-    Returns ``{feature_index: {"max", "sum", "count"}}`` accumulated across the
-    given residues' Top-K activations.
-    """
-    stats: dict[int, dict[str, float]] = defaultdict(
+    acc: dict[int, dict[str, float]] = defaultdict(
         lambda: {"max": 0.0, "sum": 0.0, "count": 0.0}
     )
-    for r in residues:
+    n = int(idx.shape[0])
+    for r in range(n):
         for f, v in zip(idx[r], val[r]):
             fi = int(f)
             fv = float(v)
-            s = stats[fi]
+            s = acc[fi]
             if fv > s["max"]:
                 s["max"] = fv
             s["sum"] += fv
             s["count"] += 1.0
-    return stats
+    return {
+        fi: {
+            "max": round(s["max"], 4),
+            "mean": round(s["sum"] / s["count"], 4),
+            "prevalence": int(s["count"]),
+        }
+        for fi, s in acc.items()
+        if s["count"] >= min_prevalence
+    }
 
 
 class SAEFeatureModule:
-    """ESM-C SAE differential-feature module (SiteModule)."""
+    """ESM-C SAE isoform↔canonical feature-comparison module (SiteModule)."""
 
     MODULE_NAME: str = "sae"
     OUTPUT_COLUMNS: list[str] = [
         "sae_status",
-        "sae_region_space",
-        "sae_n_unique_residues",
-        "sae_n_shared_residues",
-        "sae_n_active_features_unique",
-        "sae_n_features_enriched",
-        "sae_top_feature_index",
-        "sae_top_feature_label",
-        "sae_top_feature_delta_density",
-        "sae_top_features",
+        "sae_n_isoform_total",
+        "sae_n_canonical_total",
+        "sae_n_isoform_only",
+        "sae_n_canonical_only",
+        "sae_n_shared",
+        "sae_mean_abs_delta_shared",
+        "sae_top_gained_feature_index",
+        "sae_top_gained_feature_label",
+        "sae_top_gained_delta_max",
+        "sae_top_lost_feature_index",
+        "sae_top_lost_feature_label",
+        "sae_top_lost_delta_max",
+        "sae_features_isoform_only",
+        "sae_features_canonical_only",
+        "sae_shared_feature_deltas",
     ]
     SCOPE: str = "C"
 
@@ -120,131 +105,183 @@ class SAEFeatureModule:
         config: PipelineConfig,
         *,
         cache_dir: Path | str = DEFAULT_SAE_CACHE_DIR,
-        top_k: int = DEFAULT_TOP_K,
         atlas: dict[int, dict[str, Any]] | None = None,
+        model_size: str = DEFAULT_MODEL_SIZE,
+        min_prevalence: int = DEFAULT_MIN_PREVALENCE,
+        top_k: int | None = None,
     ) -> None:
         """Initialize the module.
 
         Args:
             config: Pipeline configuration.
-            cache_dir: Directory holding the sparse-feature ``<hash>.npz`` files.
-            top_k: How many top differentially-active features to emit per TIS.
-            atlas: ``{feature_index: {label, category, ...}}`` term dictionary
-                used to attach human-readable labels. Defaults to the local
-                ESM-Atlas cache (empty if not fetched → index-only output).
-                NOTE: the Atlas describes the 6B-layer60 dictionary — labels are
-                a PLACEHOLDER for the 600M features (see ``ATLAS_PROVENANCE``).
+            cache_dir: Directory holding the sparse-feature ``<hash>.npz`` files
+                (default the per-size SAE cache, e.g. ``data/cache/sae_esmc/6B``).
+            atlas: ``{feature_index: {label, description, ...}}`` term dictionary
+                for human-readable labels. Defaults to the local ESM-Atlas cache
+                (empty if not fetched → index-only output).
+            model_size: ESM-C size of the SAE that produced the features. The
+                Atlas describes the 6B-layer60 dictionary, so for ``6b`` the
+                labels are correct; for any other size they are a PLACEHOLDER
+                (see :func:`~swissisoform.plm.atlas.atlas_provenance`).
+            min_prevalence: Residue-count threshold for a feature to count as
+                "present" in a protein (default 1 = fires anywhere).
+            top_k: If set, truncate the three emitted feature lists to this many
+                entries (counts/summary still reflect the full sets). Used when
+                wiring into the pipeline so ``all_paired.parquet`` list columns
+                stay bounded; the standalone export uses ``None`` (full lists).
         """
         self.config = config
         self.cache_dir = Path(cache_dir)
-        self.top_k = top_k
         self.atlas = load_atlas() if atlas is None else atlas
+        self.model_size = model_size
+        self.min_prevalence = min_prevalence
+        self.top_k = top_k
+        self._provenance = atlas_provenance(model_size)
 
     def _label(self, feature_index: int) -> tuple[str | None, str | None, str | None]:
         """Return ``(label, description, label_source)`` for a feature index."""
         term = self.atlas.get(feature_index)
         if not term:
             return None, None, None
-        return term.get("label"), term.get("description"), ATLAS_PROVENANCE
+        return term.get("label"), term.get("description"), self._provenance
 
     def _load_features(self, protein: str) -> dict[str, Any] | None:
         if not protein:
             return None
         return load_sae_cache(protein_hash(protein), self.cache_dir)
 
-    def annotate_site(self, site: TranslationInitiationSite) -> dict[str, Any]:
-        """Compute the unique-vs-shared SAE feature differential for one TIS."""
-        empty: dict[str, Any] = {
-            "status": "not_run",
-            "region_space": None,
-            "n_unique_residues": None,
-            "n_shared_residues": None,
-            "n_active_features_unique": None,
-            "n_features_enriched": None,
-            "top_feature_index": None,
-            "top_feature_label": None,
-            "top_feature_delta_density": None,
-            "top_features": [],
+    def _unique_entry(self, f: int, prof: dict[str, float]) -> dict[str, Any]:
+        """Build a record for a feature present in only one protein."""
+        label, description, source = self._label(f)
+        return {
+            "feature_index": f,
+            "label": label,
+            "description": description,
+            "label_source": source,
+            "max": prof["max"],
+            "mean": prof["mean"],
+            "prevalence": prof["prevalence"],
         }
 
-        region = _region_indices(site)
-        if region is None:
-            empty["status"] = "no_diff_region"
-            return empty
-        space, unique_idx, shared_idx = region
-        if not unique_idx:
-            empty["status"] = "no_diff_region"
-            return empty
+    def annotate_site(self, site: TranslationInitiationSite) -> dict[str, Any]:
+        """Compute the isoform-vs-canonical SAE feature comparison for one TIS."""
+        empty: dict[str, Any] = {
+            "status": "not_run",
+            "n_isoform_total": None,
+            "n_canonical_total": None,
+            "n_isoform_only": None,
+            "n_canonical_only": None,
+            "n_shared": None,
+            "mean_abs_delta_shared": None,
+            "top_gained_feature_index": None,
+            "top_gained_feature_label": None,
+            "top_gained_delta_max": None,
+            "top_lost_feature_index": None,
+            "top_lost_feature_label": None,
+            "top_lost_delta_max": None,
+            "features_isoform_only": [],
+            "features_canonical_only": [],
+            "shared_feature_deltas": [],
+        }
 
-        protein = site.canonical_protein if space == "canonical" else site.isoform_protein
-        feats = self._load_features(protein)
-        if feats is None or feats.get("idx") is None:
+        iso = self._load_features(site.isoform_protein)
+        can = self._load_features(site.canonical_protein)
+        if (
+            iso is None or can is None
+            or iso.get("idx") is None or can.get("idx") is None
+        ):
             empty["status"] = "no_cache"
             return empty
 
-        idx, val = feats["idx"], feats["val"]
-        L = int(idx.shape[0])
-        # Defensive: cached features must cover the indexed residues.
-        if L < (max(unique_idx + shared_idx) + 1 if (unique_idx or shared_idx) else 0):
-            logger.warning(
-                "sae: cached features length %d shorter than %s protein indices for %s",
-                L, space, site.tis_id,
-            )
-            empty["status"] = "length_mismatch"
-            return empty
+        iso_prof = _feature_profile(iso["idx"], iso["val"], self.min_prevalence)
+        can_prof = _feature_profile(can["idx"], can["val"], self.min_prevalence)
+        iso_keys, can_keys = set(iso_prof), set(can_prof)
 
-        n_unique = len(unique_idx)
-        n_shared = len(shared_idx)
-        u_stats = _region_feature_stats(idx, val, unique_idx)
-        s_stats = _region_feature_stats(idx, val, shared_idx)
+        # ── 1. Categorical: features present in only one protein ─────────────
+        features_isoform_only = sorted(
+            (self._unique_entry(f, iso_prof[f]) for f in iso_keys - can_keys),
+            key=lambda d: d["max"],
+            reverse=True,
+        )
+        features_canonical_only = sorted(
+            (self._unique_entry(f, can_prof[f]) for f in can_keys - iso_keys),
+            key=lambda d: d["max"],
+            reverse=True,
+        )
 
-        rows: list[dict[str, Any]] = []
-        for f, u in u_stats.items():
-            u_count = u["count"]
-            if u_count == 0:
-                continue
-            u_density = u_count / n_unique if n_unique else 0.0
-            s = s_stats.get(f)
-            s_density = (s["count"] / n_shared) if (s and n_shared) else 0.0
-            label, description, label_source = self._label(int(f))
-            rows.append(
+        # ── 2. Activation deltas for shared features (isoform − canonical) ───
+        shared = iso_keys & can_keys
+        # Reuse the comparator's isoform−canonical delta over the per-feature
+        # peak-activation profiles (keys must be str for _scalar_deltas).
+        delta_max = _scalar_deltas(
+            {str(f): can_prof[f]["max"] for f in shared},
+            {str(f): iso_prof[f]["max"] for f in shared},
+        )
+        delta_mean = _scalar_deltas(
+            {str(f): can_prof[f]["mean"] for f in shared},
+            {str(f): iso_prof[f]["mean"] for f in shared},
+        )
+        shared_feature_deltas: list[dict[str, Any]] = []
+        for f in shared:
+            label, description, source = self._label(f)
+            shared_feature_deltas.append(
                 {
-                    "feature_index": int(f),
+                    "feature_index": f,
                     "label": label,
                     "description": description,
-                    "label_source": label_source,
-                    "unique_max": round(u["max"], 4),
-                    "unique_mean": round(u["sum"] / u_count, 4),
-                    "unique_prevalence": int(u_count),
-                    "unique_density": round(u_density, 4),
-                    "shared_density": round(s_density, 4),
-                    "delta_density": round(u_density - s_density, 4),
-                    "enrichment": round((u_density + _EPS) / (s_density + _EPS), 3),
+                    "label_source": source,
+                    "isoform_max": iso_prof[f]["max"],
+                    "canonical_max": can_prof[f]["max"],
+                    "delta_max": round(delta_max[f"{f}_delta"], 4),
+                    "isoform_mean": iso_prof[f]["mean"],
+                    "canonical_mean": can_prof[f]["mean"],
+                    "delta_mean": round(delta_mean[f"{f}_delta"], 4),
+                    "isoform_prevalence": iso_prof[f]["prevalence"],
+                    "canonical_prevalence": can_prof[f]["prevalence"],
                 }
             )
+        shared_feature_deltas.sort(key=lambda d: abs(d["delta_max"]), reverse=True)
 
-        # Rank by how much more the feature covers the unique region than the
-        # shared core; tie-break by peak activation in the unique region.
-        rows.sort(key=lambda d: (d["delta_density"], d["unique_max"]), reverse=True)
-        top = rows[: self.top_k]
+        gained = max(shared_feature_deltas, key=lambda d: d["delta_max"], default=None)
+        lost = min(shared_feature_deltas, key=lambda d: d["delta_max"], default=None)
+        mean_abs_delta = (
+            round(
+                sum(abs(d["delta_max"]) for d in shared_feature_deltas)
+                / len(shared_feature_deltas),
+                4,
+            )
+            if shared_feature_deltas
+            else None
+        )
 
         return {
             "status": "ok",
-            "region_space": space,
-            "n_unique_residues": n_unique,
-            "n_shared_residues": n_shared,
-            "n_active_features_unique": len(rows),
-            "n_features_enriched": sum(1 for r in rows if r["delta_density"] > 0),
-            "top_feature_index": top[0]["feature_index"] if top else None,
-            "top_feature_label": top[0]["label"] if top else None,
-            "top_feature_delta_density": top[0]["delta_density"] if top else None,
-            "top_features": top,
+            "n_isoform_total": len(features_isoform_only) + len(shared),
+            "n_canonical_total": len(features_canonical_only) + len(shared),
+            "n_isoform_only": len(features_isoform_only),
+            "n_canonical_only": len(features_canonical_only),
+            "n_shared": len(shared),
+            "mean_abs_delta_shared": mean_abs_delta,
+            "top_gained_feature_index": gained["feature_index"] if gained else None,
+            "top_gained_feature_label": gained["label"] if gained else None,
+            "top_gained_delta_max": gained["delta_max"] if gained else None,
+            "top_lost_feature_index": lost["feature_index"] if lost else None,
+            "top_lost_feature_label": lost["label"] if lost else None,
+            "top_lost_delta_max": lost["delta_max"] if lost else None,
+            # Counts above reflect the full sets; lists may be truncated for the
+            # pipeline (top_k) — the full inventory lives in the export.
+            "features_isoform_only": features_isoform_only[: self.top_k] if self.top_k
+            else features_isoform_only,
+            "features_canonical_only": features_canonical_only[: self.top_k] if self.top_k
+            else features_canonical_only,
+            "shared_feature_deltas": shared_feature_deltas[: self.top_k] if self.top_k
+            else shared_feature_deltas,
         }
 
     def run(
         self, tis_sites: list[TranslationInitiationSite]
     ) -> list[TranslationInitiationSite]:
-        """Attach SAE differential-feature annotations to each TIS."""
+        """Attach SAE isoform↔canonical comparison annotations to each TIS."""
         for site in tis_sites:
             site.isoform_annotations[self.MODULE_NAME] = self.annotate_site(site)
         return tis_sites
