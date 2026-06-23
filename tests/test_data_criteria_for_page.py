@@ -3,6 +3,10 @@
 import json
 from pathlib import Path
 
+import pytest
+
+pytest.importorskip("swissisoform_site")  # optional website package; skip if not installed
+
 from swissisoform_site.data import CRITERIA_FOR_PAGE, llm_criterion_for_isoform
 
 

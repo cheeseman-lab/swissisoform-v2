@@ -11,6 +11,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
+pytest.importorskip("swissisoform_site")  # optional website package; skip if not installed
+
 from swissisoform_site.plots import protein as pplot
 
 # Lollipop heads/stems live at this y (see protein._ISO_Y + 0.55).

@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
+pytest.importorskip("swissisoform_site")  # optional website package; skip if not installed
+
 from swissisoform_site.plots import transcript as tplot
 
 

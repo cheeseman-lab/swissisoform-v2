@@ -14,6 +14,10 @@ from pathlib import Path
 
 import pytest
 
+# The Flask viewer is a separate deployable with its own env (Railway/Docker);
+# skip these in the bio env, which doesn't carry a working flask/werkzeug stack.
+pytest.importorskip("swissisoform_site.app")
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WEBSITE_SRC = REPO_ROOT / "website" / "src"
 WEBSITE_DATA = REPO_ROOT / "website" / "data"
@@ -293,7 +297,8 @@ def test_isoform_page_truncation_marks_differential_region(client):
 
 def test_criterion_evidence_folds_into_score_popups(client):
     """Differential evidence is keyed by criterion id and embedded per modal."""
-    from swissisoform_site.data import criterion_evidence_for, load_all, tis_slug as make_slug
+    from swissisoform_site.data import criterion_evidence_for, load_all
+    from swissisoform_site.data import tis_slug as make_slug
 
     iso = load_all()["MSRA"].isoforms[0]
     ce = criterion_evidence_for(iso)
@@ -350,7 +355,8 @@ def test_domains_massspec_are_canonical_vs_isoform(client):
 def test_comparison_tables_use_two_standard_flavors(client):
     """Every comparison table is one of two flavors — Canonical|Isoform or
     Differential|Shared — so the modals read consistently. E1/E2 frame is the
-    one documented exception (its differential side flips with diff_space)."""
+    one documented exception (its differential side flips with diff_space).
+    """
     from swissisoform_site.data import criterion_evidence_for, load_all
 
     genes = load_all()
@@ -376,7 +382,8 @@ def test_comparison_tables_use_two_standard_flavors(client):
 def test_details_boxes_are_qualitative_lists_only(client):
     """The Details box should host only qualitative info (hit lists — peptides,
     gained/lost domains), never single-scalar key/value rows. Scalars belong in a
-    comparison table (two-sided) or a section caption (single)."""
+    comparison table (two-sided) or a section caption (single).
+    """
     from swissisoform_site.data import criterion_evidence_for, load_all
 
     genes = load_all()
