@@ -1,4 +1,4 @@
-"""CLI entrypoint: precompute Boltz-2 / Chai-1 structures for a FASTA.
+"""CLI entrypoint: precompute ESMFold2 / Boltz-2 / Chai-1 structures for a FASTA.
 
 Invoked from ``scripts/slurm/run_fold.sbatch`` on a GPU node. Reads a FASTA,
 dedupes by sequence hash, runs the chosen backend, writes per-protein
@@ -53,9 +53,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--backend",
-        choices=["boltz", "chai"],
+        choices=["esmfold2", "boltz", "chai"],
         default=DEFAULT_BACKEND,
-        help="Folding backend.",
+        help="Folding backend (default: esmfold2).",
     )
     parser.add_argument(
         "--max-seq-len",

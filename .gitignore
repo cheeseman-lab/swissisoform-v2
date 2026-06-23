@@ -45,3 +45,6 @@ docs/methods/*.pdf
 
 # regression baselines (re-derivable from a 13-gene run)
 tests/regression/baseline/
+
+# personal local run wrapper (hardcoded paths) — keep out of repo
+scripts/_run_cheeseman13.sh

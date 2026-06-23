@@ -61,7 +61,8 @@ class StructureModule:
         Args:
             config: Pipeline configuration.
             cache_dir: Root cache directory (per-backend subdirs underneath).
-            backend: Which backend's cache to read (``"boltz"`` or ``"chai"``).
+            backend: Which backend's cache to read (``"esmfold2"`` default,
+                ``"boltz"`` or ``"chai"``).
         """
         self.config = config
         self.cache_dir = Path(cache_dir)

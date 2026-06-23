@@ -10,23 +10,27 @@
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 
-# Precompute Boltz-2 (default) or Chai-1 structures for a FASTA of
+# Precompute ESMFold2 (default), Boltz-2 or Chai-1 structures for a FASTA of
 # proteins. Caches per-protein under
 # data/cache/structure/<backend>/<hash>/{model.cif, confidence.json, metrics.json}.
 #
 # Usage:
-#   sbatch scripts/slurm/run_fold.sbatch <fasta_path> [boltz|chai]
-# Defaults: data/cache/proteins.fa, backend=boltz.
+#   sbatch scripts/slurm/run_fold.sbatch <fasta_path> [esmfold2|boltz|chai]
+# Defaults: data/cache/proteins.fa, backend=esmfold2.
 
 set -euo pipefail
 
 cd "${SLURM_SUBMIT_DIR:-.}"
 
 eval "$(conda shell.bash hook)"
+# Prefer the dedicated fold env; fall back to the base env (it carries the
+# .[fold] deps after the Python 3.12 migration).
 if conda env list | grep -q "^swissisoform-v2-fold "; then
     conda activate swissisoform-v2-fold
+elif conda env list | grep -q "^swissisoform-v2 "; then
+    conda activate swissisoform-v2
 else
-    echo "swissisoform-v2-fold env missing — create with:" >&2
+    echo "no swissisoform-v2[-fold] env — create with:" >&2
     echo "  conda create -n swissisoform-v2-fold -c conda-forge python=3.12 uv pip -y" >&2
     echo "  conda activate swissisoform-v2-fold" >&2
     echo "  uv pip install -e '.[fold]'" >&2
@@ -34,7 +38,7 @@ else
 fi
 
 FASTA="${1:-data/cache/proteins.fa}"
-BACKEND="${2:-boltz}"
+BACKEND="${2:-esmfold2}"
 if [[ ! -f "$FASTA" ]]; then
     echo "FASTA not found: $FASTA  (run: python scripts/run.py <mode> --emit-fasta)" >&2
     exit 1

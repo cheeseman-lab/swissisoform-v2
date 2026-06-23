@@ -95,12 +95,12 @@ class StructureConfig:
     """Configuration for structure prediction (Module 7).
 
     Attributes:
-        method: Structure prediction method ('chai1', 'esmfold', etc.).
+        backend: Folding backend ('esmfold2' default, 'boltz', or 'chai').
         device: Compute device ('cuda' or 'cpu').
         batch_size: Number of sequences per prediction batch.
     """
 
-    method: str = "chai1"
+    backend: str = "esmfold2"
     device: str = "cuda"
     batch_size: int = 4
 

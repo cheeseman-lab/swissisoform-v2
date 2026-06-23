@@ -55,6 +55,7 @@ from swissisoform.modules.variant_intersection import VariantIntersectionModule
 from swissisoform.modules.varianteffect import VariantEffectModule
 from swissisoform.pipeline import AnnotationPipeline, UpstreamReference, run_sample
 from swissisoform.plm.module import PLMVEPModule
+from swissisoform.plm.sae_module import SAEFeatureModule
 from swissisoform.references import (
     ALL_CELL_LINES,
     GENOME,
@@ -339,14 +340,14 @@ def run_precompute(genes, all_proteins: list[str], skip: set[str]) -> dict:
     )
 
     # PLM VEP + Structure: cache lookup only (populate via sbatch GPU scripts).
-    from swissisoform.plm.embed import precompute_plm_esm2
+    from swissisoform.plm.embed import precompute_plm
     from swissisoform.structure.fold import precompute_fold
 
     preds["plm"] = (
-        precompute_plm_esm2(all_proteins, inline=False) if "plm_vep" not in skip else {}
+        precompute_plm(all_proteins, inline=False) if "plm_vep" not in skip else {}
     )
     preds["structure"] = (
-        precompute_fold(all_proteins, backend="boltz", inline=False)
+        precompute_fold(all_proteins, inline=False)  # backend defaults to DEFAULT_BACKEND
         if "structure" not in skip else {}
     )
 
@@ -428,6 +429,11 @@ def build_pipeline(cfg, preds, ref, genes, skip: set[str]) -> AnnotationPipeline
         site_mods.append(VariantIntersectionModule(validator=validator))
     if "plm_vep" not in skip:
         site_mods.append(PLMVEPModule(cfg))
+    if "sae" not in skip:
+        # Reads the per-protein 6B SAE caches (sae_esmc/<SIZE>); top_k bounds the
+        # list columns flattened into all_paired (full inventory lives in the
+        # standalone export). Emits status=no_cache when a protein isn't encoded.
+        site_mods.append(SAEFeatureModule(cfg, top_k=30))
     if "varianteffect" not in skip:
         site_mods.append(
             VariantEffectModule(

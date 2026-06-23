@@ -10,7 +10,7 @@ import pytest
 from swissisoform.plm.module import PLMVEPModule
 from swissisoform.plm.embed import (
     load_cache,
-    precompute_plm_esm2,
+    precompute_plm,
     protein_hash,
 )
 
@@ -40,14 +40,14 @@ class TestEmbedCache:
     def test_precompute_skip_missing_when_inline_false(self, tmp_path):
         """With inline=False, uncached proteins are skipped silently."""
         proteins = {"a": "MAEPRSTV", "b": "MGGGAA"}
-        res = precompute_plm_esm2(proteins, cache_dir=tmp_path, inline=False)
+        res = precompute_plm(proteins, cache_dir=tmp_path, inline=False)
         assert res == {}
 
     def test_precompute_returns_cached_only(self, tmp_path):
         seq = "MAEPRSTV"
         llr = np.array([-1.0] * len(seq), dtype=np.float32)
         h = _seed_cache(tmp_path, seq, llr)
-        res = precompute_plm_esm2({"x": seq}, cache_dir=tmp_path, inline=False)
+        res = precompute_plm({"x": seq}, cache_dir=tmp_path, inline=False)
         assert h in res
         np.testing.assert_array_almost_equal(res[h]["llr"], llr)
 

@@ -18,7 +18,7 @@
 #   annotate  python scripts/run.py <args>                 (CPU: annotate + score + paired parquet)
 #
 # Modes (consumed here; everything else forwards verbatim to run.py):
-#   --clear-cache     wipe data/cache/{plm_esm2,structure,pepquery,tmp} first
+#   --clear-cache     wipe data/cache/{plm_esmc,structure,pepquery,tmp} first
 #                     (forces full regeneration — use for a clean, confident rebuild)
 #   --annotate-only   skip the GPU stage and reuse the WARM fold/PLM caches
 #                     (fast surgical re-run; no re-folding). Equivalent caches must exist.
@@ -90,8 +90,8 @@ _stamp "run: args='${RUN_ARGS[*]}'  clear_cache=$clear_cache  annotate_only=$ann
 # ── (optional) clear caches for a clean, confident rebuild ──────────────────
 if (( clear_cache )); then
     run_stage clear-cache bash -c '
-        rm -rf data/cache/plm_esm2 data/cache/structure data/cache/pepquery data/cache/tmp
-        echo "  wiped data/cache/{plm_esm2,structure,pepquery,tmp}"'
+        rm -rf data/cache/plm_esmc data/cache/structure data/cache/pepquery data/cache/tmp
+        echo "  wiped data/cache/{plm_esmc,structure,pepquery,tmp}"'
 fi
 
 # ── prepare (CPU): emit the deduped proteins FASTA ──────────────────────────
@@ -102,7 +102,15 @@ if (( skip_gpu )); then
     _stamp "STAGE SKIP:  gpu (annotate-only / --no-gpu / both GPU modules skipped — reusing warm caches)"
 else
     gpu_stage() {
-        plm_id=$(sbatch --parsable scripts/slurm/run_plm_embed.sbatch "$FASTA")
+        # The embed job also runs the SAE encode (sae_esmc/) unless SAE is being
+        # skipped in annotate — propagate that as an env var to the embed job.
+        local plm_export=()
+        if [[ " ${RUN_ARGS[*]} " == *"--skip-modules"* && " ${RUN_ARGS[*]} " == *"sae"* ]]; then
+            plm_export=(--export=ALL,SWISSISO_SKIP_SAE=1)
+            _stamp "  --skip-modules sae → SAE encode disabled in embed job"
+        fi
+        plm_id=$(sbatch --parsable "${plm_export[@]+"${plm_export[@]}"}" \
+            scripts/slurm/run_plm_embed.sbatch "$FASTA")
         fold_id=$(sbatch --parsable scripts/slurm/run_fold.sbatch "$FASTA" boltz)
         _stamp "  submitted plm=$plm_id fold=$fold_id"
         # Cancel both GPU jobs if this orchestrator dies, so neither is orphaned.

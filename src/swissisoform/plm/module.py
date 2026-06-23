@@ -1,7 +1,7 @@
-"""Module: PLM VEP — variant-effect scores from ESM-2 masked-marginal LLR.
+"""Module: PLM VEP — variant-effect scores from ESM-C masked-marginal LLR.
 
 Consumes per-residue log-likelihood scores (computed offline by
-``swissisoform.plm.embed.precompute_plm_esm2``) and emits TIS-level
+``swissisoform.plm.embed.precompute_plm``) and emits TIS-level
 constraint metrics:
 
 - mean LLR over the isoform-unique region,
@@ -10,7 +10,7 @@ constraint metrics:
 - count of strongly-constrained positions (LLR < threshold) in the unique region.
 
 Why a SiteModule, not a ProteinModule: LLR is context-dependent — running
-ESM-2 on ``diff_region.sequence`` alone (Scope-A re-run) gives different
+ESM-C on ``diff_region.sequence`` alone (Scope-A re-run) gives different
 scores than slicing the same positions out of the full-protein forward
 pass. So we compute LLR on the full canonical and isoform proteins, then
 slice to unique/shared regions per the diff_region coordinates.
@@ -33,8 +33,9 @@ from swissisoform.plm.embed import DEFAULT_CACHE_DIR, load_cache, protein_hash
 
 logger = logging.getLogger(__name__)
 
-# Empirical threshold: ESM-2 650M log-probs below ~-5 mark strongly-constrained
-# positions in human proteomes (top decile of constraint).
+# LLR threshold below which a position counts as strongly-constrained.
+# -5.0 was the ESM-2 650M top-decile cutoff; ESM-C LLR magnitudes differ, so
+# this is PROVISIONAL for ESM-C and should be recalibrated on a genome-wide run.
 DEFAULT_CONSTRAINT_THRESHOLD = -5.0
 
 
@@ -49,7 +50,7 @@ def _safe_mean(arr: Any) -> float | None:
 
 
 class PLMVEPModule:
-    """ESM-2 masked-marginal variant-effect predictor (SiteModule)."""
+    """ESM-C masked-marginal variant-effect predictor (SiteModule)."""
 
     MODULE_NAME: str = "plm_vep"
     OUTPUT_COLUMNS: list[str] = [
