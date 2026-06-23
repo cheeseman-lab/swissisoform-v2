@@ -172,7 +172,7 @@ def _save_cache(
     h: str,
     cache_dir: Path,
     *,
-    llr: Any,
+    llr: Any | None = None,
     aa_logprobs: Any | None = None,
     embedding: Any | None = None,
     embedding_sae: Any | None = None,
@@ -180,7 +180,9 @@ def _save_cache(
     import numpy as np
 
     cache_dir.mkdir(parents=True, exist_ok=True)
-    payload: dict[str, Any] = {"llr": np.asarray(llr, dtype=np.float32)}
+    payload: dict[str, Any] = {}
+    if llr is not None:
+        payload["llr"] = np.asarray(llr, dtype=np.float32)
     if aa_logprobs is not None:
         payload["aa_logprobs"] = np.asarray(aa_logprobs, dtype=np.float32)
     # Store residual-stream reps as fp32, not fp16: deep models (esp. ESM-C 6B)
@@ -227,6 +229,7 @@ def _esmc_forward_one(
     *,
     sae_layer: int = SAE_LAYER,
     mask_chunk: int = 16,
+    compute_llr: bool = True,
 ) -> dict[str, Any]:
     """Single forward pass: per-residue last-layer embeddings + per-position LLR.
 
@@ -234,6 +237,11 @@ def _esmc_forward_one(
     of the wild-type AA. O(L) forward passes per sequence (the hot path),
     batched in chunks of ``mask_chunk``. Embeddings come from the final hidden
     layer; the SAE-target representation comes from block ``sae_layer``.
+
+    When ``compute_llr`` is False, Pass 2 (the masked-marginal sweep) is skipped
+    entirely — only the single embedding forward runs, and ``llr``/``aa_logprobs``
+    come back ``None``. This is the embeddings/SAE-only path (no variant-effect
+    LLR), which costs one forward per protein instead of ``1 + L``.
     """
     import numpy as np
     import torch
@@ -243,8 +251,10 @@ def _esmc_forward_one(
     hidden_dim = _hidden_dim(model)
     if L == 0:
         return {
-            "llr": np.zeros(0, dtype=np.float32),
-            "aa_logprobs": np.zeros((0, len(STANDARD_AA)), dtype=np.float32),
+            "llr": np.zeros(0, dtype=np.float32) if compute_llr else None,
+            "aa_logprobs": (
+                np.zeros((0, len(STANDARD_AA)), dtype=np.float32) if compute_llr else None
+            ),
             "embedding": np.zeros((0, hidden_dim), dtype=np.float16),
             "embedding_sae": np.zeros((0, hidden_dim), dtype=np.float16),
         }
@@ -271,6 +281,15 @@ def _esmc_forward_one(
     embedding_sae = (
         out.hidden_states[sae_layer][0, 1 : L + 1, :].float().cpu().numpy()
     )
+
+    # Embeddings/SAE-only path: skip the O(L) masked-marginal sweep entirely.
+    if not compute_llr:
+        return {
+            "llr": None,
+            "aa_logprobs": None,
+            "embedding": embedding,
+            "embedding_sae": embedding_sae,
+        }
 
     # Pass 2: masked marginals for LLR.
     # Build a (L, L+2) batch where row i has position (i+1) replaced by <mask>.
@@ -365,6 +384,7 @@ def precompute_plm(
     require_aa_logprobs: bool = False,
     require_embedding_sae: bool = False,
     mask_chunk: int | None = None,
+    compute_llr: bool = True,
 ) -> dict[str, dict[str, Any]]:
     """Run (or load cached) ESM-C embeddings + LLR for a batch of proteins.
 
@@ -392,6 +412,10 @@ def precompute_plm(
             recomputed. Used to backfill the key into older cache files.
         mask_chunk: Masked-marginal batch size. ``None`` → size-aware default
             (16 for ≤600M, 8 for 6B to bound VRAM on long proteins).
+        compute_llr: When True (default) run the masked-marginal LLR sweep
+            (``1 + L`` forwards/protein). When False, run only the single
+            embedding forward (embeddings + SAE layer); ``llr``/``aa_logprobs``
+            are omitted from the cache. The embeddings/SAE-only fast path.
 
     Returns:
         ``{protein_hash: {"llr": np.ndarray, "aa_logprobs": np.ndarray | None,
@@ -472,6 +496,7 @@ def precompute_plm(
                     payload = _esmc_forward_one(
                         seq, model, tokenizer, device,
                         sae_layer=sae_layer, mask_chunk=mask_chunk,
+                        compute_llr=compute_llr,
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.error(

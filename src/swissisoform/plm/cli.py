@@ -83,7 +83,20 @@ def main(argv: list[str] | None = None) -> int:
         "instead of recomputing them.",
     )
     parser.set_defaults(require_embedding_sae=True)
+    parser.add_argument(
+        "--no-llr",
+        dest="compute_llr",
+        action="store_false",
+        help="Skip the masked-marginal LLR sweep (Pass 2); compute only the "
+        "single embedding forward (embeddings + SAE layer). Much faster — one "
+        "forward per protein instead of 1+L.",
+    )
+    parser.set_defaults(compute_llr=True)
     args = parser.parse_args(argv)
+
+    # LLR off ⇒ don't also demand aa_logprobs in cache validation (contradictory).
+    if not args.compute_llr:
+        args.require_aa_logprobs = False
 
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -108,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
         inline=True,
         require_aa_logprobs=args.require_aa_logprobs,
         require_embedding_sae=args.require_embedding_sae,
+        compute_llr=args.compute_llr,
     )
     print(f"Wrote {len(res)} cache entries to {args.cache_dir}")
     return 0
