@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=mdiberna_fold
+#SBATCH --job-name=swissiso_fold
 #SBATCH --partition=nvidia-A6000-20
 #SBATCH --gres=gpu:1
 #SBATCH --nodes=1
@@ -20,16 +20,16 @@
 
 set -euo pipefail
 
-cd /lab/barcheese01/mdiberna/swissisoform-v2
+cd "${SLURM_SUBMIT_DIR:-.}"
 
 eval "$(conda shell.bash hook)"
 if conda env list | grep -q "^swissisoform-v2-fold "; then
     conda activate swissisoform-v2-fold
 else
     echo "swissisoform-v2-fold env missing — create with:" >&2
-    echo "  conda create -n swissisoform-v2-fold -c conda-forge python=3.11 uv pip -y" >&2
+    echo "  conda create -n swissisoform-v2-fold -c conda-forge python=3.12 uv pip -y" >&2
     echo "  conda activate swissisoform-v2-fold" >&2
-    echo "  uv pip install 'boltz[cuda]' chai_lab tmtools biotite" >&2
+    echo "  uv pip install -e '.[fold]'" >&2
     exit 2
 fi
 

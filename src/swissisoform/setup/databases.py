@@ -731,9 +731,12 @@ DEEPLOC_DIR = REF / "deeploc"
 DEEPLOC_TARBALL_NAME = "deeploc-2.1.All.tar.gz"
 DEEPLOC_TARBALL = DEEPLOC_DIR / DEEPLOC_TARBALL_NAME
 DEEPLOC_ENV_NAME = "swissisoform-v2-deeploc"
-# Source tarball — the DTU DeepLoc release isn't freely redownloadable, so
-# we copy from the sibling swissisoform v1 project where it already lives.
-DEEPLOC_SOURCE = Path("/lab/barcheese01/mdiberna/swissisoform/deeploc-2.1.All.tar.gz")
+# Source tarball — the DTU DeepLoc release isn't freely redownloadable and isn't
+# bundled. Point the SWISSISOFORM_DEEPLOC_TARBALL env var at a local copy (e.g. a
+# sibling swissisoform v1 checkout).
+_DEEPLOC_SOURCE_ENV = "SWISSISOFORM_DEEPLOC_TARBALL"
+_deeploc_src = os.environ.get(_DEEPLOC_SOURCE_ENV)
+DEEPLOC_SOURCE = Path(_deeploc_src) if _deeploc_src else None
 
 
 def _conda_env_exists(name: str) -> bool:
@@ -801,11 +804,11 @@ def setup_deeploc(refresh: bool = False) -> None:
     DEEPLOC_DIR.mkdir(parents=True, exist_ok=True)
 
     if not DEEPLOC_TARBALL.exists() or refresh:
-        if not DEEPLOC_SOURCE.exists():
+        if DEEPLOC_SOURCE is None or not DEEPLOC_SOURCE.exists():
             raise FileNotFoundError(
-                f"DeepLoc tarball not found at {DEEPLOC_SOURCE}.  Download "
-                "from https://services.healthtech.dtu.dk/services/DeepLoc-2.0/ "
-                "(requires DTU registration) and place it there."
+                f"DeepLoc tarball not found — set {_DEEPLOC_SOURCE_ENV} to a local "
+                "deeploc-2.1.All.tar.gz (from DTU registration at "
+                "https://services.healthtech.dtu.dk/services/DeepLoc-2.0/)."
             )
         logger.info("deeploc: copying %s → %s", DEEPLOC_SOURCE, DEEPLOC_TARBALL)
         shutil.copyfile(DEEPLOC_SOURCE, DEEPLOC_TARBALL)

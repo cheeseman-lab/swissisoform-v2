@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=mdiberna_zoonomia_hal
+#SBATCH --job-name=swissiso_zoonomia_hal
 #SBATCH --partition=20
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

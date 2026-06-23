@@ -8,9 +8,11 @@ version = "2.0.0"
 description = "Analysis pipeline for alternative protein isoforms from translation initiation sequencing"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.11"
+requires-python = ">=3.12,<3.13"
 dependencies = [
-    "numpy>=2.0.0",
+    # >=1.26 (not >=2.0) so the [fold] env can co-resolve boltz, which pins
+    # numpy<2.0; the main env still gets numpy 2.x. The package runs on both.
+    "numpy>=1.26",
     "pandas>=2.0.0",
     "pyarrow>=15.0.0",
     "biopython>=1.83",
@@ -30,8 +32,17 @@ dev = [
     "pytest-cov>=5.0.0",
     "openpyxl>=3.1",
 ]
-gpu = [
-    "torch>=2.0.0",
+fold = [
+    # chai_lab pins torch>=2.3.1,<2.7; boltz needs >=2.2 — this satisfies both.
+    "torch>=2.3.1,<2.7",
+    "boltz>=2.2",
+    "chai_lab>=0.6",  # second structure backend (run_fold.sbatch <fasta> chai)
+]
+plm = [
+    # <2.7 keeps torch on a CUDA-12 wheel; newer (cu13x) builds need a driver
+    # the cluster GPUs don't have yet (A6000 ≈ CUDA 12.6).
+    "torch>=2.2.0,<2.7",
+    "fair-esm>=2.0",
 ]
 
 [tool.setuptools]
