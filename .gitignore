@@ -36,15 +36,24 @@ tmp_signalp/
 # Nextflow + Singularity caches (InterProScan 6): tens of GB, regenerable
 .nextflow/
 .singularity_cache/
-# Most internal docs are untracked (reviews, specs, handoffs, superpowers).
-# Tracked: docs/methods/ (paper source), docs/architecture/ (current-state scoping
-# docs), docs/plans/ (feature plans) — see "Scope Before Plan" in CLAUDE.md.
+# Internal docs are untracked — ONLY docs/methods/ (the paper source) is tracked.
+# Ignore everything else under docs/ (reviews, plans, architecture, analysis,
+# handoffs, superpowers); the "Scope Before Plan" docs live here locally.
 docs/*
 !docs/methods/
 docs/methods/*.pdf
-!docs/architecture/
-!docs/plans/
 .superpowers/
+
+# Generated analysis reports (regenerable from the sourceseq tool) — not source.
+data/reports/
+
+# Source-transcript-resolution PRODUCTION tool (Elizabeth's workstream): read
+# alignment + quantification (salmon/minimap2/IsoQuant) + the window-purity /
+# expression-disambiguation library, drivers, and tests. Self-contained and
+# gitignored — it outputs the resolved per-TIS source-mRNA dataset to its final
+# data/ locations. The tracked repo only *integrates* that output (see CLAUDE.md
+# "Source-transcript resolution"). Preserved on disk + in git history.
+sourceseq/
 
 # regression baselines (re-derivable from a 13-gene run)
 tests/regression/baseline/
