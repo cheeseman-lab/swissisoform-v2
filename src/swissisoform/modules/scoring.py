@@ -16,7 +16,7 @@ driven by missing data apart from one driven by genuine non-evidence.
 Criteria that depend on modules whose caches are not yet populated
 (structure, PLM VEP) return ``None`` at evaluation time based on the
 annotation status.  F5 scores germline tolerance / constraint over the
-isoform-unique region (ESM-2 constraint enrichment + gnomAD depletion).
+isoform-unique region (ESM-C constraint enrichment + gnomAD depletion).
 
 The 12 criterion ``score`` functions and their shared types/helpers live in
 the ``swissisoform.evidence`` package — one folder per bucket. They are
@@ -48,7 +48,7 @@ Functional impact:
        (``comparison['interproscan']``)
     F4 Targeting change (``comparison['signalp']`` / ``comparison['targetp']``)
     F5 Germline tolerance / constraint over the unique region
-       (ESM-2 ``plm_vep`` constraint enrichment OR gnomAD depletion via
+       (ESM-C ``plm_vep`` constraint enrichment OR gnomAD depletion via
        ``variant_intersection``)
     F6 Disease-variant density enrichment in unique region vs shared core
        (``variant_intersection.disease_enrichment_ratio``)
