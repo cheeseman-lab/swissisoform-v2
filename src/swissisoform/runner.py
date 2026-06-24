@@ -65,6 +65,7 @@ from swissisoform.references import (
     ROOT,
     build_config,
 )
+from swissisoform.structure.fold import DEFAULT_BACKEND
 from swissisoform.structure.module import StructureModule
 
 logger = logging.getLogger("run")
@@ -304,7 +305,9 @@ def write_proteins_fasta(proteins: list[str], out_path: Path) -> int:
     return n
 
 
-def run_precompute(genes, all_proteins: list[str], skip: set[str]) -> dict:
+def run_precompute(
+    genes, all_proteins: list[str], skip: set[str], structure_backend: str | None = None
+) -> dict:
     """Run precompute steps.  `skip` controls which precomputes fire."""
     preds: dict = {}
 
@@ -347,7 +350,9 @@ def run_precompute(genes, all_proteins: list[str], skip: set[str]) -> dict:
         precompute_plm(all_proteins, inline=False) if "plm_vep" not in skip else {}
     )
     preds["structure"] = (
-        precompute_fold(all_proteins, inline=False)  # backend defaults to DEFAULT_BACKEND
+        precompute_fold(
+            all_proteins, backend=structure_backend or DEFAULT_BACKEND, inline=False
+        )
         if "structure" not in skip else {}
     )
 
@@ -442,7 +447,8 @@ def build_pipeline(cfg, preds, ref, genes, skip: set[str]) -> AnnotationPipeline
             )
         )
     if "structure" not in skip:
-        site_mods.append(StructureModule(cfg))
+        backend = cfg.structure.backend if cfg.structure else DEFAULT_BACKEND
+        site_mods.append(StructureModule(cfg, backend=backend))
 
     gene_mods = []
     if "generef" not in skip:
@@ -612,7 +618,10 @@ def annotate(prepared: PreparedRun, spec: RunSpec) -> pd.DataFrame:
     cfg = prepared.cfg
     all_proteins = prepared.all_proteins
 
-    preds = run_precompute(genes, all_proteins, spec.skip)
+    preds = run_precompute(
+        genes, all_proteins, spec.skip,
+        structure_backend=cfg.structure.backend if cfg.structure else None,
+    )
     logger.info(
         "Precompute done: deeploc=%d signalp=%d targetp=%d ips=%d plm=%d struct=%d",
         len(preds["deeploc"]), len(preds["signalp"]), len(preds["targetp"]),

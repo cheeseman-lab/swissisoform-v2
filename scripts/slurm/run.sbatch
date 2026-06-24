@@ -118,10 +118,16 @@ else
             plm_export=(--export=ALL,SWISSISO_SKIP_SAE=1)
             _stamp "  --skip-modules sae → SAE encode disabled in embed job"
         fi
+        # Fold with the backend the consumer reads — single source of truth is
+        # cfg.structure.backend (StructureModule + precompute_fold read the same).
+        local struct_backend
+        struct_backend=$(python -c \
+            "from swissisoform.references import build_config; print(build_config().structure.backend)" \
+            2>/dev/null || echo esmfold2)
         plm_id=$(sbatch --parsable "${plm_export[@]+"${plm_export[@]}"}" \
             scripts/slurm/run_plm_embed.sbatch "$FASTA")
-        fold_id=$(sbatch --parsable scripts/slurm/run_fold.sbatch "$FASTA" boltz)
-        _stamp "  submitted plm=$plm_id fold=$fold_id"
+        fold_id=$(sbatch --parsable scripts/slurm/run_fold.sbatch "$FASTA" "$struct_backend")
+        _stamp "  submitted plm=$plm_id fold=$fold_id (backend=$struct_backend)"
         # Cancel both GPU jobs if this orchestrator dies, so neither is orphaned.
         trap 'scancel "$plm_id" "$fold_id" 2>/dev/null || true' EXIT
         while squeue -h -j "${plm_id},${fold_id}" -o '%i' 2>/dev/null | grep -q '[0-9]'; do

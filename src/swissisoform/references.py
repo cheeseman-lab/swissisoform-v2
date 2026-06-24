@@ -14,6 +14,7 @@ from swissisoform.config import (
     ConservationConfig,
     PipelineConfig,
     ScoringConfig,
+    StructureConfig,
 )
 
 # ── Paths ────────────────────────────────────────────────────────────────
@@ -102,4 +103,8 @@ def build_config(min_cell_lines: int = 3) -> PipelineConfig:
     # principled E3/E4 anchors; the 13-gene set validates scoring LOGIC, not
     # calibration, so no per-run override of those thresholds.
     cfg.scoring = ScoringConfig(min_cell_lines=min_cell_lines)
+    # Folding backend is config-driven: the GPU fold job, the cache-lookup
+    # precompute, and StructureModule all read cfg.structure.backend, so they
+    # never disagree on which backend's cache to write/read.
+    cfg.structure = StructureConfig()
     return cfg
