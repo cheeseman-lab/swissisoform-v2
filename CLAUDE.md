@@ -309,34 +309,38 @@ Raw Ribo-TISH predict files in `data/reference/` (gitignored, 6 cell lines):
 Reference genome (download with `bash scripts/setup/download_references.sh`):
 - `GRCh38.primary_assembly.genome.fa`, `gencode.v49.pc_translations.fa`, GTF
 
-## Source-transcript resolution — production tool vs. tracked integration
+## Source-transcript resolution — alignment tool vs. tracked filtering
 
 Pinning each TIS to one high-confidence source mRNA (short-read salmon +
 long-read IsoQuant expression + a sequence window-purity test) is **Elizabeth's
-workstream**, and it lives as a **self-contained, gitignored production tool**
-at `sourceseq/` (library + drivers + tests + the read-alignment/quantification
-`mapping/`). The clean boundary:
+workstream**. The boundary sits between *read alignment* (out of repo) and *the
+disambiguation science* (tracked filtering):
 
 ```
-sourceseq/ (gitignored production tool)              │ boundary │  swissisoform-v2 (tracked)
-reads → mapping → quant.sf / transcript_counts.tsv   │ resolved │  integration: pull in the
-→ window-purity + expression disambiguation          │ dataset  │  dataset + subset our input
-→ resolved per-TIS source-mRNA dataset ──────────────┼─► data/ ─┼─► per the filtering approach
+sourceseq/ (gitignored alignment tool)         │ boundary │  swissisoform-v2 (tracked)
+reads → mapping (salmon / minimap2 / IsoQuant) │ aligned  │  filtering cascade: window-purity
+→ quant.sf / transcript_counts.tsv ────────────┼─► data/ ─┼─► + expression disambiguation
+                                               │ quant    │  → source transcript per TIS
 ```
 
-- **Out-of-repo (gitignored `sourceseq/`):** everything that *produces* the
-  dataset, incl. read alignment (its own workstream, as for `crossval`). It
-  writes the resolved dataset to `data/output/source_transcripts/` (e.g.
-  `HeLa_tis_union3_W100.parquet`) and the quantifications to `data/reference/`
-  (`salmon/{cell}_rep*/quant.sf`, `longread/isoquant_{cell}/OUT/…tsv`). See
-  `sourceseq/README.md`; validate inputs with
-  `bash sourceseq/setup/check_source_transcript_inputs.sh [CELL]`.
-- **Tracked (this repo):** only the *integration* — once we've tested what the
-  filtering does to our existing input, the pipeline cleanly pulls in the
-  resolved dataset and subsets per the filtering approach defined in the tool.
-  This is the only part that consumes `sourceseq/`'s output; it never imports
-  the tool. (Convention: processed data in — like the Ribo-TISH predicts and
-  HTSeq counts.)
+- **Out-of-repo (gitignored `sourceseq/`):** *only* read alignment +
+  quantification — `mapping/` (salmon / minimap2 / IsoQuant / SRA + envs) and
+  `setup/` (downloads). It writes the quantifications to `data/reference/`
+  (`salmon/{cell}_rep*/quant.sf`, `longread/isoquant_{cell}/OUT/…tsv`). That is
+  the *processed data in* — like the Ribo-TISH predicts and HTSeq counts. See
+  `sourceseq/README.md`.
+- **Tracked (this repo):** the disambiguation **is our filtering**, so it lives
+  in `src/swissisoform/sourceresolve/` (`mrna` / `purity` / `expression` /
+  `resolve`) and runs as an **optional per-sample step inside `run_sample`** —
+  it depends on that sample's own RNA-seq, so it is intrinsically per cell line
+  (HeLa only today). `resolve_sources` groups the filtered TIS by init_site,
+  runs the three arms (sequence-purity S, salmon A, IsoQuant B), and **tags**
+  every TIS with its verdict (`resolved` / `agreement_tier` /
+  `source_transcript` / `source_evidence` / `tie_initiation_efficiency`).
+  Tag-only — nothing is dropped yet (`SourceResolutionConfig.drop_unresolved`
+  is reserved until the unresolved fraction is quantified). Gated by
+  `PipelineConfig.source_resolution`; per-sample salmon/IsoQuant paths come from
+  optional `salmon_quant_files` / `isoquant_table` manifest columns.
 
 ## Development
 

@@ -35,6 +35,30 @@ class FilterConfig:
 
 
 @dataclass
+class SourceResolutionConfig:
+    """Configuration for per-sample source-transcript resolution.
+
+    Optional filtering-cascade stage (``pipeline.run_sample``) that pins each
+    TIS to one source mRNA using the sample's own RNA-seq. Off unless
+    ``PipelineConfig.source_resolution`` is set; skipped for samples without
+    salmon/IsoQuant inputs (HeLa only today).
+
+    Attributes:
+        window_radius: Half-width W (nt) of the sequence-purity window.
+        salmon_min_tpm: Per-replicate salmon presence threshold (TPM).
+        isoquant_min_count: IsoQuant presence threshold (long-read counts).
+        drop_unresolved: Reserved — subset to resolved TIS. Tag-only today
+            (kept ``False``); deferred until the unresolved fraction is
+            quantified on real data.
+    """
+
+    window_radius: int = 100
+    salmon_min_tpm: float = 0.1
+    isoquant_min_count: float = 3.0
+    drop_unresolved: bool = False
+
+
+@dataclass
 class ConservationConfig:
     """Configuration for conservation analysis (Module 8).
 
@@ -251,6 +275,7 @@ class PipelineConfig:
     protein_fasta: Path | None = None
     output_dir: Path = Path("results")
     filtering: FilterConfig = field(default_factory=FilterConfig)
+    source_resolution: SourceResolutionConfig | None = None
     conservation: ConservationConfig | None = None
     structure: StructureConfig | None = None
     scoring: ScoringConfig | None = None

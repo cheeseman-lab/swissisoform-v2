@@ -116,6 +116,27 @@ def _write_unique_tis(combined: pd.DataFrame) -> None:
     )
 
 
+def _manifest_path_list(row: pd.Series, col: str) -> list[Path] | None:
+    """Parse a ``;``-separated manifest cell into ``[ROOT / p, ...]`` or ``None``.
+
+    Used for the optional per-sample salmon ``quant.sf`` paths; absent / blank
+    cells (samples without RNA-seq quant) yield ``None`` so the source-resolution
+    stage skips them.
+    """
+    val = row.get(col)
+    if val is None or (isinstance(val, float) and pd.isna(val)) or str(val).strip() == "":
+        return None
+    return [ROOT / p.strip() for p in str(val).split(";") if p.strip()]
+
+
+def _manifest_single_path(row: pd.Series, col: str) -> Path | None:
+    """Parse a single optional manifest path cell into ``ROOT / p`` or ``None``."""
+    val = row.get(col)
+    if val is None or (isinstance(val, float) and pd.isna(val)) or str(val).strip() == "":
+        return None
+    return ROOT / str(val).strip()
+
+
 def load_combined(
     cell_lines: list[str],
     reference: UpstreamReference,
@@ -157,6 +178,9 @@ def load_combined(
         t0 = time.perf_counter()
         final_df, _ = run_sample(
             predict, rnaseq_files, GTF, sample=sample, config=cfg, reference=reference,
+            genome_fasta=GENOME,
+            salmon_quant=_manifest_path_list(row, "salmon_quant_files"),
+            isoquant_table=_manifest_single_path(row, "isoquant_table"),
         )
         filtered_out = ROOT / row["filtered_file"]
         filtered_out.parent.mkdir(parents=True, exist_ok=True)
