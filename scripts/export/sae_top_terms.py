@@ -10,7 +10,7 @@ Terms come from the 6B-layer60 ESM-Atlas. With the default 6B SAE these labels
 are correct (the Atlas describes exactly that dictionary); for any other size
 they are a placeholder — see swissisoform.plm.atlas.atlas_provenance.
 
-Usage: python scripts/_sae_top_terms.py
+Usage: python scripts/export/sae_top_terms.py
 """
 
 from __future__ import annotations

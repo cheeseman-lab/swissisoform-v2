@@ -164,4 +164,4 @@ for name in clear-cache prepare gpu annotate; do
     total=$((total + secs))
 done
 printf '  %-12s %6ds  (%dm%02ds)\n' "TOTAL" "$total" $((total/60)) $((total%60))
-_stamp "done. Next: bash scripts/build_website.sh   (rebuild website/data from data/output/cheeseman_13gene/)"
+_stamp "done. Next: bash scripts/build_website.sh"

@@ -30,8 +30,14 @@ set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-.}"
 
 eval "$(conda shell.bash hook)"
+# Prefer a dedicated plm/fold env; fall back to the unified swissisoform-v2 env
+# (it carries the .[plm] deps after the Python 3.12 migration).
 if conda env list | grep -q "^swissisoform-v2-plm "; then
     conda activate swissisoform-v2-plm
+elif conda env list | grep -q "^swissisoform-v2-fold "; then
+    conda activate swissisoform-v2-fold
+elif conda env list | grep -q "^swissisoform-v2 "; then
+    conda activate swissisoform-v2
 else
     echo "No swissisoform-v2[-plm|-fold] env found. Create one with:" >&2
     echo "  conda create -n swissisoform-v2-plm -c conda-forge python=3.12 uv pip -y" >&2
