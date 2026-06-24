@@ -94,6 +94,15 @@ if (( clear_cache )); then
         echo "  wiped data/cache/{plm_esmc,structure,pepquery,tmp}"'
 fi
 
+# ── ensure SAE Atlas term dictionary (CPU/network, once; idempotent) ─────────
+# SAEFeatureModule attaches human-readable feature labels from this at annotate
+# time. The fetch self-skips when the JSON is already present. Best-effort: a
+# failure does NOT abort the run — SAE still works, labels just degrade to
+# index-only (load_atlas returns {} when the file is absent).
+if ! python scripts/setup/fetch_sae_atlas.py; then
+    _stamp "WARN: SAE Atlas fetch failed — SAE feature labels will be index-only"
+fi
+
 # ── prepare (CPU): emit the deduped proteins FASTA ──────────────────────────
 run_stage prepare python scripts/run.py "${RUN_ARGS[@]}" --fasta-out "$FASTA" --emit-fasta
 

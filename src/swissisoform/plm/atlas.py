@@ -1,9 +1,12 @@
-"""ESM Atlas feature descriptions — local index→term cache.
+"""ESM Atlas feature descriptions — runtime read-side (index→term lookup).
 
-Fetches per-feature functional descriptions from the public Biohub ESM Atlas
-(``https://biohub.ai/esm/protein/api/v1alpha1/features``) once and stores them
-locally so the SAE feature module can attach human-readable labels offline
-(consistent with the three-phase, no-network-at-annotate-time design).
+Loads the per-feature functional descriptions for the SAE codebook from a local
+JSON cache so the SAE feature module can attach human-readable labels offline
+(consistent with the three-phase, no-network-at-annotate-time design). This
+module is import-safe and network-free; the one-off network fetch that populates
+the cache lives in :mod:`swissisoform.setup.sae_atlas` (CLI:
+``scripts/setup/fetch_sae_atlas.py``), wired into the pipeline via
+``scripts/slurm/run.sbatch``.
 
 PROVENANCE: the Atlas describes the **6B layer-60** SAE dictionary
 (``esmc-6b-2024-12-sae-layer60-k64-codebook16384``). When the pipeline runs the
@@ -60,52 +63,6 @@ DEFAULT_ATLAS_PATH = (
 TERM_FIELDS = ("label", "description")
 
 
-def fetch_atlas(
-    out_path: Path | str = DEFAULT_ATLAS_PATH,
-    *,
-    codebook_dim: int = DEFAULT_CODEBOOK_DIM,
-    timeout: int = 120,
-) -> dict[str, Any]:
-    """Fetch all feature terms in one bulk request and write them as JSON.
-
-    The bare ``/features`` endpoint returns every feature in a single
-    ``{"data": [{feature_index, label, description}, ...]}`` response (all
-    16,384, no pagination), so this is one GET — not one-per-feature.
-
-    Returns the written payload ``{"_meta": {...}, "features": {idx: {...}}}``.
-    """
-    import requests
-
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with requests.Session() as session:
-        r = session.get(ATLAS_BASE_URL, timeout=timeout)
-        r.raise_for_status()
-        data = r.json()["data"]
-
-    features: dict[str, Any] = {
-        str(item["feature_index"]): {k: item.get(k) for k in TERM_FIELDS}
-        for item in data
-        if item.get("feature_index") is not None
-    }
-
-    payload = {
-        "_meta": {
-            "source_sae": ATLAS_SOURCE_SAE,
-            "provenance": ATLAS_PROVENANCE,
-            "base_url": ATLAS_BASE_URL,
-            "codebook_dim": codebook_dim,
-            "n_features": len(features),
-            "fields": list(TERM_FIELDS),
-        },
-        "features": features,
-    }
-    out_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    logger.info("wrote %d feature terms to %s", len(features), out_path)
-    return payload
-
-
 def load_atlas(path: Path | str = DEFAULT_ATLAS_PATH) -> dict[int, dict[str, Any]]:
     """Load the local Atlas term dictionary as ``{feature_index: {label, ...}}``.
 
@@ -118,23 +75,3 @@ def load_atlas(path: Path | str = DEFAULT_ATLAS_PATH) -> dict[int, dict[str, Any
     payload = json.loads(path.read_text(encoding="utf-8"))
     feats = payload.get("features", payload)
     return {int(k): v for k, v in feats.items()}
-
-
-def main(argv: list[str] | None = None) -> int:
-    """CLI: fetch the Atlas term dictionary to the local JSON cache."""
-    import argparse
-
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--out", type=Path, default=DEFAULT_ATLAS_PATH)
-    p.add_argument("--codebook-dim", type=int, default=DEFAULT_CODEBOOK_DIM)
-    args = p.parse_args(argv)
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
-    payload = fetch_atlas(args.out, codebook_dim=args.codebook_dim)
-    print(f"wrote {payload['_meta']['n_features']} terms to {args.out}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
