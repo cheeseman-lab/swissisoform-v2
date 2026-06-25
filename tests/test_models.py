@@ -298,7 +298,7 @@ class TestConfig:
 
     def test_structure_config(self):
         sc = StructureConfig()
-        assert sc.method == "chai1"
+        assert sc.backend == "esmfold2"
         assert sc.device == "cuda"
         assert sc.batch_size == 4
 

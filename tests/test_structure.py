@@ -79,7 +79,7 @@ class TestCacheRoundtrip:
     def test_precompute_returns_cached_only(self, tmp_path):
         seq = "MAEPRSTV"
         h = _seed_cache(tmp_path, seq, plddt=[70.0] * len(seq), ptm=0.5)
-        res = precompute_fold({"x": seq}, cache_dir=tmp_path, inline=False)
+        res = precompute_fold({"x": seq}, cache_dir=tmp_path, backend="boltz", inline=False)
         assert h in res
         assert res[h]["metrics"]["plddt_mean"] == pytest.approx(70.0)
 
@@ -155,7 +155,7 @@ class TestStructureModule:
     """Module contract — SiteModule semantics + status surfacing."""
 
     def test_no_cache_status(self, synthetic_tis, config, tmp_path):
-        module = StructureModule(config, cache_dir=tmp_path)
+        module = StructureModule(config, cache_dir=tmp_path, backend="boltz")
         ann = module.annotate_site(synthetic_tis[0])
         assert ann["status"] == "no_cache"
         assert ann["plddt_diffregion_mean"] is None
@@ -171,7 +171,7 @@ class TestStructureModule:
         _seed_cache(tmp_path, site.isoform_protein, plddt=iso_plddt, ptm=0.7)
         _seed_cache(tmp_path, site.canonical_protein, plddt=can_plddt, ptm=0.7)
 
-        module = StructureModule(config, cache_dir=tmp_path)
+        module = StructureModule(config, cache_dir=tmp_path, backend="boltz")
         ann = module.annotate_site(site)
         assert ann["status"] == "ok"
         assert ann["backend"] == "boltz"
@@ -192,7 +192,7 @@ class TestStructureModule:
         _seed_cache(tmp_path, site.canonical_protein, plddt=can_plddt, ptm=0.7)
         _seed_cache(tmp_path, site.isoform_protein, plddt=iso_plddt, ptm=0.7)
 
-        module = StructureModule(config, cache_dir=tmp_path)
+        module = StructureModule(config, cache_dir=tmp_path, backend="boltz")
         ann = module.annotate_site(site)
         assert ann["status"] == "ok"
         assert ann["plddt_diffregion_mean"] == pytest.approx(85.0)
@@ -206,12 +206,12 @@ class TestStructureModule:
         # check the metrics file says too_long
         with open(tmp_path / "boltz" / h_can / "metrics.json") as fh:
             assert json.load(fh)["status"] == "too_long"
-        module = StructureModule(config, cache_dir=tmp_path)
+        module = StructureModule(config, cache_dir=tmp_path, backend="boltz")
         ann = module.annotate_site(site)
         assert ann["status"] == "too_long"
 
     def test_run_does_not_drop_sites(self, synthetic_tis, config, tmp_path):
-        module = StructureModule(config, cache_dir=tmp_path)
+        module = StructureModule(config, cache_dir=tmp_path, backend="boltz")
         out = module.run(synthetic_tis)
         assert len(out) == len(synthetic_tis)
         for s in out:
