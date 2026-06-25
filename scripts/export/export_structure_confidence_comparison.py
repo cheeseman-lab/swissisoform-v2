@@ -1,5 +1,7 @@
-"""Compare per-residue confidence (pLDDT) between the Boltz-2 and ESMFold2
-structure caches, one row per protein folded by BOTH backends.
+"""Compare per-residue confidence (pLDDT) between Boltz-2 and ESMFold2.
+
+Compares the two structure caches, one row per protein folded by BOTH
+backends.
 
 For each sequence hash present in both data/cache/structure/{boltz,esmfold2}/:
   - pull the per-residue pLDDT vector from each confidence.json

@@ -7,12 +7,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from swissisoform.plm.module import PLMVEPModule
 from swissisoform.plm.embed import (
     load_cache,
     precompute_plm,
     protein_hash,
 )
+from swissisoform.plm.module import PLMVEPModule
 
 
 def _seed_cache(cache_dir: Path, seq: str, llr: np.ndarray) -> str:

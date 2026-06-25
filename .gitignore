@@ -48,6 +48,6 @@ tests/regression/baseline/
 
 # personal local run wrapper (hardcoded paths) — keep out of repo
 scripts/_run_cheeseman13.sh
-/lab/barcheese01/ating/swissisoform-v2/scripts/export
+scripts/export
 # local-only backfill (DeepLoc/SignalP/InterProScan from snapshot until those envs exist)
 scripts/_backfill_cols.py

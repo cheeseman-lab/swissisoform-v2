@@ -61,12 +61,34 @@ if [[ ${#RUN_ARGS[@]} -eq 0 ]]; then
     RUN_ARGS=(--preset cheeseman13)
 fi
 
+# Does --skip-modules contain the exact module token <name>? Parses the value of
+# --skip-modules (the only place module names live) and compares comma-split
+# tokens exactly — robust against substring collisions where a gene name, preset,
+# or path happens to contain "sae"/"plm_vep"/etc. Supports both
+# "--skip-modules a,b" and "--skip-modules=a,b"; last occurrence wins (argparse).
+skip_has() {  # skip_has <module>
+    local want="$1" i val="" tok
+    for ((i = 0; i < ${#RUN_ARGS[@]}; i++)); do
+        case "${RUN_ARGS[i]}" in
+            --skip-modules)   val="${RUN_ARGS[i+1]:-}" ;;
+            --skip-modules=*) val="${RUN_ARGS[i]#--skip-modules=}" ;;
+        esac
+    done
+    [[ -z "$val" ]] && return 1
+    local IFS=,
+    for tok in $val; do
+        tok="${tok#"${tok%%[![:space:]]*}"}"   # ltrim (matches run.py m.strip())
+        tok="${tok%"${tok##*[![:space:]]}"}"   # rtrim
+        [[ "$tok" == "$want" ]] && return 0
+    done
+    return 1
+}
+
 # --no-gpu / both-GPU-modules-skipped also implies no GPU stage.
 skip_gpu=$annotate_only
 if [[ " ${RUN_ARGS[*]} " == *" --no-gpu "* ]]; then
     skip_gpu=1
-elif [[ " ${RUN_ARGS[*]} " == *"--skip-modules"* \
-        && " ${RUN_ARGS[*]} " == *"plm_vep"* && " ${RUN_ARGS[*]} " == *"structure"* ]]; then
+elif skip_has plm_vep && skip_has structure; then
     skip_gpu=1
 fi
 
@@ -114,7 +136,7 @@ else
         # The embed job also runs the SAE encode (sae_esmc/) unless SAE is being
         # skipped in annotate — propagate that as an env var to the embed job.
         local plm_export=()
-        if [[ " ${RUN_ARGS[*]} " == *"--skip-modules"* && " ${RUN_ARGS[*]} " == *"sae"* ]]; then
+        if skip_has sae; then
             plm_export=(--export=ALL,SWISSISO_SKIP_SAE=1)
             _stamp "  --skip-modules sae → SAE encode disabled in embed job"
         fi
