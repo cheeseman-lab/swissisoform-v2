@@ -438,7 +438,7 @@ def build_pipeline(cfg, preds, ref, genes, skip: set[str]) -> AnnotationPipeline
         # Reads the per-protein 6B SAE caches (sae_esmc/<SIZE>); top_k bounds the
         # list columns flattened into all_paired (full inventory lives in the
         # standalone export). Emits status=no_cache when a protein isn't encoded.
-        site_mods.append(SAEFeatureModule(cfg, top_k=30))
+        site_mods.append(SAEFeatureModule(cfg, top_k=30, unique_top_n=30))
     if "varianteffect" not in skip:
         site_mods.append(
             VariantEffectModule(

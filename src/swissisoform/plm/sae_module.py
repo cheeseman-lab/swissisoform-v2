@@ -36,6 +36,7 @@ from swissisoform.config import PipelineConfig
 from swissisoform.models import TranslationInitiationSite
 from swissisoform.plm.atlas import atlas_provenance, load_atlas
 from swissisoform.plm.embed import DEFAULT_MODEL_SIZE, protein_hash
+from swissisoform.plm.regions import diff_region_indices
 from swissisoform.plm.sae import DEFAULT_SAE_CACHE_DIR, load_sae_cache
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,9 @@ logger = logging.getLogger(__name__)
 # A feature counts as "present" in a protein when it fires on at least this many
 # residues (i.e. is in the per-residue Top-K). 1 = fires anywhere.
 DEFAULT_MIN_PREVALENCE = 1
+
+# Default cap on the unique-region top-feature list emitted per isoform.
+DEFAULT_UNIQUE_TOP_N = 30
 
 
 def _feature_profile(idx: Any, val: Any, min_prevalence: int) -> dict[int, dict[str, float]]:
@@ -97,6 +101,9 @@ class SAEFeatureModule:
         "sae_features_isoform_only",
         "sae_features_canonical_only",
         "sae_shared_feature_deltas",
+        "sae_unique_region_space",
+        "sae_n_unique_region_features",
+        "sae_unique_region_top_features",
     ]
     SCOPE: str = "C"
 
@@ -109,6 +116,7 @@ class SAEFeatureModule:
         model_size: str = DEFAULT_MODEL_SIZE,
         min_prevalence: int = DEFAULT_MIN_PREVALENCE,
         top_k: int | None = None,
+        unique_top_n: int = DEFAULT_UNIQUE_TOP_N,
     ) -> None:
         """Initialize the module.
 
@@ -129,6 +137,9 @@ class SAEFeatureModule:
                 entries (counts/summary still reflect the full sets). Used when
                 wiring into the pipeline so ``all_paired.parquet`` list columns
                 stay bounded; the standalone export uses ``None`` (full lists).
+            unique_top_n: Cap on the ``sae_unique_region_top_features`` list — the
+                features ranked by peak activation over only the isoform-unique
+                region (default 30).
         """
         self.config = config
         self.cache_dir = Path(cache_dir)
@@ -136,6 +147,7 @@ class SAEFeatureModule:
         self.model_size = model_size
         self.min_prevalence = min_prevalence
         self.top_k = top_k
+        self.unique_top_n = unique_top_n
         self._provenance = atlas_provenance(model_size)
 
     def _label(self, feature_index: int) -> tuple[str | None, str | None, str | None]:
@@ -163,6 +175,46 @@ class SAEFeatureModule:
             "prevalence": prof["prevalence"],
         }
 
+    def _unique_region_top(
+        self,
+        site: TranslationInitiationSite,
+        iso: dict[str, Any],
+        can: dict[str, Any],
+    ) -> tuple[str, int, list[dict[str, Any]]]:
+        """Top features by peak activation over only the isoform-unique region.
+
+        Reuses :func:`~swissisoform.plm.regions.diff_region_indices` to pick the
+        protein space (canonical for truncations, isoform otherwise) and the
+        unique-region residue indices, slices the matching SAE activation matrix to
+        those residues, and ranks the features firing there by ``max`` activation.
+
+        Returns ``(space, n_total, top_features)`` where ``n_total`` is the full
+        distinct-feature count over the region and ``top_features`` is capped at
+        ``unique_top_n``.
+        """
+        space, unique_idx, _ = diff_region_indices(site)
+        if space == "none" or not unique_idx:
+            return space, 0, []
+
+        feats = can if space == "canonical" else iso
+        idx_mat, val_mat = feats["idx"], feats["val"]
+        if int(idx_mat.shape[0]) < max(unique_idx) + 1:
+            logger.warning(
+                "sae: cached feature length %d shorter than %s protein indices for %s",
+                int(idx_mat.shape[0]),
+                space,
+                site.tis_id,
+            )
+            return space, 0, []
+
+        prof = _feature_profile(idx_mat[unique_idx], val_mat[unique_idx], self.min_prevalence)
+        records = sorted(
+            (self._unique_entry(f, prof[f]) for f in prof),
+            key=lambda d: d["max"],
+            reverse=True,
+        )
+        return space, len(records), records[: self.unique_top_n]
+
     def annotate_site(self, site: TranslationInitiationSite) -> dict[str, Any]:
         """Compute the isoform-vs-canonical SAE feature comparison for one TIS."""
         empty: dict[str, Any] = {
@@ -182,6 +234,9 @@ class SAEFeatureModule:
             "features_isoform_only": [],
             "features_canonical_only": [],
             "shared_feature_deltas": [],
+            "unique_region_space": "none",
+            "n_unique_region_features": None,
+            "unique_region_top_features": [],
         }
 
         iso = self._load_features(site.isoform_protein)
@@ -242,6 +297,11 @@ class SAEFeatureModule:
             )
         shared_feature_deltas.sort(key=lambda d: abs(d["delta_max"]), reverse=True)
 
+        # ── 3. Top features over the isoform-unique region only ──────────────
+        unique_region_space, n_unique_region, unique_region_top = self._unique_region_top(
+            site, iso, can
+        )
+
         gained = max(shared_feature_deltas, key=lambda d: d["delta_max"], default=None)
         lost = min(shared_feature_deltas, key=lambda d: d["delta_max"], default=None)
         mean_abs_delta = (
@@ -276,6 +336,9 @@ class SAEFeatureModule:
             else features_canonical_only,
             "shared_feature_deltas": shared_feature_deltas[: self.top_k] if self.top_k
             else shared_feature_deltas,
+            "unique_region_space": unique_region_space,
+            "n_unique_region_features": n_unique_region,
+            "unique_region_top_features": unique_region_top,
         }
 
     def run(

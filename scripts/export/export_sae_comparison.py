@@ -6,12 +6,13 @@ the cached 6B SAE features (``data/cache/sae_esmc/<SIZE>/``), and writes:
 
   1. ``sae_comparison.parquet`` — one row per (gene, tis_id): summary scalars
      (incl. the 4 counts) plus the FULL nested ``features_isoform_only`` /
-     ``features_canonical_only`` / ``shared_feature_deltas`` lists (exhaustive).
+     ``features_canonical_only`` / ``shared_feature_deltas`` lists (exhaustive),
+     and the isoform-unique-region top features (``unique_region_*``).
   2. ``sae_feature_changes.parquet`` / ``.csv`` — the curated, ranked,
      metric-rich table: **top 30 per change_type per isoform**
-     (isoform_only / canonical_only by max activation; shared by |delta_max|),
-     one row per feature with rank + all metrics (max, mean, delta, prevalence
-     for both sides + label/description).
+     (isoform_only / canonical_only / unique_region by max activation; shared by
+     |delta_max|), one row per feature with rank + all metrics (max, mean, delta,
+     prevalence for both sides + label/description).
 
 No model inference — pure SAE-cache read + set ops. Reads everything else
 read-only; writes only the NEW files above.
@@ -93,6 +94,17 @@ def _change_rows(
                      "isoform_prevalence": e["isoform_prevalence"],
                      "canonical_prevalence": e["canonical_prevalence"],
                      "label_source": e["label_source"]})
+    # Unique-region features come from one protein space (canonical for
+    # truncations, isoform otherwise) — route their metrics to the matching side.
+    space = ann.get("unique_region_space")
+    side = "canonical" if space == "canonical" else "isoform"
+    for rank, e in enumerate(ann["unique_region_top_features"][:top_n], 1):
+        rows.append({**base, "change_type": "unique_region", "rank": rank,
+                     "feature_index": e["feature_index"], "label": e["label"],
+                     "description": e["description"], "delta_max": None, "delta_mean": None,
+                     f"{side}_max": e["max"], f"{side}_mean": e["mean"],
+                     f"{side}_prevalence": e["prevalence"],
+                     "label_source": e["label_source"]})
     return rows
 
 
@@ -173,6 +185,9 @@ def main(argv: list[str] | None = None) -> int:
                 "features_isoform_only": ann["features_isoform_only"],
                 "features_canonical_only": ann["features_canonical_only"],
                 "shared_feature_deltas": ann["shared_feature_deltas"],
+                "unique_region_space": ann["unique_region_space"],
+                "n_unique_region_features": ann["n_unique_region_features"],
+                "unique_region_top_features": ann["unique_region_top_features"],
                 "isoform_protein_hash": protein_hash(site.isoform_protein),
                 "canonical_protein_hash": protein_hash(site.canonical_protein),
             })

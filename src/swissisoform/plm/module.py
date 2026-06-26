@@ -28,8 +28,9 @@ from pathlib import Path
 from typing import Any
 
 from swissisoform.config import PipelineConfig
-from swissisoform.models import ORFType, TranslationInitiationSite
+from swissisoform.models import TranslationInitiationSite
 from swissisoform.plm.embed import DEFAULT_CACHE_DIR, load_cache, protein_hash
+from swissisoform.plm.regions import diff_region_indices
 
 logger = logging.getLogger(__name__)
 
@@ -92,44 +93,6 @@ class PLMVEPModule:
             return None
         return cached.get("llr")
 
-    @staticmethod
-    def _unique_indices(site: TranslationInitiationSite) -> tuple[list[int], list[int]] | None:
-        """Return (unique, shared) isoform-protein 0-based indices for the diff region.
-
-        ``None`` when the diff region has no isoform-coords interpretation
-        (truncations live in canonical coords).
-        """
-        dr = site.diff_region
-        if dr is None or dr.isoform_start is None or dr.isoform_end is None:
-            return None
-        L = len(site.isoform_protein.rstrip("*"))
-        if L <= 0:
-            return None
-        u_lo = max(0, int(dr.isoform_start))
-        u_hi = min(L, int(dr.isoform_end))
-        unique = list(range(u_lo, u_hi))
-        unique_set = set(unique)
-        shared = [i for i in range(L) if i not in unique_set]
-        return unique, shared
-
-    @staticmethod
-    def _canonical_unique_indices(
-        site: TranslationInitiationSite,
-    ) -> tuple[list[int], list[int]] | None:
-        """Return (unique, shared) canonical-protein indices for truncations."""
-        dr = site.diff_region
-        if dr is None or dr.canonical_start is None or dr.canonical_end is None:
-            return None
-        L = len(site.canonical_protein.rstrip("*"))
-        if L <= 0:
-            return None
-        u_lo = max(0, int(dr.canonical_start))
-        u_hi = min(L, int(dr.canonical_end))
-        unique = list(range(u_lo, u_hi))
-        unique_set = set(unique)
-        shared = [i for i in range(L) if i not in unique_set]
-        return unique, shared
-
     def annotate_site(self, site: TranslationInitiationSite) -> dict[str, Any]:
         """Compute LLR-derived constraint metrics for a single TIS."""
         empty = {
@@ -156,23 +119,8 @@ class PLMVEPModule:
         out["mean_llr_canonical"] = _safe_mean(can_llr) if can_llr is not None else None
 
         # Pick the protein space matching the diff region.
-        unique_idx: list[int] = []
-        shared_idx: list[int] = []
-        scores: Any | None = None
-        space = "none"
-
-        if site.orf_type == ORFType.TRUNCATED and can_llr is not None:
-            res = self._canonical_unique_indices(site)
-            if res is not None:
-                unique_idx, shared_idx = res
-                scores = can_llr
-                space = "canonical"
-        else:
-            res = self._unique_indices(site)
-            if res is not None and iso_llr is not None:
-                unique_idx, shared_idx = res
-                scores = iso_llr
-                space = "isoform"
+        space, unique_idx, shared_idx = diff_region_indices(site)
+        scores = can_llr if space == "canonical" else iso_llr if space == "isoform" else None
 
         if scores is None or len(unique_idx) == 0:
             out["status"] = "no_diff_region"
