@@ -311,36 +311,49 @@ Reference genome (download with `bash scripts/setup/download_references.sh`):
 
 ## Source-transcript resolution — alignment tool vs. tracked filtering
 
-Pinning each TIS to one high-confidence source mRNA (short-read salmon +
-long-read IsoQuant expression + a sequence window-purity test) is **Elizabeth's
-workstream**. The boundary sits between *read alignment* (out of repo) and *the
-disambiguation science* (tracked filtering):
+Pinning each TIS to one high-confidence source mRNA (long-read IsoQuant
+expression + a sequence window-purity test) is **Elizabeth's workstream**. The
+boundary sits between *read alignment* (out of repo) and *the disambiguation
+science* (tracked filtering):
 
 ```
 sourceseq/ (gitignored alignment tool)         │ boundary │  swissisoform-v2 (tracked)
-reads → mapping (salmon / minimap2 / IsoQuant) │ aligned  │  filtering cascade: window-purity
-→ quant.sf / transcript_counts.tsv ────────────┼─► data/ ─┼─► + expression disambiguation
-                                               │ quant    │  → source transcript per TIS
+reads → mapping (minimap2 / IsoQuant)          │ aligned  │  unified cascade:
+→ transcript_counts.tsv ───────────────────────┼─► data/ ─┼─► long-read filter → window-purity
+                                               │ quant    │  → abundance label → source per TIS
 ```
 
 - **Out-of-repo (gitignored `sourceseq/`):** *only* read alignment +
-  quantification — `mapping/` (salmon / minimap2 / IsoQuant / SRA + envs) and
-  `setup/` (downloads). It writes the quantifications to `data/reference/`
-  (`salmon/{cell}_rep*/quant.sf`, `longread/isoquant_{cell}/OUT/…tsv`). That is
-  the *processed data in* — like the Ribo-TISH predicts and HTSeq counts. See
-  `sourceseq/README.md`.
+  quantification — `mapping/` (minimap2 / IsoQuant / SRA + envs) and `setup/`
+  (downloads). It writes the long-read quantification to `data/reference/`
+  (`longread/isoquant_{cell}/OUT/…tsv`). That is the *processed data in* — like
+  the Ribo-TISH predicts and HTSeq counts. See `sourceseq/README.md`.
 - **Tracked (this repo):** the disambiguation **is our filtering**, so it lives
   in `src/swissisoform/sourceresolve/` (`mrna` / `purity` / `expression` /
-  `resolve`) and runs as an **optional per-sample step inside `run_sample`** —
-  it depends on that sample's own RNA-seq, so it is intrinsically per cell line
-  (HeLa only today). `resolve_sources` groups the filtered TIS by init_site,
-  runs the three arms (sequence-purity S, salmon A, IsoQuant B), and **tags**
-  every TIS with its verdict (`resolved` / `agreement_tier` /
-  `source_transcript` / `source_evidence` / `tie_initiation_efficiency`).
-  Tag-only — nothing is dropped yet (`SourceResolutionConfig.drop_unresolved`
-  is reserved until the unresolved fraction is quantified). Gated by
-  `PipelineConfig.source_resolution`; per-sample salmon/IsoQuant paths come from
-  optional `salmon_quant_files` / `isoquant_table` manifest columns.
+  `resolve` / `diagnostics`) and runs as a **per-sample step inside
+  `run_sample`** — it depends on that sample's own long-read RNA-seq, so it is
+  intrinsically per cell line (HeLa only today). `resolve_sources` groups the
+  filtered TIS by init_site and runs a **single linear cascade** per site:
+
+  1. **long-read filter** — keep candidate transcripts present in IsoQuant
+     (count ≥ `isoquant_min_count`); none survive ⇒ unresolved.
+  2. **±W window-purity** (`purity_decision`) on the survivors.
+  3. **abundance label** — *pure/single* → most-abundant survivor; *divergent*
+     → an abundance threshold (`divergence_dominance_frac` and/or
+     `divergence_min_count`) decides, else unresolved (no threshold ⇒
+     most-abundant placeholder).
+
+  It **tags** every TIS with `resolved` / `window_status` / `source_transcript`
+  / `source_evidence` / `tie_initiation_efficiency`. Tag-only — nothing is
+  dropped yet (`SourceResolutionConfig.drop_unresolved` is reserved until the
+  unresolved fraction is quantified). Short-read salmon was removed: the cascade
+  uses long-read only, for both presence and abundance. Gated by
+  `PipelineConfig.source_resolution` (built by `references.build_config`) + the
+  sample's optional `isoquant_table` manifest column. The divergent threshold is
+  chosen empirically from
+  `scripts/export/export_source_divergence_distribution.py` (per-site read
+  distribution: CSV + quantiles + a 100%-stacked-bar plot, one bar per divergent
+  TIS).
 
 ## Development
 

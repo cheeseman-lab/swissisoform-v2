@@ -31,6 +31,10 @@ dev = [
     "ruff>=0.4.0",
     "pytest-cov>=5.0.0",
     "openpyxl>=3.1",
+    # diagnostics-only: the source-divergence distribution plot
+    # (scripts/export/export_source_divergence_distribution.py). Lazy-imported,
+    # so the library + tests do not require it.
+    "matplotlib>=3.7",
 ]
 fold = [
     # chai_lab pins torch>=2.3.1,<2.7; boltz needs >=2.2 — this satisfies both.

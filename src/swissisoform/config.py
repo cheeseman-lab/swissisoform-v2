@@ -38,23 +38,34 @@ class FilterConfig:
 class SourceResolutionConfig:
     """Configuration for per-sample source-transcript resolution.
 
-    Optional filtering-cascade stage (``pipeline.run_sample``) that pins each
-    TIS to one source mRNA using the sample's own RNA-seq. Off unless
-    ``PipelineConfig.source_resolution`` is set; skipped for samples without
-    salmon/IsoQuant inputs (HeLa only today).
+    Filtering-cascade stage (``pipeline.run_sample``) that pins each TIS to one
+    source mRNA using the sample's own long-read (IsoQuant) RNA-seq. A single
+    cascade: long-read presence filter → ±W window-purity → abundance-based
+    labeling. Off unless ``PipelineConfig.source_resolution`` is set; skipped
+    for samples without an IsoQuant input (HeLa only today).
 
     Attributes:
         window_radius: Half-width W (nt) of the sequence-purity window.
-        salmon_min_tpm: Per-replicate salmon presence threshold (TPM).
-        isoquant_min_count: IsoQuant presence threshold (long-read counts).
+        isoquant_min_count: IsoQuant presence threshold (long-read counts) for
+            the long-read filter step.
+        divergence_dominance_frac: For divergent (ambiguous-window) sites, the
+            top survivor must hold at least this fraction of the total long-read
+            abundance across divergent candidates to be called the source.
+            ``None`` disables this check.
+        divergence_min_count: For divergent sites, the top survivor must have at
+            least this absolute long-read count to be called the source.
+            ``None`` disables this check. When both knobs are ``None`` the
+            divergent case falls back to most-abundant-wins (placeholder until a
+            threshold is chosen from the read distribution).
         drop_unresolved: Reserved — subset to resolved TIS. Tag-only today
             (kept ``False``); deferred until the unresolved fraction is
             quantified on real data.
     """
 
     window_radius: int = 100
-    salmon_min_tpm: float = 0.1
     isoquant_min_count: float = 3.0
+    divergence_dominance_frac: float | None = None
+    divergence_min_count: float | None = None
     drop_unresolved: bool = False
 
 

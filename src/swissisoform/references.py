@@ -14,6 +14,7 @@ from swissisoform.config import (
     ConservationConfig,
     PipelineConfig,
     ScoringConfig,
+    SourceResolutionConfig,
 )
 
 # ── Paths ────────────────────────────────────────────────────────────────
@@ -102,4 +103,9 @@ def build_config(min_cell_lines: int = 3) -> PipelineConfig:
     # principled E3/E4 anchors; the 13-gene set validates scoring LOGIC, not
     # calibration, so no per-run override of those thresholds.
     cfg.scoring = ScoringConfig(min_cell_lines=min_cell_lines)
+    # Source-transcript resolution: the cascade runs per sample only when that
+    # sample's manifest row supplies an ``isoquant_table`` (HeLa today). The
+    # divergence thresholds stay None until a value is chosen from the read
+    # distribution (scripts/export/export_source_divergence_distribution.py).
+    cfg.source_resolution = SourceResolutionConfig()
     return cfg
