@@ -5,7 +5,7 @@ For choosing the divergent-case dominance threshold
 front of the cascade (long-read filter → window-purity) and, for every
 initiation site whose surviving candidates **diverge in-window**, record how the
 sample's long-read reads split across those candidate transcripts. Backs
-``scripts/export/export_source_divergence_distribution.py``.
+``figures/source_divergence/export_source_divergence_distribution.py``.
 """
 
 from __future__ import annotations

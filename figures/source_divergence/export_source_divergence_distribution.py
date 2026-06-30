@@ -9,13 +9,15 @@ reports how that sample's long-read reads split across the candidate transcripts
 Outputs:
   1. a per-site CSV (``--out``);
   2. a quantile summary of the top-fraction to stdout;
-  3. an optional 100%-stacked-bar PNG (``--plot``) — one bar per divergent TIS,
-     each bar split into per-candidate read-percentage segments, colored by
-     within-site rank, bars sorted by top fraction.
+  3. a 100%-stacked-bar PNG (``--plot``) — one bar per divergent TIS, each bar
+     split into per-candidate read-percentage segments, colored by within-site
+     rank, bars sorted by top fraction.
+
+Both the CSV and PNG default to this script's own directory
+(``figures/source_divergence/``).
 
 Usage:
-    python scripts/export/export_source_divergence_distribution.py --sample HeLa \
-        --plot data/output/diagnostics/HeLa_divergence.png
+    python figures/source_divergence/export_source_divergence_distribution.py --sample HeLa
 """
 
 from __future__ import annotations
@@ -37,6 +39,8 @@ from swissisoform.runner import (
 from swissisoform.sourceresolve.diagnostics import divergent_site_distribution
 
 ROOT = Path(__file__).resolve().parent.parent.parent
+# Outputs (CSV + PNG) live alongside this script, under figures/source_divergence/.
+HERE = Path(__file__).resolve().parent
 
 
 def _resolve_inputs(sample: str) -> tuple[Path, Path]:
@@ -151,6 +155,7 @@ def _plot(dist: pd.DataFrame, out: Path, max_bars: int) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Generate the divergence CSV + stacked-bar plot for one sample."""
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -165,9 +170,17 @@ def main(argv: list[str] | None = None) -> int:
         "--isoquant-min-count", type=float, default=3.0, help="Long-read presence threshold"
     )
     p.add_argument(
-        "--out", type=Path, default=None, help="Per-site CSV (default under data/output)"
+        "--out",
+        type=Path,
+        default=None,
+        help="Per-site CSV (default: alongside this script, {sample}_divergence.csv)",
     )
-    p.add_argument("--plot", type=Path, default=None, help="Stacked-bar PNG output path")
+    p.add_argument(
+        "--plot",
+        type=Path,
+        default=None,
+        help="Stacked-bar PNG path (default: alongside this script, {sample}_divergence.png)",
+    )
     p.add_argument("--max-bars", type=int, default=200, help="Max bars per plot (0 = no cap)")
     args = p.parse_args(argv)
 
@@ -191,13 +204,13 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         genome.close()
 
-    out = args.out or (ROOT / "data" / "output" / "diagnostics" / f"{args.sample}_divergence.csv")
+    out = args.out or (HERE / f"{args.sample}_divergence.csv")
     out.parent.mkdir(parents=True, exist_ok=True)
     dist.to_csv(out, index=False)
     print(f"wrote per-site CSV: {out}  ({len(dist)} divergent sites)")
     _print_summary(dist)
-    if args.plot:
-        _plot(dist, args.plot, args.max_bars)
+    plot_path = args.plot or (HERE / f"{args.sample}_divergence.png")
+    _plot(dist, plot_path, args.max_bars)
     return 0
 
 

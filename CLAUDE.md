@@ -364,9 +364,10 @@ reads → mapping (minimap2 / IsoQuant)          │ aligned  │  unified casca
   `--skip-source-resolution` (disable cascade+collapse), `--divergence-threshold`
   (default 0.5), `--window-upstream` / `--window-downstream` (default 100). The
   divergent threshold is chosen empirically from
-  `scripts/export/export_source_divergence_distribution.py` (per-site read
-  distribution: CSV + quantiles + a 100%-stacked-bar plot, one bar per divergent
-  TIS).
+  `figures/source_divergence/export_source_divergence_distribution.py` (per-site
+  read distribution: CSV + quantiles + a 100%-stacked-bar plot, one bar per
+  divergent TIS; CSV + PNG written alongside the script in
+  `figures/source_divergence/`).
 
 ## Development
 
