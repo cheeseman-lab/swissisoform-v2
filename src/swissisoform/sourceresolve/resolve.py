@@ -6,19 +6,28 @@ long-read RNA-seq, so it is intrinsically per cell line. Per genomic initiation
 site (``init_site``):
 
 1. **Long-read filter** — keep only candidate transcripts present in the sample's
-   IsoQuant table (count ≥ ``isoquant_min_count``). If none survive, the site is
-   unresolved.
-2. **±W window-purity** — run :func:`purity_decision` on the survivors. If their
-   local sequence within ±W of the start codon agrees (pure / single candidate),
-   the window is unambiguous regardless of which isoform a footprint came from.
+   IsoQuant table (count ≥ ``isoquant_min_count``). If none survive, the site has
+   **no support** (``window_status="no_support"``).
+2. **Window-purity** — run :func:`purity_decision` on the survivors over the
+   ``window_upstream`` / ``window_downstream`` bounds. If their local sequence
+   agrees (pure / single candidate), the window is unambiguous regardless of
+   which isoform a footprint came from.
 3. **Abundance labeling**:
    - **pure / single** → source = most-abundant survivor (by long-read count).
-   - **divergent** → an abundance threshold decides which survivor to keep
-     (dominance fraction and/or absolute count); if it fails, the site is
-     unresolved; with no threshold set, falls back to most-abundant-wins.
+   - **divergent** → the top survivor must hold ≥ ``divergence_dominance_frac``
+     of the divergent candidates' total long-read abundance; if it fails, the
+     site is **unresolved**. With no threshold set, falls back to
+     most-abundant-wins.
 
-**Tag-only:** every TIS is annotated with its verdict and kept — nothing is
-dropped (subsetting on resolution is a deliberate follow-up).
+Verdict vocabulary — ``window_status`` ∈ ``single | pure | divergent |
+no_support``; ``source_evidence`` ∈ ``window_pure | divergent_pass | no_support
+| unresolved``; ``resolved`` is ``True`` only when a source mRNA is pinned. So
+the *only* ``unresolved`` sites are divergent ones that fail the threshold;
+long-read drop-outs are ``no_support``.
+
+**Tag-only here:** every TIS is annotated with its verdict and kept. Collapsing
+to one mRNA per resolved TIS happens later, at the assembly boundary
+(:func:`swissisoform.sourceresolve.collapse.collapse_to_source`).
 """
 
 from __future__ import annotations
@@ -59,11 +68,11 @@ class Resolution:
     Attributes:
         resolved: ``True`` if the cascade pins a source transcript.
         window_status: ``"single"`` (one survivor), ``"pure"`` (survivors agree
-            in-window), ``"divergent"`` (survivors disagree), or ``"none"`` (no
-            survivor after the long-read filter).
-        source_transcript: The chosen source mRNA, or ``None`` if unresolved.
-        source_evidence: ``"window_pure"`` | ``"divergent_abundance"`` |
-            ``"unresolved"``.
+            in-window), ``"divergent"`` (survivors disagree), or ``"no_support"``
+            (no survivor after the long-read filter).
+        source_transcript: The chosen source mRNA, or ``None`` if not resolved.
+        source_evidence: ``"window_pure"`` | ``"divergent_pass"`` |
+            ``"no_support"`` | ``"unresolved"``.
         tie_initiation_efficiency: The source transcript's ``NormTISCounts``
             divided by its long-read abundance, or ``None``.
     """
@@ -81,15 +90,16 @@ def _candidate_windows(
     start_codon: str,
     exon_skeletons: Mapping[str, TranscriptCoordinates],
     genome: Any,
-    w: int,
+    up: int,
+    down: int,
 ) -> dict[str, TisWindow]:
-    """Extract the ±W window for each candidate that contains the start codon.
+    """Extract the window for each candidate that contains the start codon.
 
     Candidates without an exon skeleton, whose start is intronic, or whose window
     does not open on the called start codon (a coordinate-error guard) are
     dropped. The start-codon comparison is case-insensitive so a soft-masked
-    genome does not spuriously drop every candidate. ``down=w + 1`` so radius
-    ``w`` (the w-th base 3' of the A) is reachable by the purity test.
+    genome does not spuriously drop every candidate. ``down=down + 1`` so the
+    ``down``-th base 3' of the A is reachable by the purity test.
     """
     expected = start_codon.upper()
     windows: dict[str, TisWindow] = {}
@@ -97,7 +107,7 @@ def _candidate_windows(
         coords = exon_skeletons.get(tid)
         if coords is None:
             continue
-        win = extract_tis_window(coords, genome, gstart, up=w, down=w + 1)
+        win = extract_tis_window(coords, genome, gstart, up=up, down=down + 1)
         if win is None or win.downstream[:3].upper() != expected:
             continue
         windows[tid] = win
@@ -121,32 +131,28 @@ def _divergent_decision(
     abundance: Mapping[str, float],
     *,
     dominance_frac: float | None,
-    min_count: float | None,
 ) -> str | None:
-    """Pick a source among divergent survivors subject to abundance thresholds.
+    """Pick a source among divergent survivors subject to a dominance threshold.
 
-    The top survivor (by long-read abundance) must clear every configured
-    threshold to be returned; otherwise the site is unresolved (``None``). With
-    no threshold configured this is most-abundant-wins.
+    The top survivor (by long-read abundance) must hold at least
+    ``dominance_frac`` of the divergent candidates' total long-read abundance to
+    be returned; otherwise the site is unresolved (``None``). With no threshold
+    configured this is most-abundant-wins.
 
     Args:
         survivors: Divergent candidate tids (≥ 2).
         abundance: ``{tid: long-read count}``.
         dominance_frac: Required fraction of total abundance for the top
             survivor, or ``None`` to skip the check.
-        min_count: Required absolute abundance for the top survivor, or ``None``
-            to skip the check.
 
     Returns:
-        The chosen source tid, or ``None`` when a threshold is not met.
+        The chosen source tid, or ``None`` when the threshold is not met.
     """
     top = _most_abundant(survivors, abundance)
     if top is None:
         return None
-    top_count = float(abundance.get(top, 0.0))
-    if min_count is not None and top_count < min_count:
-        return None
     if dominance_frac is not None:
+        top_count = float(abundance.get(top, 0.0))
         total = sum(float(abundance.get(t, 0.0)) for t in survivors)
         if total <= 0 or (top_count / total) < dominance_frac:
             return None
@@ -159,28 +165,29 @@ def _resolve_site(
     iso_abundance: Mapping[str, float],
     norm_tis_by_tid: Mapping[str, float],
     *,
-    window: int,
+    window_upstream: int,
+    window_downstream: int,
     dominance_frac: float | None,
-    min_count: float | None,
 ) -> Resolution:
     """Run the cascade for a single site and return its verdict."""
     survivors = [t for t in windows if t in iso_present]
     if not survivors:
-        return Resolution(False, "none", None, "unresolved", None)
+        # No long-read-supported candidate — distinct from a divergent failure.
+        return Resolution(False, "no_support", None, "no_support", None)
 
-    pur = purity_decision([windows[t] for t in survivors], window)
+    pur = purity_decision(
+        [windows[t] for t in survivors], window_upstream, window_downstream
+    )
     if pur.reason in ("single_candidate", "pure_window"):
         status = "single" if pur.reason == "single_candidate" else "pure"
         source = _most_abundant(survivors, iso_abundance)
         evidence = "window_pure"
     else:  # ambiguous_window
         status = "divergent"
-        source = _divergent_decision(
-            survivors, iso_abundance, dominance_frac=dominance_frac, min_count=min_count
-        )
-        evidence = "divergent_abundance" if source is not None else "unresolved"
+        source = _divergent_decision(survivors, iso_abundance, dominance_frac=dominance_frac)
+        evidence = "divergent_pass" if source is not None else "unresolved"
 
-    if source is None:
+    if source is None:  # divergent that failed the dominance threshold
         return Resolution(False, status, None, "unresolved", None)
 
     denom = float(iso_abundance.get(source, 0.0))
@@ -195,10 +202,10 @@ def resolve_sources(
     exon_skeletons: Mapping[str, TranscriptCoordinates],
     genome: Any,
     isoquant_table: str | Path,
-    window: int = 100,
+    window_upstream: int = 100,
+    window_downstream: int = 100,
     isoquant_min_count: float = 3.0,
-    divergence_dominance_frac: float | None = None,
-    divergence_min_count: float | None = None,
+    divergence_dominance_frac: float | None = 0.5,
 ) -> pd.DataFrame:
     """Resolve the source transcript for each TIS in one sample's filtered table.
 
@@ -217,12 +224,11 @@ def resolve_sources(
         genome: Object with ``.fetch(chrom, start, end) -> str`` (e.g.
             ``pysam.FastaFile``).
         isoquant_table: IsoQuant transcript-abundance TSV for this sample.
-        window: Window radius W in nt.
+        window_upstream: nt 5' of the start codon in the purity window.
+        window_downstream: nt 3' of the start codon in the purity window.
         isoquant_min_count: IsoQuant presence threshold (long-read filter).
         divergence_dominance_frac: Dominance-fraction threshold for divergent
-            sites, or ``None``.
-        divergence_min_count: Absolute-count threshold for divergent sites, or
-            ``None``.
+            sites (default 0.5), or ``None`` for most-abundant-wins.
 
     Returns:
         ``filtered_df`` with :data:`VERDICT_COLUMNS` appended (same row count).
@@ -247,7 +253,10 @@ def resolve_sources(
         start_codon = str(grp["StartCodon"].iloc[0])
         cand_tids = list(dict.fromkeys(grp["Tid"].astype(str)))
 
-        windows = _candidate_windows(cand_tids, gstart, start_codon, exon_skeletons, genome, window)
+        windows = _candidate_windows(
+            cand_tids, gstart, start_codon, exon_skeletons, genome,
+            window_upstream, window_downstream,
+        )
 
         # Per-transcript TIS signal for the efficiency numerator (max over the
         # transcript's own rows at this site).
@@ -262,9 +271,9 @@ def resolve_sources(
             iso_present,
             iso_abundance,
             norm_tis_by_tid,
-            window=window,
+            window_upstream=window_upstream,
+            window_downstream=window_downstream,
             dominance_frac=divergence_dominance_frac,
-            min_count=divergence_min_count,
         )
 
     for col in VERDICT_COLUMNS:
@@ -273,13 +282,13 @@ def resolve_sources(
     n_sites = len(verdicts)
     n_resolved = sum(v.resolved for v in verdicts.values())
     logger.info(
-        "resolve_sources: %d init sites → %d resolved (%d unresolved); window_status %s",
+        "resolve_sources: %d init sites → %d resolved (%d not resolved); window_status %s",
         n_sites,
         n_resolved,
         n_sites - n_resolved,
         {
             s: sum(v.window_status == s for v in verdicts.values())
-            for s in ("single", "pure", "divergent", "none")
+            for s in ("single", "pure", "divergent", "no_support")
         },
     )
     return df

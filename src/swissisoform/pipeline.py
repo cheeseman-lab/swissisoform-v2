@@ -192,10 +192,10 @@ def run_sample(
                 exon_skeletons=ref.exon_skeletons,
                 genome=genome,
                 isoquant_table=isoquant_table,
-                window=sr.window_radius,
+                window_upstream=sr.window_upstream,
+                window_downstream=sr.window_downstream,
                 isoquant_min_count=sr.isoquant_min_count,
                 divergence_dominance_frac=sr.divergence_dominance_frac,
-                divergence_min_count=sr.divergence_min_count,
             )
         finally:
             genome.close()

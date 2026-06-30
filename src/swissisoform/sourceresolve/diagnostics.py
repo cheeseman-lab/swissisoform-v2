@@ -1,11 +1,10 @@
 """Read-distribution diagnostics for divergent source-resolution sites.
 
-For choosing the divergent-case abundance threshold
-(``SourceResolutionConfig.divergence_dominance_frac`` /
-``divergence_min_count``) empirically: re-run the front of the cascade
-(long-read filter → window-purity) and, for every initiation site whose
-surviving candidates **diverge in-window**, record how the sample's long-read
-reads split across those candidate transcripts. Backs
+For choosing the divergent-case dominance threshold
+(``SourceResolutionConfig.divergence_dominance_frac``) empirically: re-run the
+front of the cascade (long-read filter → window-purity) and, for every
+initiation site whose surviving candidates **diverge in-window**, record how the
+sample's long-read reads split across those candidate transcripts. Backs
 ``scripts/export/export_source_divergence_distribution.py``.
 """
 
@@ -45,7 +44,8 @@ def divergent_site_distribution(
     exon_skeletons: Mapping[str, TranscriptCoordinates],
     genome: Any,
     isoquant_table: str | Path,
-    window: int = 100,
+    window_upstream: int = 100,
+    window_downstream: int = 100,
     isoquant_min_count: float = 3.0,
 ) -> pd.DataFrame:
     """Per-site long-read abundance distribution for divergent-window sites.
@@ -60,7 +60,8 @@ def divergent_site_distribution(
         exon_skeletons: ``{transcript_id: TranscriptCoordinates}``.
         genome: Object with ``.fetch(chrom, start, end) -> str``.
         isoquant_table: IsoQuant transcript-abundance TSV for this sample.
-        window: Window radius W in nt.
+        window_upstream: nt 5' of the start codon in the purity window.
+        window_downstream: nt 3' of the start codon in the purity window.
         isoquant_min_count: IsoQuant presence threshold (long-read filter).
 
     Returns:
@@ -84,12 +85,16 @@ def divergent_site_distribution(
         cand_tids = list(dict.fromkeys(grp["Tid"].astype(str)))
 
         windows = _candidate_windows(
-            cand_tids, gstart, start_codon, exon_skeletons, genome, window
+            cand_tids, gstart, start_codon, exon_skeletons, genome,
+            window_upstream, window_downstream,
         )
         survivors = [t for t in windows if t in iso_present]
         if len(survivors) < 2:
             continue
-        if purity_decision([windows[t] for t in survivors], window).reason != "ambiguous_window":
+        pur = purity_decision(
+            [windows[t] for t in survivors], window_upstream, window_downstream
+        )
+        if pur.reason != "ambiguous_window":
             continue
 
         ranked = sorted(survivors, key=lambda t: (-float(iso_abundance.get(t, 0.0)), t))

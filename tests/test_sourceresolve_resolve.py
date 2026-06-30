@@ -33,35 +33,21 @@ class TestMostAbundant:
 
 class TestDivergentDecision:
     def test_no_threshold_is_most_abundant(self):
-        src = _divergent_decision(
-            ["A", "B"], {"A": 8.0, "B": 2.0}, dominance_frac=None, min_count=None
-        )
+        src = _divergent_decision(["A", "B"], {"A": 8.0, "B": 2.0}, dominance_frac=None)
         assert src == "A"
 
     def test_dominance_pass(self):
-        src = _divergent_decision(
-            ["A", "B"], {"A": 8.0, "B": 2.0}, dominance_frac=0.75, min_count=None
-        )
+        src = _divergent_decision(["A", "B"], {"A": 8.0, "B": 2.0}, dominance_frac=0.75)
         assert src == "A"  # 8 / 10 = 0.8 >= 0.75
 
     def test_dominance_fail(self):
-        src = _divergent_decision(
-            ["A", "B"], {"A": 8.0, "B": 2.0}, dominance_frac=0.9, min_count=None
-        )
+        src = _divergent_decision(["A", "B"], {"A": 8.0, "B": 2.0}, dominance_frac=0.9)
         assert src is None  # 0.8 < 0.9
 
-    def test_min_count_fail(self):
-        src = _divergent_decision(
-            ["A", "B"], {"A": 8.0, "B": 2.0}, dominance_frac=None, min_count=10.0
-        )
-        assert src is None  # top count 8 < 10
-
-    def test_both_must_pass(self):
-        # dominance passes (0.8) but min_count fails (8 < 9) → unresolved.
-        src = _divergent_decision(
-            ["A", "B"], {"A": 8.0, "B": 2.0}, dominance_frac=0.5, min_count=9.0
-        )
-        assert src is None
+    def test_dominance_exactly_at_threshold_passes(self):
+        # 5 / 10 = 0.5 >= 0.5 → resolved (default threshold behavior).
+        src = _divergent_decision(["A", "B"], {"A": 5.0, "B": 5.0}, dominance_frac=0.5)
+        assert src == "A"  # tie-break to smallest tid
 
 
 def _coords(tid, strand, exons, chrom="chr1"):
@@ -138,7 +124,8 @@ class TestResolveSources:
             exon_skeletons=_skeletons(),
             genome=_genome(),
             isoquant_table=iso,
-            window=10,
+            window_upstream=10,
+            window_downstream=10,
             isoquant_min_count=3.0,
             **kwargs,
         )
@@ -165,12 +152,19 @@ class TestResolveSources:
         # both rows of the site share the broadcast verdict
         assert out.loc["T_p2", "source_transcript"] == "T_p1"
 
-    def test_divergent_no_threshold_most_abundant(self, tmp_path):
+    def test_divergent_default_threshold_resolves(self, tmp_path):
+        # Default divergence_dominance_frac=0.5; top fraction 0.8 >= 0.5.
         out = self._run(tmp_path)
         assert out.loc["T_d1", "window_status"] == "divergent"
         assert bool(out.loc["T_d1", "resolved"]) is True
-        assert out.loc["T_d1", "source_transcript"] == "T_d1"  # 8 > 2
-        assert out.loc["T_d1", "source_evidence"] == "divergent_abundance"
+        assert out.loc["T_d1", "source_transcript"] == "T_d1"  # 32 > 8
+        assert out.loc["T_d1", "source_evidence"] == "divergent_pass"
+
+    def test_divergent_no_threshold_most_abundant(self, tmp_path):
+        out = self._run(tmp_path, divergence_dominance_frac=None)
+        assert bool(out.loc["T_d1", "resolved"]) is True
+        assert out.loc["T_d1", "source_transcript"] == "T_d1"
+        assert out.loc["T_d1", "source_evidence"] == "divergent_pass"
 
     def test_divergent_dominance_pass(self, tmp_path):
         out = self._run(tmp_path, divergence_dominance_frac=0.75)
@@ -190,12 +184,13 @@ class TestResolveSources:
         assert out.loc["T_m1", "window_status"] == "single"
         assert out.loc["T_m1", "source_transcript"] == "T_m1"
 
-    def test_all_filtered_out_is_unresolved(self, tmp_path):
+    def test_all_filtered_out_is_no_support(self, tmp_path):
         out = self._run(tmp_path)
-        assert out.loc["T_x1", "window_status"] == "none"
+        # No long-read-supported candidate → no_support, distinct from unresolved.
+        assert out.loc["T_x1", "window_status"] == "no_support"
         assert bool(out.loc["T_x1", "resolved"]) is False
         assert pd.isna(out.loc["T_x1", "source_transcript"])
-        assert out.loc["T_x1", "source_evidence"] == "unresolved"
+        assert out.loc["T_x1", "source_evidence"] == "no_support"
 
 
 class TestDivergentSiteDistribution:
@@ -206,7 +201,8 @@ class TestDivergentSiteDistribution:
             exon_skeletons=_skeletons(),
             genome=_genome(),
             isoquant_table=iso,
-            window=10,
+            window_upstream=10,
+            window_downstream=10,
             isoquant_min_count=3.0,
         )
         # only the gstart-360 pair (T_d1/T_d2) diverges with both present

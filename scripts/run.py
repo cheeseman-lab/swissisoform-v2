@@ -111,6 +111,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--rebuild-combined", action="store_true",
         help="Force rebuild of the cached all_samples_combined.parquet",
     )
+
+    # Source-transcript resolution (cascade → collapse to one mRNA per TIS).
+    # These take effect only when the combined catalog is (re)built — pair with
+    # --rebuild-combined if a cached all_samples_combined.parquet already exists.
+    p.add_argument(
+        "--skip-source-resolution", action="store_true",
+        help="Disable the source-resolution cascade + collapse entirely "
+             "(every candidate transcript advances, as before resolution existed)",
+    )
+    p.add_argument(
+        "--divergence-threshold", type=float, default=0.5,
+        help="Fraction of long-read abundance the top transcript must hold at a "
+             "divergent site to be resolved (default 0.5 = >=50%%); below it the "
+             "site is unresolved and drops at the collapse step",
+    )
+    p.add_argument(
+        "--window-upstream", type=int, default=100,
+        help="Window-purity bound: nt 5' of the start codon (default 100)",
+    )
+    p.add_argument(
+        "--window-downstream", type=int, default=100,
+        help="Window-purity bound: nt 3' of the start codon (default 100)",
+    )
     p.add_argument(
         "--no-spot-check-limit", action="store_true",
         help="Print every TIS in the spot check (default caps at 5 per gene)",
@@ -258,7 +281,13 @@ def main(argv: list[str] | None = None) -> int:
         from swissisoform.references import build_config
 
         combined = runner.load_combined(
-            cell_lines, ref, build_config(),
+            cell_lines, ref,
+            build_config(
+                source_resolution=not args.skip_source_resolution,
+                divergence_threshold=args.divergence_threshold,
+                window_upstream=args.window_upstream,
+                window_downstream=args.window_downstream,
+            ),
             force_rebuild=args.rebuild_combined,
         )
 
@@ -278,6 +307,10 @@ def main(argv: list[str] | None = None) -> int:
         out_dir=None,
         spot_check_limit=None if args.no_spot_check_limit else 5,
         rebuild_combined=args.rebuild_combined,
+        skip_source_resolution=args.skip_source_resolution,
+        divergence_threshold=args.divergence_threshold,
+        window_upstream=args.window_upstream,
+        window_downstream=args.window_downstream,
     )
     return runner.run(spec)
 

@@ -330,27 +330,40 @@ reads → mapping (minimap2 / IsoQuant)          │ aligned  │  unified casca
   the Ribo-TISH predicts and HTSeq counts. See `sourceseq/README.md`.
 - **Tracked (this repo):** the disambiguation **is our filtering**, so it lives
   in `src/swissisoform/sourceresolve/` (`mrna` / `purity` / `expression` /
-  `resolve` / `diagnostics`) and runs as a **per-sample step inside
+  `resolve` / `collapse` / `diagnostics`) and runs as a **per-sample step inside
   `run_sample`** — it depends on that sample's own long-read RNA-seq, so it is
   intrinsically per cell line (HeLa only today). `resolve_sources` groups the
   filtered TIS by init_site and runs a **single linear cascade** per site:
 
   1. **long-read filter** — keep candidate transcripts present in IsoQuant
-     (count ≥ `isoquant_min_count`); none survive ⇒ unresolved.
-  2. **±W window-purity** (`purity_decision`) on the survivors.
+     (count ≥ `isoquant_min_count`); none survive ⇒ `window_status="no_support"`.
+  2. **window-purity** (`purity_decision`) on the survivors, over independent
+     `window_upstream` / `window_downstream` bounds (both default 100 nt).
   3. **abundance label** — *pure/single* → most-abundant survivor; *divergent*
-     → an abundance threshold (`divergence_dominance_frac` and/or
-     `divergence_min_count`) decides, else unresolved (no threshold ⇒
-     most-abundant placeholder).
+     → top survivor must hold ≥ `divergence_dominance_frac` (default 0.5) of the
+     divergent total, else `unresolved` (`None` ⇒ most-abundant-wins).
 
   It **tags** every TIS with `resolved` / `window_status` / `source_transcript`
-  / `source_evidence` / `tie_initiation_efficiency`. Tag-only — nothing is
-  dropped yet (`SourceResolutionConfig.drop_unresolved` is reserved until the
-  unresolved fraction is quantified). Short-read salmon was removed: the cascade
-  uses long-read only, for both presence and abundance. Gated by
+  / `source_evidence` / `tie_initiation_efficiency`. Labels: `window_status` ∈
+  `single|pure|divergent|no_support`; `source_evidence` ∈
+  `window_pure|divergent_pass|no_support|unresolved` — the **only** `unresolved`
+  sites are divergent ones that fail the threshold; long-read drop-outs are
+  `no_support`. Tag-only here (full rows kept for audit). Short-read salmon was
+  removed: long-read only, for both presence and abundance. Gated by
   `PipelineConfig.source_resolution` (built by `references.build_config`) + the
-  sample's optional `isoquant_table` manifest column. The divergent threshold is
-  chosen empirically from
+  sample's optional `isoquant_table` manifest column.
+
+  **Collapse to one mRNA per TIS** — the verdict is consumed by
+  `collapse_to_source` (`sourceresolve/collapse.py`) at the assembly boundary
+  (`runner.prepare`, before `assemble_genes`): keeps all Annotated rows + each
+  resolved site's source-transcript row, dropping non-resolved
+  (`no_support`/`unresolved`) alt rows, so only resolved TIS — one mRNA each —
+  advance. No-op when the verdict columns are absent.
+
+  **CLI** (`scripts/run.py`, effective when the combined catalog is (re)built):
+  `--skip-source-resolution` (disable cascade+collapse), `--divergence-threshold`
+  (default 0.5), `--window-upstream` / `--window-downstream` (default 100). The
+  divergent threshold is chosen empirically from
   `scripts/export/export_source_divergence_distribution.py` (per-site read
   distribution: CSV + quantiles + a 100%-stacked-bar plot, one bar per divergent
   TIS).

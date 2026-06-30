@@ -1,11 +1,10 @@
 """Diagnostic: long-read read distribution at divergent source-resolution sites.
 
-For picking the divergent-case abundance threshold
-(``SourceResolutionConfig.divergence_dominance_frac`` / ``divergence_min_count``)
-empirically. For one sample it re-runs the front of the source-resolution
-cascade (long-read filter → window-purity) and, for every site whose surviving
-candidates diverge in-window, reports how that sample's long-read reads split
-across the candidate transcripts.
+For picking the divergent-case dominance threshold
+(``SourceResolutionConfig.divergence_dominance_frac``) empirically. For one
+sample it re-runs the front of the source-resolution cascade (long-read filter →
+window-purity) and, for every site whose surviving candidates diverge in-window,
+reports how that sample's long-read reads split across the candidate transcripts.
 
 Outputs:
   1. a per-site CSV (``--out``);
@@ -111,11 +110,32 @@ def _plot(dist: pd.DataFrame, out: Path, max_bars: int) -> None:
         ax.bar(x, heights, bottom=bottoms, color=cmap(rank), width=1.0, linewidth=0)
         bottoms = [b + h for b, h in zip(bottoms, heights)]
 
+    # Horizontal reference lines at 20/40/60/80% — candidate dominance thresholds.
+    # The rank-1 (bottom) segment height IS the top transcript's read share, so a
+    # line at y=60 crosses the bars exactly where top_fraction drops below 0.60.
+    for thr in (20, 40, 50, 60, 80):
+        ax.axhline(thr, color="white", linestyle="--", linewidth=1.0, alpha=0.9, zorder=5)
+        ax.text(
+            n - 0.5, thr, f" {thr}%", va="center", ha="left", fontsize="small",
+            color="0.2", clip_on=False, zorder=6,
+        )
+
     ax.set_ylabel("% of long-read reads at the TIS")
     ax.set_xlabel("divergent TIS (sorted by dominance of the top transcript)")
     ax.set_xlim(-0.5, len(ordered) - 0.5)
     ax.set_ylim(0, 100)
-    ax.set_xticks([])
+
+    # X ticks as a percentage of the divergent sites (left = most dominant).
+    if n > 1:
+        fracs = [i / 20 for i in range(21)]  # every 5% of the divergent sites
+        ax.set_xticks([f * (n - 1) for f in fracs])
+        ax.set_xticklabels([f"{int(f * 100)}%" for f in fracs])
+        ax.set_xlabel(
+            "divergent TIS, sorted by dominance "
+            "(x = % of divergent sites, left = most dominant)"
+        )
+    else:
+        ax.set_xticks([])
     ax.legend(
         handles=[Patch(color=cmap(r), label=f"rank {r + 1}") for r in range(max_rank)],
         title="within-TIS transcript",
@@ -135,7 +155,12 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     p.add_argument("--sample", default="HeLa", help="Cell line in the sample manifest")
-    p.add_argument("--window", type=int, default=100, help="Window radius W (nt)")
+    p.add_argument(
+        "--window-upstream", type=int, default=100, help="Window bound: nt 5' of start codon"
+    )
+    p.add_argument(
+        "--window-downstream", type=int, default=100, help="Window bound: nt 3' of start codon"
+    )
     p.add_argument(
         "--isoquant-min-count", type=float, default=3.0, help="Long-read presence threshold"
     )
@@ -159,7 +184,8 @@ def main(argv: list[str] | None = None) -> int:
             exon_skeletons=skeletons,
             genome=genome,
             isoquant_table=isoquant,
-            window=args.window,
+            window_upstream=args.window_upstream,
+            window_downstream=args.window_downstream,
             isoquant_min_count=args.isoquant_min_count,
         )
     finally:
