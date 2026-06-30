@@ -27,7 +27,7 @@ from swissisoform.clinical.module import ClinicalModule
 from swissisoform.clinical.validate import ConsequenceValidator
 from swissisoform.combine import combine_filtered_samples, dedupe_unique_proteins
 from swissisoform.compare.comparator import compare_genes
-from swissisoform.config import PipelineConfig
+from swissisoform.config import PipelineConfig, ScoringConfig
 from swissisoform.conservation_frame.module import ConservationFrameModule
 from swissisoform.evidence.e6_mass_spec import (
     MassSpecModule,
@@ -303,9 +303,12 @@ def write_proteins_fasta(proteins: list[str], out_path: Path) -> int:
     return n
 
 
-def run_precompute(genes, all_proteins: list[str], skip: set[str]) -> dict:
+def run_precompute(
+    genes, all_proteins: list[str], skip: set[str], scoring: ScoringConfig | None = None
+) -> dict:
     """Run precompute steps.  `skip` controls which precomputes fire."""
     preds: dict = {}
+    scoring = scoring or ScoringConfig()
 
     if "localization" not in skip:
         deeploc_input = {}
@@ -324,6 +327,9 @@ def run_precompute(genes, all_proteins: list[str], skip: set[str]) -> dict:
             dataset="Deep_29_healthy_human_tissues_PXD010154,GTEx_32_Tissues_Proteome_PXD016999",
             reference_db="swissprot:human",
             cache_dir=ROOT / "data" / "cache" / "pepquery",
+            fix_mods=scoring.pepquery_fix_mods,
+            var_mods=scoring.pepquery_var_mods,
+            max_var=scoring.pepquery_max_var,
         )
     else:
         preds["pepquery"] = {}
@@ -606,7 +612,7 @@ def annotate(prepared: PreparedRun, spec: RunSpec) -> pd.DataFrame:
     cfg = prepared.cfg
     all_proteins = prepared.all_proteins
 
-    preds = run_precompute(genes, all_proteins, spec.skip)
+    preds = run_precompute(genes, all_proteins, spec.skip, scoring=cfg.scoring)
     logger.info(
         "Precompute done: deeploc=%d signalp=%d targetp=%d ips=%d plm=%d struct=%d",
         len(preds["deeploc"]), len(preds["signalp"]), len(preds["targetp"]),

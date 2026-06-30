@@ -138,6 +138,11 @@ class ScoringConfig:
             initiation efficiency across any cell line.
         massspec_unique_peptides_min: E6 threshold — minimum number of
             peptides uniquely assigned to the isoform.
+        pepquery_fix_mods: PepQuery2 ``-fixMod`` UNIMOD ids (default
+            Carbamidomethyl C).
+        pepquery_var_mods: PepQuery2 ``-varMod`` UNIMOD ids (default
+            Oxidation M + Acetyl peptide N-term).
+        pepquery_max_var: PepQuery2 ``-maxVar`` — max variable mods per peptide.
         f5_constraint_enrichment_min: F5 threshold — minimum ESM-2 constraint
             enrichment (unique vs shared) to call germline constraint.
         f5_depletion_ratio_max: F5 threshold — gnomAD depletion ratio below
@@ -163,6 +168,17 @@ class ScoringConfig:
     phylop_coding_min: float = 1.0
     initiation_efficiency_min: float = 0.01
     massspec_unique_peptides_min: int = 1
+    # PepQuery2 modification ids (`-printPTM`): keep Carbamidomethyl(C)=1 fixed
+    # and Oxidation(M)=2 variable (PepQuery's own defaults), and add id 5 =
+    # "Acetylation of peptide N-term" (+42.0106) so the initiator / NME-acetyl
+    # proteoform is searchable. We use the *peptide* N-term acetyl (5), not the
+    # *protein* N-term acetyl (33): in peptide-input mode PepQuery has no protein
+    # context to anchor a protein-N-term mod, so 33 would never fire — and since
+    # we only submit N-terminal diagnostic peptides, the peptide N-term is the
+    # protein N-term anyway.
+    pepquery_fix_mods: str = "1"
+    pepquery_var_mods: str = "2,5"
+    pepquery_max_var: int = 3
     # F6 principled anchor: disease-variant density enrichment zero-point.
     f6_disease_enrichment_min: float = 1.0
     # E1/E2 score on AA percent-identity over the unique region.
