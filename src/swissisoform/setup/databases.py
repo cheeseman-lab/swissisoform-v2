@@ -921,6 +921,15 @@ def setup_pepquery(refresh: bool = False) -> None:
                 proc.returncode, (proc.stderr or "")[-400:],
             )
 
+    write_sidecar(
+        PEPQUERY_DIR,
+        source_url=PEPQUERY_TARBALL_URL,
+        version=PEPQUERY_VERSION,
+        artifact=PEPQUERY_JAR,
+        extra={"install_mode": "direct-jar", "java_version": _java_version()},
+    )
+    logger.info("pepquery: jar staged + sidecar written (%s)", PEPQUERY_JAR)
+
 
 # Local PepQuery MS/MS spectra library — provisioned reference data per the
 # CLAUDE.md Execution Contract: mirror the PepQueryDB datasets from the public
@@ -991,15 +1000,6 @@ def setup_pepquery_spectra(refresh: bool = False) -> None:
             prefix + "/", str(dest),
         ])
     logger.info("pepquery-spectra: done -> %s", PEPQUERY_SPECTRA_DIR)
-
-    write_sidecar(
-        PEPQUERY_DIR,
-        source_url=PEPQUERY_TARBALL_URL,
-        version=PEPQUERY_VERSION,
-        artifact=PEPQUERY_JAR,
-        extra={"install_mode": "direct-jar", "java_version": _java_version()},
-    )
-    logger.info("pepquery: jar staged + sidecar written (%s)", PEPQUERY_JAR)
 
 
 def _java_version() -> str:
