@@ -50,7 +50,7 @@ SHARED_FIELDS: tuple[str, ...] = (
 )
 
 # Per-sample metrics pivoted into {sample}_{metric} wide columns.  The
-# source-resolution verdict (resolved / agreement_tier / source_transcript /
+# source-resolution verdict (resolved / window_status / source_transcript /
 # source_evidence / tie_initiation_efficiency) is per cell line — it depends on
 # that sample's RNA-seq — so it pivots wide alongside the count metrics, present
 # only for samples the stage ran on (HeLa today).
@@ -64,7 +64,7 @@ PER_SAMPLE_METRICS: tuple[str, ...] = (
     "GeneRNASeqCounts",
     "TotalRNASeqCounts",
     "resolved",
-    "agreement_tier",
+    "window_status",
     "source_transcript",
     "source_evidence",
     "tie_initiation_efficiency",
@@ -130,6 +130,7 @@ def combine_filtered_samples(
         columns="_sample",
         values=metric_cols,
         aggfunc="first",
+        dropna=False,
     )
     # Flatten MultiIndex columns: ("TISCounts", "HeLa") → "HeLa_TISCounts"
     wide.columns = [f"{sample}_{metric}" for metric, sample in wide.columns]

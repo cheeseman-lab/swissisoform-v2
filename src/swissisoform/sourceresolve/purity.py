@@ -41,41 +41,46 @@ def _all_equal(values: list) -> bool:
     return all(v == first for v in values[1:])
 
 
-def divergence_radius(windows: list[TisWindow], w: int) -> int | None:
-    """Smallest radius ``r`` in ``1..w`` at which the windows disagree.
+def divergence_radius(windows: list[TisWindow], up: int, down: int) -> int | None:
+    """Smallest radius ``r`` at which the windows disagree, bounds asymmetric.
 
     The start-codon A is the shared anchor at radius 0 and is not compared.
-    At each radius ``r`` the ``r``-th base 3' of the A (``downstream[r]``) and
-    the ``r``-th base 5' of the A (``upstream[-r]``) are compared across all
-    candidates. A candidate that has run out of sequence at radius ``r`` (a
-    shorter 5'UTR, or a 3' end) contributes ``None`` — so a *different
-    transcript extent* within the window counts as a divergence, while
-    candidates that all end at the same radius still agree.
+    At each radius ``r`` the ``r``-th base 3' of the A (``downstream[r]``) is
+    compared while ``r <= down``, and the ``r``-th base 5' of the A
+    (``upstream[-r]``) is compared while ``r <= up``. A candidate that has run
+    out of sequence at radius ``r`` (a shorter 5'UTR, or a 3' end) contributes
+    ``None`` — so a *different transcript extent* within the window counts as a
+    divergence, while candidates that all end at the same radius still agree.
 
     Args:
         windows: One :class:`TisWindow` per candidate transcript.
-        w: Window radius in nt.
+        up: nt to compare 5' of the A.
+        down: nt to compare 3' of the A.
 
     Returns:
-        The radius of the first disagreement, or ``None`` if all candidates
-        are identical out to ``w`` on both sides (given available sequence).
+        The radius of the first disagreement, or ``None`` if all candidates are
+        identical out to their respective bounds on both sides (given available
+        sequence).
     """
-    for r in range(1, w + 1):
-        downstream = [wn.downstream[r] if r < len(wn.downstream) else None for wn in windows]
-        if not _all_equal(downstream):
-            return r
-        upstream = [wn.upstream[-r] if r <= len(wn.upstream) else None for wn in windows]
-        if not _all_equal(upstream):
-            return r
+    for r in range(1, max(up, down) + 1):
+        if r <= down:
+            downstream = [wn.downstream[r] if r < len(wn.downstream) else None for wn in windows]
+            if not _all_equal(downstream):
+                return r
+        if r <= up:
+            upstream = [wn.upstream[-r] if r <= len(wn.upstream) else None for wn in windows]
+            if not _all_equal(upstream):
+                return r
     return None
 
 
-def purity_decision(windows: list[TisWindow], w: int) -> PurityResult:
-    """Decide whether a TIS's candidate windows are pure within ``±w`` nt.
+def purity_decision(windows: list[TisWindow], up: int, down: int) -> PurityResult:
+    """Decide whether a TIS's candidate windows are pure within the bounds.
 
     Args:
         windows: One :class:`TisWindow` per surviving candidate transcript.
-        w: Window radius in nt (the "±W" of the test).
+        up: nt 5' of the start codon to compare.
+        down: nt 3' of the start codon to compare.
 
     Returns:
         A :class:`PurityResult`. A single candidate is trivially pure; an empty
@@ -85,7 +90,7 @@ def purity_decision(windows: list[TisWindow], w: int) -> PurityResult:
         return PurityResult(keep=False, divergence_nt=None, reason="no_candidates")
     if len(windows) == 1:
         return PurityResult(keep=True, divergence_nt=None, reason="single_candidate")
-    r = divergence_radius(windows, w)
+    r = divergence_radius(windows, up, down)
     if r is None:
         return PurityResult(keep=True, divergence_nt=None, reason="pure_window")
     return PurityResult(keep=False, divergence_nt=r, reason="ambiguous_window")

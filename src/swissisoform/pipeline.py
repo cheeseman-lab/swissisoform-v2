@@ -51,7 +51,6 @@ def run_sample(
     genome_fasta: str | Path | None = None,
     protein_fasta: str | Path | None = None,
     reference: "UpstreamReference | None" = None,
-    salmon_quant: list[str | Path] | None = None,
     isoquant_table: str | Path | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """End-to-end upstream for a single sample (cell line).
@@ -179,11 +178,11 @@ def run_sample(
     )
 
     # 7: source-transcript resolution (optional, per-sample). Needs this
-    # sample's own RNA-seq (salmon / IsoQuant) + a genome to extract windows;
-    # skipped when unconfigured or when the sample has no expression inputs
+    # sample's own long-read RNA-seq (IsoQuant) + a genome to extract windows;
+    # skipped when unconfigured or when the sample has no IsoQuant input
     # (HeLa only today).  Tag-only — every TIS is annotated, none dropped.
     sr = full_config.source_resolution
-    if sr is not None and (salmon_quant or isoquant_table) and genome_fasta is not None:
+    if sr is not None and isoquant_table is not None and genome_fasta is not None:
         import pysam
 
         genome = pysam.FastaFile(str(genome_fasta))
@@ -192,11 +191,11 @@ def run_sample(
                 final_df,
                 exon_skeletons=ref.exon_skeletons,
                 genome=genome,
-                salmon_quant=salmon_quant,
                 isoquant_table=isoquant_table,
-                window=sr.window_radius,
-                salmon_min_tpm=sr.salmon_min_tpm,
+                window_upstream=sr.window_upstream,
+                window_downstream=sr.window_downstream,
                 isoquant_min_count=sr.isoquant_min_count,
+                divergence_dominance_frac=sr.divergence_dominance_frac,
             )
         finally:
             genome.close()
