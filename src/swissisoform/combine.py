@@ -123,15 +123,15 @@ def combine_filtered_samples(
         list(SHARED_FIELDS)
     ].reset_index(drop=True)
 
-    # Pivot per-sample metrics to wide columns
+    # Pivot per-sample metrics to wide columns. NB: pandas pivot_table with
+    # dropna=False builds MultiIndex.from_product over the index levels — here the
+    # cartesian product of the four DEDUP_KEY levels (Symbol × Tid × GenomePos ×
+    # StartCodon), which explodes to trillions of cells on the full catalog. Take
+    # one row per (key, sample) and unstack instead: same wide layout, NaN for
+    # absent samples, no cartesian blow-up.
     metric_cols = [m for m in PER_SAMPLE_METRICS if m in long.columns]
-    wide = long.pivot_table(
-        index=list(DEDUP_KEY),
-        columns="_sample",
-        values=metric_cols,
-        aggfunc="first",
-        dropna=False,
-    )
+    one_per = long.drop_duplicates(subset=list(DEDUP_KEY) + ["_sample"], keep="first")
+    wide = one_per.set_index(list(DEDUP_KEY) + ["_sample"])[metric_cols].unstack("_sample")
     # Flatten MultiIndex columns: ("TISCounts", "HeLa") → "HeLa_TISCounts"
     wide.columns = [f"{sample}_{metric}" for metric, sample in wide.columns]
     wide = wide.reset_index()
