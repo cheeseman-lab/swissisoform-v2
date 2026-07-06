@@ -12,6 +12,9 @@ expensive annotation modules depend on:
     cosmic   — manual raw TSV prereq → standardized parquet
                (clinical module, COSMIC source)
     gencode  — delegates to scripts/setup/download_references.sh
+    pepquery        — PepQuery2 jar (mass-spec module)
+    pepquery-spectra — mirror PepQueryDB MS/MS library to a local store
+               (~196 GiB, opt-in; lets runs search via local `-ms`, no per-run S3)
 
 Each subcommand writes:
     data/reference/<db>/<artifact>
@@ -931,6 +934,77 @@ def setup_pepquery(refresh: bool = False) -> None:
     logger.info("pepquery: jar staged + sidecar written (%s)", PEPQUERY_JAR)
 
 
+# Local PepQuery MS/MS spectra library — provisioned reference data per the
+# CLAUDE.md Execution Contract: mirror the PepQueryDB datasets from the public
+# S3 bucket so runs search the local copy via `-ms` instead of re-pulling (and
+# deleting) the spectra from S3 on every search. ~196 GiB for the two datasets
+# below; opt-in (not part of `all`).
+PEPQUERY_SPECTRA_DIR = PEPQUERY_DIR / "spectra"
+# Must match the datasets precompute_pepquery searches (the runner's -b list).
+PEPQUERY_DATASETS = (
+    "Deep_29_healthy_human_tissues_PXD010154",
+    "GTEx_32_Tissues_Proteome_PXD016999",
+)
+
+
+def _pepquery_msms_s3_prefix(dataset: str) -> str:
+    """Resolve a dataset's ``msms_library`` S3 prefix from the jar's msms.json."""
+    import json
+    import zipfile
+
+    with zipfile.ZipFile(PEPQUERY_JAR) as z:
+        catalog = json.loads(z.read("main/resources/msms.json"))
+    try:
+        ms_file = catalog[dataset]["ms_file"]
+    except (KeyError, TypeError) as exc:
+        raise KeyError(
+            f"pepquery-spectra: {dataset!r} not found (or has no ms_file) in the "
+            "jar's msms.json catalog"
+        ) from exc
+    if not ms_file or not str(ms_file).startswith("s3://"):
+        raise ValueError(
+            f"pepquery-spectra: {dataset!r} ms_file is not an S3 prefix: {ms_file!r}"
+        )
+    return str(ms_file).rstrip("/")
+
+
+def setup_pepquery_spectra(refresh: bool = False) -> None:
+    """Mirror the PepQueryDB MS/MS spectra library locally (~196 GiB).
+
+    Contract-legal reference provisioning (see CLAUDE.md "Execution Contract").
+    The PepQueryDB ``-b`` datasets live in a public S3 bucket as gzipped MGF;
+    by default PepQuery re-downloads then deletes them on every search. Mirroring
+    them once lets runs search the local copy via ``-ms`` with no per-run S3
+    traffic. Anonymous (public) S3 — no credentials needed.
+
+    Idempotent and resumable: ``aws s3 sync`` transfers only missing/changed
+    objects, so an interrupted transfer resumes on re-run. ``refresh=True`` adds
+    ``--delete`` to mirror exactly. Opt-in (not part of ``all``) given the size.
+    """
+    if not PEPQUERY_JAR.exists():
+        raise FileNotFoundError(
+            f"pepquery-spectra: jar missing at {PEPQUERY_JAR} — run the 'pepquery' "
+            "target first (it ships the msms.json dataset catalog this reads)."
+        )
+    if shutil.which("aws") is None:
+        raise FileNotFoundError(
+            "pepquery-spectra: 'aws' CLI not on PATH — required for anonymous S3 sync."
+        )
+
+    PEPQUERY_SPECTRA_DIR.mkdir(parents=True, exist_ok=True)
+    for dataset in PEPQUERY_DATASETS:
+        prefix = _pepquery_msms_s3_prefix(dataset)
+        dest = PEPQUERY_SPECTRA_DIR / dataset
+        dest.mkdir(parents=True, exist_ok=True)
+        logger.info("pepquery-spectra: syncing %s/ -> %s", prefix, dest)
+        run([
+            "aws", "s3", "sync", "--no-sign-request",
+            *(["--delete"] if refresh else []),
+            prefix + "/", str(dest),
+        ])
+    logger.info("pepquery-spectra: done -> %s", PEPQUERY_SPECTRA_DIR)
+
+
 def _java_version() -> str:
     """Short Java version string for the provenance sidecar."""
     try:
@@ -1478,6 +1552,7 @@ _HANDLERS: dict[str, Any] = {
     "alphamissense": setup_alphamissense,
     "deeploc": setup_deeploc,
     "pepquery": setup_pepquery,
+    "pepquery-spectra": setup_pepquery_spectra,
     "hal": setup_hal,
     "gencode": setup_gencode,
     "signalp": setup_signalp,

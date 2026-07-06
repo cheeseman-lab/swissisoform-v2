@@ -423,6 +423,19 @@ Modules produce two kinds of output:
 - **Truncations:** `canonical[0 : abs(delta_aa)]` (the lost region)
 - **uORFs/altORFs:** entire isoform (no shared region)
 
+## Execution Contract — fresh reruns
+
+**The CPU pipeline recomputes from scratch on every run. No step may rely on cached results of a prior run.** Identical inputs → identical outputs, computed fresh; no hidden accumulated state. Speed comes from parallelism and per-unit efficiency, never from skipping work via a results cache (the InterProScan non-reproducibility — 337→107 hits on rebuild — is the cautionary example).
+
+The only persisted artifacts allowed are:
+
+1. **Provisioned reference data** — genome, GTF, `pc_translations`, the clinical parquets (ClinVar / gnomAD / COSMIC), and the local PepQuery spectra library (`python -m swissisoform.setup.databases pepquery-spectra` mirrors the public PepQueryDB S3 library, ~196 GiB). These are *inputs* downloaded once via the setup phase; identical regardless of what runs against them.
+2. **GPU precomputes** — ESM/PLM embeddings and Boltz structures, keyed by `protein_hash`. The *sole compute exception*, because they are prohibitively expensive inline; produced by the GPU sbatch scripts and treated as static inputs to the CPU run.
+
+Everything else — PepQuery search, all annotation, scoring, comparison — runs fresh each run.
+
+**PepQuery implication:** the only contract-legal prep is **pre-downloading the spectra library** (reference data) — the `pepquery-spectra` setup target mirrors the public PepQueryDB S3 library locally so runs can search it via local `-ms` instead of re-pulling (and deleting) spectra from S3 every search. The search input is already scoped to the differential region: `collect_unique_peptides` submits only isoform-unique peptides (the isoform tryptic digest minus the canonical digest — a sequence set-difference, not a `diff_region` coordinate intersection), so canonical/shared peptides are never searched. There is no caching shortcut: on top of that scoping, a real PepQuery *speedup* still requires **sharding the search**, a fundamental pipeline architecture change (per-protein Snakemake DAG + a fresh, peptide-sharded PepQuery stage over the local library), tracked as its own project — not a quick win. *Known deviations to address:* runtime still uses `-b` (S3) until wired to local `-ms`; and `precompute_pepquery`'s on-disk result cache (`data/cache/pepquery/*.json`) is a CPU result cache that violates this contract.
+
 ## Module Contract
 
 All modules must:
