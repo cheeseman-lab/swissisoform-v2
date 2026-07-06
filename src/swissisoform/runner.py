@@ -569,6 +569,9 @@ class RunSpec:
     divergence_threshold: float | None = 0.5
     window_upstream: int = 100
     window_downstream: int = 100
+    # Non-production opt-in: drop TIS no long-read sample scored (collapse with
+    # keep_unevaluated=False). For long-read-only timing tests.
+    drop_unsupported_tis: bool = False
 
 
 @dataclass
@@ -632,7 +635,7 @@ def prepare(spec: RunSpec) -> PreparedRun:
     # source-resolution verdict columns are absent (cascade skipped/never ran);
     # otherwise keeps Annotated rows + each resolved site's source transcript,
     # so only resolved TIS — one mRNA each — advance to annotation.
-    final = collapse_to_source(final)
+    final = collapse_to_source(final, keep_unevaluated=not spec.drop_unsupported_tis)
 
     logger.info("Stage 4: assembling gene + TIS domain objects")
     genes = assemble_genes(

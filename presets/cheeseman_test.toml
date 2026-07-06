@@ -1,0 +1,17 @@
+# Gene-scoped sibling of cheeseman13: the SAME 13 genes, but ALL of their TIS
+# from the combined 6-cell-line catalog (not the curated [[isoforms]] picks).
+# Runs multi-sample end-to-end — per-sample filter + HeLa long-read source
+# resolution -> combine -> collapse to one mRNA per resolved TIS -> assemble ->
+# annotate.
+#
+# Intended for the long-read timing test: run WITH --drop-unsupported-tis so that
+# only HeLa-long-read-supported TIS advance (non-production; production keeps TIS
+# that lack long-read support). Output: data/output/cheeseman_test/.
+run_name = "cheeseman_test"
+# Scoring-only (E4 reproducibility); never drops TIS. 1 keeps every TIS
+# un-penalized, including HeLa-only / low-recurrence ones.
+min_cell_lines = 1
+genes = [
+  "CBX1", "CDC34", "CDKN1A", "CSNK2A2", "EIF2B1", "FZR1",
+  "MAD2L1", "SRSF2", "TRIP13", "TRNT1", "UBE2D2", "UBE2M", "MSRA",
+]
