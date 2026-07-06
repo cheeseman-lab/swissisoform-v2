@@ -43,8 +43,12 @@ def get_canonical_genome_positions(cds_df: pd.DataFrame) -> pd.DataFrame:
         ],
         axis=1,
     )
+    # GTF coordinates are 1-based inclusive; the pipeline's GenomePos is 0-based
+    # half-open (matching the Ribo-TISH native rows and get_start_codons' own
+    # `start - 1` slice). Without the −1 the imputed +-strand canonical start
+    # anchored one base 3' of the actual codon.
     out["GenomePos"] = out.apply(
-        lambda r: f"{r['chromosome']}:{r['start']}-{r['end']}:{r['strand']}",
+        lambda r: f"{r['chromosome']}:{r['start'] - 1}-{r['end']}:{r['strand']}",
         axis=1,
     )
     out.index.name = "Tid"

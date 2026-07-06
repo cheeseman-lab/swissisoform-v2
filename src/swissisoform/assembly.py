@@ -122,6 +122,25 @@ def _strip_stop(seq: str) -> str:
     return seq.rstrip("*")
 
 
+def install_initiator_met(aaseq: str) -> str:
+    """Set the N-terminal residue to the initiator methionine.
+
+    Ribo-TISH translates near-cognate start codons (CTG→L, GTG→V, …) literally,
+    so the predicted ``AASeq`` carries the wrong N-terminal residue. The mature
+    proteoform always begins with the initiator Met — UniProt convention keeps it
+    even when it is biologically excised — so we install it here. Isoform-only:
+    GENCODE-derived canonical proteins already carry their Met. ATG starts are a
+    no-op. A trailing stop, if present, is preserved.
+    """
+    body = aaseq
+    stop = ""
+    if body.endswith("*"):
+        body, stop = body[:-1], "*"
+    if not body:
+        return aaseq
+    return "M" + body[1:] + stop
+
+
 # Minimum aligned tail length required after a prefix match to trust the offset.
 # A 20-residue prefix match alone is not proof of identity (paralogs, conserved
 # exons); we verify the rest of the sequence aligns after the claimed offset.
@@ -505,7 +524,7 @@ def _row_to_tis(
     position = int(end_str) if strand == "-" else int(start_str)
     start_codon = str(row["StartCodon"])
     orf_type = orf_type_from_ribotish(str(row["TisType"]))
-    isoform_protein = str(row["AASeq"])
+    isoform_protein = install_initiator_met(str(row["AASeq"]))
     gene_name = str(row["Symbol"])
     # Include transcript_id in tis_id so the same genomic start codon on
     # distinct transcripts (common for the same Symbol across isoforms)

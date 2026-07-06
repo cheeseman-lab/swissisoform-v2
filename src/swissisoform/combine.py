@@ -49,7 +49,11 @@ SHARED_FIELDS: tuple[str, ...] = (
     "Start",
 )
 
-# Per-sample metrics pivoted into {sample}_{metric} wide columns
+# Per-sample metrics pivoted into {sample}_{metric} wide columns.  The
+# source-resolution verdict (resolved / window_status / source_transcript /
+# source_evidence / tie_initiation_efficiency) is per cell line — it depends on
+# that sample's RNA-seq — so it pivots wide alongside the count metrics, present
+# only for samples the stage ran on (HeLa today).
 PER_SAMPLE_METRICS: tuple[str, ...] = (
     "TISCounts",
     "NormTISCounts",
@@ -59,6 +63,11 @@ PER_SAMPLE_METRICS: tuple[str, ...] = (
     "Imputed",
     "GeneRNASeqCounts",
     "TotalRNASeqCounts",
+    "resolved",
+    "window_status",
+    "source_transcript",
+    "source_evidence",
+    "tie_initiation_efficiency",
 )
 
 
@@ -121,6 +130,7 @@ def combine_filtered_samples(
         columns="_sample",
         values=metric_cols,
         aggfunc="first",
+        dropna=False,
     )
     # Flatten MultiIndex columns: ("TISCounts", "HeLa") → "HeLa_TISCounts"
     wide.columns = [f"{sample}_{metric}" for metric, sample in wide.columns]
@@ -154,16 +164,34 @@ def _join_unique(s: pd.Series) -> str:
     return ",".join(sorted(set(s.dropna().astype(str))))
 
 
-def _init_site_from_genome_pos(genome_pos: pd.Series, start_codon: pd.Series) -> pd.Series:
-    """Genomic initiation site ``chrom:gstart:strand:codon`` from the ORF span.
+def genome_pos_components(genome_pos: str) -> tuple[str, int, str]:
+    """``(chrom, start_codon_genomic_pos, strand)`` from a ``chrom:lo-hi:strand`` span.
 
     ``GenomePos`` is ``chrom:lo-hi:strand`` (the full ORF span); the start codon
-    sits at the 5' end — ``lo`` on the plus strand, ``hi`` on the minus.
+    sits at the 5' end — ``lo`` on the plus strand, ``hi`` on the minus. Splits
+    from the right so any contig name is handled (incl. non-``chr`` scaffolds).
     """
-    parts = genome_pos.astype(str).str.extract(r"(chr[\w]+):(\d+)-(\d+):([+-])")
-    parts.columns = ["chrom", "lo", "hi", "strand"]
-    gstart = parts["hi"].where(parts["strand"] == "-", parts["lo"])
-    return parts["chrom"] + ":" + gstart + ":" + parts["strand"] + ":" + start_codon.astype(str)
+    chrom, coords, strand = genome_pos.rsplit(":", 2)
+    lo, hi = coords.split("-")
+    return chrom, int(lo if strand == "+" else hi), strand
+
+
+def init_site_from_genome_pos(genome_pos: str, start_codon: str) -> str:
+    """Canonical init-site key ``chrom:gstart:strand:codon`` for one ORF span.
+
+    The single source of truth for the init-site grouping key used across the
+    combine / source-transcript layers (``benchmark``, ``window_purity``, etc.).
+    """
+    chrom, gstart, strand = genome_pos_components(genome_pos)
+    return f"{chrom}:{gstart}:{strand}:{start_codon}"
+
+
+def _init_site_from_genome_pos(genome_pos: pd.Series, start_codon: pd.Series) -> pd.Series:
+    """Vectorized :func:`init_site_from_genome_pos` over two aligned Series."""
+    keys = [
+        init_site_from_genome_pos(g, str(c)) for g, c in zip(genome_pos.astype(str), start_codon)
+    ]
+    return pd.Series(keys, index=genome_pos.index)
 
 
 def dedupe_unique_proteins(combined: pd.DataFrame) -> pd.DataFrame:

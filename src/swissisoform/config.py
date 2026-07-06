@@ -35,6 +35,43 @@ class FilterConfig:
 
 
 @dataclass
+class SourceResolutionConfig:
+    """Configuration for per-sample source-transcript resolution.
+
+    Filtering-cascade stage (``pipeline.run_sample``) that pins each TIS to one
+    source mRNA using the sample's own long-read (IsoQuant) RNA-seq. A single
+    cascade: long-read presence filter → window-purity → abundance-based
+    labeling. Off unless ``PipelineConfig.source_resolution`` is set; skipped
+    for samples without an IsoQuant input (HeLa only today).
+
+    The purity window is defined by two independent bounds — ``window_upstream``
+    nt 5' of the start-codon A and ``window_downstream`` nt 3' of it — so the
+    local-context test can be made asymmetric. Both default to 100.
+
+    Attributes:
+        window_upstream: nt 5' of the start codon in the purity window.
+        window_downstream: nt 3' of the start codon in the purity window.
+        isoquant_min_count: IsoQuant presence threshold (long-read counts) for
+            the long-read filter step.
+        divergence_dominance_frac: For divergent (ambiguous-window) sites, the
+            top survivor must hold at least this fraction of the total long-read
+            abundance across divergent candidates to be called the source;
+            otherwise the site is ``unresolved``. Defaults to 0.5 (≥50%).
+            ``None`` disables the check (most-abundant-wins).
+        drop_unresolved: Reserved — superseded by the assembly-boundary collapse
+            (``sourceresolve.collapse_to_source``), which is what actually
+            subsets to resolved TIS for the next stage. Kept ``False``; the
+            per-sample filtered table stays tag-only (full rows) for audit.
+    """
+
+    window_upstream: int = 100
+    window_downstream: int = 100
+    isoquant_min_count: float = 3.0
+    divergence_dominance_frac: float | None = 0.5
+    drop_unresolved: bool = False
+
+
+@dataclass
 class ConservationConfig:
     """Configuration for conservation analysis (Module 8).
 
@@ -138,6 +175,11 @@ class ScoringConfig:
             initiation efficiency across any cell line.
         massspec_unique_peptides_min: E6 threshold — minimum number of
             peptides uniquely assigned to the isoform.
+        pepquery_fix_mods: PepQuery2 ``-fixMod`` UNIMOD ids (default
+            Carbamidomethyl C).
+        pepquery_var_mods: PepQuery2 ``-varMod`` UNIMOD ids (default
+            Oxidation M + Acetyl peptide N-term).
+        pepquery_max_var: PepQuery2 ``-maxVar`` — max variable mods per peptide.
         f5_constraint_enrichment_min: F5 threshold — minimum ESM-2 constraint
             enrichment (unique vs shared) to call germline constraint.
         f5_depletion_ratio_max: F5 threshold — gnomAD depletion ratio below
@@ -163,6 +205,17 @@ class ScoringConfig:
     phylop_coding_min: float = 1.0
     initiation_efficiency_min: float = 0.01
     massspec_unique_peptides_min: int = 1
+    # PepQuery2 modification ids (`-printPTM`): keep Carbamidomethyl(C)=1 fixed
+    # and Oxidation(M)=2 variable (PepQuery's own defaults), and add id 5 =
+    # "Acetylation of peptide N-term" (+42.0106) so the initiator / NME-acetyl
+    # proteoform is searchable. We use the *peptide* N-term acetyl (5), not the
+    # *protein* N-term acetyl (33): in peptide-input mode PepQuery has no protein
+    # context to anchor a protein-N-term mod, so 33 would never fire — and since
+    # we only submit N-terminal diagnostic peptides, the peptide N-term is the
+    # protein N-term anyway.
+    pepquery_fix_mods: str = "1"
+    pepquery_var_mods: str = "2,5"
+    pepquery_max_var: int = 3
     # F6 principled anchor: disease-variant density enrichment zero-point.
     f6_disease_enrichment_min: float = 1.0
     # E1/E2 score on AA percent-identity over the unique region.
@@ -251,6 +304,7 @@ class PipelineConfig:
     protein_fasta: Path | None = None
     output_dir: Path = Path("results")
     filtering: FilterConfig = field(default_factory=FilterConfig)
+    source_resolution: SourceResolutionConfig | None = None
     conservation: ConservationConfig | None = None
     structure: StructureConfig | None = None
     scoring: ScoringConfig | None = None

@@ -14,6 +14,7 @@ from swissisoform.config import (
     ConservationConfig,
     PipelineConfig,
     ScoringConfig,
+    SourceResolutionConfig,
     StructureConfig,
 )
 
@@ -75,13 +76,28 @@ ALL_GENE_MODULES = ["generef"]
 # ── Configuration ────────────────────────────────────────────────────────
 
 
-def build_config(min_cell_lines: int = 3) -> PipelineConfig:
+def build_config(
+    min_cell_lines: int = 3,
+    *,
+    source_resolution: bool = True,
+    divergence_threshold: float | None = 0.5,
+    window_upstream: int = 100,
+    window_downstream: int = 100,
+) -> PipelineConfig:
     """Build PipelineConfig populated with local DB paths when available.
 
     Args:
         min_cell_lines: ScoringConfig.min_cell_lines. Default 3 for
             production multi-cell-line runs; presets override to 1 for
             single-sample diagnostics.
+        source_resolution: When ``False`` the source-resolution cascade is
+            disabled (``cfg.source_resolution = None``) — no per-TIS mRNA
+            resolution and no downstream collapse.
+        divergence_threshold: ``SourceResolutionConfig.divergence_dominance_frac``
+            — the fraction of long-read abundance the top transcript must hold at
+            a divergent site (default 0.5). ``None`` = most-abundant-wins.
+        window_upstream: nt 5' of the start codon in the purity window.
+        window_downstream: nt 3' of the start codon in the purity window.
     """
     cfg = PipelineConfig()
     cfg.clinical = ClinicalConfig(
@@ -107,4 +123,16 @@ def build_config(min_cell_lines: int = 3) -> PipelineConfig:
     # precompute, and StructureModule all read cfg.structure.backend, so they
     # never disagree on which backend's cache to write/read.
     cfg.structure = StructureConfig()
+    # Source-transcript resolution: the cascade runs per sample only when that
+    # sample's manifest row supplies an ``isoquant_table`` (HeLa today). Disabled
+    # entirely when ``source_resolution=False`` (CLI --skip-source-resolution).
+    cfg.source_resolution = (
+        SourceResolutionConfig(
+            window_upstream=window_upstream,
+            window_downstream=window_downstream,
+            divergence_dominance_frac=divergence_threshold,
+        )
+        if source_resolution
+        else None
+    )
     return cfg
