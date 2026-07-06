@@ -19,6 +19,14 @@ to what should advance to annotation:
     threshold-failing divergent sites) contribute no alternative-TIS rows — they
     do not advance, but they remain in the saved tables.
 
+Collapse is **gated to rows a long-read sample actually scored.** In the combined
+catalog a TIS called only in samples without long-read data (e.g. K562 / U2OS /
+RPE1 when only HeLa has IsoQuant) has ``NaN`` in every ``{sample}_resolved``
+column — it was never evaluated by the cascade, so it **passes through
+unchanged** rather than being dropped as a non-source candidate. This keeps the
+full cross-sample TIS set alive for downstream ``min_cell_lines`` scoring during
+a single-long-read-sample phase.
+
 When the verdict columns are absent (cascade skipped / never ran) the frame is
 returned unchanged, so the collapse is a transparent no-op.
 """
@@ -92,22 +100,33 @@ def collapse_to_source(df: pd.DataFrame) -> pd.DataFrame:
     # ``source_transcript == Tid``; non-source candidate rows carry a different
     # Tid and are dropped.
     is_source_row = pd.Series(False, index=df.index)
+    evaluated = pd.Series(False, index=df.index)
     for resolved_col, source_col in pairs:
         resolved = df[resolved_col].map(_is_true)
         src = df[source_col].astype("string")
         is_source_row |= resolved & src.notna() & (tid == src)
+        # A sample "evaluated" a row iff it wrote a verdict for it. In the
+        # combined catalog a TIS called only in samples without long-read data
+        # has NaN in every {sample}_resolved column — it was never evaluated, so
+        # collapse must not drop it as a non-source candidate.
+        evaluated |= df[resolved_col].notna()
 
-    keep = annotated | is_source_row
+    # Un-evaluated rows pass through: only rows a long-read sample actually
+    # scored are eligible to be collapsed away.
+    keep = annotated | is_source_row | ~evaluated
     out = df[keep].reset_index(drop=True)
 
     n_alt_in = int((~annotated).sum())
     n_alt_out = int((~out["TisType"].astype(str).str.startswith("Annotated")).sum())
+    n_passthrough = int((~annotated & ~is_source_row & ~evaluated).sum())
     logger.info(
-        "collapse_to_source: %d rows → %d (alt TIS %d → %d; %d Annotated kept)",
+        "collapse_to_source: %d rows → %d (alt TIS %d → %d; %d Annotated kept; "
+        "%d un-evaluated rows passed through)",
         len(df),
         len(out),
         n_alt_in,
         n_alt_out,
         int(annotated.sum()),
+        n_passthrough,
     )
     return out

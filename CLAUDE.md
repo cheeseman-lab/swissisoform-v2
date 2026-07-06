@@ -358,7 +358,12 @@ reads → mapping (minimap2 / IsoQuant)          │ aligned  │  unified casca
   (`runner.prepare`, before `assemble_genes`): keeps all Annotated rows + each
   resolved site's source-transcript row, dropping non-resolved
   (`no_support`/`unresolved`) alt rows, so only resolved TIS — one mRNA each —
-  advance. No-op when the verdict columns are absent.
+  advance. **Gated to rows a long-read sample actually scored:** a TIS called
+  only in samples without long-read data (e.g. K562/U2OS/RPE1 when only HeLa has
+  IsoQuant) has `NaN` in every `{sample}_resolved` column, was never evaluated,
+  and passes through unchanged — so a single-long-read-sample phase keeps the
+  full cross-sample TIS set alive for downstream `min_cell_lines` scoring. No-op
+  when the verdict columns are absent.
 
   **CLI** (`scripts/run.py`, effective when the combined catalog is (re)built):
   `--skip-source-resolution` (disable cascade+collapse), `--divergence-threshold`
