@@ -22,6 +22,7 @@ from typing import Any
 
 import pandas as pd
 
+from swissisoform.assembly import install_initiator_met
 from swissisoform.config import PipelineConfig
 from swissisoform.filtering import filter_tis, normalize_tis_counts
 from swissisoform.io.canonical import (
@@ -39,6 +40,32 @@ from swissisoform.models import Gene, TranscriptCoordinates, TranslationInitiati
 from swissisoform.sourceresolve.resolve import resolve_sources
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_canonical_initiator(df: pd.DataFrame) -> pd.DataFrame:
+    """Set the initiator residue of every ``Annotated`` row to Met.
+
+    Ribo-TISH translates near-cognate canonical starts (GTG→V, CTG→L) literally,
+    but the annotated CDS start encodes the initiator Met — as GENCODE
+    ``pc_translations`` (and thus :func:`impute_missing_canonical_starts`) do.
+    A natively-detected canonical therefore disagrees with the imputed one on
+    the N-terminus, and since a given transcript is native in some samples and
+    imputed in others, the same site ends up with two ``AASeq`` values across
+    cell lines — which ``combine._verify_shared_fields`` rejects.
+
+    Normalizing detected ``Annotated`` rows here (via
+    :func:`~swissisoform.assembly.install_initiator_met`) makes the two paths
+    agree. Scoped to ``Annotated`` only: non-canonical near-cognate isoforms
+    keep Ribo-TISH's literal residue (Met-vs-Leu initiation is genuinely
+    ambiguous there, and those get their own M installed at assembly). No-op
+    when there is no ``AASeq`` column or for ATG starts (already M).
+    """
+    if "AASeq" not in df.columns:
+        return df
+    df = df.copy()
+    ann = (df["RecatTISType"] == "Annotated") & df["AASeq"].notna()
+    df.loc[ann, "AASeq"] = df.loc[ann, "AASeq"].map(install_initiator_met)
+    return df
 
 
 def run_sample(
@@ -94,6 +121,10 @@ def run_sample(
     # 1 + 2: load + GTF merge + recategorize
     df = load_ribotish_predictions(predict_file, gtf_path=gtf_path)
     df = recategorize_tis_type(df)
+
+    # Normalize detected canonical initiators to M before filter/impute, so
+    # native and imputed canonicals agree on the N-terminus (see helper).
+    df = normalize_canonical_initiator(df)
 
     # 3: RNA-seq counts — gene-level + total
     gene_counts = sum_replicate_counts(list(rnaseq_count_files))

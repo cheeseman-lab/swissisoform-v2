@@ -2,11 +2,41 @@
 
 from __future__ import annotations
 
+import pandas as pd
+
 from swissisoform.modules.biophysics import BiophysicsModule
 from swissisoform.modules.core_identity import CoreIdentityModule
 from swissisoform.modules.initiation_context import InitiationContextModule
 from swissisoform.modules.motifs import MotifsModule
-from swissisoform.pipeline import AnnotationPipeline
+from swissisoform.pipeline import AnnotationPipeline, normalize_canonical_initiator
+
+
+class TestNormalizeCanonicalInitiator:
+    """Detected near-cognate canonical starts get an installed initiator Met."""
+
+    def test_annotated_near_cognate_normalized_to_met(self):
+        # GTG→V and CTG→L on Annotated rows become M, matching the imputed
+        # (pc_translations, M-start) path; ATG Annotated rows are unchanged, and
+        # non-Annotated near-cognate isoforms keep Ribo-TISH's literal residue.
+        df = pd.DataFrame(
+            {
+                "RecatTISType": ["Annotated", "Annotated", "Annotated", "Extended", "Annotated"],
+                "AASeq": ["VESAIAEG", "LDFFRVV", "MPLNVSF", "VDFSSVV", None],
+            }
+        )
+        out = normalize_canonical_initiator(df)
+        assert out.loc[0, "AASeq"] == "MESAIAEG"  # GTG→V normalized
+        assert out.loc[1, "AASeq"] == "MDFFRVV"  # CTG→L normalized
+        assert out.loc[2, "AASeq"] == "MPLNVSF"  # ATG already M — unchanged
+        assert out.loc[3, "AASeq"] == "VDFSSVV"  # non-Annotated — untouched
+        assert pd.isna(out.loc[4, "AASeq"])  # NaN AASeq tolerated
+        # Input frame not mutated in place.
+        assert df.loc[0, "AASeq"] == "VESAIAEG"
+
+    def test_missing_aaseq_column_is_noop(self):
+        df = pd.DataFrame({"RecatTISType": ["Annotated", "Extended"]})
+        out = normalize_canonical_initiator(df)
+        assert out.equals(df)
 
 
 class TestAnnotationPipeline:
