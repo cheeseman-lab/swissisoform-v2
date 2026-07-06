@@ -35,6 +35,43 @@ class FilterConfig:
 
 
 @dataclass
+class SourceResolutionConfig:
+    """Configuration for per-sample source-transcript resolution.
+
+    Filtering-cascade stage (``pipeline.run_sample``) that pins each TIS to one
+    source mRNA using the sample's own long-read (IsoQuant) RNA-seq. A single
+    cascade: long-read presence filter → window-purity → abundance-based
+    labeling. Off unless ``PipelineConfig.source_resolution`` is set; skipped
+    for samples without an IsoQuant input (HeLa only today).
+
+    The purity window is defined by two independent bounds — ``window_upstream``
+    nt 5' of the start-codon A and ``window_downstream`` nt 3' of it — so the
+    local-context test can be made asymmetric. Both default to 100.
+
+    Attributes:
+        window_upstream: nt 5' of the start codon in the purity window.
+        window_downstream: nt 3' of the start codon in the purity window.
+        isoquant_min_count: IsoQuant presence threshold (long-read counts) for
+            the long-read filter step.
+        divergence_dominance_frac: For divergent (ambiguous-window) sites, the
+            top survivor must hold at least this fraction of the total long-read
+            abundance across divergent candidates to be called the source;
+            otherwise the site is ``unresolved``. Defaults to 0.5 (≥50%).
+            ``None`` disables the check (most-abundant-wins).
+        drop_unresolved: Reserved — superseded by the assembly-boundary collapse
+            (``sourceresolve.collapse_to_source``), which is what actually
+            subsets to resolved TIS for the next stage. Kept ``False``; the
+            per-sample filtered table stays tag-only (full rows) for audit.
+    """
+
+    window_upstream: int = 100
+    window_downstream: int = 100
+    isoquant_min_count: float = 3.0
+    divergence_dominance_frac: float | None = 0.5
+    drop_unresolved: bool = False
+
+
+@dataclass
 class ConservationConfig:
     """Configuration for conservation analysis (Module 8).
 
@@ -267,6 +304,7 @@ class PipelineConfig:
     protein_fasta: Path | None = None
     output_dir: Path = Path("results")
     filtering: FilterConfig = field(default_factory=FilterConfig)
+    source_resolution: SourceResolutionConfig | None = None
     conservation: ConservationConfig | None = None
     structure: StructureConfig | None = None
     scoring: ScoringConfig | None = None

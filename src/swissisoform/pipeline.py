@@ -36,6 +36,7 @@ from swissisoform.io.gtf import load_exon_skeletons
 from swissisoform.io.ribotish import load_ribotish_predictions, recategorize_tis_type
 from swissisoform.io.rnaseq import sum_replicate_counts
 from swissisoform.models import Gene, TranscriptCoordinates, TranslationInitiationSite
+from swissisoform.sourceresolve.resolve import resolve_sources
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ def run_sample(
     genome_fasta: str | Path | None = None,
     protein_fasta: str | Path | None = None,
     reference: "UpstreamReference | None" = None,
+    isoquant_table: str | Path | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """End-to-end upstream for a single sample (cell line).
 
@@ -86,7 +88,8 @@ def run_sample(
     if not gtf_path.exists():
         raise FileNotFoundError(f"GTF file not found: {gtf_path}")
 
-    cfg = (config or PipelineConfig()).filtering
+    full_config = config or PipelineConfig()
+    cfg = full_config.filtering
 
     # 1 + 2: load + GTF merge + recategorize
     df = load_ribotish_predictions(predict_file, gtf_path=gtf_path)
@@ -173,6 +176,30 @@ def run_sample(
         len(dropped_df),
         len(imputed_df),
     )
+
+    # 7: source-transcript resolution (optional, per-sample). Needs this
+    # sample's own long-read RNA-seq (IsoQuant) + a genome to extract windows;
+    # skipped when unconfigured or when the sample has no IsoQuant input
+    # (HeLa only today).  Tag-only — every TIS is annotated, none dropped.
+    sr = full_config.source_resolution
+    if sr is not None and isoquant_table is not None and genome_fasta is not None:
+        import pysam
+
+        genome = pysam.FastaFile(str(genome_fasta))
+        try:
+            final_df = resolve_sources(
+                final_df,
+                exon_skeletons=ref.exon_skeletons,
+                genome=genome,
+                isoquant_table=isoquant_table,
+                window_upstream=sr.window_upstream,
+                window_downstream=sr.window_downstream,
+                isoquant_min_count=sr.isoquant_min_count,
+                divergence_dominance_frac=sr.divergence_dominance_frac,
+            )
+        finally:
+            genome.close()
+
     return final_df, dropped_df
 
 

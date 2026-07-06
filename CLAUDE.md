@@ -256,6 +256,41 @@ Stub status `region_map_not_implemented` retired — now returns
 |----------|------|---------|
 | Methods | `docs/methods/methods.typ` (+ `methods.bib`) | Publication-ready paper methods section (typst source; renders to `methods.pdf`) |
 | Reviews | `docs/reviews/` | Code-review / gap-analysis documents from external reviewers |
+| Architecture (current state) | `docs/architecture/` | Code-grounded descriptions of subsystems **as they exist** — no planned changes |
+| Plans | `docs/plans/` | Feature/integration plans, each written **against** an architecture doc |
+
+## Working Convention: Scope Before Plan
+
+**Before designing or integrating any new feature, first write down what the
+relevant part of the codebase *currently does* — then, and only then, plan the
+change.** This separation is mandatory and keeps "what is" from getting tangled
+with "what we want."
+
+Two-step workflow:
+
+1. **Scope (current state) → `docs/architecture/`.** Document the existing
+   subsystem the feature touches. Rules:
+   - Describe **only what exists today**. No proposed changes, no "we should,"
+     no aspirational behavior. Planned work goes in step 2, never here.
+   - **Ground every claim in code** with `file:line` references so the doc is
+     reproducible and checkable against source.
+   - Include **how to reproduce/regenerate** any artifact described (the exact
+     command), and the **columns/schema** of every file the subsystem produces.
+   - Date the doc and note the commit/baseline it was verified against.
+   - Prefer updating an existing architecture doc over forking a new one.
+
+2. **Plan (proposed change) → `docs/plans/`.** Only after the scope doc exists.
+   The plan references the architecture doc, states the goal, the chosen
+   insertion point(s), trade-offs, and the concrete edits. Keep current-state
+   facts in the architecture doc; the plan links to them rather than restating.
+
+Rationale: scoping first surfaces the real seams and constraints (where data is
+available, what invariants hold) before committing to a design, and produces a
+durable, reproducible reference that outlives any single change.
+
+Worked example: `docs/architecture/upstream_filtering_and_dedup.md` scopes the
+filter → merge → dedup pipeline (current state) ahead of the splice-aware
+filtering feature, whose plan will live in `docs/plans/`.
 
 ## Source Repos (Read-Only Reference)
 
@@ -273,6 +308,71 @@ Raw Ribo-TISH predict files in `data/reference/` (gitignored, 6 cell lines):
 
 Reference genome (download with `bash scripts/setup/download_references.sh`):
 - `GRCh38.primary_assembly.genome.fa`, `gencode.v49.pc_translations.fa`, GTF
+
+## Source-transcript resolution — alignment tool vs. tracked filtering
+
+Pinning each TIS to one high-confidence source mRNA (long-read IsoQuant
+expression + a sequence window-purity test) is **Elizabeth's workstream**. The
+boundary sits between *read alignment* (out of repo) and *the disambiguation
+science* (tracked filtering):
+
+```
+sourceseq/ (gitignored alignment tool)         │ boundary │  swissisoform-v2 (tracked)
+reads → mapping (minimap2 / IsoQuant)          │ aligned  │  unified cascade:
+→ transcript_counts.tsv ───────────────────────┼─► data/ ─┼─► long-read filter → window-purity
+                                               │ quant    │  → abundance label → source per TIS
+```
+
+- **Out-of-repo (gitignored `sourceseq/`):** *only* read alignment +
+  quantification — `mapping/` (minimap2 / IsoQuant / SRA + envs) and `setup/`
+  (downloads). It writes the long-read quantification to `data/reference/`
+  (`longread/isoquant_{cell}/OUT/…tsv`). That is the *processed data in* — like
+  the Ribo-TISH predicts and HTSeq counts. See `sourceseq/README.md`.
+- **Tracked (this repo):** the disambiguation **is our filtering**, so it lives
+  in `src/swissisoform/sourceresolve/` (`mrna` / `purity` / `expression` /
+  `resolve` / `collapse` / `diagnostics`) and runs as a **per-sample step inside
+  `run_sample`** — it depends on that sample's own long-read RNA-seq, so it is
+  intrinsically per cell line (HeLa only today). `resolve_sources` groups the
+  filtered TIS by init_site and runs a **single linear cascade** per site:
+
+  1. **long-read filter** — keep candidate transcripts present in IsoQuant
+     (count ≥ `isoquant_min_count`); none survive ⇒ `window_status="no_support"`.
+  2. **window-purity** (`purity_decision`) on the survivors, over independent
+     `window_upstream` / `window_downstream` bounds (both default 100 nt).
+  3. **abundance label** — *pure/single* → most-abundant survivor; *divergent*
+     → top survivor must hold ≥ `divergence_dominance_frac` (default 0.5) of the
+     divergent total, else `unresolved` (`None` ⇒ most-abundant-wins).
+
+  It **tags** every TIS with `resolved` / `window_status` / `source_transcript`
+  / `source_evidence` / `tie_initiation_efficiency`. Labels: `window_status` ∈
+  `single|pure|divergent|no_support`; `source_evidence` ∈
+  `window_pure|divergent_pass|no_support|unresolved` — the **only** `unresolved`
+  sites are divergent ones that fail the threshold; long-read drop-outs are
+  `no_support`. Tag-only here (full rows kept for audit). Short-read salmon was
+  removed: long-read only, for both presence and abundance. Gated by
+  `PipelineConfig.source_resolution` (built by `references.build_config`) + the
+  sample's optional `isoquant_table` manifest column.
+
+  **Collapse to one mRNA per TIS** — the verdict is consumed by
+  `collapse_to_source` (`sourceresolve/collapse.py`) at the assembly boundary
+  (`runner.prepare`, before `assemble_genes`): keeps all Annotated rows + each
+  resolved site's source-transcript row, dropping non-resolved
+  (`no_support`/`unresolved`) alt rows, so only resolved TIS — one mRNA each —
+  advance. **Gated to rows a long-read sample actually scored:** a TIS called
+  only in samples without long-read data (e.g. K562/U2OS/RPE1 when only HeLa has
+  IsoQuant) has `NaN` in every `{sample}_resolved` column, was never evaluated,
+  and passes through unchanged — so a single-long-read-sample phase keeps the
+  full cross-sample TIS set alive for downstream `min_cell_lines` scoring. No-op
+  when the verdict columns are absent.
+
+  **CLI** (`scripts/run.py`, effective when the combined catalog is (re)built):
+  `--skip-source-resolution` (disable cascade+collapse), `--divergence-threshold`
+  (default 0.5), `--window-upstream` / `--window-downstream` (default 100). The
+  divergent threshold is chosen empirically from
+  `figures/source_divergence/export_source_divergence_distribution.py` (per-site
+  read distribution: CSV + quantiles + a 100%-stacked-bar plot, one bar per
+  divergent TIS; CSV + PNG written alongside the script in
+  `figures/source_divergence/`).
 
 ## Development
 

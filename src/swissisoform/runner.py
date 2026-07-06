@@ -64,6 +64,7 @@ from swissisoform.references import (
     ROOT,
     build_config,
 )
+from swissisoform.sourceresolve import collapse_to_source
 from swissisoform.structure.module import StructureModule
 
 logger = logging.getLogger("run")
@@ -116,6 +117,25 @@ def _write_unique_tis(combined: pd.DataFrame) -> None:
     )
 
 
+def _manifest_single_path(row: pd.Series, col: str) -> Path | None:
+    """Parse a single optional manifest path cell into ``ROOT / p`` or ``None``.
+
+    Used for the optional per-sample IsoQuant abundance table; absent / blank
+    cells (samples without long-read quant) yield ``None`` so the
+    source-resolution stage skips them. A configured path that does not exist on
+    disk is treated as absent (warn + ``None``) so one bad/pending cell does not
+    crash a multi-sample run.
+    """
+    val = row.get(col)
+    if val is None or (isinstance(val, float) and pd.isna(val)) or str(val).strip() == "":
+        return None
+    path = ROOT / str(val).strip()
+    if not path.exists():
+        logger.warning("manifest %s path does not exist, skipping: %s", col, path)
+        return None
+    return path
+
+
 def load_combined(
     cell_lines: list[str],
     reference: UpstreamReference,
@@ -157,6 +177,8 @@ def load_combined(
         t0 = time.perf_counter()
         final_df, _ = run_sample(
             predict, rnaseq_files, GTF, sample=sample, config=cfg, reference=reference,
+            genome_fasta=GENOME,
+            isoquant_table=_manifest_single_path(row, "isoquant_table"),
         )
         filtered_out = ROOT / row["filtered_file"]
         filtered_out.parent.mkdir(parents=True, exist_ok=True)
@@ -528,6 +550,11 @@ class RunSpec:
     out_dir: Path | None = None            # default OUT / run_name
     spot_check_limit: int | None = 5
     rebuild_combined: bool = False
+    # Source-transcript resolution (cascade + collapse to one mRNA per TIS).
+    skip_source_resolution: bool = False
+    divergence_threshold: float | None = 0.5
+    window_upstream: int = 100
+    window_downstream: int = 100
 
 
 @dataclass
@@ -572,7 +599,13 @@ def prepare(spec: RunSpec) -> PreparedRun:
     else:
         logger.info("Stage 2: multi-sample mode (%s)", ",".join(spec.cell_lines))
         final = load_combined(
-            spec.cell_lines, ref, build_config(),
+            spec.cell_lines, ref,
+            build_config(
+                source_resolution=not spec.skip_source_resolution,
+                divergence_threshold=spec.divergence_threshold,
+                window_upstream=spec.window_upstream,
+                window_downstream=spec.window_downstream,
+            ),
             force_rebuild=spec.rebuild_combined,
         )
         if spec.gene_names is not None:
@@ -580,6 +613,12 @@ def prepare(spec: RunSpec) -> PreparedRun:
 
     n_genes_label = f"{len(spec.gene_names)} genes" if spec.gene_names else "ALL genes"
     logger.info("Stage 3: gene selection → %s (run_name=%s)", n_genes_label, spec.run_name)
+
+    # Collapse to one mRNA per resolved TIS before assembly. No-op when the
+    # source-resolution verdict columns are absent (cascade skipped/never ran);
+    # otherwise keeps Annotated rows + each resolved site's source transcript,
+    # so only resolved TIS — one mRNA each — advance to annotation.
+    final = collapse_to_source(final)
 
     logger.info("Stage 4: assembling gene + TIS domain objects")
     genes = assemble_genes(

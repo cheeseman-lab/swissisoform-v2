@@ -37,11 +37,31 @@ tmp_signalp/
 .nextflow/
 .singularity_cache/
 # Internal docs are untracked — ONLY docs/methods/ (the paper source) is tracked.
-# Ignore everything else under docs/ (reviews, plans, specs, handoffs, superpowers).
+# Ignore everything else under docs/ (reviews, plans, architecture, analysis,
+# handoffs, superpowers); the "Scope Before Plan" docs live here locally.
 docs/*
 !docs/methods/
 docs/methods/*.pdf
 .superpowers/
 
+# Generated analysis reports (regenerable from the sourceseq tool) — not source.
+data/reports/
+
+# Source-transcript-resolution read-alignment tool (Elizabeth's workstream):
+# salmon / minimap2 / IsoQuant / SRA mapping + envs + download scripts only. It
+# writes quantifications (quant.sf / transcript_counts.tsv) to data/reference/ —
+# the "processed data in". The disambiguation *science* is tracked filtering
+# (src/swissisoform/sourceresolve/, run per-sample in run_sample); see CLAUDE.md
+# "Source-transcript resolution". Gitignored, preserved on disk + git history.
+sourceseq/
+
+# Method-development analysis (gitignored, re-derivable): the disambiguation
+# QC / benchmark / plot / report drivers + the original sourceseq library, moved
+# out of sourceseq/ when the resolution logic became tracked filtering.
+analysis/
+
 # regression baselines (re-derivable from a 13-gene run)
 tests/regression/baseline/
+
+# Validation / diagnostic scratch (this session) — transient
+.scratch/
