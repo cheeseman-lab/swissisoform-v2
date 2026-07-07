@@ -89,11 +89,22 @@ DEFAULT_INTERPROSCAN_DIR = (
 )
 # Comma-separated set of member-DB applications.  When ``None``, IPS6
 # uses its default non-ML app set (Pfam, SMART, CDD, PANTHER, etc.).
-# Pfam-only runs trip a COMBINE_MATCHES bug in IPS6 6.0.0 when any
-# sequence has no hit, so the multi-app default is safer.
+# Pfam-only runs trip a COMBINE_MATCHES bug when any sequence has no hit,
+# so the multi-app default is safer.
 INTERPROSCAN_APPLICATIONS: str | None = None
-INTERPROSCAN_VERSION = "6.0.0"
-INTERPROSCAN_DATA_VERSION = "108.0"
+# IPS6 6.0.0's COMBINE_MATCHES step is broken two ways in this environment:
+# (1) with the online Matches API (default) a local-vs-API InterPro release
+# mismatch nulls the lookup path and crashes combine with "Path value cannot
+# be null"; (2) bypassing the API via --noMatchesApi surfaces a groovy
+# classpath error ("unable to resolve class ...ProcessCombine").  6.0.1 fixes
+# the combine classpath, and we always pass --noMatchesApi true (see cmd
+# below) so runs never depend on the API release matching our local datadir.
+INTERPROSCAN_VERSION = "6.0.1"
+# InterPro 109.0 (2026_01 member releases). The PROSITE 109 data (2026_01)
+# must be fully downloaded first or PARSE_PFSEARCH crashes with "A
+# DataflowVariable can only be assigned once"; once present, 109 runs clean
+# through COMBINE. Keep in sync with setup/databases.py.
+INTERPROSCAN_DATA_VERSION = "109.0"
 INTERPROSCAN_NF_REPO = "ebi-pf-team/interproscan6"
 
 
@@ -352,6 +363,10 @@ def _run_interproscan(
         # Route through the container-based COMBINE_MATCHES path; the
         # LOCAL variant trips a Groovy classpath issue under Nextflow 25.x.
         "--batchSize", "50000",
+        # Never use the online EBI Matches API precalc: a release mismatch
+        # between our local datadir and the live API nulls the lookup path and
+        # crashes combine (IPS6). Local scanning gives identical domain hits.
+        "--noMatchesApi", "true",
     ]
     if applications:
         cmd.extend(["--applications", applications])

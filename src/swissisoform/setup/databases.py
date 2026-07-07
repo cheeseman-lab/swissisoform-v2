@@ -1374,8 +1374,12 @@ def setup_targetp(refresh: bool = False) -> None:
 INTERPROSCAN_DIR = REF / "interproscan"
 INTERPROSCAN_DATADIR = INTERPROSCAN_DIR / "datadir"
 INTERPROSCAN_NF_REPO = "ebi-pf-team/interproscan6"
-INTERPROSCAN_VERSION = "6.0.0"
-INTERPROSCAN_DATA_VERSION = "108.0"
+# 6.0.1 fixes the COMBINE_MATCHES groovy classpath crash present in 6.0.0.
+# Keep this in sync with evidence/f3_domains/interproscan.py.
+INTERPROSCAN_VERSION = "6.0.1"
+# InterPro 109.0 (2026_01 member releases). Keep in sync with
+# evidence/f3_domains/interproscan.py.
+INTERPROSCAN_DATA_VERSION = "109.0"
 
 
 def setup_interproscan(refresh: bool = False) -> None:
@@ -1435,6 +1439,9 @@ def setup_interproscan(refresh: bool = False) -> None:
         # fails under Nextflow 25.x due to a Groovy classpath regression
         # around `lib/uk/ac/ebi/interpro/ProcessCombine.groovy`.
         "--batchSize", "50000",
+        # Never use the online EBI Matches API precalc — a release mismatch
+        # vs our local datadir nulls the lookup path and crashes combine.
+        "--noMatchesApi", "true",
     ]
     logger.info(
         "interproscan: first run (auto-downloads DBs + member images, 30–60 min): %s",
