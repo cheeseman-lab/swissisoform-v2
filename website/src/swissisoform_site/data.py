@@ -5,12 +5,16 @@ layout under ``SWISSISOFORM_DATA_DIR`` (default ``./data``):
 
 ::
 
-    <DATA_DIR>/all_paired.parquet     # one row per (gene, TIS)
-    <DATA_DIR>/structures/*.cif       # baked AlphaFold/Boltz isoform structures
-    <DATA_DIR>/llm/<gene>.json        # optional — Stage-2 interpretation
+    <DATA_DIR>/all_paired.parquet            # one row per (gene, TIS)
+    <DATA_DIR>/variants_long.parquet         # per-variant rows for the clinical panel
+    <DATA_DIR>/transcript_skeletons.parquet  # exon skeletons for the transcript diagram
+    <DATA_DIR>/structures/*.cif              # baked AlphaFold/Boltz isoform structures
+    <DATA_DIR>/structures/colors/*.colors.json  # per-residue 3Dmol colouring
+    <DATA_DIR>/llm/<slug>/                   # optional — per-isoform interpretation
+                                             #   (synthesis.json + criteria.json)
 
 LLM JSONs are produced by a separate pipeline and may not be present yet.
-Missing files degrade gracefully (the gene page renders with a placeholder).
+Missing files degrade gracefully (the page renders with a placeholder).
 """
 
 from __future__ import annotations
