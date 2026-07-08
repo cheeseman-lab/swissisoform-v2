@@ -66,7 +66,15 @@
         Lollipops = ClinVar/gnomAD/COSMIC variants (red = pathogenic): solid in the differential region, faded over the shared canonical core; green boxes = InterPro domains; purple = motifs.
         Lower lanes = per-cell-line initiation efficiency at each start codon (dot size). The solid red dot is this isoform's start (red dotted guide); hollow grey dots are other alternative starts on the same transcript; black dotted line = canonical start.
       </p>
-      <div id="graph-protein" class="plotly-graph"></div>
+      <div class="protein-toolbar">
+        <span class="igv-hint">drag the bottom edge to resize ↕</span>
+        <button type="button" id="toggle-domains" class="domain-toggle" aria-expanded="false">
+          Expand domains
+        </button>
+      </div>
+      <div id="graph-protein-wrap" class="igv-resize">
+        <div id="graph-protein" class="plotly-graph"></div>
+      </div>
     </div>
     <div class="iso-panel iso-panel-folding iso-folding-row">
       <h2 class="iso-panel-h">Folding</h2>
@@ -120,13 +128,43 @@
 
 <script>
   const PROTEIN_FIG = {{ protein_figure_json|safe }};
-  function swissRenderPlots() {
-    Plotly.newPlot("graph-protein", PROTEIN_FIG.data, PROTEIN_FIG.layout, {responsive: true});
+  const PROTEIN_FIG_COLLAPSED = {{ protein_figure_collapsed_json|safe }};
+  // Start compact: domains collapsed, and the viewer autosizes to its (short)
+  // resizable container rather than its full computed height.
+  let swissDomainsCollapsed = true;
+  function swissCurrentFig() {
+    return swissDomainsCollapsed ? PROTEIN_FIG_COLLAPSED : PROTEIN_FIG;
   }
-  if (window.Plotly) { swissRenderPlots(); }
+  function swissRenderPlots() {
+    const fig = swissCurrentFig();
+    const layout = Object.assign({}, fig.layout, {autosize: true});
+    delete layout.height;  // container height drives the plot
+    Plotly.react("graph-protein", fig.data, layout, {responsive: true});
+  }
+  function swissWireDomainToggle() {
+    const btn = document.getElementById("toggle-domains");
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      swissDomainsCollapsed = !swissDomainsCollapsed;
+      btn.textContent = swissDomainsCollapsed ? "Expand domains" : "Collapse domains";
+      btn.setAttribute("aria-expanded", String(!swissDomainsCollapsed));
+      swissRenderPlots();
+    });
+  }
+  function swissWireResize() {
+    const wrap = document.getElementById("graph-protein-wrap");
+    const gd = document.getElementById("graph-protein");
+    if (!wrap || !gd || !window.ResizeObserver) return;
+    const ro = new ResizeObserver(function () {
+      if (window.Plotly) Plotly.Plots.resize(gd);
+    });
+    ro.observe(wrap);
+  }
+  function swissInitProtein() { swissRenderPlots(); swissWireDomainToggle(); swissWireResize(); }
+  if (window.Plotly) { swissInitProtein(); }
   else { document.addEventListener('DOMContentLoaded', function () {
-    if (window.Plotly) swissRenderPlots();
-    else { var t = setInterval(function () { if (window.Plotly) { clearInterval(t); swissRenderPlots(); } }, 30); }
+    if (window.Plotly) swissInitProtein();
+    else { var t = setInterval(function () { if (window.Plotly) { clearInterval(t); swissInitProtein(); } }, 30); }
   }); }
 </script>
 <script src="{{ url_for('static', filename='js/folding3d.js') }}"></script>

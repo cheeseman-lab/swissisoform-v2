@@ -17,6 +17,8 @@ _ISO_COLOR = "#1f77b4"  # blue
 _EXT_FILL = "#2ca02c"  # green (added region)
 _TRUNC_FILL = "#d62728"  # red (lost region)
 _DOMAIN_FILL = "rgba(44, 160, 44, 0.45)"
+_DISORDER_FILL = "rgba(148, 163, 184, 0.55)"  # slate — intrinsically disordered
+_COIL_COLOR = "#ea580c"  # orange — coiled-coil
 _MOTIF_COLOR = "#9467bd"
 
 _FONT_FAMILY = (
@@ -26,6 +28,11 @@ _HOVER_FONT_FAMILY = "system-ui, sans-serif"
 
 _CANON_Y = 1.0
 _ISO_Y = 0.5
+
+# Rough number of 9px label characters that span the full residue axis, used to
+# fit domain names to their box width. Approximate (plot width is responsive);
+# tuned to favour showing full names on reasonably wide boxes.
+_AXIS_CHARS = 140
 
 # Variant tracks, one row per consequence type, ordered most→least severe.
 _CONSEQ_ORDER = [
@@ -66,8 +73,16 @@ _CONSEQ_SHORT = {
 }
 
 
-def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, Any]:
-    """Return a Plotly figure dict for the protein view."""
+def build_protein_figure(
+    isoform: Any, overlays: dict[str, bool], collapse_domains: bool = False
+) -> dict[str, Any]:
+    """Return a Plotly figure dict for the protein view.
+
+    Args:
+        collapse_domains: When True, render the compact merged-region domain
+            summary (``isoform.domains_merged``) instead of the full per-entry
+            stack — the collapsed state of the page's domain toggle.
+    """
     overlays = overlays or {}
     can_len = int(getattr(isoform, "canonical_len", 0) or 0)
     iso_len = int(getattr(isoform, "isoform_len", 0) or 0)
@@ -198,63 +213,216 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
         if conseqs:
             mut_top = mut_base + (len(conseqs) - 1) * 0.32 + 0.3
 
-    # ── Domains (boxes), one legend entry ──
-    if overlays.get("domains", True):
-        domain_legend_shown = False
-        for d in getattr(isoform, "domains", []) or []:
+    # ── Feature tracks below the bars, laid out top-down with a descending
+    #    y-cursor so each lane clears the one above it: InterPro domains (packed
+    #    into rows), disorder, coiled-coil, motifs, then per-cell-line
+    #    initiation. Feature x-coords use ``feat_offset`` (isoform → display). ──
+    row_h, row_gap = 0.30, 0.06
+    y_cur = -0.15
+
+    def _left_label(text: str, y: float) -> None:
+        annotations.append(
+            {
+                "x": x_left,
+                "y": y,
+                "xref": "x",
+                "yref": "y",
+                "xanchor": "right",
+                "xshift": -6,
+                "text": text,
+                "showarrow": False,
+                "font": {"size": 10, "color": "#475569"},
+            }
+        )
+
+    def _feature_box(
+        x0: float, x1: float, top: float, bot: float, fill: str, name: str, group: str,
+        hover: str, show_legend: bool,
+    ) -> dict[str, Any]:
+        return {
+            "type": "scatter",
+            "name": name,
+            "mode": "lines",
+            "fill": "toself",
+            "x": [x0, x1, x1, x0, x0],
+            "y": [bot, bot, top, top, bot],
+            "line": {"color": "rgba(0,0,0,0)"},
+            "fillcolor": fill,
+            "legendgroup": group,
+            # ``hoveron: fills`` makes the whole box interior hoverable (a filled
+            # shape otherwise only reacts at its corner vertices), so short boxes
+            # still surface their name/accession on hover.
+            "text": hover,
+            "hoveron": "fills",
+            "hoverinfo": "text",
+            "showlegend": show_legend,
+        }
+
+    show_domains = overlays.get("domains", True)
+    if show_domains and collapse_domains:
+        # Collapsed = one green bar on a single lane whose opacity tracks how
+        # many domain signatures overlap at each position — the original density
+        # look, no per-entry rows or inline labels.
+        segs = list(getattr(isoform, "domain_segments", []) or [])
+        if segs:
+            max_depth = max(s["depth"] for s in segs) or 1
+            top, bot = y_cur, y_cur - row_h
+            legend_shown = False
+            for s in segs:
+                alpha = 0.20 + 0.65 * (s["depth"] / max_depth)
+                fill = f"rgba(44, 160, 44, {alpha:.2f})"
+                hover = (
+                    f"<b>{s['depth']} overlapping domain signature"
+                    f"{'s' if s['depth'] != 1 else ''}</b>"
+                    f"<br>residues {int(s['start'])}–{int(s['end'])}"
+                )
+                traces.append(
+                    _feature_box(
+                        s["start"] + feat_offset, s["end"] + feat_offset, top, bot,
+                        fill, "Domain (InterPro)", "domain", hover, not legend_shown,
+                    )
+                )
+                legend_shown = True
+            _left_label("domains (InterPro)", (top + bot) / 2)
+            y_cur = bot - 0.18
+    elif show_domains:
+        # Expanded — greedy row-packing so non-overlapping domains share a row
+        # and overlapping ones stack instead of smearing into one block.
+        domains = list(getattr(isoform, "domains", []) or [])
+        if domains:
+            row_ends: list[float] = []
+            for d in domains:
+                d["_x0"] = d["start"] + feat_offset
+                d["_x1"] = d["end"] + feat_offset
+                ri = next((i for i, rend in enumerate(row_ends) if d["_x0"] > rend + 1), None)
+                if ri is None:
+                    ri = len(row_ends)
+                    row_ends.append(d["_x1"])
+                else:
+                    row_ends[ri] = d["_x1"]
+                d["_row"] = ri
+            n_rows = len(row_ends)
+            legend_shown = False
+            for d in domains:
+                top = y_cur - d["_row"] * (row_h + row_gap)
+                bot = top - row_h
+                hover = f"<b>{d['name']}</b>"
+                if d.get("interpro_id"):
+                    hover += f"<br>{d['interpro_id']}"
+                hover += f"<br>residues {int(d['start'])}–{int(d['end'])}"
+                if d.get("dbs"):
+                    hover += f"<br>{d.get('n_sig', len(d['dbs']))} signatures: {', '.join(d['dbs'])}"
+                traces.append(
+                    _feature_box(
+                        d["_x0"], d["_x1"], top, bot, _DOMAIN_FILL,
+                        "Domain (InterPro)", "domain", hover, not legend_shown,
+                    )
+                )
+                legend_shown = True
+                # Label only named InterPro entries; raw member-DB accessions
+                # ("G3DSA:…", "cd18654", "PTHR…") stay unlabeled, named on hover.
+                # Size the label to the box's own width — full name when it fits,
+                # ellipsize only when the box is genuinely too narrow.
+                name = d.get("name") or ""
+                if d.get("interpro_id"):
+                    chars_fit = int((d["_x1"] - d["_x0"]) / max(axis_len, 1) * _AXIS_CHARS)
+                    if chars_fit >= 3:
+                        label = (
+                            name if len(name) <= chars_fit else name[: max(1, chars_fit - 1)] + "…"
+                        )
+                        annotations.append(
+                            {
+                                "x": d["_x0"],
+                                "y": top - row_h / 2,
+                                "xanchor": "left",
+                                "xshift": 3,
+                                "text": label,
+                                "showarrow": False,
+                                "font": {"size": 9, "color": "#14532d"},
+                            }
+                        )
+            band_bottom = y_cur - (n_rows - 1) * (row_h + row_gap) - row_h
+            _left_label("domains (InterPro)", (y_cur + band_bottom) / 2)
+            y_cur = band_bottom - 0.18
+
+    # Disordered regions (MobiDB-lite) — their own slate lane.
+    disorder = list(getattr(isoform, "disorder", []) or []) if overlays.get("disorder", True) else []
+    if disorder:
+        top, bot = y_cur, y_cur - row_h * 0.7
+        legend_shown = False
+        for seg in disorder:
+            traces.append(
+                _feature_box(
+                    seg["start"] + feat_offset, seg["end"] + feat_offset, top, bot,
+                    _DISORDER_FILL, "Disordered (MobiDB)", "disorder",
+                    f"<b>Disordered region</b><br>residues {int(seg['start'])}–{int(seg['end'])}",
+                    not legend_shown,
+                )
+            )
+            legend_shown = True
+        _left_label("disorder (MobiDB-lite)", (top + bot) / 2)
+        y_cur = bot - 0.18
+
+    # Coiled-coil regions (COILS) — own orange lane.
+    coils = list(getattr(isoform, "coiled_coil", []) or []) if overlays.get("coiled_coil", True) else []
+    if coils:
+        cy = y_cur - row_h * 0.35
+        legend_shown = False
+        for seg in coils:
+            cxs = _bar_samples(seg["start"] + feat_offset, seg["end"] + feat_offset)
+            chov = f"<b>Coiled-coil</b><br>residues {int(seg['start'])}–{int(seg['end'])}"
             traces.append(
                 {
                     "type": "scatter",
-                    "name": "Domain (InterPro)",
+                    "name": "Coiled-coil",
                     "mode": "lines",
-                    "fill": "toself",
-                    "x": [
-                        d["start"] + feat_offset,
-                        d["end"] + feat_offset,
-                        d["end"] + feat_offset,
-                        d["start"] + feat_offset,
-                        d["start"] + feat_offset,
-                    ],
-                    "y": [-0.7, -0.7, -0.3, -0.3, -0.7],
-                    "line": {"color": "rgba(0,0,0,0)"},
-                    "fillcolor": _DOMAIN_FILL,
-                    "legendgroup": "domain",
-                    "hovertext": d.get("name", "?"),
+                    "x": cxs,
+                    "y": [cy] * len(cxs),
+                    "line": {"color": _COIL_COLOR, "width": 8},
+                    "legendgroup": "coil",
+                    "hovertext": [chov] * len(cxs),
                     "hoverinfo": "text",
-                    "showlegend": not domain_legend_shown,
+                    "showlegend": not legend_shown,
                 }
             )
-            domain_legend_shown = True
+            legend_shown = True
+        _left_label("coiled-coil (COILS)", cy)
+        y_cur = cy - row_h * 0.35 - 0.18
 
     # ── Motifs (spans), one legend entry ──
-    if overlays.get("motifs", True):
+    motifs = list(getattr(isoform, "motifs", []) or []) if overlays.get("motifs", True) else []
+    if motifs:
+        motif_y = y_cur - row_h * 0.35
         motif_legend_shown = False
-        for m in getattr(isoform, "motifs", []) or []:
+        for m in motifs:
             end = m.get("end", m.get("start"))
             label = m.get("name", "?")
             hover = f"{label}" + (f"<br>{m['match']}" if m.get("match") else "")
+            mxs = _bar_samples(m["start"] + feat_offset, end + feat_offset)
             traces.append(
                 {
                     "type": "scatter",
                     "name": "Motif",
                     "mode": "lines",
-                    "x": [m["start"] + feat_offset, end + feat_offset],
-                    "y": [-1.0, -1.0],
+                    "x": mxs,
+                    "y": [motif_y] * len(mxs),
                     "line": {"color": _MOTIF_COLOR, "width": 6},
                     "legendgroup": "motif",
-                    "hovertext": [hover, hover],
+                    "hovertext": [hover] * len(mxs),
                     "hoverinfo": "text",
                     "showlegend": not motif_legend_shown,
                 }
             )
             motif_legend_shown = True
+        _left_label("motifs (ELM)", motif_y)
+        y_cur = motif_y - row_h * 0.35 - 0.18
 
     # ── Per-cell-line initiation lanes (TIS mapped onto the residue axis) ──
     tracks = cl_tracks
     canon_residue = getattr(isoform, "canon_residue", None)
-    y_bottom = -1.5
+    y_bottom = y_cur - 0.1
     if tracks:
-        lane_base, lane_gap = -1.7, 0.45
+        lane_base, lane_gap = y_cur - 0.2, 0.45
         all_ie = [m["log2_ie"] for t in tracks for m in t["marks"]]
         vmin, vmax = (min(all_ie), max(all_ie)) if all_ie else (-1.0, 0.0)
 
@@ -352,16 +520,9 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
             }
         )
 
-    title = (
-        f"Protein — {orf_type.title()}; "
-        f"canonical {can_len} aa vs isoform {iso_len} aa; "
-        f"diff {diff_lo}..{diff_hi} "
-        f"({'lost from canonical' if is_trunc else 'added to isoform'})"
-    )
     return {
         "data": traces,
         "layout": {
-            "title": {"text": title, "font": {"size": 15, "color": "#111827"}},
             "font": {"family": _FONT_FAMILY, "size": 13, "color": "#1f2937"},
             "hoverlabel": {"font": {"family": _HOVER_FONT_FAMILY, "size": 12}},
             "showlegend": True,
@@ -388,37 +549,65 @@ def build_protein_figure(isoform: Any, overlays: dict[str, bool]) -> dict[str, A
                 "showticklabels": False,
                 "zeroline": False,
             },
-            "height": 300
-            + int(60 * max(0.0, mut_top - _CANON_Y))
-            + (40 * len(tracks) if tracks else 0),
-            "margin": {"l": 110, "r": 30, "t": 70, "b": 50},
+            # Height tracks the full vertical span, which now grows with the
+            # number of stacked feature rows (domains/disorder/coil) + lanes.
+            "height": int(150 + 150 * ((mut_top + 0.3) - (y_bottom - 0.2))),
+            "margin": {"l": 110, "r": 30, "t": 40, "b": 50},
         },
     }
 
 
+def _bar_samples(x0: int, x1: int, cap: int = 400) -> list[float]:
+    """Evenly sample display coords across ``[x0, x1]`` (endpoints included).
+
+    Plotly fires line-trace hover only at data vertices, so a 2-point bar has no
+    hover in its interior. Densifying into collinear points keeps the visual
+    identical (a straight line) while making the whole bar hoverable.
+    """
+    lo, hi = (x0, x1) if x0 <= x1 else (x1, x0)
+    n = int(hi - lo)
+    if n <= 1:
+        return [float(lo), float(hi)]
+    step = max(1, n // cap)
+    xs = [float(v) for v in range(int(lo), int(hi) + 1, step)]
+    if xs[-1] != float(hi):
+        xs.append(float(hi))
+    return xs
+
+
 def _length_bar(x0: int, x1: int, y: float, color: str, name: str) -> dict[str, Any]:
+    xs = _bar_samples(x0, x1)
+    length = int(abs(x1 - x0)) + 1
+    base = min(x0, x1)
+    hover = [f"<b>{name}</b><br>residue {int(x - base) + 1} / {length} aa" for x in xs]
     return {
         "type": "scatter",
         "name": name,
         "mode": "lines",
-        "x": [x0, x1],
-        "y": [y, y],
+        "x": xs,
+        "y": [y] * len(xs),
         "line": {"color": color, "width": 12},
-        "hovertext": [f"{name}: {x0}", f"{name}: {x1}"],
+        "hovertext": hover,
         "hoverinfo": "text",
         "showlegend": True,
     }
 
 
 def _diff_overlay(x0: int, x1: int, y: float, color: str) -> dict[str, Any]:
+    xs = _bar_samples(x0, x1)
+    length = int(abs(x1 - x0)) + 1
+    base = min(x0, x1)
+    hover = [
+        f"<b>Differential region</b><br>residue {int(x - base) + 1} / {length} aa" for x in xs
+    ]
     return {
         "type": "scatter",
         "name": "Differential region",
         "mode": "lines",
-        "x": [x0, x1],
-        "y": [y, y],
+        "x": xs,
+        "y": [y] * len(xs),
         "line": {"color": color, "width": 12},
-        "hovertext": [f"Differential region {x0}", f"Differential region {x1}"],
+        "hovertext": hover,
         "hoverinfo": "text",
         "showlegend": True,
     }

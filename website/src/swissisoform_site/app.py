@@ -220,7 +220,11 @@ def create_app() -> Flask:
                 llm_dir=llm_dir, tis_slug=tis_slug_str, criterion_id=cid
             )
 
-        protein_fig = build_protein_figure(_make_protein_adapter(iso, gene, skeleton), overlays={})
+        protein_adapter = _make_protein_adapter(iso, gene, skeleton)
+        protein_fig = build_protein_figure(protein_adapter, overlays={})
+        protein_fig_collapsed = build_protein_figure(
+            protein_adapter, overlays={}, collapse_domains=True
+        )
 
         variant_rows = variant_rows_for_isoform(data_dir_path / "variants_long.parquet", iso.tis_id)
 
@@ -254,6 +258,7 @@ def create_app() -> Flask:
             variant_rows_unique=variant_rows_unique,
             variant_rows_shared=variant_rows_shared,
             protein_figure_json=json.dumps(protein_fig),
+            protein_figure_collapsed_json=json.dumps(protein_fig_collapsed),
             canonical_cif=iso.canonical_cif,
             isoform_cif=iso.isoform_cif,
             canonical_colors=iso.canonical_colors,
@@ -356,6 +361,157 @@ def _make_transcript_adapter(iso: Isoform, gene: Any) -> types.SimpleNamespace:
     )
 
 
+# InterProScan member DBs grouped by the kind of feature they call, so the
+# figure can render each kind in its own track instead of stacking them all into
+# one green smear. Anything unlisted is treated as a folded domain.
+_DISORDER_DBS = {"MobiDB-lite", "MobiDB"}
+_COILED_COIL_DBS = {"COILS", "Coils"}
+
+
+def _merge_hit_intervals(recs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge overlapping/adjacent hit records into regions, keeping members."""
+    regions: list[dict[str, Any]] = []
+    for r in sorted(recs, key=lambda rr: (rr["start"], rr["end"])):
+        if regions and r["start"] <= regions[-1]["end"] + 1:
+            reg = regions[-1]
+            reg["end"] = max(reg["end"], r["end"])
+            reg["members"].append(r["hit"])
+        else:
+            regions.append({"start": r["start"], "end": r["end"], "members": [r["hit"]]})
+    return regions
+
+
+def _depth_segments(recs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sweep-line coverage depth over hit records (1-based inclusive coords).
+
+    Returns contiguous ``{start, end, depth}`` segments where ``depth`` is the
+    number of hits covering that stretch — used to shade the collapsed domain
+    bar by overlap density, recreating the original stacked-transparency look.
+    """
+    if not recs:
+        return []
+    bounds = sorted({r["start"] for r in recs} | {r["end"] + 1 for r in recs})
+    segs: list[dict[str, Any]] = []
+    for a, b in zip(bounds, bounds[1:]):
+        lo, hi = a, b - 1
+        if hi < lo:
+            continue
+        depth = sum(1 for r in recs if r["start"] <= lo and r["end"] >= hi)
+        if depth <= 0:
+            continue
+        if segs and segs[-1]["depth"] == depth and segs[-1]["end"] + 1 >= lo:
+            segs[-1]["end"] = hi
+        else:
+            segs.append({"start": lo, "end": hi, "depth": depth})
+    return segs
+
+
+def _classify_interproscan_hits(ips_hits: Any) -> dict[str, list[dict[str, Any]]]:
+    """Split InterProScan hits by feature type and collapse redundancy.
+
+    Every member DB is kept — nothing is filtered out. Hits are bucketed into
+    ``domain`` / ``disorder`` / ``coiled_coil`` by their source DB, then hits of
+    the same type that overlap in residue space are merged into one region so a
+    dozen DBs describing the same domain render as a single labelled box (with
+    every contributing signature listed on hover), not a green smear.
+
+    Coordinates convert from the pipeline's 0-based ``pos``/``end`` to the
+    1-based residue axis the figure uses.
+    """
+    empty = {"domains": [], "disorder": [], "coiled_coil": []}
+    if ips_hits is None:
+        return dict(empty)
+    buckets: dict[str, list[dict[str, Any]]] = {"domain": [], "disorder": [], "coiled_coil": []}
+    try:
+        for h in list(ips_hits):
+            if not isinstance(h, dict):
+                continue
+            start = h.get("start", h.get("pos"))
+            end = h.get("end")
+            if start is None or end is None:
+                continue
+            db = h.get("db")
+            kind = (
+                "disorder"
+                if db in _DISORDER_DBS
+                else "coiled_coil"
+                if db in _COILED_COIL_DBS
+                else "domain"
+            )
+            buckets[kind].append({"hit": h, "start": int(start) + 1, "end": int(end) + 1})
+    except (TypeError, ValueError):
+        return dict(empty)
+
+    # One box per distinct InterPro entry (member DBs collapse under their
+    # entry; unmapped signatures keep their own box), preserving sub-domain
+    # structure. Overlapping entries are row-stacked by the figure, not merged,
+    # so e.g. a chromo domain and a chromo-shadow domain stay distinct even when
+    # a whole-protein family signature spans both.
+    domains: list[dict[str, Any]] = []
+    by_entry: dict[str, list[dict[str, Any]]] = {}
+    for rec in buckets["domain"]:
+        h = rec["hit"]
+        key = h.get("interpro_id") or f"sig:{h.get('name') or h.get('db')}"
+        by_entry.setdefault(key, []).append(rec)
+    for recs in by_entry.values():
+        # Merge only overlapping occurrences of the SAME entry; a single entry
+        # appearing at two separate loci stays two boxes.
+        for reg in _merge_hit_intervals(recs):
+            members = reg["members"]
+            mapped = [m for m in members if m.get("interpro_id")]
+            best = mapped[0] if mapped else members[0]
+            name = best.get("interpro_description") or best.get("name") or best.get("db") or "domain"
+            if name in ("-", "—"):
+                name = best.get("name") or best.get("db") or "domain"
+            domains.append(
+                {
+                    "name": name,
+                    "interpro_id": best.get("interpro_id"),
+                    "start": reg["start"],
+                    "end": reg["end"],
+                    "dbs": sorted({m.get("db") for m in members if m.get("db")}),
+                    "n_sig": len(members),
+                }
+            )
+    domains.sort(key=lambda d: (d["start"], d["end"]))
+
+    # Collapsed representation: one box per contiguous domain region (all member
+    # DBs merged), for the compact state of the page's domain toggle.
+    domains_merged: list[dict[str, Any]] = []
+    for reg in _merge_hit_intervals(buckets["domain"]):
+        members = reg["members"]
+        mapped = [m for m in members if m.get("interpro_id")]
+        best = (
+            max(mapped, key=lambda m: len(m.get("interpro_description") or ""))
+            if mapped
+            else members[0]
+        )
+        name = best.get("interpro_description") or best.get("name") or best.get("db") or "domain"
+        if name in ("-", "—"):
+            name = best.get("name") or best.get("db") or "domain"
+        domains_merged.append(
+            {
+                "name": name,
+                "interpro_id": best.get("interpro_id"),
+                "start": reg["start"],
+                "end": reg["end"],
+                "dbs": sorted({m.get("db") for m in members if m.get("db")}),
+                "n_sig": len(members),
+            }
+        )
+
+    def _simple(regs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [{"start": r["start"], "end": r["end"]} for r in regs]
+
+    return {
+        "domains": domains,
+        "domains_merged": domains_merged,
+        "domain_segments": _depth_segments(buckets["domain"]),
+        "disorder": _simple(_merge_hit_intervals(buckets["disorder"])),
+        "coiled_coil": _simple(_merge_hit_intervals(buckets["coiled_coil"])),
+    }
+
+
 def _make_protein_adapter(iso: Isoform, gene: Any, skeleton: Any | None) -> types.SimpleNamespace:
     """Convert a V1 ``Isoform`` into the duck-typed input ``build_protein_figure`` expects.
 
@@ -366,35 +522,18 @@ def _make_protein_adapter(iso: Isoform, gene: Any, skeleton: Any | None) -> type
     """
     raw = getattr(iso, "raw", None) or {}
 
-    domains: list[dict[str, Any]] = []
-    # ``raw`` values can be numpy arrays — their truthiness is ambiguous so we
-    # check ``is None`` explicitly instead of ``or []``.
+    # Split InterProScan hits by feature type (domain / disorder / coiled-coil),
+    # merging redundant same-region domain hits. ``raw`` values may be numpy
+    # arrays, so check ``is None`` rather than truthiness.
     ips_hits = raw.get("isoform_interproscan_hits")
     if ips_hits is None:
         ips_hits = []
-    try:
-        for h in list(ips_hits)[:30]:
-            if not isinstance(h, dict):
-                continue
-            start = h.get("start", h.get("pos"))
-            end = h.get("end")
-            if start is None or end is None:
-                continue
-            domains.append(
-                {
-                    "name": (
-                        h.get("name")
-                        or h.get("interpro_description")
-                        or h.get("description")
-                        or h.get("db")
-                        or "domain"
-                    ),
-                    "start": int(start) + 1,
-                    "end": int(end) + 1,
-                }
-            )
-    except (TypeError, ValueError):
-        domains = []
+    features = _classify_interproscan_hits(ips_hits)
+    domains = features["domains"]
+    domains_merged = features["domains_merged"]
+    domain_segments = features["domain_segments"]
+    disorder = features["disorder"]
+    coiled_coil = features["coiled_coil"]
 
     motifs: list[dict[str, Any]] = []
     motif_hits = raw.get("isoform_motifs_hits")
@@ -471,6 +610,10 @@ def _make_protein_adapter(iso: Isoform, gene: Any, skeleton: Any | None) -> type
         diff_end=getattr(iso, "diff_end", 0) or 0,
         variants=variants,
         domains=domains,
+        domains_merged=domains_merged,
+        domain_segments=domain_segments,
+        disorder=disorder,
+        coiled_coil=coiled_coil,
         motifs=motifs,
         cell_line_tracks=tracks,
         canon_residue=canon_residue,
