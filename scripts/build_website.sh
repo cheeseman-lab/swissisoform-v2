@@ -16,6 +16,9 @@
 #   bash scripts/build_website.sh                 # full rebuild incl. LLM
 #   bash scripts/build_website.sh --skip-llm      # reuse existing llm/, no API calls
 #   RUN=cheeseman_13gene bash scripts/build_website.sh
+#   RUN=cheeseman_test PRESET=cheeseman_test bash scripts/build_website.sh
+#     RUN   = output dir under data/output/ (drives every stage's paths + staging)
+#     PRESET= preset registry name for the structures stage (export_structures.py)
 #
 # Deploy is a separate manual step: cd website && railway up --no-gitignore --service swissisoform-viewer
 
@@ -32,7 +35,7 @@ for arg in "$@"; do
 done
 
 RUN="${RUN:-cheeseman_13gene}"
-PRESET="cheeseman13"
+PRESET="${PRESET:-cheeseman13}"
 OUT="data/output/${RUN}"
 GTF="data/reference/gencode.v49.primary_assembly.annotation.gtf"
 PAIRED="${OUT}/all_paired.parquet"
@@ -74,7 +77,7 @@ fi
 
 run_stage structures python scripts/export/export_structures.py --preset "$PRESET"
 
-run_stage stage bash -c 'cd website && bash prepare_deploy.sh'
+run_stage stage bash -c "cd website && RUN='$RUN' bash prepare_deploy.sh"
 
 echo
 _stamp "TIMING SUMMARY (wall-clock per stage):"
