@@ -592,7 +592,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
         ],
         "headline_col": "isoform_structure_plddt_diffregion_mean",
         "interpretation_hint": (
-            "Does the unique region fold confidently (Boltz pLDDT) AND look "
+            "Does the unique region fold confidently (ESMFold2 pLDDT) AND look "
             "biophysically distinct from the canonical core? Higher diffregion_mean "
             "means more structured; the cmp_biophysics unique-vs-shared deltas and "
             "ratios (GRAVY, fraction_charged, disorder) report distinctness."
@@ -691,7 +691,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "Is the unique region under germline constraint? Two independent "
             "signals: (1) gnomad_depletion_ratio < 1 means germline variation "
             "AVOIDS the unique region (density-normalized vs shared core); "
-            "(2) ESM-2 constraint_enrichment high means residues there are "
+            "(2) ESM-C constraint_enrichment high means residues there are "
             "predicted intolerant to substitution. This measures tolerance/"
             "constraint, not damaging-variant burden."
         ),
@@ -1088,26 +1088,26 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "gnomAD variants in shared region",
         "format": "int",
     },
-    # F5 — ESM-2 (PLM VEP) constraint
+    # F5 — ESM-C (PLM VEP) constraint
     "isoform_plm_vep_status": {"label": "PLM VEP status", "format": "str"},
     "isoform_plm_vep_constraint_enrichment": {
-        "label": "ESM-2 constraint enrichment (unique vs shared)",
+        "label": "ESM-C constraint enrichment (unique vs shared)",
         "format": "float3",
     },
     "isoform_plm_vep_mean_llr_unique_region": {
-        "label": "Mean ESM-2 LLR over unique region",
+        "label": "Mean ESM-C LLR over unique region",
         "format": "float3",
     },
     "isoform_plm_vep_mean_llr_shared_region": {
-        "label": "Mean ESM-2 LLR over shared region",
+        "label": "Mean ESM-C LLR over shared region",
         "format": "float3",
     },
     "isoform_plm_vep_n_constrained_positions_unique": {
-        "label": "ESM-2 constrained positions (unique)",
+        "label": "ESM-C constrained positions (unique)",
         "format": "int",
     },
     "isoform_plm_vep_n_constrained_positions_shared": {
-        "label": "ESM-2 constrained positions (shared)",
+        "label": "ESM-C constrained positions (shared)",
         "format": "int",
     },
     "isoform_variant_intersection_n_total": {
@@ -1155,11 +1155,11 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "format": "int",
     },
     "isoform_varianteffect_mean_delta_llr_unique_gnomad": {
-        "label": "Mean ESM-2 ΔLLR, germline (unique)",
+        "label": "Mean ESM-C ΔLLR, germline (unique)",
         "format": "float3",
     },
     "isoform_varianteffect_min_delta_llr_unique_gnomad": {
-        "label": "Min ESM-2 ΔLLR, germline (unique)",
+        "label": "Min ESM-C ΔLLR, germline (unique)",
         "format": "float3",
     },
     "isoform_varianteffect_mean_am_pathogenicity_unique_gnomad": {

@@ -20,10 +20,15 @@
     const label = tile.querySelector(".tile-label")?.textContent.trim() || "Evidence";
     const id = tile.querySelector(".tile-id")?.textContent.trim() || "";
     modalTitle.textContent = id ? `${id} · ${label}` : label;
+    // The SAE card carries wide multi-column tables — give it a roomier modal.
+    modal.classList.toggle("evidence-modal-wide", tile.classList.contains("sae-tile"));
     modalBody.innerHTML = "";
     const tpl = tile.querySelector("template.tile-body-template");
     if (tpl) {
       modalBody.appendChild(tpl.content.cloneNode(true));
+      // Template content is inert until cloned here — wire sorting + expanders on the clone.
+      makeVariantTablesSortable(modalBody);
+      wireSaeExpanders(modalBody);
     }
     if (typeof modal.showModal === "function") {
       modal.showModal();
@@ -84,4 +89,71 @@
       restyleByPrefix("graph-protein", prefix, cb.checked);
     });
   });
+
+  // Sortable variant tables. Each column header toggles asc/desc; missing/empty
+  // sort keys always sink to the bottom. Keys come from each cell's data-sort
+  // (raw number or lowercased text), not the rendered string.
+  function makeVariantTablesSortable(root) {
+    (root || document).querySelectorAll("table.js-sortable").forEach((table) => {
+      const tbody = table.querySelector("tbody");
+      const heads = Array.prototype.slice.call(table.querySelectorAll("thead th.sortable"));
+      if (!tbody || !heads.length) return;
+
+      function sortBy(th, colIndex) {
+        const isNum = th.getAttribute("data-sort-type") === "num";
+        // asc → desc → asc; a fresh column starts ascending.
+        const dir = th.getAttribute("aria-sort") === "ascending" ? "descending" : "ascending";
+        heads.forEach((h) => h.removeAttribute("aria-sort"));
+        th.setAttribute("aria-sort", dir);
+        const sign = dir === "ascending" ? 1 : -1;
+
+        const cellKey = (tr) => {
+          const cell = tr.children[colIndex];
+          if (!cell) return "";
+          const raw = cell.dataset.sort;
+          return raw !== undefined ? raw : cell.textContent.trim();
+        };
+
+        const rows = Array.prototype.slice.call(tbody.querySelectorAll("tr"));
+        rows.sort((a, b) => {
+          const ka = cellKey(a);
+          const kb = cellKey(b);
+          const ea = ka === "" || ka == null;
+          const eb = kb === "" || kb == null;
+          if (ea && eb) return 0;
+          if (ea) return 1;   // empties always last, regardless of direction
+          if (eb) return -1;
+          if (isNum) return (parseFloat(ka) - parseFloat(kb)) * sign;
+          return ka.localeCompare(kb) * sign;
+        });
+        rows.forEach((tr) => tbody.appendChild(tr));
+      }
+
+      heads.forEach((th, colIndex) => {
+        th.addEventListener("click", () => sortBy(th, colIndex));
+        th.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            sortBy(th, colIndex);
+          }
+        });
+      });
+    });
+  }
+  makeVariantTablesSortable();
+
+  // SAE table expanders: each button toggles the `collapsed` class on its
+  // .sae-table-block (CSS hides rows 11+ when collapsed) and swaps its label.
+  function wireSaeExpanders(root) {
+    (root || document).querySelectorAll(".sae-expand-btn").forEach((btn) => {
+      const block = btn.closest(".sae-table-block");
+      if (!block) return;
+      const fullLabel = btn.textContent.trim();  // "Show all N"
+      btn.addEventListener("click", () => {
+        const collapsed = block.classList.toggle("collapsed");
+        btn.setAttribute("aria-expanded", String(!collapsed));
+        btn.textContent = collapsed ? fullLabel : "Show top 10";
+      });
+    });
+  }
 })();

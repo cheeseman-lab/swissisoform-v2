@@ -87,19 +87,48 @@ python scripts/run.py --all --run-name full_catalog
 # Skip GPU-dependent modules when their caches are empty
 python scripts/run.py --genes TP53 --no-gpu          # = --skip-modules plm_vep,structure
 python scripts/run.py --genes TP53 --skip-modules clinical,conservation
+
+# Long-read source-resolution knobs (effective when the combined catalog is
+# (re)built — pair with --rebuild-combined if it is already cached)
+python scripts/run.py --preset cheeseman_test --drop-unsupported-tis
+python scripts/run.py --genes TP53 --divergence-threshold 0.6 --window-upstream 150
 ```
 
 | Mode | Flag | Selects |
 |------|------|---------|
-| Preset | `--preset <name>` | A named run from `presets/<name>.toml` — `cheeseman13` (the canonical run, also the default) |
+| Preset | `--preset <name>` | A named run from `presets/<name>.toml` — `cheeseman13` (the canonical run, also the default) or `cheeseman_test` |
 | Genes | `--genes SYM …` | Named HGNC symbols |
 | Gene list | `--gene-list FILE` | One symbol per line |
 | Isoforms | `--isoforms FILE` | Ad-hoc TIS picks (parquet/CSV with `Tid`,`GenomePos`,`StartCodon`) |
 | Catalog | `--all` | Every gene |
 
+Other frequently-used options (see `--help` for the full 20-flag list):
+
+| Flag | Effect |
+|------|--------|
+| `--cell-lines A,B,…` | Restrict to a subset of the 6 cell lines (default: all) |
+| `--single-sample` | HeLa-only from the raw predict file (skips the combined catalog) |
+| `--min-cell-lines N` | E4 reproducibility bar (default 1 single-sample / 3 multi-sample) |
+| `--skip-modules a,b` | Skip named annotators (e.g. `plm_vep,structure,sae,clinical`) |
+| `--rebuild-combined` | Force-rebuild the cached `all_samples_combined.parquet` |
+| `--skip-source-resolution` | Disable the long-read source-resolution cascade + collapse |
+| `--divergence-threshold F` | Abundance fraction the top transcript must hold at a divergent site (default 0.5) |
+| `--window-upstream N` / `--window-downstream N` | Window-purity bounds around the start codon (nt, default 100) |
+| `--drop-unsupported-tis` | Drop TIS no long-read sample scored (test-only; production keeps them) |
+| `--emit-fasta` / `--fasta-out PATH` | Write the proteins FASTA and exit (seeds the GPU jobs) |
+
+The source-resolution flags tune the per-sample cascade that pins each TIS to one
+long-read-supported source mRNA; they take effect only when the combined catalog
+is (re)built. See CLAUDE.md ("Source-transcript resolution") for the cascade.
+
 **Presets** are self-contained TOML files in `presets/` (auto-discovered — drop
 a new `.toml` to add a named run). Each lists either `genes = [...]` or an inline
 `[[isoforms]]` array, plus `run_name` / `min_cell_lines` / optional `cell_lines`.
+Two ship today: **`cheeseman13`** (23 curated `[[isoforms]]` picks across 13 genes
+→ `data/output/cheeseman_13gene/`, the canonical run and the default) and
+**`cheeseman_test`** (the same 13 genes but every TIS from the combined catalog,
+`min_cell_lines = 1` → `data/output/cheeseman_test/`; the long-read timing test,
+run with `--drop-unsupported-tis`).
 
 Output lands in `data/output/<run_name>/`: `all_paired.parquet` (one row per
 TIS) plus one `<gene>_paired.parquet` per gene. Run
@@ -107,8 +136,8 @@ TIS) plus one `<gene>_paired.parquet` per gene. Run
 
 > To run **everything as one Slurm job — including GPU precompute** — use the
 > orchestrator `sbatch scripts/slurm/run.sbatch --preset cheeseman13`: it emits the
-> FASTA, spawns the ESM-2 + folding jobs, waits, then runs the full pipeline.
-> All args after the script name are forwarded to `run.py`.
+> FASTA, spawns the ESM-C embedding (+ SAE encode) + folding jobs, waits, then
+> runs the full pipeline. All args after the script name are forwarded to `run.py`.
 
 ---
 
@@ -160,8 +189,10 @@ src/swissisoform/
                        #   (gnomAD/ClinVar/COSMIC), ConsequenceValidator, AlphaMissense
   structure/           # capability folder (module.py + impl): Boltz-2 / Chai-1
                        #   folding + structure comparison
-  plm/                 # capability folder (module.py + impl): ESM-2 masked-marginal
-                       #   embedding cache (embed, cli)
+  plm/                 # capability folder: ESM-C masked-marginal embedding cache
+                       #   (embed, cli; default ESM-C 6B, biohub/ESMC-*, → plm_esmc/)
+                       #   + PLMVEPModule (module.py) + the Top-K SAE feature stack
+                       #   (sae, sae_module = SAEFeatureModule, atlas → sae_esmc/)
   conservation_frame/  # capability folder (module.py + impl): MAF/HAL reading-frame
                        #   integrity (maf, frame, species, hal, tree)
   compare/             # paired canonical-vs-isoform comparison
@@ -222,7 +253,7 @@ plumbing now lives **inside the bucket folder** (E6, F2, F3, F4).
 | **F2** localization | DeepLoc compartment / signals / membrane change | `evidence/f2_localization/localization.py` (DeepLoc 2) |
 | **F3** domains | real InterPro domain gained / lost in the diff region | `evidence/f3_domains/interproscan.py` (InterProScan 6) |
 | **F4** targeting | SignalP / TargetP category change canonical vs. isoform | `evidence/f4_targeting/signalp.py` + `targetp.py` |
-| **F5** germline constraint | ESM-2 constraint enrichment OR gnomAD depletion over the unique region | `modules/varianteffect.py` + `clinical/` (via `plm_vep` / `variant_intersection`) |
+| **F5** germline constraint | ESM-C masked-marginal LLR constraint enrichment OR gnomAD depletion over the unique region | `modules/varianteffect.py` + `clinical/` (via `plm_vep` / `variant_intersection`) |
 | **F6** disease enrichment | ClinVar + COSMIC density enrichment in the unique region | `modules/varianteffect.py` + `clinical/` (via `variant_intersection`) |
 
 ### Underlying annotators
@@ -240,10 +271,14 @@ Shared single-file annotators live in `modules/`: `biophysics`, `motifs`,
 `initiation_context`, `generef`. Heavier annotators are capability folders that
 own a `module.py` plus their implementation: `clinical/`
 (gnomAD/ClinVar/COSMIC + `ConsequenceValidator` + AlphaMissense), `structure/`
-(Boltz-2 / Chai-1, GPU cache), `plm/` (ESM-2 650M masked-marginal LLR, GPU
-cache), `conservation_frame/` (primate/mammalian frame integrity over the
-Cactus HAL). The bucket-owned annotators (`massspec`, `localization`,
-`interproscan`, `signalp`, `targetp`) live under their `evidence/` folder.
+(Boltz-2 / Chai-1, GPU cache), `plm/` (ESM-C masked-marginal LLR, GPU cache),
+`conservation_frame/` (primate/mammalian frame integrity over the Cactus HAL).
+`plm/` also carries two SiteModules: `PLMVEPModule` (`plm_vep` — feeds F5) and
+`SAEFeatureModule` (`sae`), a Top-K sparse-autoencoder feature diff on the ESM-C
+residual stream that is **descriptive only** (surfaced in the paired output, not
+scored into any E/F criterion). The bucket-owned annotators (`massspec`,
+`localization`, `interproscan`, `signalp`, `targetp`) live under their
+`evidence/` folder.
 
 > The old homology-based conservation (DIAMOND/blastp vs. SwissProt) is retained
 > dormant as `modules/conservation_homology.py`, not wired into the pipeline.
@@ -286,8 +321,11 @@ pytest
 
 ## GPU precompute
 
-`plm_vep` and `structure` are **cache-lookup** modules — their caches must be
-populated on a GPU node *before* annotation.
+`plm_vep`, `sae`, and `structure` are **cache-lookup** modules — their caches
+must be populated on a GPU node *before* annotation. `run_plm_embed.sbatch`
+produces both PLM caches in one job: the ESM-C embeddings (`data/cache/plm_esmc/`)
+and then, in the same job, the SAE encode (`data/cache/sae_esmc/`, skippable with
+`--skip-modules sae` → `SWISSISO_SKIP_SAE=1`).
 
 These run in their own conda envs, separate from the base env (the base env
 stays lightweight; each GPU env pulls only what it needs). Create them **on a
@@ -300,7 +338,7 @@ conda activate swissisoform-v2-fold
 uv pip install -e ".[fold]"
 # for the optional Chai-1 backend (run_fold.sbatch ... chai): also `uv pip install chai_lab`
 
-# protein-LM embeddings (ESM-2) — run_plm_embed.sbatch
+# protein-LM embeddings (ESM-C) + SAE encode — run_plm_embed.sbatch
 conda create -n swissisoform-v2-plm -c conda-forge python=3.12 uv pip -y
 conda activate swissisoform-v2-plm
 uv pip install -e ".[plm]"
@@ -325,7 +363,7 @@ Or step by step:
 
 ```bash
 python scripts/run.py --preset cheeseman13 --emit-fasta           # data/cache/proteins.fa
-sbatch scripts/slurm/run_plm_embed.sbatch data/cache/proteins.fa  # ESM-2 650M → data/cache/plm_esm2/
+sbatch scripts/slurm/run_plm_embed.sbatch data/cache/proteins.fa  # ESM-C → data/cache/plm_esmc/ + SAE encode → data/cache/sae_esmc/
 sbatch scripts/slurm/run_fold.sbatch      data/cache/proteins.fa boltz  # → data/cache/structure/
 python scripts/run.py --preset cheeseman13                        # caches now found
 ```
@@ -370,7 +408,7 @@ trusted for protein position.
 `website/` is a standalone Flask app over the paired-evidence parquet — a gene
 grid plus per-gene pages showing each alternative TIS with its dual evidence
 axis (E1–E6 / F1–F6), key metrics, pathogenic variants in the isoform-unique
-region, an embedded Mol\* structure viewer, and an LLM-written interpretation
+region, an embedded 3Dmol.js structure viewer, and an LLM-written interpretation
 when available. It imports only `swissisoform.site.evidence` (numpy + pandas),
 not the full analysis package, so the image stays small.
 
@@ -384,14 +422,13 @@ pip install -e .
 flask --app swissisoform_site.app run --port 5050
 
 # Deploy to Railway (Docker; data baked into the image)
-./prepare_deploy.sh   # dereference website/data/ symlinks + stage site.evidence
+./prepare_deploy.sh   # cp -L cheeseman_13gene into website/data/ + stage site.evidence
 railway up            # builds via Dockerfile, healthcheck at /healthz
 ```
 
-`prepare_deploy.sh` dereferences the `website/data/` symlinks (which point at
-the latest `data/output/cheeseman_13gene/` run) and stages
-`swissisoform.site.evidence` into the build context. See `website/README.md`
-for routes and data layout.
+`prepare_deploy.sh` copies (`cp -L`) the latest `data/output/cheeseman_13gene/`
+run into `website/data/` and stages the `swissisoform.site.evidence` helper into
+the build context. See `website/README.md` for routes and data layout.
 
 ---
 
@@ -421,4 +458,5 @@ asserts a later run is unchanged.
 - ClinVar: <https://www.ncbi.nlm.nih.gov/clinvar/> · COSMIC v102: <https://cancer.sanger.ac.uk/cosmic>
 - Zoonomia 241-mammal alignment: Christmas et al., _Science_ 380:eabn3943 (2023)
 - Ribo-TISH: Zhang et al., _Nat Commun_ 2017 · DeepLoc 2.1: Thumuluri et al., _NAR_ 2022
-- ESM-2: Lin et al., _Science_ 2023 · Boltz-2 / Chai-1 structure prediction
+- ESM-C: EvolutionaryScale, 2024 (`biohub/ESMC-*` HF-transformers fork) · ESM-2: Lin et al., _Science_ 2023
+- Boltz-2 / Chai-1 structure prediction

@@ -180,7 +180,7 @@ class ScoringConfig:
         pepquery_var_mods: PepQuery2 ``-varMod`` UNIMOD ids (default
             Oxidation M + Acetyl peptide N-term).
         pepquery_max_var: PepQuery2 ``-maxVar`` — max variable mods per peptide.
-        f5_constraint_enrichment_min: F5 threshold — minimum ESM-2 constraint
+        f5_constraint_enrichment_min: F5 threshold — minimum ESM-C constraint
             enrichment (unique vs shared) to call germline constraint.
         f5_depletion_ratio_max: F5 threshold — gnomAD depletion ratio below
             which germline variation is judged to avoid the unique region.

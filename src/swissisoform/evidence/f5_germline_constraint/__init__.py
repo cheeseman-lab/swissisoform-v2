@@ -13,7 +13,7 @@ def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResul
     Two complementary, independent signals that the unique region is under
     selective constraint in healthy humans:
 
-    - **ESM-2 constraint enrichment** (``plm_vep.constraint_enrichment``,
+    - **ESM-C constraint enrichment** (``plm_vep.constraint_enrichment``,
       unique/shared mean LLR ratio) — the protein language model finds the
       unique region's residues more constrained than the shared core.
     - **gnomAD depletion** (``variant_intersection.gnomad_depletion_ratio``,

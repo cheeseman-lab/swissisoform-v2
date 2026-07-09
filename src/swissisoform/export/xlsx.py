@@ -38,10 +38,10 @@ MODULE = {
     "conservation": "Zoonomia conservation (PhyloP / PhastCons + primate/mammal frame integrity)",
     "core": "core TIS identity metadata",
     "initiation": "translation-initiation (Kozak) context",
-    "plm": "protein language model variant effect (ESM-2 masked-marginal LLR)",
+    "plm": "protein language model variant effect (ESM-C masked-marginal LLR)",
     "structure": "Boltz-2 predicted structure metrics",
     "variant": "genomic variant ↔ ORF-region intersection",
-    "varianteffect": "per-variant effect on identified mutants (ESM-2 ΔLLR + AlphaMissense)",
+    "varianteffect": "per-variant effect on identified mutants (ESM-C ΔLLR + AlphaMissense)",
     "scoring": "dual-axis evidence score (E1–E7 existence / F1–F6 functional)",
     "len": "protein length (aa)",
     "transcript": "transcript identifier",
@@ -127,15 +127,15 @@ FIELD = {
     "constraint_enrichment": "unique/shared evolutionary-constraint enrichment",
     "n_constrained_positions_unique": "constrained positions in the unique region",
     "n_constrained_positions_shared": "constrained positions in the shared region",
-    # variant effect (per-variant ESM-2 ΔLLR + AlphaMissense)
-    "n_scored_plm": "clinical variants given an ESM-2 ΔLLR score",
+    # variant effect (per-variant ESM-C ΔLLR + AlphaMissense)
+    "n_scored_plm": "clinical variants given an ESM-C ΔLLR score",
     "n_scored_am": "clinical variants given an AlphaMissense score",
     "n_scorable_in_unique": "scorable (missense, predictor-available) variants "
     "in the unique region",
     "n_damaging_in_unique": "damaging variants in the unique region "
-    "(AlphaMissense likely_pathogenic or ESM-2 ΔLLR ≤ −7.5)",
-    "mean_delta_llr_unique": "mean ESM-2 ΔLLR (logP(alt)−logP(wt)) over unique-region variants",
-    "min_delta_llr_unique": "most damaging ESM-2 ΔLLR over unique-region variants",
+    "(AlphaMissense likely_pathogenic or ESM-C ΔLLR ≤ −7.5)",
+    "mean_delta_llr_unique": "mean ESM-C ΔLLR (logP(alt)−logP(wt)) over unique-region variants",
+    "min_delta_llr_unique": "most damaging ESM-C ΔLLR over unique-region variants",
     "mean_am_pathogenicity_unique": "mean AlphaMissense pathogenicity over unique-region variants",
     "max_am_pathogenicity_unique": "max AlphaMissense pathogenicity over unique-region variants",
     "n_am_pathogenic_in_unique": "AlphaMissense likely_pathogenic variants in the unique region",
