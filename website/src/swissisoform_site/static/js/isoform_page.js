@@ -84,4 +84,56 @@
       restyleByPrefix("graph-protein", prefix, cb.checked);
     });
   });
+
+  // Sortable variant tables. Each column header toggles asc/desc; missing/empty
+  // sort keys always sink to the bottom. Keys come from each cell's data-sort
+  // (raw number or lowercased text), not the rendered string.
+  function makeVariantTablesSortable() {
+    document.querySelectorAll("table.variants-table").forEach((table) => {
+      const tbody = table.querySelector("tbody");
+      const heads = Array.prototype.slice.call(table.querySelectorAll("thead th.sortable"));
+      if (!tbody || !heads.length) return;
+
+      function sortBy(th, colIndex) {
+        const isNum = th.getAttribute("data-sort-type") === "num";
+        // asc → desc → asc; a fresh column starts ascending.
+        const dir = th.getAttribute("aria-sort") === "ascending" ? "descending" : "ascending";
+        heads.forEach((h) => h.removeAttribute("aria-sort"));
+        th.setAttribute("aria-sort", dir);
+        const sign = dir === "ascending" ? 1 : -1;
+
+        const cellKey = (tr) => {
+          const cell = tr.children[colIndex];
+          if (!cell) return "";
+          const raw = cell.dataset.sort;
+          return raw !== undefined ? raw : cell.textContent.trim();
+        };
+
+        const rows = Array.prototype.slice.call(tbody.querySelectorAll("tr"));
+        rows.sort((a, b) => {
+          const ka = cellKey(a);
+          const kb = cellKey(b);
+          const ea = ka === "" || ka == null;
+          const eb = kb === "" || kb == null;
+          if (ea && eb) return 0;
+          if (ea) return 1;   // empties always last, regardless of direction
+          if (eb) return -1;
+          if (isNum) return (parseFloat(ka) - parseFloat(kb)) * sign;
+          return ka.localeCompare(kb) * sign;
+        });
+        rows.forEach((tr) => tbody.appendChild(tr));
+      }
+
+      heads.forEach((th, colIndex) => {
+        th.addEventListener("click", () => sortBy(th, colIndex));
+        th.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            sortBy(th, colIndex);
+          }
+        });
+      });
+    });
+  }
+  makeVariantTablesSortable();
 })();

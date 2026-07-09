@@ -3,7 +3,7 @@
 Combines two complementary per-variant predictors onto every clinical hit
 already attached to a TIS, then aggregates over the isoform-unique region:
 
-1. **ESM-2 masked-marginal ΔLLR** — ``logP(alt) − logP(wt)`` at the variant's
+1. **ESM-C masked-marginal ΔLLR** — ``logP(alt) − logP(wt)`` at the variant's
    residue, read from the per-position distribution cached by
    ``swissisoform.plm.embed`` (``aa_logprobs``). More negative ⇒ the
    substitution is less tolerated by the language model. Looked up in the
@@ -23,9 +23,9 @@ unique-region aggregates that feed evidence-scoring criterion F5.
 
 Two independent damaging branches (mirrors v1):
 1. **Loss-of-function** — a frameshift / stop-gained / splice / start-lost
-   consequence is damaging on its own; neither AlphaMissense nor ESM-2 (both
+   consequence is damaging on its own; neither AlphaMissense nor ESM-C (both
    missense-only) can see these, so they are flagged from the consequence term.
-2. **Missense** — AlphaMissense (canonical frame only) or ESM-2 ΔLLR.
+2. **Missense** — AlphaMissense (canonical frame only) or ESM-C ΔLLR.
 
 Single-residue missense variants get ΔLLR / AlphaMissense scores; LoF variants
 get ``effect_lof=True`` with ``None`` numeric scores but still count as damaging.
@@ -44,7 +44,7 @@ from swissisoform.plm.embed import DEFAULT_CACHE_DIR, aa_column, load_cache, pro
 
 logger = logging.getLogger(__name__)
 
-# ESM-2 ΔLLR cutoff below which a substitution is treated as damaging. The
+# ESM-C ΔLLR cutoff below which a substitution is treated as damaging. The
 # natural-log masked-marginal margin is comparable to ESM-1v variant scores;
 # −7.5 is the threshold Brandes et al. (2023) use for the analogous LLR.
 DEFAULT_LLR_DAMAGING_THRESHOLD = -7.5
@@ -58,7 +58,7 @@ DEFAULT_GNOMAD_TOLERATED_AF = 1e-3
 
 # Loss-of-function (high-impact) consequence terms. A variant with any of these
 # is functionally damaging independent of any missense pathogenicity score —
-# AlphaMissense and ESM-2 ΔLLR are missense-only and never see these. Restores
+# AlphaMissense and ESM-C ΔLLR are missense-only and never see these. Restores
 # v1's first clinical branch (is-there-a-LoF-variant) alongside the missense
 # branch. SequenceOntology high-impact terms plus the short forms our annotators
 # emit.
@@ -92,7 +92,7 @@ def _ve_metric_cols(prefix: str) -> list[str]:
 
 
 class VariantEffectModule:
-    """Per-variant ESM-2 ΔLLR + AlphaMissense effect scoring (SiteModule).
+    """Per-variant ESM-C ΔLLR + AlphaMissense effect scoring (SiteModule).
 
     Attributes:
         MODULE_NAME: ``"varianteffect"``.
@@ -142,7 +142,7 @@ class VariantEffectModule:
                 ``alphamissense_db``.
             alphamissense_db: Path to the tabix-indexed AlphaMissense hg38
                 table; used to build a lookup when one isn't passed.
-            llr_damaging_threshold: ESM-2 ΔLLR cutoff for the damaging flag.
+            llr_damaging_threshold: ESM-C ΔLLR cutoff for the damaging flag.
         """
         self.config = config
         self.cache_dir = Path(plm_cache_dir)
@@ -164,7 +164,7 @@ class VariantEffectModule:
         self._llr_cache: dict[str, Any] = {}
 
     # ------------------------------------------------------------------
-    # ESM-2 ΔLLR
+    # ESM-C ΔLLR
     # ------------------------------------------------------------------
 
     def _aa_logprobs(self, protein: str) -> Any | None:
@@ -188,7 +188,7 @@ class VariantEffectModule:
         aa_alt: Any,
         frame: str,
     ) -> dict[str, Any]:
-        """Compute ESM-2 ΔLLR for one (pos, ref→alt) in a given protein frame.
+        """Compute ESM-C ΔLLR for one (pos, ref→alt) in a given protein frame.
 
         Returns ``plm_llr_wt`` / ``plm_llr_alt`` / ``plm_delta_llr`` + a
         ``plm_status`` reason and the ``plm_frame`` actually scored
@@ -232,7 +232,7 @@ class VariantEffectModule:
         isoform_seq: str,
         isoform_lp: Any | None,
     ) -> dict[str, Any]:
-        """Pick the right protein frame for a hit and compute ESM-2 ΔLLR.
+        """Pick the right protein frame for a hit and compute ESM-C ΔLLR.
 
         Rule: variants in the isoform-unique region for an extension/uORF/altORF
         live in *isoform* coordinates, so score against the isoform cache when
@@ -358,7 +358,7 @@ class VariantEffectModule:
                 and plm["plm_delta_llr"] <= self.llr_damaging_threshold
             )
             # Two independent branches (A1/A4): a loss-of-function consequence,
-            # OR a missense call from AlphaMissense / ESM-2.
+            # OR a missense call from AlphaMissense / ESM-C.
             is_damaging = is_lof or am_damaging or plm_damaging
 
             # gnomAD tolerance gate (§3): a predicted-damaging *gnomAD* variant

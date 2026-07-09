@@ -8,7 +8,7 @@ layout under ``SWISSISOFORM_DATA_DIR`` (default ``./data``):
     <DATA_DIR>/all_paired.parquet            # one row per (gene, TIS)
     <DATA_DIR>/variants_long.parquet         # per-variant rows for the clinical panel
     <DATA_DIR>/transcript_skeletons.parquet  # exon skeletons for the transcript diagram
-    <DATA_DIR>/structures/*.cif              # baked AlphaFold/Boltz isoform structures
+    <DATA_DIR>/structures/*.cif              # baked ESMFold2/Boltz isoform structures
     <DATA_DIR>/structures/colors/*.colors.json  # per-residue 3Dmol colouring
     <DATA_DIR>/llm/<slug>/                   # optional — per-isoform interpretation
                                              #   (synthesis.json + criteria.json)
@@ -661,7 +661,7 @@ CRITERION_ABOUT = {
     ),
     "F5_pathogenic_variant_enrichment": (
         "Does healthy human germline variation (gnomAD) avoid this region "
-        "(depletion ratio < 1×), and is it intrinsically constrained (ESM-2 "
+        "(depletion ratio < 1×), and is it intrinsically constrained (ESM-C "
         "constraint enrichment)? Depletion of population variation plus high "
         "sequence constraint mean the region resists change — it is functionally "
         "important. gnomAD is a tolerance catalogue, not a disease one; "
@@ -707,9 +707,9 @@ METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
     "Kozak Hamming — major positions": ("m-initiation", "Mismatches at the key −3 and +4 Kozak positions."),
     "Kozak Hamming — partial": ("m-initiation", "Mismatches at the partial Kozak consensus positions."),
     "Kozak window GC content": ("m-initiation", "GC fraction of the Kozak window."),
-    # Structure / Boltz
-    "pLDDT (whole protein)": ("m-structure", "Mean Boltz per-residue confidence (0–1) over the whole protein."),
-    "pLDDT — differential region": ("m-structure", "Mean Boltz confidence over the differential region only."),
+    # Structure / ESMFold2
+    "pLDDT (whole protein)": ("m-structure", "Mean ESMFold2 per-residue confidence (0–1) over the whole protein."),
+    "pLDDT — differential region": ("m-structure", "Mean ESMFold2 confidence over the differential region only."),
     "pLDDT std — differential region": ("m-structure", "Spread of pLDDT within the differential region."),
     "pLDDT Δ (diff vs shared)": ("m-structure", "Differential-minus-shared mean pLDDT."),
     "TM-score (iso vs canonical)": ("m-structure", "Global fold similarity (0–1) between isoform and canonical."),
@@ -731,22 +731,22 @@ METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
     "Isoform-unique peptides": ("m-massspec", "Peptides that map only to the isoform — direct existence evidence."),
     "Mass-spec peptides in diff region": ("m-massspec", "Detected tryptic peptides unique to the differential region."),
     # Constraint / variant effect
-    "ESM-2 mean LLR": ("m-esm2", "Mean ESM-2 masked-marginal log-likelihood ratio; lower = more constrained."),
+    "ESM-C mean LLR": ("m-esm2", "Mean ESM-C masked-marginal log-likelihood ratio; lower = more constrained."),
     "Constrained positions": ("m-esm2", "Count of residues the language model flags as highly constrained."),
-    "Mean ΔLLR — unique-region variants": ("m-esm2", "Mean ESM-2 ΔLLR across variants in the unique region."),
-    "Min ΔLLR — unique-region variants": ("m-esm2", "Most-constrained ESM-2 ΔLLR among unique-region variants."),
-    "Variants ESM-2-scored": ("m-esm2", "Number of variants scored by ESM-2."),
+    "Mean ΔLLR — unique-region variants": ("m-esm2", "Mean ESM-C ΔLLR across variants in the unique region."),
+    "Min ΔLLR — unique-region variants": ("m-esm2", "Most-constrained ESM-C ΔLLR among unique-region variants."),
+    "Variants ESM-C-scored": ("m-esm2", "Number of variants scored by ESM-C."),
     "AlphaMissense-pathogenic in unique": ("m-alphamissense", "AlphaMissense-pathogenic missense variants in the unique region."),
     "Mean AlphaMissense — unique": ("m-alphamissense", "Mean AlphaMissense pathogenicity in the unique region."),
     "Variants AlphaMissense-scored": ("m-alphamissense", "Number of variants scored by AlphaMissense."),
     "Scorable variants in unique region": ("m-clinical", "Variants in the unique region that could be scored."),
-    "Damaging variants in unique region": ("m-clinical", "Variants called damaging by AlphaMissense or ESM-2."),
-    "Scorable variants": ("m-clinical", "Variants in the differential region that could be scored (ESM-2, AlphaMissense, or LoF)."),
-    "Damaging variants": ("m-clinical", "Variants called damaging — AlphaMissense-pathogenic, ESM-2-constrained, or loss-of-function."),
+    "Damaging variants in unique region": ("m-clinical", "Variants called damaging by AlphaMissense or ESM-C."),
+    "Scorable variants": ("m-clinical", "Variants in the differential region that could be scored (ESM-C, AlphaMissense, or LoF)."),
+    "Damaging variants": ("m-clinical", "Variants called damaging — AlphaMissense-pathogenic, ESM-C-constrained, or loss-of-function."),
     "— of which loss-of-function": ("m-clinical", "Damaging variants that are frameshift / stop-gained / splice / start-lost (missense predictors never see these)."),
     "AlphaMissense-pathogenic": ("m-alphamissense", "AlphaMissense-pathogenic missense variants in the differential region."),
-    "Mean ΔLLR (ESM-2)": ("m-esm2", "Mean ESM-2 ΔLLR across variants in the differential region (lower = more constrained)."),
-    "Min ΔLLR (ESM-2)": ("m-esm2", "Most-constrained ESM-2 ΔLLR among differential-region variants."),
+    "Mean ΔLLR (ESM-C)": ("m-esm2", "Mean ESM-C ΔLLR across variants in the differential region (lower = more constrained)."),
+    "Min ΔLLR (ESM-C)": ("m-esm2", "Most-constrained ESM-C ΔLLR among differential-region variants."),
     "Mean AlphaMissense": ("m-alphamissense", "Mean AlphaMissense pathogenicity in the differential region."),
     # Biophysics
     "Isoelectric point (pI)": ("m-biophysics", "pH at which the region carries no net charge."),
@@ -1072,7 +1072,7 @@ def criterion_evidence_for(iso) -> dict:
                 "isoform — treat the per-residue confidence as unreliable."
             )
         return {
-            "title": "Structure (Boltz) · canonical vs isoform",
+            "title": "Structure (ESMFold2) · canonical vs isoform",
             "subtitle": sub,
             "cmp_headers": ["Metric", "Canonical", "Isoform"],
             "col_classes": CANON_ISO,
@@ -1107,7 +1107,7 @@ def criterion_evidence_for(iso) -> dict:
         }
         return {
             "title": "Fold confidence · differential vs shared region",
-            "subtitle": "mean Boltz pLDDT in each region",
+            "subtitle": "mean ESMFold2 pLDDT in each region",
             "cmp_headers": ["Metric", "Differential", "Shared", "Enrichment"],
             "col_classes": DIFF_SHARED_3,
             "compare_rows": [row],
@@ -1375,7 +1375,7 @@ def criterion_evidence_for(iso) -> dict:
             "subtitle": (
                 "gnomAD (population) variant density per nucleotide — depletion "
                 "ratio < 1× means healthy human variation avoids the region "
-                "(constrained), the F5 basis alongside ESM-2 constraint"
+                "(constrained), the F5 basis alongside ESM-C constraint"
             ),
             "cmp_headers": ["Variant set", "Differential", "Shared", "Depletion ratio"],
             "col_classes": DIFF_SHARED_3,
@@ -1383,12 +1383,12 @@ def criterion_evidence_for(iso) -> dict:
         }
 
     def sec_constraint():
-        # Region-resolved sequence constraint (ESM-2): is the differential region
+        # Region-resolved sequence constraint (ESM-C): is the differential region
         # more constrained than the shared region?
         compare_rows = compare(
             [
                 (
-                    "ESM-2 mean LLR",
+                    "ESM-C mean LLR",
                     [
                         "isoform_plm_vep_mean_llr_unique_region",
                         "isoform_plm_vep_mean_llr_shared_region",
@@ -1408,7 +1408,7 @@ def criterion_evidence_for(iso) -> dict:
         if not compare_rows:
             return None
         return {
-            "title": "Sequence constraint (ESM-2) · differential vs shared region",
+            "title": "Sequence constraint (ESM-C) · differential vs shared region",
             "subtitle": "lower LLR = more constrained; enrichment = differential / conserved",
             "cmp_headers": ["Property", "Differential", "Shared", "Enrichment"],
             "col_classes": DIFF_SHARED_3,
@@ -1462,7 +1462,7 @@ def criterion_evidence_for(iso) -> dict:
             return None
         return {
             "title": f"Predicted-damaging variants · {pool_label}",
-            "subtitle": "AlphaMissense / ESM-2 / LoF calls per region (length-normalized)",
+            "subtitle": "AlphaMissense / ESM-C / LoF calls per region (length-normalized)",
             "cmp_headers": ["Variant set", "Differential", "Shared", "Enrichment"],
             "col_classes": DIFF_SHARED_3,
             "compare_rows": compare_rows,
@@ -1472,8 +1472,8 @@ def criterion_evidence_for(iso) -> dict:
         # Per-variant predictor scores for one source pool (§4), differential vs
         # shared. Predictor coverage (overall #scored) rides in the caption.
         metrics = [
-            ("Mean ΔLLR (ESM-2)", "mean_delta_llr"),
-            ("Min ΔLLR (ESM-2)", "min_delta_llr"),
+            ("Mean ΔLLR (ESM-C)", "mean_delta_llr"),
+            ("Min ΔLLR (ESM-C)", "min_delta_llr"),
             ("Mean AlphaMissense", "mean_am_pathogenicity"),
         ]
         compare_rows = []
@@ -1492,7 +1492,7 @@ def criterion_evidence_for(iso) -> dict:
         plm = _fmt_num(g("isoform_varianteffect_n_scored_plm"))
         am = _fmt_num(g("isoform_varianteffect_n_scored_am"))
         if plm is not None:
-            cov.append(f"{plm} ESM-2")
+            cov.append(f"{plm} ESM-C")
         if am is not None:
             cov.append(f"{am} AlphaMissense")
         sub = "scored: " + " · ".join(cov) if cov else f"{pool_label} variants"
