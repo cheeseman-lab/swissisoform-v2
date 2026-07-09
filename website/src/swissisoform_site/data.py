@@ -579,6 +579,159 @@ def variant_rows_for_isoform(path: Path, tis_id: str) -> list[dict[str, Any]]:
     return rows
 
 
+def _sae_num(v: Any) -> float | None:
+    """Coerce a numpy/py scalar to a native float, or None if missing/NaN."""
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return None if not math.isfinite(f) else f
+
+
+def _sae_records(raw_val: Any) -> list[dict[str, Any]]:
+    """Normalize a nested SAE list column (ndarray/list of dicts) to plain dicts."""
+    if raw_val is None:
+        return []
+    try:
+        items = list(raw_val)
+    except TypeError:
+        return []
+    return [dict(d) for d in items if hasattr(d, "keys")]
+
+
+# Display filters requested by collaborators: drop uninterpretable features and
+# features that fire on only a single residue (noise). Applied at shaping time so
+# the card tables show only interpretable, robustly-present features.
+_SAE_MIN_PREVALENCE = 2
+_SAE_GENERIC_LABELS = {"unknown generic feature", "unknown", ""}
+
+
+def _sae_is_generic(label: Any) -> bool:
+    """True when a feature label is the placeholder / uninterpretable one."""
+    return (str(label).strip().lower() if label is not None else "") in _SAE_GENERIC_LABELS
+
+
+def _sae_prevalent(v: Any) -> bool:
+    """True when a prevalence value clears the min-prevalence display threshold."""
+    n = _sae_num(v)
+    return n is not None and n >= _SAE_MIN_PREVALENCE
+
+
+def _sae_simple_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Shape a simple SAE feature list ({max,mean,prevalence}) into display rows.
+
+    Used for the isoform-only, canonical-only, and differential-coordinate
+    (unique-region) feature lists, which share the same per-feature schema. Drops
+    generic-labelled features and any firing on < 2 residues.
+    """
+    out: list[dict[str, Any]] = []
+    for rec in records:
+        if _sae_is_generic(rec.get("label")) or not _sae_prevalent(rec.get("prevalence")):
+            continue
+        idx = rec.get("feature_index")
+        out.append(
+            {
+                "feature_index": int(idx) if idx is not None else None,
+                "label": rec.get("label") or None,
+                "description": rec.get("description") or None,
+                "activation": _sae_num(rec.get("max")),
+                "prevalence": _sae_num(rec.get("prevalence")),
+            }
+        )
+    return out
+
+
+def _sae_shared_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Shape the shared-feature deltas list into display rows (already |Δ|-sorted).
+
+    Drops generic-labelled features and features firing on < 2 residues in both
+    forms (a feature prevalent in either the isoform or canonical is kept).
+    """
+    out: list[dict[str, Any]] = []
+    for rec in records:
+        if _sae_is_generic(rec.get("label")):
+            continue
+        if not (
+            _sae_prevalent(rec.get("isoform_prevalence"))
+            or _sae_prevalent(rec.get("canonical_prevalence"))
+        ):
+            continue
+        idx = rec.get("feature_index")
+        out.append(
+            {
+                "feature_index": int(idx) if idx is not None else None,
+                "label": rec.get("label") or None,
+                "description": rec.get("description") or None,
+                "delta_max": _sae_num(rec.get("delta_max")),
+                "isoform_max": _sae_num(rec.get("isoform_max")),
+                "canonical_max": _sae_num(rec.get("canonical_max")),
+                "isoform_prevalence": _sae_num(rec.get("isoform_prevalence")),
+                "canonical_prevalence": _sae_num(rec.get("canonical_prevalence")),
+            }
+        )
+    return out
+
+
+def sae_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
+    """Everything the F7 "SAE features" card needs, or None when not computed.
+
+    Reads the ``isoform_sae_*`` columns already carried on ``iso.raw`` (populated
+    by the SAE SiteModule and flattened into all_paired.parquet). Returns None
+    when the SAE step did not run for this protein pair (status != "ok").
+
+    Two parts of the card:
+      - Global (whole-protein feature-set comparison): ``isoform_only`` /
+        ``canonical_only`` (features present in only one form) and ``shared``
+        (present in both, ranked by |Δ| activation) — each capped at top 30, with
+        the saved total count for the full category.
+      - Differential coordinates: ``unique_region`` — features firing on just the
+        isoform-unique residues (top 30).
+
+    Scoring (a future F7 criterion) and LLM surfacing are intentionally out of
+    scope — this card is descriptive over data already in the parquet.
+    """
+    raw = iso.raw or {}
+    if raw.get("isoform_sae_status") != "ok":
+        return None
+
+    def _int(key: str) -> int | None:
+        v = raw.get(key)
+        return int(v) if v is not None else None
+
+    def _top(prefix: str) -> dict[str, Any] | None:
+        idx = _int(f"isoform_sae_top_{prefix}_feature_index")
+        if idx is None:
+            return None
+        return {
+            "index": idx,
+            "label": raw.get(f"isoform_sae_top_{prefix}_feature_label"),
+            "delta": _sae_num(raw.get(f"isoform_sae_top_{prefix}_delta_max")),
+        }
+
+    return {
+        "counts": {
+            "isoform_only": _int("isoform_sae_n_isoform_only"),
+            "canonical_only": _int("isoform_sae_n_canonical_only"),
+            "shared": _int("isoform_sae_n_shared"),
+        },
+        "mean_abs_delta_shared": _sae_num(raw.get("isoform_sae_mean_abs_delta_shared")),
+        "isoform_only": _sae_simple_rows(_sae_records(raw.get("isoform_sae_features_isoform_only"))),
+        "canonical_only": _sae_simple_rows(
+            _sae_records(raw.get("isoform_sae_features_canonical_only"))
+        ),
+        "shared": _sae_shared_rows(_sae_records(raw.get("isoform_sae_shared_feature_deltas"))),
+        "unique_region": _sae_simple_rows(
+            _sae_records(raw.get("isoform_sae_unique_region_top_features"))
+        ),
+        "n_unique_region_features": _int("isoform_sae_n_unique_region_features"),
+        "unique_region_space": raw.get("isoform_sae_unique_region_space"),
+        "top_gained": _top("gained"),
+        "top_lost": _top("lost"),
+    }
+
+
 def _fmt_num(v, pct=False):
     """Format a metric value for display, or None if missing/NaN."""
     import math

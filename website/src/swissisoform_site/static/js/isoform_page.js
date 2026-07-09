@@ -20,10 +20,15 @@
     const label = tile.querySelector(".tile-label")?.textContent.trim() || "Evidence";
     const id = tile.querySelector(".tile-id")?.textContent.trim() || "";
     modalTitle.textContent = id ? `${id} · ${label}` : label;
+    // The SAE card carries wide multi-column tables — give it a roomier modal.
+    modal.classList.toggle("evidence-modal-wide", tile.classList.contains("sae-tile"));
     modalBody.innerHTML = "";
     const tpl = tile.querySelector("template.tile-body-template");
     if (tpl) {
       modalBody.appendChild(tpl.content.cloneNode(true));
+      // Template content is inert until cloned here — wire sorting + expanders on the clone.
+      makeVariantTablesSortable(modalBody);
+      wireSaeExpanders(modalBody);
     }
     if (typeof modal.showModal === "function") {
       modal.showModal();
@@ -88,8 +93,8 @@
   // Sortable variant tables. Each column header toggles asc/desc; missing/empty
   // sort keys always sink to the bottom. Keys come from each cell's data-sort
   // (raw number or lowercased text), not the rendered string.
-  function makeVariantTablesSortable() {
-    document.querySelectorAll("table.variants-table").forEach((table) => {
+  function makeVariantTablesSortable(root) {
+    (root || document).querySelectorAll("table.js-sortable").forEach((table) => {
       const tbody = table.querySelector("tbody");
       const heads = Array.prototype.slice.call(table.querySelectorAll("thead th.sortable"));
       if (!tbody || !heads.length) return;
@@ -136,4 +141,19 @@
     });
   }
   makeVariantTablesSortable();
+
+  // SAE table expanders: each button toggles the `collapsed` class on its
+  // .sae-table-block (CSS hides rows 11+ when collapsed) and swaps its label.
+  function wireSaeExpanders(root) {
+    (root || document).querySelectorAll(".sae-expand-btn").forEach((btn) => {
+      const block = btn.closest(".sae-table-block");
+      if (!block) return;
+      const fullLabel = btn.textContent.trim();  // "Show all N"
+      btn.addEventListener("click", () => {
+        const collapsed = block.classList.toggle("collapsed");
+        btn.setAttribute("aria-expanded", String(!collapsed));
+        btn.textContent = collapsed ? fullLabel : "Show top 10";
+      });
+    });
+  }
 })();

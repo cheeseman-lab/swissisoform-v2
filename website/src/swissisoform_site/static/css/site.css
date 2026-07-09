@@ -506,6 +506,33 @@
   color: #334155;
 }
 .variants-table th[aria-sort="descending"] .sort-caret::after { content: "\25BC"; }  /* ▼ */
+
+/* SAE F7 card — reuses .variants-scroll / .variants-table / .sortable inside the modal. */
+.tile-badge-info { background: #e2e8f0; color: #475569; font-size: 9px; font-weight: 700; letter-spacing: .02em; }
+.evidence-modal-wide { max-width: 960px; }
+.sae-modal-intro { font-size: 12px; color: #475569; line-height: 1.6; margin: 0 0 14px; }
+.sae-part { margin-top: 18px; }
+.sae-part:first-of-type { margin-top: 4px; }
+.sae-part-h { font-size: 13px; font-weight: 700; color: #0f172a; margin: 0 0 2px; padding-bottom: 4px; border-bottom: 1px solid #e5e7eb; }
+.sae-part-note { font-size: 11px; color: #6b7280; margin: 4px 0 10px; }
+.sae-tbl-h { font-size: 12px; font-weight: 600; color: #334155; margin: 12px 0 4px; }
+.sae-scroll { max-height: 240px; }
+.variants-table td.sae-desc { color: #475569; max-width: 360px; }
+.sae-foot { margin-top: 12px; }
+/* Collapse each SAE table to its top 10 rows; the expander toggles `.collapsed`.
+   :nth-child tracks live DOM order, so after a sort this shows the current top 10. */
+.sae-table-block.collapsed .variants-scroll tbody tr:nth-child(n+11) { display: none; }
+.sae-expand-btn {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #4338ca;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  border-radius: 4px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.sae-expand-btn:hover { background: #e0e7ff; }
 .variants-table td {
   padding: 6px 10px;
   color: #111827;

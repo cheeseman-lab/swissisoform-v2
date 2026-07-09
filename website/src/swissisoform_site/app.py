@@ -43,6 +43,7 @@ from swissisoform_site.data import (
     llm_synthesis_for_isoform,
     load_all,
     load_transcript_skeletons,
+    sae_card_for_isoform,
     tis_slug,
     variant_rows_for_isoform,
     variant_url,
@@ -246,9 +247,12 @@ def create_app() -> Flask:
             (r for r in variant_rows if not r.get("in_isoform_unique")), key=_vsort
         )
 
+        sae = sae_card_for_isoform(iso)
+
         return render_template(
             "isoform.html",
             isoform=_isoform_view(iso, gene),
+            sae=sae,
             criterion_evidence=criterion_evidence_for(iso),
             criteria=CRITERIA_FOR_PAGE,
             criterion_slices=criterion_slices,

@@ -1,0 +1,141 @@
+{# F7 "SAE features" — a blank (non-scored) evidence card. Reuses the evidence-tile
+   structure so isoform_page.js clones the <template> body into the shared modal on click.
+   Content: Part 1 (global whole-protein feature comparison, 3 tables) + Part 2
+   (features on the differential coordinates). Descriptive only — no E/F score.
+   Tables are filtered (interpretable + prevalence >= 2, in data.py) and collapsed to the
+   top 10 with a "Show all" expander wired in isoform_page.js on modal open. #}
+
+{% macro sae_simple_table(rows) %}
+{% if rows %}
+<div class="sae-table-block collapsed">
+  <div class="variants-scroll sae-scroll">
+    <table class="variants-table js-sortable">
+      <thead>
+        <tr>
+          <th class="sortable" scope="col" tabindex="0" data-sort-type="num">Feature <span class="sort-caret"></span></th>
+          <th class="sortable" scope="col" tabindex="0" data-sort-type="text">Label <span class="sort-caret"></span></th>
+          <th class="sortable" scope="col" tabindex="0" data-sort-type="text">Description <span class="sort-caret"></span></th>
+          <th class="sortable" scope="col" tabindex="0" data-sort-type="num">Activation <span class="sort-caret"></span></th>
+          <th class="sortable" scope="col" tabindex="0" data-sort-type="num">Prevalence <span class="sort-caret"></span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in rows %}
+        <tr>
+          <td class="var-num" data-sort="{{ f.feature_index if f.feature_index is not none else '' }}">{% if f.feature_index is not none %}#{{ f.feature_index }}{% else %}—{% endif %}</td>
+          <td data-sort="{{ (f.label or '')|lower }}">{{ f.label or '—' }}</td>
+          <td class="sae-desc" data-sort="{{ (f.description or '')|lower }}">{{ f.description or '—' }}</td>
+          <td class="var-num" data-sort="{{ f.activation if f.activation is not none else '' }}">{% if f.activation is not none %}{{ '%.2f'|format(f.activation) }}{% else %}—{% endif %}</td>
+          <td class="var-num" data-sort="{{ f.prevalence if f.prevalence is not none else '' }}">{% if f.prevalence is not none %}{{ f.prevalence|int }}{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if rows|length > 10 %}<button type="button" class="sae-expand-btn" aria-expanded="false">Show all {{ rows|length }}</button>{% endif %}
+</div>
+{% else %}<p class="empty">No interpretable features in this category.</p>{% endif %}
+{% endmacro %}
+
+{% macro sae_shared_table(rows) %}
+{% if rows %}
+<div class="sae-table-block collapsed">
+  <div class="variants-scroll sae-scroll">
+    <table class="variants-table js-sortable">
+      <thead>
+        <tr>
+          <th class="sortable" scope="col" tabindex="0" data-sort-type="num">Feature <span class="sort-caret"></span></th>
+          <th class="sortable" scope="col" tabindex="0" data-sort-type="text">Label <span class="sort-caret"></span></th>
+          <th class="sortable" scope="col" tabindex="0" data-sort-type="text">Description <span class="sort-caret"></span></th>
+          <th class="sortable" scope="col" tabindex="0" data-sort-type="num">Δ activation <span class="sort-caret"></span></th>
+          <th class="sortable" scope="col" tabindex="0" data-sort-type="num">Iso act. <span class="sort-caret"></span></th>
+          <th class="sortable" scope="col" tabindex="0" data-sort-type="num">Canon act. <span class="sort-caret"></span></th>
+          <th class="sortable" scope="col" tabindex="0" data-sort-type="num">Iso prev. <span class="sort-caret"></span></th>
+          <th class="sortable" scope="col" tabindex="0" data-sort-type="num">Canon prev. <span class="sort-caret"></span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in rows %}
+        <tr>
+          <td class="var-num" data-sort="{{ f.feature_index if f.feature_index is not none else '' }}">{% if f.feature_index is not none %}#{{ f.feature_index }}{% else %}—{% endif %}</td>
+          <td data-sort="{{ (f.label or '')|lower }}">{{ f.label or '—' }}</td>
+          <td class="sae-desc" data-sort="{{ (f.description or '')|lower }}">{{ f.description or '—' }}</td>
+          <td class="var-num" data-sort="{{ f.delta_max if f.delta_max is not none else '' }}">{% if f.delta_max is not none %}{{ '%+.2f'|format(f.delta_max) }}{% else %}—{% endif %}</td>
+          <td class="var-num" data-sort="{{ f.isoform_max if f.isoform_max is not none else '' }}">{% if f.isoform_max is not none %}{{ '%.2f'|format(f.isoform_max) }}{% else %}—{% endif %}</td>
+          <td class="var-num" data-sort="{{ f.canonical_max if f.canonical_max is not none else '' }}">{% if f.canonical_max is not none %}{{ '%.2f'|format(f.canonical_max) }}{% else %}—{% endif %}</td>
+          <td class="var-num" data-sort="{{ f.isoform_prevalence if f.isoform_prevalence is not none else '' }}">{% if f.isoform_prevalence is not none %}{{ f.isoform_prevalence|int }}{% else %}—{% endif %}</td>
+          <td class="var-num" data-sort="{{ f.canonical_prevalence if f.canonical_prevalence is not none else '' }}">{% if f.canonical_prevalence is not none %}{{ f.canonical_prevalence|int }}{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if rows|length > 10 %}<button type="button" class="sae-expand-btn" aria-expanded="false">Show all {{ rows|length }}</button>{% endif %}
+</div>
+{% else %}<p class="empty">No interpretable features in this category.</p>{% endif %}
+{% endmacro %}
+
+<div class="evidence-tile axis-F sae-tile" data-criterion="F7_sae" title="SAE interpretability features — descriptive, not scored">
+  <button class="tile-head" type="button" aria-haspopup="dialog">
+    <span class="tile-id">F7</span>
+    <span class="tile-label">SAE features</span>
+    <span class="tile-badge tile-badge-info">SAE</span>
+  </button>
+  <div class="tile-headline">
+    {% if sae %}
+      {{ sae.counts.isoform_only }} gained · {{ sae.counts.canonical_only }} lost · {{ sae.counts.shared }} shared
+    {% else %}
+      <span class="text-xs text-slate-400">—</span>
+    {% endif %}
+  </div>
+
+  <template class="tile-body-template">
+    {% if sae %}
+      <p class="sae-modal-intro">
+        Sparse-autoencoder (SAE) interpretability features on the ESM-C residual stream,
+        comparing the isoform against the canonical protein. Descriptive only — not part of
+        the E/F score. Tables show interpretable features firing on ≥ 2 residues, top 10 by
+        default.
+      </p>
+
+      <div class="sae-part">
+        <h4 class="sae-part-h">Part 1 · Global feature comparison</h4>
+        <p class="sae-part-note">Which SAE features fire in the isoform vs the canonical protein, across the whole sequence.</p>
+
+        <h5 class="sae-tbl-h">Isoform-only features
+          <span class="variants-subnote">— {{ sae.counts.isoform_only }} total; {{ sae.isoform_only|length }} interpretable (prevalence ≥ 2)</span></h5>
+        {{ sae_simple_table(sae.isoform_only) }}
+
+        <h5 class="sae-tbl-h">Canonical-only features
+          <span class="variants-subnote">— {{ sae.counts.canonical_only }} total; {{ sae.canonical_only|length }} interpretable (prevalence ≥ 2)</span></h5>
+        {{ sae_simple_table(sae.canonical_only) }}
+
+        <h5 class="sae-tbl-h">Shared features by |Δ| activation
+          <span class="variants-subnote">— {{ sae.counts.shared }} total; {{ sae.shared|length }} interpretable (prevalence ≥ 2)</span></h5>
+        {{ sae_shared_table(sae.shared) }}
+      </div>
+
+      <div class="sae-part">
+        <h4 class="sae-part-h">Part 2 · Differential coordinates</h4>
+        <p class="sae-part-note">
+          Features firing on just the
+          {% if sae.unique_region_space == 'isoform' %}isoform-unique (extension / alt-frame){% elif sae.unique_region_space == 'canonical' %}canonical-lost (truncated){% else %}differential{% endif %}
+          residues.
+        </p>
+        <h5 class="sae-tbl-h">Unique-region features
+          <span class="variants-subnote">— {{ sae.n_unique_region_features }} distinct; {{ sae.unique_region|length }} interpretable (prevalence ≥ 2)</span></h5>
+        {{ sae_simple_table(sae.unique_region) }}
+      </div>
+
+      <p class="var-foot sae-foot">
+        Top-K sparse-autoencoder activations on the ESM-C residual stream. <strong>Activation</strong>
+        is a feature's peak value over its region; <strong>Prevalence</strong> is the number of residues
+        it fires on; <strong>Δ activation</strong> is isoform − canonical. Uninterpretable ("generic")
+        features and those firing on a single residue are hidden. Interpretability labels come from the
+        ESM-C 6B-layer60 SAE atlas and are <em>provisional</em>.
+      </p>
+    {% else %}
+      <p class="empty">SAE features were not computed for this isoform.</p>
+    {% endif %}
+  </template>
+</div>
