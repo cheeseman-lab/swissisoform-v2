@@ -213,6 +213,24 @@ def _find_canonical_offset(isoform: str, canonical: str) -> int | None:
     return None
 
 
+def _is_initiator_met_trunc(iso: str, can: str) -> bool:
+    """True if *iso* is a truncation of *can* with an initiator-Met substitution.
+
+    The alternative-TIS start codon is translated as an initiator methionine that
+    replaces the canonical residue at the truncation start; ``iso[1:]`` is then an
+    exact suffix of ``can`` (a single-residue junction difference, everything
+    downstream identical). Both args must already be stop-stripped. Excludes the
+    exact-suffix case (``can.endswith(iso)``), which is already residue-exact.
+    """
+    return (
+        len(iso) > 1
+        and iso[0] == "M"
+        and len(can) >= len(iso)
+        and not can.endswith(iso)
+        and can.endswith(iso[1:])
+    )
+
+
 def _find_truncation_offset(isoform: str, canonical: str) -> int | None:
     """Find the 0-based offset in *canonical* where *isoform* begins.
 
@@ -228,6 +246,12 @@ def _find_truncation_offset(isoform: str, canonical: str) -> int | None:
     # Exact suffix match: canonical = lost_prefix + isoform
     if len(can) > len(iso) and can.endswith(iso):
         return len(can) - len(iso)
+
+    # Alt-TIS initiator Met substitutes the canonical residue at the start
+    # position; iso[1:] is then an exact suffix of canonical. The lost prefix is
+    # can[: len(can) - len(iso[1:])], so the isoform "begins" one residue earlier.
+    if _is_initiator_met_trunc(iso, can):
+        return len(can) - (len(iso) - 1)
 
     # Prefix search + tail verification
     check_len = min(20, len(iso))
@@ -306,13 +330,20 @@ def compute_diff_region(
                 confidence="tail_verified",
             )
 
-        # If isoform is found as a suffix of canonical → truncation
+        # If isoform is found as a suffix of canonical → truncation. The
+        # initiator-Met case is residue-verified too (iso[1:] is an exact suffix),
+        # but tagged distinctly so downstream knows the junction carries a Met
+        # substitution rather than a byte-exact truncation.
         if trunc_offset is not None and trunc_offset > 0:
             return DifferentialRegion(
                 canonical_start=0,
                 canonical_end=trunc_offset,
                 sequence=can[:trunc_offset],
-                confidence="tail_verified",
+                confidence=(
+                    "initiator_met"
+                    if _is_initiator_met_trunc(iso, can)
+                    else "tail_verified"
+                ),
             )
 
         # Length-based fallback for truncations (low confidence)

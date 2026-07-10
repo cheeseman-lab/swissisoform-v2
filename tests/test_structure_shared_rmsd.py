@@ -19,7 +19,6 @@ from swissisoform.config import ScoringConfig
 from swissisoform.evidence import f7_shared_rmsd
 from swissisoform.structure import compare as C
 
-
 # ---------------------------------------------------------------------------
 # _kabsch_rmsd
 # ---------------------------------------------------------------------------
@@ -157,6 +156,34 @@ class TestCompareStructuresShared:
         assert out["rmsd_shared_status"] == "ok"
         assert out["rmsd_shared"] == pytest.approx(0.0, abs=1e-6)
         assert out["shared_region_len"] == 11
+
+    def test_initiator_met_truncation_drops_leading_M(self, monkeypatch, cif_paths):
+        # Near-cognate truncation: iso = installed-M + canonical[k:]. The leading
+        # M is isoform-unique (a start-codon substitution); the shared suffix
+        # iso[1:] == canonical[k:] is byte-identical. Suffix-alignment must drop
+        # the M and superpose iso[1:] onto canonical[k:] → RMSD ~0. A prefix
+        # slice would pair off-by-one and give a large RMSD.
+        rng = np.random.default_rng(8)
+        can = rng.normal(size=(15, 3)) * 5.0
+        k = 4  # diff_canonical_end = len(can) - (len(iso) - 1) = 15 - 11 = 4
+        m_coord = rng.normal(size=(1, 3)) * 5.0  # installed Met, arbitrary position
+        iso = np.vstack([m_coord, can[k:]])  # iso = M + canonical[k:]  (12 residues)
+        can_seq = "ACDEFGHIKLMNPQR"
+        iso_seq = "M" + can_seq[k:]  # leading M substitutes; downstream identical
+        _patch_coords(monkeypatch, can, can_seq, iso, iso_seq)
+
+        out = C.compare_structures(
+            cif_paths[0],
+            cif_paths[1],
+            diff_canonical_start=0,
+            diff_canonical_end=k,
+            orf_type="truncated",
+            diff_region_confidence="initiator_met",  # verified tier
+        )
+        assert out["rmsd_shared_status"] == "ok"  # tier admitted
+        assert out["rmsd_shared"] == pytest.approx(0.0, abs=1e-6)  # M dropped, not off-by-one
+        assert out["shared_region_len"] == 11
+        assert out["tm_score_shared"] == pytest.approx(1.0, abs=1e-3)
 
     def test_uorf_has_no_shared_region(self, monkeypatch, cif_paths):
         rng = np.random.default_rng(6)

@@ -20,10 +20,13 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Diff-region confidence tiers whose sequence relationship is verified well
-# enough to pair shared-region residues 1:1 for a strict RMSD. The fallback
-# tiers ("length_fallback", "whole_isoform_fallback") are NOT residue-aligned,
-# so a positional Cα pairing over them would be meaningless.
-_VERIFIED_DIFF_CONF = {"exact", "tail_verified"}
+# enough to pair shared-region residues 1:1 for a strict RMSD. "initiator_met"
+# is a truncation with a single-residue Met substitution at the start — the
+# shared suffix is residue-exact, so it pairs cleanly (the leading M is dropped
+# by suffix-alignment below). The fallback tiers ("length_fallback",
+# "whole_isoform_fallback") are NOT residue-aligned, so a positional Cα pairing
+# over them would be meaningless.
+_VERIFIED_DIFF_CONF = {"exact", "tail_verified", "initiator_met"}
 
 
 def _slice_indices(
@@ -114,6 +117,9 @@ def compare_confidence(
     # protein space is "complete". Using the isoform protein as anchor is
     # natural for extensions; for truncations it is the canonical.
     if isoform_plddt and canonical_plddt:
+        # Shared region shares the C-terminus for both events; take the last `n`
+        # of each side so a leading isoform-unique residue (e.g. an initiator-Met
+        # substitution on a truncation) is excluded, matching the RMSD pairing.
         if not truncated and diff_isoform_end is not None:
             iso_shared = isoform_plddt[diff_isoform_end:]
             # Pair against canonical shared region (entirety, since
@@ -121,8 +127,8 @@ def compare_confidence(
             can_shared = canonical_plddt
             n = min(len(iso_shared), len(can_shared))
             if n > 0:
-                iso_m = sum(iso_shared[:n]) / n
-                can_m = sum(can_shared[:n]) / n
+                iso_m = sum(iso_shared[len(iso_shared) - n :]) / n
+                can_m = sum(can_shared[len(can_shared) - n :]) / n
                 out["plddt_delta_shared"] = iso_m - can_m
                 out["plddt_shared_mean_isoform"] = iso_m
                 out["plddt_shared_mean_canonical"] = can_m
@@ -131,8 +137,8 @@ def compare_confidence(
             can_shared = canonical_plddt[diff_canonical_end:]
             n = min(len(iso_shared), len(can_shared))
             if n > 0:
-                iso_m = sum(iso_shared[:n]) / n
-                can_m = sum(can_shared[:n]) / n
+                iso_m = sum(iso_shared[len(iso_shared) - n :]) / n
+                can_m = sum(can_shared[len(can_shared) - n :]) / n
                 out["plddt_delta_shared"] = iso_m - can_m
                 out["plddt_shared_mean_isoform"] = iso_m
                 out["plddt_shared_mean_canonical"] = can_m
@@ -318,8 +324,14 @@ def compare_structures(
             if n < 3:  # too few points for a meaningful superposition
                 out["rmsd_shared_status"] = "no_shared_region"
             else:
-                p_shared = iso_shared[:n]
-                q_shared = can_shared[:n]
+                # Both events share the C-terminus (common stop codon); align by
+                # the shared SUFFIX so any leading isoform-unique residue (e.g. an
+                # initiator-Met substitution on a truncation) is excluded rather
+                # than paired off-by-one. For equal-length shared regions this is
+                # identical to a prefix slice.
+                io, co = len(iso_shared) - n, len(can_shared) - n
+                p_shared = iso_shared[io:]
+                q_shared = can_shared[co:]
                 rmsd_shared = _kabsch_rmsd(p_shared, q_shared)
                 out["shared_region_len"] = int(n)
                 out["rmsd_shared"] = rmsd_shared
@@ -328,7 +340,7 @@ def compare_structures(
                     from tmtools import tm_align
 
                     ali_s = tm_align(
-                        p_shared, q_shared, iso_shared_seq[:n], can_shared_seq[:n]
+                        p_shared, q_shared, iso_shared_seq[io:], can_shared_seq[co:]
                     )
                     out["tm_score_shared"] = (
                         float(ali_s.tm_norm_chain1) + float(ali_s.tm_norm_chain2)
