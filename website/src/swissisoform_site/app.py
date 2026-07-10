@@ -37,6 +37,7 @@ from swissisoform_site.data import (
     FUNCTIONAL_CRITERIA,
     Isoform,
     _isoform_view,
+    biophysics_card_for_isoform,
     criterion_evidence_for,
     data_dir,
     llm_criterion_for_isoform,
@@ -248,11 +249,13 @@ def create_app() -> Flask:
         )
 
         sae = sae_card_for_isoform(iso)
+        bio = biophysics_card_for_isoform(iso)
 
         return render_template(
             "isoform.html",
             isoform=_isoform_view(iso, gene),
             sae=sae,
+            bio=bio,
             criterion_evidence=criterion_evidence_for(iso),
             criteria=CRITERIA_FOR_PAGE,
             criterion_slices=criterion_slices,

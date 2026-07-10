@@ -733,6 +733,90 @@ def sae_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
     }
 
 
+# Biophysical properties shown in the standalone Biophysics card (differential vs
+# shared region) — mirrors the table formerly nested in the F1 structure modal.
+_BIOPHYSICS_FEATURES = [
+    ("Isoelectric point (pI)", "pI"),
+    ("Hydropathy (GRAVY)", "gravy"),
+    ("Fraction charged", "fraction_charged"),
+    ("Disorder fraction", "disorder"),
+    ("Disorder-promoting", "fraction_disorder_promoting"),
+    ("Low-complexity fraction", "fraction_lcr"),
+    ("Prion-like fraction", "prionlike_fraction"),
+    ("LLPS score", "llps_score"),
+    ("π–π propensity", "pipi_propensity"),
+    ("Aromaticity", "aromaticity"),
+    ("Instability index", "instability_index"),
+    ("Shannon entropy", "shannon_entropy"),
+    ("Normalized complexity", "normalized_complexity"),
+]
+_BIOPHYSICS_COL_CLASSES = ["", "dm-shared", "dm-ratio"]  # differential | shared | enrichment
+
+
+def biophysics_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
+    """Standalone Biophysics card data (was a sub-section of the F1 modal).
+
+    Descriptive, not scored — reads the ``cmp_biophysics_*`` columns already on
+    ``iso.raw`` (differential/shared/ratio + enriched flag per property) and returns
+    a ``ce``-shaped payload the shared ``_criterion_evidence.html`` renderer consumes.
+    Returns ``None`` when no biophysics comparison columns are present.
+    """
+    raw = getattr(iso, "raw", None) or {}
+    g = raw.get
+    rows = []
+    for label, feat in _BIOPHYSICS_FEATURES:
+        cols = [
+            _fmt_num(g(f"cmp_biophysics_{feat}_unique")),
+            _fmt_num(g(f"cmp_biophysics_{feat}_shared")),
+            _fmt_num(g(f"cmp_biophysics_{feat}_ratio")),
+        ]
+        if all(c is None for c in cols):
+            continue
+        rows.append(
+            {
+                "label": label,
+                "cols": [c if c is not None else "—" for c in cols],
+                "hot": bool(g(f"cmp_biophysics_{feat}_enriched")),
+                **_term(label),
+            }
+        )
+    if not rows:
+        return None
+
+    # Compact headline: the three deltas the F1 folding score keys off (isoform − canonical).
+    bits = []
+    for lbl, key in (
+        ("ΔGRAVY", "cmp_biophysics_gravy_delta"),
+        ("Δcharge", "cmp_biophysics_fraction_charged_delta"),
+        ("Δdisorder", "cmp_biophysics_disorder_delta"),
+    ):
+        v = _fmt_num(g(key))
+        if v is not None:
+            bits.append(f"{lbl} {v}")
+    headline = " · ".join(bits) if bits else f"{len(rows)} properties"
+
+    return {
+        "headline": headline,
+        "evidence": {
+            "about": (
+                "Biophysical character of the isoform-differential region versus the "
+                "shared canonical core — pI, hydropathy, charge, disorder and related "
+                "properties. Descriptive; the folding (F1) score keys off the GRAVY / "
+                "charge / disorder deltas."
+            ),
+            "sections": [
+                {
+                    "title": "Biophysics · differential vs shared region",
+                    "subtitle": "highlighted rows are enriched in the differential region",
+                    "cmp_headers": ["Property", "Differential", "Shared", "Enrichment"],
+                    "col_classes": _BIOPHYSICS_COL_CLASSES,
+                    "compare_rows": rows,
+                }
+            ],
+        },
+    }
+
+
 def _fmt_num(v, pct=False):
     """Format a metric value for display, or None if missing/NaN."""
     import math
@@ -1359,46 +1443,6 @@ def criterion_evidence_for(iso) -> dict:
             "rows": detail_rows,
         }
 
-    def sec_biophysics():
-        feats = [
-            ("Isoelectric point (pI)", "pI"),
-            ("Hydropathy (GRAVY)", "gravy"),
-            ("Fraction charged", "fraction_charged"),
-            ("Disorder fraction", "disorder"),
-            ("Disorder-promoting", "fraction_disorder_promoting"),
-            ("Low-complexity fraction", "fraction_lcr"),
-            ("Prion-like fraction", "prionlike_fraction"),
-            ("LLPS score", "llps_score"),
-            ("π–π propensity", "pipi_propensity"),
-            ("Aromaticity", "aromaticity"),
-            ("Instability index", "instability_index"),
-            ("Shannon entropy", "shannon_entropy"),
-            ("Normalized complexity", "normalized_complexity"),
-        ]
-        compare_rows = compare(
-            [
-                (
-                    label,
-                    [
-                        f"cmp_biophysics_{feat}_unique",
-                        f"cmp_biophysics_{feat}_shared",
-                        f"cmp_biophysics_{feat}_ratio",
-                    ],
-                    f"cmp_biophysics_{feat}_enriched",
-                )
-                for label, feat in feats
-            ]
-        )
-        if not compare_rows:
-            return None
-        return {
-            "title": "Biophysics · differential vs shared region",
-            "subtitle": "highlighted rows are enriched in the differential region",
-            "cmp_headers": ["Property", "Differential", "Shared", "Enrichment"],
-            "col_classes": DIFF_SHARED_3,
-            "compare_rows": compare_rows,
-        }
-
     def sec_deeploc():
         compare_rows = compare(
             [
@@ -1838,7 +1882,7 @@ def criterion_evidence_for(iso) -> dict:
         "E4_multi_cell_line": [sec_cell_lines()],
         "E5_initiation_efficiency": [sec_efficiency()],
         "E6_mass_spec": [sec_massspec()],
-        "F1_structured_extension": [sec_structure(), sec_structure_region(), sec_biophysics()],
+        "F1_structured_extension": [sec_structure(), sec_structure_region()],
         "F2_localization_change": [sec_deeploc()],
         "F3_domain_change": [sec_domains_motifs()],
         "F4_targeting_change": [sec_targeting()],

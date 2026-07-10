@@ -82,31 +82,18 @@
     </div>
   </section>
 
-  <!-- 12 evidence tiles — each modal now hosts its own differential-region evidence -->
+  <!-- Evidence cards — one flat grid (E/F grouping removed; a different ordering
+       will land later). Each modal hosts its own differential-region evidence. -->
   <section class="evidence-tiles">
     <h2>Evidence <span class="evidence-sub">— click any tile for the differential-region detail</span></h2>
-    <div class="tile-row tile-row-existence">
-      <h3 class="tile-row-h">Existence (E)</h3>
+    <div class="tile-row">
       <div class="tile-grid">
         {% for c in criteria %}
-          {% if c.axis == 'E' %}
-            {% set sl = criterion_slices[c.id] %}
-            {% set llm = criterion_llms[c.id] %}
-            {% include '_evidence_tile.html' %}
-          {% endif %}
+          {% set sl = criterion_slices[c.id] %}
+          {% set llm = criterion_llms[c.id] %}
+          {% include '_evidence_tile.html' %}
         {% endfor %}
-      </div>
-    </div>
-    <div class="tile-row tile-row-functional">
-      <h3 class="tile-row-h">Functional (F)</h3>
-      <div class="tile-grid">
-        {% for c in criteria %}
-          {% if c.axis == 'F' %}
-            {% set sl = criterion_slices[c.id] %}
-            {% set llm = criterion_llms[c.id] %}
-            {% include '_evidence_tile.html' %}
-          {% endif %}
-        {% endfor %}
+        {% include '_biophysics_card.html' %}
         {% include '_sae_card.html' %}
       </div>
     </div>

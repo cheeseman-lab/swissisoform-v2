@@ -1,0 +1,24 @@
+{# Biophysics — a descriptive (non-scored) evidence card. Lifted out of the F1
+   structure modal into its own card. Reuses the evidence-tile structure so
+   isoform_page.js clones the <template> body into the shared modal on click, and
+   reuses the shared _criterion_evidence.html renderer (via a ``ce``-shaped dict)
+   for the differential-vs-shared comparison table. Data: the ``bio`` context var
+   from data.biophysics_card_for_isoform. #}
+<div class="evidence-tile axis-F biophysics-tile" data-criterion="biophysics" title="Biophysical property comparison — descriptive, not scored">
+  <button class="tile-head" type="button" aria-haspopup="dialog">
+    <span class="tile-label">Biophysics</span>
+    <span class="tile-badge tile-badge-info">BIO</span>
+  </button>
+  <div class="tile-headline">
+    {% if bio %}{{ bio.headline }}{% else %}<span class="text-xs text-slate-400">—</span>{% endif %}
+  </div>
+
+  <template class="tile-body-template">
+    {% if bio %}
+      {% set ce = bio.evidence %}
+      {% include '_criterion_evidence.html' %}
+    {% else %}
+      <p class="empty">Biophysics comparison not available for this isoform.</p>
+    {% endif %}
+  </template>
+</div>

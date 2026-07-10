@@ -213,7 +213,7 @@ def test_isoform_page_contains_graphs_and_synthesis_block(client):
 
 def test_isoform_page_has_evidence_tiles(client):
     """The V2 isoform page renders 13 scored evidence tiles (E1-E6, F1-F7) plus the
-    descriptive SAE (F8) card, with axis classes."""
+    descriptive Biophysics and SAE (F8) cards, in one flat grid (no E/F group headers)."""
     import pandas as pd
     from swissisoform_site.data import tis_slug as make_slug
 
@@ -222,9 +222,12 @@ def test_isoform_page_has_evidence_tiles(client):
     r = client.get(f"/genes/{row['gene_name']}/isoforms/{make_slug(row['tis_id'])}")
     assert r.status_code == 200
     body = r.data
-    # 13 scored criterion tiles (+ the SAE F8 card), each an evidence-tile instance.
-    assert body.count(b"evidence-tile") >= 13
-    # Both axis classes present (E + F).
+    # 13 scored criterion tiles + the Biophysics and SAE cards, each an evidence-tile.
+    assert body.count(b"evidence-tile") >= 15
+    # Grouping headers are gone; the flat grid remains.
+    assert b"tile-row-h" not in body
+    assert b'data-criterion="biophysics"' in body
+    # Both axis classes still present (E + F border colors).
     assert b"axis-E" in body
     assert b"axis-F" in body
     # Folding panel placeholder until Task D lands the dual Mol* viewer.
