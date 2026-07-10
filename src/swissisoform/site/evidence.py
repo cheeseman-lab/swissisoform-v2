@@ -720,6 +720,31 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "the raw unique/shared disease and pathogenic counts are context."
         ),
     },
+    "F7_shared_structural_change": {
+        "axis": "F",
+        "label": "Shared region structural changes",
+        "short_label": "Shared RMSD",
+        "evidence_cols": [
+            "isoform_structure_rmsd_shared",
+            "isoform_structure_tm_score_shared",
+            "isoform_structure_shared_region_len",
+            "isoform_structure_rmsd_shared_status",
+            "isoform_structure_plddt_shared_mean_isoform",
+            "isoform_structure_plddt_shared_mean_canonical",
+            "isoform_structure_rmsd_global",
+            "isoform_structure_tm_score",
+        ],
+        "headline_col": "isoform_structure_rmsd_shared",
+        "interpretation_hint": (
+            "Does the retained (shared) region fold differently in the isoform vs "
+            "the canonical protein? The shared region is identical in sequence, so a "
+            "high Cα RMSD (Kabsch-superposed on the shared residues only) means the "
+            "extension/truncation reorganizes how that region folds — most isoforms "
+            "read ≈ 0. TM-score is a length-normalized companion. Only scored when "
+            "both structures are confidently folded (min shared-region pLDDT ≥ 0.70); "
+            "uORF/altORF isoforms have no shared region and are not evaluable."
+        ),
+    },
 }
 
 
@@ -1166,6 +1191,39 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "Mean AlphaMissense pathogenicity, germline (unique)",
         "format": "float3",
     },
+    # F7 — shared-region structural change (structure)
+    "isoform_structure_rmsd_shared": {
+        "label": "Shared-region Cα RMSD",
+        "format": "angstrom",
+    },
+    "isoform_structure_tm_score_shared": {
+        "label": "Shared-region TM-score",
+        "format": "float3",
+    },
+    "isoform_structure_shared_region_len": {
+        "label": "Shared region length (aa)",
+        "format": "int",
+    },
+    "isoform_structure_rmsd_shared_status": {
+        "label": "Shared-region RMSD status",
+        "format": "str",
+    },
+    "isoform_structure_plddt_shared_mean_isoform": {
+        "label": "Mean shared-region pLDDT (isoform)",
+        "format": "float3",
+    },
+    "isoform_structure_plddt_shared_mean_canonical": {
+        "label": "Mean shared-region pLDDT (canonical)",
+        "format": "float3",
+    },
+    "isoform_structure_rmsd_global": {
+        "label": "Global Cα RMSD (tm-align)",
+        "format": "angstrom",
+    },
+    "isoform_structure_tm_score": {
+        "label": "Global TM-score",
+        "format": "float3",
+    },
 }
 
 # E4/E5 — per-cell-line expression columns (generated programmatically)
@@ -1198,8 +1256,8 @@ def format_metric(value: Any, fmt: str) -> str:
 
     Args:
         value: Raw scalar value from the parquet row.
-        fmt: One of ``"percent"``, ``"int"``, ``"float3"``, ``"sci"``, ``"bool"``,
-            ``"json"``, or ``"str"`` (default).
+        fmt: One of ``"percent"``, ``"int"``, ``"float3"``, ``"angstrom"``,
+            ``"sci"``, ``"bool"``, ``"json"``, or ``"str"`` (default).
 
     Returns:
         Display string. ``None`` / NaN values render as an em dash.
@@ -1224,6 +1282,11 @@ def format_metric(value: Any, fmt: str) -> str:
     if fmt == "float3":
         try:
             return f"{float(value):.3g}"
+        except (TypeError, ValueError):
+            return str(value)
+    if fmt == "angstrom":
+        try:
+            return f"{float(value):.2f} Å"
         except (TypeError, ValueError):
             return str(value)
     if fmt == "sci":

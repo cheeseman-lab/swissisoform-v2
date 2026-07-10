@@ -10,12 +10,12 @@ pytest.importorskip("swissisoform_site")  # optional website package; skip if no
 from swissisoform_site.data import CRITERIA_FOR_PAGE, llm_criterion_for_isoform
 
 
-def test_criteria_for_page_has_12_entries() -> None:
-    assert len(CRITERIA_FOR_PAGE) == 12
+def test_criteria_for_page_has_13_entries() -> None:
+    assert len(CRITERIA_FOR_PAGE) == 13
     e_count = sum(1 for c in CRITERIA_FOR_PAGE if c["axis"] == "E")
     f_count = sum(1 for c in CRITERIA_FOR_PAGE if c["axis"] == "F")
     assert e_count == 6
-    assert f_count == 6
+    assert f_count == 7
 
 
 def test_criteria_for_page_ids_match_ber() -> None:

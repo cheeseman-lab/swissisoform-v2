@@ -675,7 +675,7 @@ def _sae_shared_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def sae_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
-    """Everything the F7 "SAE features" card needs, or None when not computed.
+    """Everything the F8 "SAE features" card needs, or None when not computed.
 
     Reads the ``isoform_sae_*`` columns already carried on ``iso.raw`` (populated
     by the SAE SiteModule and flattened into all_paired.parquet). Returns None
@@ -689,8 +689,9 @@ def sae_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
       - Differential coordinates: ``unique_region`` — features firing on just the
         isoform-unique residues (top 30).
 
-    Scoring (a future F7 criterion) and LLM surfacing are intentionally out of
-    scope — this card is descriptive over data already in the parquet.
+    Scoring and LLM surfacing are intentionally out of scope for this card — it
+    is descriptive over data already in the parquet. (The scored F7 criterion is
+    the separate "Shared region structural changes" RMSD tile.)
     """
     raw = iso.raw or {}
     if raw.get("isoform_sae_status") != "ok":
@@ -826,6 +827,17 @@ CRITERION_ABOUT = {
         "1×)? Disease variants concentrating in the unique region tie it to "
         "phenotype."
     ),
+    "F7_shared_structural_change": (
+        "The shared region is the stretch of protein identical in both the isoform "
+        "and the canonical (the canonical body for an extension; the post-truncation "
+        "body for a truncation). Folded in both contexts it normally comes out nearly "
+        "identical, so its Cα backbone RMSD ≈ 0. A high shared-region RMSD (superposed "
+        "on the shared residues only, from the ESMFold2 structures) means the "
+        "extension or truncation reorganizes how the retained region folds — a rare, "
+        "high-interest functional signal. TM-score is a length-normalized companion; "
+        "the check only fires when both structures are confidently folded, and "
+        "uORF/altORF isoforms (no shared region) are not evaluable."
+    ),
 }
 
 
@@ -868,6 +880,10 @@ METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
     "TM-score (iso vs canonical)": ("m-structure", "Global fold similarity (0–1) between isoform and canonical."),
     "RMSD global (Å)": ("m-structure", "Backbone RMSD between isoform and canonical folds."),
     "Extension contacts": ("m-structure", "Inter-residue contacts the differential region makes with the core."),
+    "Shared-region Cα RMSD": ("m-structure", "Backbone RMSD over the shared (identical) residues only, after superposing on them — 0 ≈ identical fold, high = the retained region refolds."),
+    "Shared-region TM-score": ("m-structure", "Length-normalized fold similarity (0–1) of the shared region between isoform and canonical."),
+    "Shared region length": ("m-structure", "Number of residues shared (identical) between the isoform and canonical proteins."),
+    "Min shared-region pLDDT": ("m-structure", "Lower of the two mean shared-region ESMFold2 confidences; the RMSD is only trusted (scored) when this is high."),
     # Localization / targeting
     "Predicted location": ("m-localization", "DeepLoc predicted subcellular compartment."),
     "Sorting signals": ("m-localization", "DeepLoc-detected sorting / targeting signals."),
@@ -936,7 +952,7 @@ def _term(label: str) -> dict[str, str]:
 
 
 def criterion_evidence_for(iso) -> dict:
-    """Per-criterion differential evidence for the 12 score modals.
+    """Per-criterion differential evidence for the score modals (E1–E6, F1–F7).
 
     Pulls the conservation / structure / biophysics / localization / PLM-VEP /
     function / clinical evidence off the parquet row, sliced finer than a flat
@@ -1264,6 +1280,83 @@ def criterion_evidence_for(iso) -> dict:
             "cmp_headers": ["Metric", "Differential", "Shared", "Enrichment"],
             "col_classes": DIFF_SHARED_3,
             "compare_rows": [row],
+        }
+
+    def sec_shared_rmsd():
+        # F7 — strict shared-region Cα RMSD (Kabsch-superposed on the shared
+        # residues only). Global TM/RMSD ride in the caption; the shared-region
+        # metrics are the score basis. When not evaluable, surface the status so
+        # the modal explains itself rather than rendering blank.
+        status = g("isoform_structure_rmsd_shared_status")
+        rmsd = _fmt_num(g("isoform_structure_rmsd_shared"))
+        tm = _fmt_num(g("isoform_structure_tm_score_shared"))
+        n = g("isoform_structure_shared_region_len")
+        pmin = None
+        try:
+            pvals = [
+                float(x)
+                for x in (
+                    g("isoform_structure_plddt_shared_mean_isoform"),
+                    g("isoform_structure_plddt_shared_mean_canonical"),
+                )
+                if x is not None and math.isfinite(float(x))
+            ]
+            pmin = min(pvals) if pvals else None
+        except (TypeError, ValueError):
+            pmin = None
+
+        detail_rows = []
+        if rmsd is not None:
+            detail_rows.append(
+                {"label": "Shared-region Cα RMSD", "value": f"{rmsd} Å",
+                 **_term("Shared-region Cα RMSD")}
+            )
+        if tm is not None:
+            detail_rows.append(
+                {"label": "Shared-region TM-score", "value": tm,
+                 **_term("Shared-region TM-score")}
+            )
+        if n is not None:
+            detail_rows.append(
+                {"label": "Shared region length", "value": f"{int(n)} aa",
+                 **_term("Shared region length")}
+            )
+        pmin_fmt = _fmt_num(pmin)
+        if pmin_fmt is not None:
+            detail_rows.append(
+                {"label": "Min shared-region pLDDT", "value": pmin_fmt,
+                 **_term("Min shared-region pLDDT")}
+            )
+
+        # Global fold-similarity singletons ride in the caption for context.
+        bits = []
+        gtm = _fmt_num(g("isoform_structure_tm_score"))
+        grmsd = _fmt_num(g("isoform_structure_rmsd_global"))
+        if gtm is not None:
+            bits.append(f"global TM-score {gtm}")
+        if grmsd is not None:
+            bits.append(f"global RMSD {grmsd} Å")
+
+        if not detail_rows:
+            if status and status != "ok":
+                _why = {
+                    "no_shared_region": "no shared region (uORF/altORF, or region too short)",
+                    "unverified_alignment": "isoform/canonical alignment unverified",
+                    "no_cache": "predicted structures not available",
+                }.get(status, status)
+                return {
+                    "title": "Shared-region structural change",
+                    "subtitle": f"not evaluable — {_why}",
+                    "rows": [],
+                }
+            return None
+        sub = "Cα RMSD superposed on the shared residues only; TM-score is length-normalized"
+        if bits:
+            sub += " · " + " · ".join(bits)
+        return {
+            "title": "Shared-region structural change",
+            "subtitle": sub,
+            "rows": detail_rows,
         }
 
     def sec_biophysics():
@@ -1760,6 +1853,7 @@ def criterion_evidence_for(iso) -> dict:
             sec_variant_burden("disease", "disease (ClinVar/COSMIC)"),
             sec_variant_scores("disease", "disease (ClinVar/COSMIC)"),
         ],
+        "F7_shared_structural_change": [sec_shared_rmsd()],
     }
 
     out = {}
@@ -1816,7 +1910,7 @@ def llm_for_isoform(gene: GeneRecord, tis_id: str) -> dict[str, Any] | None:
     return None
 
 
-# Drives the 12-tile UI grid on the isoform page (E1..E6, F1..F6).
+# Drives the evidence-tile UI grid on the isoform page (E1..E6, F1..F7).
 CRITERIA_FOR_PAGE = [
     {
         "id": "E1_primate_conservation",
@@ -1879,6 +1973,12 @@ CRITERIA_FOR_PAGE = [
         "axis": "F",
         "label": "Clinical variant overlap",
         "short_label": "Variants",
+    },
+    {
+        "id": "F7_shared_structural_change",
+        "axis": "F",
+        "label": "Shared region structural changes",
+        "short_label": "Shared RMSD",
     },
 ]
 

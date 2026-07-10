@@ -344,8 +344,8 @@ def test_criteria_pass_dry_run_emits_one_call_per_criterion(monkeypatch, tmp_pat
     )
     captured = capsys.readouterr().out
     assert rc == 0
-    # 12 criteria × 1 isoform = 12 dry-run "criterion:" prints.
-    assert captured.count("criterion:") == 12
+    # 13 criteria × 1 isoform = 13 dry-run "criterion:" prints.
+    assert captured.count("criterion:") == 13
 
 
 def test_synthesis_pass_refuses_without_prereqs(monkeypatch, tmp_path):

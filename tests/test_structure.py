@@ -224,9 +224,15 @@ class TestStructureModule:
                 "plddt_diffregion_mean",
                 "plddt_diffregion_std",
                 "plddt_delta_shared",
+                "plddt_shared_mean_isoform",
+                "plddt_shared_mean_canonical",
                 "tm_score",
                 "rmsd_global",
                 "extension_contacts",
+                "rmsd_shared",
+                "tm_score_shared",
+                "shared_region_len",
+                "rmsd_shared_status",
             ]:
                 assert k in keys
 

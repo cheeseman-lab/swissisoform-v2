@@ -507,7 +507,7 @@
 }
 .variants-table th[aria-sort="descending"] .sort-caret::after { content: "\25BC"; }  /* ▼ */
 
-/* SAE F7 card — reuses .variants-scroll / .variants-table / .sortable inside the modal. */
+/* SAE F8 card — reuses .variants-scroll / .variants-table / .sortable inside the modal. */
 .tile-badge-info { background: #e2e8f0; color: #475569; font-size: 9px; font-weight: 700; letter-spacing: .02em; }
 .evidence-modal-wide { max-width: 960px; }
 .sae-modal-intro { font-size: 12px; color: #475569; line-height: 1.6; margin: 0 0 14px; }

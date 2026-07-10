@@ -43,9 +43,15 @@ class StructureModule:
         "structure_plddt_diffregion_mean",
         "structure_plddt_diffregion_std",
         "structure_plddt_delta_shared",
+        "structure_plddt_shared_mean_isoform",
+        "structure_plddt_shared_mean_canonical",
         "structure_tm_score",
         "structure_rmsd_global",
         "structure_extension_contacts",
+        "structure_rmsd_shared",
+        "structure_tm_score_shared",
+        "structure_shared_region_len",
+        "structure_rmsd_shared_status",
     ]
     SCOPE: str = "C"
 
@@ -83,9 +89,15 @@ class StructureModule:
             "plddt_diffregion_mean": None,
             "plddt_diffregion_std": None,
             "plddt_delta_shared": None,
+            "plddt_shared_mean_isoform": None,
+            "plddt_shared_mean_canonical": None,
             "tm_score": None,
             "rmsd_global": None,
             "extension_contacts": None,
+            "rmsd_shared": None,
+            "tm_score_shared": None,
+            "shared_region_len": None,
+            "rmsd_shared_status": reason,
         }
 
     def annotate_site(self, site: TranslationInitiationSite) -> dict[str, Any]:
@@ -141,6 +153,10 @@ class StructureModule:
             (iso or {}).get("cif_path"),
             diff_isoform_start=getattr(dr, "isoform_start", None) if dr else None,
             diff_isoform_end=getattr(dr, "isoform_end", None) if dr else None,
+            diff_canonical_start=getattr(dr, "canonical_start", None) if dr else None,
+            diff_canonical_end=getattr(dr, "canonical_end", None) if dr else None,
+            orf_type=site.orf_type.value if site.orf_type else None,
+            diff_region_confidence=getattr(dr, "confidence", None) if dr else None,
         )
         for k, v in struct_metrics.items():
             out[k] = v

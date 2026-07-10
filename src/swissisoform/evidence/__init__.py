@@ -1,4 +1,4 @@
-"""Evidence-scoring buckets — dual-axis existence (E1–E6) + functional (F1–F6).
+"""Evidence-scoring buckets — dual-axis existence (E1–E6) + functional (F1–F7).
 
 Each bucket is a subpackage exposing a ``score(site, cfg) -> CriterionResult``
 function. ``EXISTENCE_CRITERIA`` / ``FUNCTIONAL_CRITERIA`` collect them in the
@@ -20,6 +20,7 @@ bucket folder; genuinely shared plumbing stays as infrastructure packages::
     F4 targeting                evidence/f4_targeting           (owns it)
     F5 germline constraint      modules.varianteffect + clinical (shared F5/F6)
     F6 disease enrichment       modules.variant_intersection + clinical (shared F5/F6)
+    F7 shared structural change structure (shared-region Cα RMSD)
 """
 
 from __future__ import annotations
@@ -60,6 +61,9 @@ from swissisoform.evidence import (
 from swissisoform.evidence import (
     f6_disease_enrichment as f6,
 )
+from swissisoform.evidence import (
+    f7_shared_rmsd as f7,
+)
 from swissisoform.evidence.common import Criterion, CriterionResult
 
 EXISTENCE_CRITERIA: list[Criterion] = [
@@ -78,6 +82,7 @@ FUNCTIONAL_CRITERIA: list[Criterion] = [
     f4.score,
     f5.score,
     f6.score,
+    f7.score,
 ]
 
 __all__ = [

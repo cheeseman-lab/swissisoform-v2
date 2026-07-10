@@ -19,6 +19,12 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Diff-region confidence tiers whose sequence relationship is verified well
+# enough to pair shared-region residues 1:1 for a strict RMSD. The fallback
+# tiers ("length_fallback", "whole_isoform_fallback") are NOT residue-aligned,
+# so a positional Cα pairing over them would be meaningless.
+_VERIFIED_DIFF_CONF = {"exact", "tail_verified"}
+
 
 def _slice_indices(
     n: int, lo: int | None, hi: int | None
@@ -83,6 +89,8 @@ def compare_confidence(
         "plddt_diffregion_mean": None,
         "plddt_diffregion_std": None,
         "plddt_delta_shared": None,
+        "plddt_shared_mean_isoform": None,
+        "plddt_shared_mean_canonical": None,
     }
 
     truncated = (orf_type == "truncated") or (
@@ -116,6 +124,8 @@ def compare_confidence(
                 iso_m = sum(iso_shared[:n]) / n
                 can_m = sum(can_shared[:n]) / n
                 out["plddt_delta_shared"] = iso_m - can_m
+                out["plddt_shared_mean_isoform"] = iso_m
+                out["plddt_shared_mean_canonical"] = can_m
         elif truncated and diff_canonical_end is not None:
             iso_shared = isoform_plddt
             can_shared = canonical_plddt[diff_canonical_end:]
@@ -124,6 +134,8 @@ def compare_confidence(
                 iso_m = sum(iso_shared[:n]) / n
                 can_m = sum(can_shared[:n]) / n
                 out["plddt_delta_shared"] = iso_m - can_m
+                out["plddt_shared_mean_isoform"] = iso_m
+                out["plddt_shared_mean_canonical"] = can_m
 
     return out
 
@@ -182,12 +194,46 @@ def _ca_coords_and_seq(struct: Any) -> tuple[Any, str] | None:
         return None
 
 
+def _kabsch_rmsd(p: Any, q: Any) -> float | None:
+    """RMSD of two equal-length Cα point sets after optimal (Kabsch) superposition.
+
+    ``p`` and ``q`` are ``(n, 3)`` coordinate arrays whose rows are already in
+    1:1 correspondence. Returns the minimum-RMSD over all rigid rotations +
+    translations (centroids removed, rotation from the SVD of the covariance),
+    or ``None`` when the inputs are malformed / numpy is unavailable.
+    """
+    try:
+        import numpy as np
+
+        P = np.asarray(p, dtype=float)
+        Q = np.asarray(q, dtype=float)
+        if P.shape != Q.shape or P.ndim != 2 or P.shape[1] != 3 or P.shape[0] == 0:
+            return None
+        Pc = P - P.mean(axis=0)
+        Qc = Q - Q.mean(axis=0)
+        h = Pc.T @ Qc
+        u, _s, vt = np.linalg.svd(h)
+        # Correct for a reflection so R is a proper rotation (det +1).
+        d = 1.0 if np.linalg.det(vt.T @ u.T) >= 0 else -1.0
+        rot = vt.T @ np.diag([1.0, 1.0, d]) @ u.T
+        p_aligned = (rot @ Pc.T).T
+        diff = p_aligned - Qc
+        return float(np.sqrt((diff ** 2).sum() / P.shape[0]))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("kabsch rmsd failed: %s", exc)
+        return None
+
+
 def compare_structures(
     canonical_cif: Path | None,
     isoform_cif: Path | None,
     *,
     diff_isoform_start: int | None = None,
     diff_isoform_end: int | None = None,
+    diff_canonical_start: int | None = None,
+    diff_canonical_end: int | None = None,
+    orf_type: str | None = None,
+    diff_region_confidence: str | None = None,
     contact_distance: float = 8.0,
 ) -> dict[str, Any]:
     """Compute TM-score, shared-region RMSD, and extension contacts.
@@ -200,19 +246,32 @@ def compare_structures(
         isoform_cif: Path to the isoform protein's predicted CIF.
         diff_isoform_start: Diff-region start in isoform coords (extension contacts).
         diff_isoform_end: Diff-region end in isoform coords.
+        diff_canonical_start: Diff-region start in canonical coords (truncations).
+        diff_canonical_end: Diff-region end in canonical coords (truncations).
+        orf_type: ``ORFType.value``. Only ``"extended"`` / ``"truncated"`` have a
+            shared region; every other type has none → ``rmsd_shared`` undefined.
+        diff_region_confidence: ``DifferentialRegion.confidence``. The shared-
+            region RMSD is only computed for the residue-verified tiers
+            (``exact`` / ``tail_verified``); the fallback tiers aren't aligned.
         contact_distance: Cα-Cα distance threshold (Å) for contacts.
 
     Returns:
-        Dict with ``tm_score``, ``rmsd_global``, ``extension_contacts``. The
-        ``rmsd_global`` is the tm-align global alignment RMSD over BOTH
-        proteins, not a strict shared-residue-only RMSD (the alignment spans
-        residues in both that aligned, including non-shared positions). Named
-        ``_global`` to keep the semantics honest.
+        Dict with ``tm_score``, ``rmsd_global``, ``extension_contacts`` and the
+        shared-region metrics ``rmsd_shared`` (strict Cα RMSD, Kabsch-superposed
+        on the shared residues only), ``tm_score_shared`` (length-normalized
+        companion), ``shared_region_len``, and ``rmsd_shared_status``
+        (``ok | no_cache | no_shared_region | unverified_alignment``). The
+        ``rmsd_global`` is the tm-align global alignment RMSD over BOTH proteins,
+        NOT a shared-residue-only RMSD — ``rmsd_shared`` is the strict one.
     """
     out: dict[str, Any] = {
         "tm_score": None,
         "rmsd_global": None,
         "extension_contacts": None,
+        "rmsd_shared": None,
+        "tm_score_shared": None,
+        "shared_region_len": None,
+        "rmsd_shared_status": "no_cache",
     }
     if canonical_cif is None or isoform_cif is None:
         return out
@@ -230,6 +289,52 @@ def compare_structures(
         return out
     can_xyz, can_seq = can_pair
     iso_xyz, iso_seq = iso_pair
+
+    # Strict shared-region Cα RMSD: superpose (Kabsch) on the shared residues
+    # ONLY, then RMSD over them — isolates whether the retained region physically
+    # refolds, independent of the extension/truncation. Paired 1:1 by the diff
+    # offsets (extension: iso[delta:] ↔ can[:]; truncation: can[delta:] ↔ iso[:]).
+    # A length-normalized TM-score companion exposes the length-dependence of RMSD.
+    if orf_type not in ("extended", "truncated"):
+        out["rmsd_shared_status"] = "no_shared_region"
+    elif diff_region_confidence not in _VERIFIED_DIFF_CONF:
+        out["rmsd_shared_status"] = "unverified_alignment"
+    else:
+        iso_shared = can_shared = None
+        iso_shared_seq = can_shared_seq = ""
+        if orf_type == "extended" and diff_isoform_end is not None:
+            k = int(diff_isoform_end)
+            iso_shared, iso_shared_seq = iso_xyz[k:], iso_seq[k:]
+            can_shared, can_shared_seq = can_xyz, can_seq
+        elif orf_type == "truncated" and diff_canonical_end is not None:
+            k = int(diff_canonical_end)
+            can_shared, can_shared_seq = can_xyz[k:], can_seq[k:]
+            iso_shared, iso_shared_seq = iso_xyz, iso_seq
+
+        if iso_shared is None or can_shared is None:
+            out["rmsd_shared_status"] = "no_shared_region"
+        else:
+            n = min(len(iso_shared), len(can_shared))
+            if n < 3:  # too few points for a meaningful superposition
+                out["rmsd_shared_status"] = "no_shared_region"
+            else:
+                p_shared = iso_shared[:n]
+                q_shared = can_shared[:n]
+                rmsd_shared = _kabsch_rmsd(p_shared, q_shared)
+                out["shared_region_len"] = int(n)
+                out["rmsd_shared"] = rmsd_shared
+                out["rmsd_shared_status"] = "ok" if rmsd_shared is not None else "no_cache"
+                try:
+                    from tmtools import tm_align
+
+                    ali_s = tm_align(
+                        p_shared, q_shared, iso_shared_seq[:n], can_shared_seq[:n]
+                    )
+                    out["tm_score_shared"] = (
+                        float(ali_s.tm_norm_chain1) + float(ali_s.tm_norm_chain2)
+                    ) / 2.0
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("shared tm_align failed: %s", exc)
 
     # TM-score via tmtools (if available).
     try:
