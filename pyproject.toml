@@ -38,15 +38,21 @@ dev = [
 ]
 fold = [
     # chai_lab pins torch>=2.3.1,<2.7; boltz needs >=2.2 — this satisfies both.
+    # Single forward pass per protein → no fused kernel; don't add xformers here.
     "torch>=2.3.1,<2.7",
     "boltz>=2.2",
     "chai_lab>=0.6",  # second structure backend (run_fold.sbatch <fasta> chai)
 ]
 plm = [
-    # <2.7 keeps torch on a CUDA-12 wheel; newer (cu13x) builds need a driver
-    # the cluster GPUs don't have yet (A6000 ≈ CUDA 12.6).
+    # torch <2.7 = CUDA-12 wheel (A6000 ≈ CUDA 12.6; cu13x needs a newer driver).
     "torch>=2.2.0,<2.7",
     "fair-esm>=2.0",
+    # xformers = fused attention for ESM-C's LLR sweep (the GPU bottleneck),
+    # ~1.3-2x faster embed vs pure-PyTorch fallback. Pinned to resolve against
+    # torch 2.6.0. Never swap kernels mid-run — it shifts the residual stream the
+    # SAE reads and corrupts SAE features. flash-attn is opt-in (GPU-node source
+    # build): scripts/setup/install_plm_fused_kernels.sh --flash.
+    "xformers==0.0.29.post3",
 ]
 
 [tool.setuptools]
