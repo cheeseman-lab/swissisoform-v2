@@ -51,7 +51,7 @@ plm = [
     # ~1.3-2x faster embed vs pure-PyTorch fallback. Pinned to resolve against
     # torch 2.6.0. Never swap kernels mid-run — it shifts the residual stream the
     # SAE reads and corrupts SAE features. flash-attn is opt-in (GPU-node source
-    # build): scripts/setup/install_plm_fused_kernels.sh --flash.
+    # build): scripts/setup/create_envs.sh --plm --flash.
     "xformers==0.0.29.post3",
 ]
 
