@@ -128,9 +128,14 @@ def install_initiator_met(aaseq: str) -> str:
     Ribo-TISH translates near-cognate start codons (CTG→L, GTG→V, …) literally,
     so the predicted ``AASeq`` carries the wrong N-terminal residue. The mature
     proteoform always begins with the initiator Met — UniProt convention keeps it
-    even when it is biologically excised — so we install it here. Isoform-only:
-    GENCODE-derived canonical proteins already carry their Met. ATG starts are a
+    even when it is biologically excised — so we install it here. ATG starts are a
     no-op. A trailing stop, if present, is preserved.
+
+    Applied in two places: to each isoform protein at assembly time, and — via
+    ``run_sample`` — to natively-detected canonical (``Annotated``) rows, so a
+    detected near-cognate canonical matches the imputed one (from GENCODE
+    ``pc_translations``, always M-start) and ``combine._verify_shared_fields``
+    sees a single sample-invariant ``AASeq`` per site.
     """
     body = aaseq
     stop = ""

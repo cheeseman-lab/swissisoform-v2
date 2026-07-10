@@ -3,13 +3,35 @@
 
 {% block content %}
 
-<section class="mb-8">
-  <h1 class="text-2xl font-semibold tracking-tight text-slate-900">Alternative protein isoforms</h1>
-  <p class="mt-2 text-sm text-slate-600 max-w-2xl">
-    {{ n_genes }} gene{% if n_genes != 1 %}s{% endif %} with at least one alternative translation initiation site
-    detected by Ribo-TISH. Each isoform carries a dual evidence axis — six
-    existence criteria (E1–E6) and six functional-impact criteria (F1–F6).
+{% set stats = namespace(iso=0) %}
+{% for g in genes %}{% set stats.iso = stats.iso + g.isoforms|length %}{% endfor %}
+
+<section class="landing-hero">
+  <h1 class="landing-title">Alternative protein isoforms</h1>
+  <p class="landing-desc">
+    Evidence-scored annotation of alternative translation initiation sites detected by
+    Ribo-TISH. Every isoform carries a dual evidence axis — six existence criteria
+    (E1–E6) and six functional-impact criteria (F1–F6) — each grounded in per-isoform
+    structural, conservation, clinical, and proteomic data.
   </p>
+
+  <div class="landing-stats">
+    <div class="stat"><span class="stat-num">{{ n_genes }}</span><span class="stat-lbl">genes</span></div>
+    <div class="stat"><span class="stat-num">{{ stats.iso }}</span><span class="stat-lbl">isoforms</span></div>
+  </div>
+
+  <div class="landing-search">
+    <input type="search" id="gene-search" placeholder="Search a gene… (e.g. CBX1, TRIP13)"
+           autocomplete="off" spellcheck="false" aria-label="Search genes">
+  </div>
+
+  {% if genes %}
+  <p class="landing-examples">
+    Examples:{% for g in genes[:6] %}
+      <a href="{{ url_for('gene_page', gene_name=g.name) }}">{{ g.name }}</a>{% if not loop.last %} ·{% endif %}
+    {% endfor %}
+  </p>
+  {% endif %}
 </section>
 
 {% if not genes %}
@@ -19,7 +41,7 @@
   </div>
 {% else %}
 
-<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+<div id="gene-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
   {% for gene in genes %}
 
   {% set extensions = gene.isoforms|selectattr("orf_type", "equalto", "extended")|list %}
@@ -43,7 +65,8 @@
     {% endif %}
   {% endfor %}
 
-  <div class="block bg-white border border-slate-200 rounded-lg p-4 hover:border-slate-400 hover:shadow-sm transition">
+  <div class="gene-card block bg-white border border-slate-200 rounded-lg p-4 hover:border-slate-400 hover:shadow-sm transition"
+       data-gene="{{ gene.name|lower }}" data-uniprot="{{ (gene.uniprot_id or '')|lower }}">
 
     <div class="flex items-baseline justify-between mb-2">
       <div class="flex items-baseline gap-2">
@@ -103,6 +126,30 @@
   {% endfor %}
 </div>
 
+<p id="no-results">No gene matches your search.</p>
+
 {% endif %}
 
+{% endblock %}
+
+{% block scripts %}
+<script>
+  (function () {
+    var input = document.getElementById("gene-search");
+    if (!input) return;
+    var cards = Array.prototype.slice.call(document.querySelectorAll(".gene-card"));
+    var none = document.getElementById("no-results");
+    input.addEventListener("input", function () {
+      var q = input.value.trim().toLowerCase();
+      var shown = 0;
+      cards.forEach(function (c) {
+        var hay = (c.dataset.gene || "") + " " + (c.dataset.uniprot || "");
+        var match = !q || hay.indexOf(q) !== -1;
+        c.style.display = match ? "" : "none";
+        if (match) shown++;
+      });
+      if (none) none.style.display = shown ? "none" : "block";
+    });
+  })();
+</script>
 {% endblock %}

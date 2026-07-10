@@ -19,13 +19,19 @@ to what should advance to annotation:
     threshold-failing divergent sites) contribute no alternative-TIS rows — they
     do not advance, but they remain in the saved tables.
 
-Collapse is **gated to rows a long-read sample actually scored.** In the combined
-catalog a TIS called only in samples without long-read data (e.g. K562 / U2OS /
-RPE1 when only HeLa has IsoQuant) has ``NaN`` in every ``{sample}_resolved``
-column — it was never evaluated by the cascade, so it **passes through
-unchanged** rather than being dropped as a non-source candidate. This keeps the
-full cross-sample TIS set alive for downstream ``min_cell_lines`` scoring during
-a single-long-read-sample phase.
+Collapse is **gated to rows a long-read sample actually scored** (production
+default, ``keep_unevaluated=True``). In the combined catalog a TIS called only in
+samples without long-read data (e.g. K562 / U2OS / RPE1 when only HeLa has
+IsoQuant) has ``NaN`` in every ``{sample}_resolved`` column — it was never
+evaluated by the cascade, so it **passes through unchanged** rather than being
+dropped as a non-source candidate. This keeps the full cross-sample TIS set alive
+for downstream ``min_cell_lines`` scoring during a single-long-read-sample phase.
+
+Passing ``keep_unevaluated=False`` (the CLI ``--drop-unsupported-tis`` opt-in)
+reverts to the pre-gate behavior: un-evaluated rows are dropped too, so only
+Annotated rows and resolved source transcripts survive. That is **non-production**
+— it exists for long-read-only timing tests where you want just the
+long-read-supported TIS to advance.
 
 When the verdict columns are absent (cascade skipped / never ran) the frame is
 returned unchanged, so the collapse is a transparent no-op.
@@ -71,12 +77,20 @@ def _resolution_columns(df: pd.DataFrame) -> list[tuple[str, str]]:
     return pairs
 
 
-def collapse_to_source(df: pd.DataFrame) -> pd.DataFrame:
+def collapse_to_source(df: pd.DataFrame, *, keep_unevaluated: bool = True) -> pd.DataFrame:
     """Keep Annotated rows + one source-transcript row per resolved TIS.
 
     Args:
         df: A source-resolution-tagged TIS table (per-sample filtered frame or
             the combined catalog). Must carry ``Tid`` and ``TisType``.
+        keep_unevaluated: When ``True`` (the production default), rows no
+            long-read sample scored (``NaN`` in every ``{sample}_resolved``
+            column) pass through unchanged — a TIS is never dropped merely
+            because its cell line lacks long-read support. When ``False``, those
+            un-evaluated rows are dropped too (the pre-gate behavior): only
+            Annotated rows and resolved source transcripts survive, so a run
+            keeps only long-read-supported TIS. Non-production — for
+            long-read-only timing tests (``--drop-unsupported-tis``).
 
     Returns:
         The collapsed frame (a copy). If the verdict columns are absent the
@@ -111,22 +125,27 @@ def collapse_to_source(df: pd.DataFrame) -> pd.DataFrame:
         # collapse must not drop it as a non-source candidate.
         evaluated |= df[resolved_col].notna()
 
-    # Un-evaluated rows pass through: only rows a long-read sample actually
-    # scored are eligible to be collapsed away.
-    keep = annotated | is_source_row | ~evaluated
+    # Un-evaluated rows (no long-read sample scored them) pass through by default
+    # so a TIS is never dropped just for lacking long-read support. With
+    # keep_unevaluated=False they are dropped too — only Annotated rows and
+    # resolved source transcripts survive (long-read-supported TIS only).
+    keep = annotated | is_source_row
+    if keep_unevaluated:
+        keep = keep | ~evaluated
     out = df[keep].reset_index(drop=True)
 
     n_alt_in = int((~annotated).sum())
     n_alt_out = int((~out["TisType"].astype(str).str.startswith("Annotated")).sum())
-    n_passthrough = int((~annotated & ~is_source_row & ~evaluated).sum())
+    n_unevaluated = int((~annotated & ~is_source_row & ~evaluated).sum())
     logger.info(
         "collapse_to_source: %d rows → %d (alt TIS %d → %d; %d Annotated kept; "
-        "%d un-evaluated rows passed through)",
+        "%d un-evaluated rows %s)",
         len(df),
         len(out),
         n_alt_in,
         n_alt_out,
         int(annotated.sum()),
-        n_passthrough,
+        n_unevaluated,
+        "passed through" if keep_unevaluated else "dropped",
     )
     return out

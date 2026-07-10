@@ -2,8 +2,9 @@
 # Stage a self-contained Railway build context under website/.
 #
 # Two things the repo keeps as references but Docker can't follow:
-#   1. website/data/* are symlinks into ../data/output/cheeseman_13gene/ —
-#      dereference into real files so COPY data/ bakes the actual parquet/llm.
+#   1. website/data/* are symlinks into ../data/output/$RUN/ (default
+#      cheeseman_13gene; override with the RUN env var) — dereference into real
+#      files so COPY data/ bakes the actual parquet/llm.
 #   2. The viewer imports swissisoform.site.evidence (a light presentation
 #      module — numpy + pandas only) from the main package — copy just it + the
 #      package __init__s into the build context so the image has it on
@@ -14,7 +15,7 @@
 # and LLM summaries.
 set -euo pipefail
 cd "$(dirname "$0")"                      # website/
-SRC="../data/output/cheeseman_13gene"
+SRC="../data/output/${RUN:-cheeseman_13gene}"
 
 echo "[prepare_deploy] dereferencing website/data/ from $SRC"
 rm -rf data/all_paired.parquet data/variants_long.parquet \
@@ -22,8 +23,11 @@ rm -rf data/all_paired.parquet data/variants_long.parquet \
 cp -L "$SRC/all_paired.parquet"          data/all_paired.parquet
 cp -L "$SRC/variants_long.parquet"       data/variants_long.parquet
 cp -L "$SRC/transcript_skeletons.parquet" data/transcript_skeletons.parquet
-cp -rL "$SRC/llm"                         data/llm
-cp -rL "$SRC/structures"                 data/structures
+# llm/ + structures/ are optional — the site degrades to placeholders without
+# them (e.g. a --skip-llm build, or before GPU folding). Stage an empty llm/ so
+# the app's data dir shape is consistent.
+if [[ -d "$SRC/llm" ]]; then cp -rL "$SRC/llm" data/llm; else mkdir -p data/llm; fi
+if [[ -d "$SRC/structures" ]]; then cp -rL "$SRC/structures" data/structures; fi
 
 echo "[prepare_deploy] staging swissisoform.site.evidence into the build context"
 rm -rf src/swissisoform scripts

@@ -87,6 +87,24 @@ class TestCollapsePerSample:
         out = collapse_to_source(df)
         assert sorted(out["Tid"]) == ["T1", "T2", "T7"]
 
+    def test_keep_unevaluated_false_drops_unsupported(self):
+        # keep_unevaluated=False (--drop-unsupported-tis): the un-evaluated,
+        # non-HeLa-supported T7 is dropped; only Annotated + resolved source survive.
+        df = pd.DataFrame(
+            [
+                {"Tid": "T1", "TisType": "Annotated",
+                 "HeLa_resolved": True, "HeLa_source_transcript": "T1"},
+                {"Tid": "T2", "TisType": "Extension",
+                 "HeLa_resolved": True, "HeLa_source_transcript": "T2"},
+                {"Tid": "T3", "TisType": "Extension",
+                 "HeLa_resolved": True, "HeLa_source_transcript": "T2"},
+                {"Tid": "T7", "TisType": "Truncation",  # K562-only: no HeLa verdict
+                 "HeLa_resolved": None, "HeLa_source_transcript": None},
+            ]
+        )
+        out = collapse_to_source(df, keep_unevaluated=False)
+        assert sorted(out["Tid"]) == ["T1", "T2"]
+
     def test_string_bool_round_trip(self):
         # CSV round-trips bools to "True"/"False" strings — must still collapse.
         df = pd.DataFrame(

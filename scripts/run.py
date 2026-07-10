@@ -135,6 +135,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Window-purity bound: nt 3' of the start codon (default 100)",
     )
     p.add_argument(
+        "--drop-unsupported-tis", action="store_true",
+        help="Drop TIS no long-read sample scored, at the collapse step "
+             "(non-production; production keeps them). For long-read-only "
+             "timing tests where only long-read-supported TIS should advance",
+    )
+    p.add_argument(
         "--no-spot-check-limit", action="store_true",
         help="Print every TIS in the spot check (default caps at 5 per gene)",
     )
@@ -311,6 +317,7 @@ def main(argv: list[str] | None = None) -> int:
         divergence_threshold=args.divergence_threshold,
         window_upstream=args.window_upstream,
         window_downstream=args.window_downstream,
+        drop_unsupported_tis=args.drop_unsupported_tis,
     )
     return runner.run(spec)
 
