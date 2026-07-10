@@ -344,8 +344,9 @@ def test_criteria_pass_dry_run_emits_one_call_per_criterion(monkeypatch, tmp_pat
     )
     captured = capsys.readouterr().out
     assert rc == 0
-    # 13 criteria × 1 isoform = 13 dry-run "criterion:" prints.
-    assert captured.count("criterion:") == 13
+    # 12 LLM-eligible criteria × 1 isoform = 12 dry-run "criterion:" prints
+    # (F7 shared-region RMSD is excluded from the LLM pass).
+    assert captured.count("criterion:") == 12
 
 
 def test_synthesis_pass_refuses_without_prereqs(monkeypatch, tmp_path):

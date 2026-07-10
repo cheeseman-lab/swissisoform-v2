@@ -748,6 +748,13 @@ CRITERIA: dict[str, dict[str, Any]] = {
 }
 
 
+# Criteria excluded from the LLM interpretation passes (per-criterion reads +
+# synthesis). They stay fully scored and rendered on the site — the LLM simply
+# does not editorialize on them. F7 (shared-region structural change) is a
+# provisional structural metric we surface descriptively, without an AI blurb.
+LLM_EXCLUDED_CRITERIA: set[str] = {"F7_shared_structural_change"}
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # Human-readable metric labels + formatters for the expanded evidence tile.
 # Keys are raw parquet column names; values describe how to render them.
