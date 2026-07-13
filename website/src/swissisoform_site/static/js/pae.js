@@ -11,7 +11,8 @@
  *
  *     We render to canvas (not Plotly) because the site ships plotly-basic,
  *     which has no heatmap trace — and a PAE map is fundamentally an image, so
- *     canvas is both lighter and crisper. Precompute is offline
+ *     canvas is both lighter and crisper. Residue-axis ticks + numbers are drawn
+ *     in a small margin around the plot. Precompute is offline
  *     (swissisoform.export.pae); this is a dumb display.
  *
  *   opts: { diffLo, diffHi }  1-based inclusive differential-region bounds
@@ -47,6 +48,27 @@
     return STOPS[STOPS.length - 1][1];
   }
 
+  // Residue-axis tick spacing: a "nice" 1-2-2.5-5 step giving ~7-9 ticks across
+  // L (e.g. 25 for ~185-240 aa, 50 for ~250-450 aa, 100 for ~900 aa). The 2.5
+  // stop keeps paired canonical/isoform panels of similar length on the same
+  // increment instead of jumping between 20 and 50.
+  function niceStep(L) {
+    var target = L / 7;
+    var mag = Math.pow(10, Math.floor(Math.log10(target)));
+    var norm = target / mag;
+    var nice = norm < 1.5 ? 1 : norm < 2.25 ? 2 : norm < 3.5 ? 2.5 : norm < 7.5 ? 5 : 10;
+    return Math.max(1, nice * mag);
+  }
+
+  // Plot margins (canvas px): the left/bottom margins hold the tick numbers AND
+  // an axis title; top/right just breathe. S = square plot side. The top margin
+  // is derived so the whole canvas is square (width === height), not just the plot.
+  var ML = 50, MR = 12, MB = 42, S = 300;
+  var N = ML + S + MR;   // 362 — square canvas side
+  var MT = N - S - MB;   // top margin chosen so the canvas is square
+  var TICK = "#64748b";  // slate tick numbers — legible on the white PAE card
+  var TITLE = "#475569"; // slightly darker for the axis titles
+
   function draw(el, data, opts) {
     var L = data.L;
     var pae = data.pae;
@@ -58,7 +80,7 @@
     el.innerHTML = "";
     el.classList.add("pae-panel");
 
-    // Paint the L×L map at native resolution, then let CSS scale it to fit.
+    // Paint the L*L map at native resolution, then scale it into the plot area.
     var off = document.createElement("canvas");
     off.width = L;
     off.height = L;
@@ -76,26 +98,75 @@
 
     var canvas = document.createElement("canvas");
     canvas.className = "pae-canvas";
-    // Display size is CSS-driven (square, responsive); back it with a crisp
-    // raster at a sensible device pixel budget.
-    var px = 320;
-    canvas.width = px;
-    canvas.height = px;
+    // Back the canvas at devicePixelRatio so it stays crisp on HiDPI/retina
+    // screens — a 1x backing store is the usual "low-res/blurry" culprit. The
+    // CSS sizes the display (max-width 344px); all drawing below stays in CSS
+    // units and ctx.scale(dpr) maps them onto the denser backing store.
+    var dpr = Math.min(window.devicePixelRatio || 1, 3);
+    canvas.width = Math.round(N * dpr);
+    canvas.height = Math.round(N * dpr);
     var ctx = canvas.getContext("2d");
+    ctx.scale(dpr, dpr);
     ctx.imageSmoothingEnabled = true;
-    ctx.drawImage(off, 0, 0, L, L, 0, 0, px, px);
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(off, 0, 0, L, L, ML, MT, S, S);
+
+    // Map a residue index (0..L) to a pixel offset along the plot axis.
+    function px(r) { return (r / L) * S; }
 
     // Differential-region outline (1-based inclusive bounds → pixel span).
     if (opts && opts.diffLo && opts.diffHi && opts.diffHi >= opts.diffLo) {
-      var s = ((opts.diffLo - 1) / L) * px;
-      var e = (opts.diffHi / L) * px;
+      var s0 = px(opts.diffLo - 1), e0 = px(opts.diffHi);
       ctx.strokeStyle = "rgba(140, 40, 160, 0.9)";
       ctx.lineWidth = 1.5;
       ctx.setLineDash([4, 3]);
-      // Band on both axes = the diagonal block for the gained/lost region.
-      ctx.strokeRect(s, s, e - s, e - s);
+      ctx.strokeRect(ML + s0, MT + s0, e0 - s0, e0 - s0);
       ctx.setLineDash([]);
     }
+
+    // Axis ticks + residue numbers.
+    var step = niceStep(L);
+    ctx.strokeStyle = TICK;
+    ctx.fillStyle = TICK;
+    ctx.lineWidth = 1;
+    ctx.font = '10px ui-monospace, "SF Mono", Menlo, monospace';
+    // x-axis (bottom): scored residue. Round to whole px + the .5 line offset so
+    // ticks and numbers land on the pixel grid (crisp, not fuzzy).
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    for (var rx = step; rx <= L - step * 0.35; rx += step) {
+      var xr = Math.round(ML + px(rx));
+      ctx.beginPath();
+      ctx.moveTo(xr + 0.5, MT + S);
+      ctx.lineTo(xr + 0.5, MT + S + 4);
+      ctx.stroke();
+      ctx.fillText(String(rx), xr, MT + S + 6);
+    }
+    // y-axis (left): aligned residue
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    for (var ry = step; ry <= L - step * 0.35; ry += step) {
+      var yr = Math.round(MT + px(ry));
+      ctx.beginPath();
+      ctx.moveTo(ML - 4, yr + 0.5);
+      ctx.lineTo(ML, yr + 0.5);
+      ctx.stroke();
+      ctx.fillText(String(ry), ML - 6, yr);
+    }
+
+    // Axis titles.
+    ctx.fillStyle = TITLE;
+    ctx.font = '600 10px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    ctx.textAlign = "center";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText("scored residue", ML + S / 2, MT + S + MB - 6);
+    ctx.save();
+    ctx.translate(12, MT + S / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("aligned residue", 0, 0);
+    ctx.restore();
 
     var fig = document.createElement("figure");
     fig.className = "pae-figure";
@@ -104,7 +175,6 @@
     var cap = document.createElement("figcaption");
     cap.className = "pae-caption";
     cap.innerHTML =
-      '<span class="pae-axislabel">Aligned residue (rows) · scored residue (cols)</span>' +
       '<span class="pae-legend"><span class="pae-swatch"></span>0 Å (confident) → ' +
       Math.round(PAE_MAX) +
       " Å (uncertain)</span>";
