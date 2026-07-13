@@ -102,6 +102,10 @@ class Isoform:
     # Precomputed per-residue colour maps (dual pLDDT ramp; diff region recoloured)
     isoform_colors: str | None
     canonical_colors: str | None
+    # Precomputed PAE (predicted aligned error) heatmap JSONs, or None if the
+    # structure was folded before PAE capture / isn't available.
+    isoform_pae: str | None
+    canonical_pae: str | None
     # All clinical variants in the isoform-unique region (any significance)
     variants_in_unique: list[dict[str, Any]] = field(default_factory=list)
     # Every clinical variant over the isoform's coding region (unique + shared)
@@ -326,6 +330,25 @@ def _lookup_colors(colors: frozenset[str], gene: str, tis_id: str, side: str) ->
     return name if name in colors else None
 
 
+@lru_cache(maxsize=1)
+def _pae_index(pae_dir_str: str) -> frozenset[str]:
+    """Set of precomputed PAE heatmap filenames in ``<structures>/pae/``.
+
+    Maps are named ``<gene>__<side>__<segment>.pae.json`` by
+    ``swissisoform.export.pae.export_pae`` — the same gene + tis-segment used for
+    CIF / colour-map lookup, so the page resolves them deterministically.
+    """
+    pae_dir = Path(pae_dir_str)
+    if not pae_dir.is_dir():
+        return frozenset()
+    return frozenset(p.name for p in pae_dir.glob("*.pae.json"))
+
+
+def _lookup_pae(pae_files: frozenset[str], gene: str, tis_id: str, side: str) -> str | None:
+    name = f"{gene}__{side}__{_tis_id_to_struct_segment(tis_id)}.pae.json"
+    return name if name in pae_files else None
+
+
 # --------------------------------------------------------------------------- #
 # Row -> Isoform
 # --------------------------------------------------------------------------- #
@@ -335,6 +358,7 @@ def _build_isoform(
     row: pd.Series,
     struct_index: dict[tuple[str, str], str],
     colors: frozenset[str] = frozenset(),
+    pae: frozenset[str] = frozenset(),
 ) -> Isoform:
     gene = row["gene_name"]
     tis_id = str(row["tis_id"])
@@ -395,6 +419,8 @@ def _build_isoform(
         canonical_cif=canonical_cif,
         isoform_colors=_lookup_colors(colors, gene, tis_id, "isoform"),
         canonical_colors=_lookup_colors(colors, gene, tis_id, "canonical"),
+        isoform_pae=_lookup_pae(pae, gene, tis_id, "isoform"),
+        canonical_pae=_lookup_pae(pae, gene, tis_id, "canonical"),
         raw=_clean_nan({k: row[k] for k in row.index}),
     )
 
@@ -428,6 +454,7 @@ def load_all() -> dict[str, GeneRecord]:
     df = pd.read_parquet(parquet_path)
     struct_index = _structure_index(str(structures_dir))
     colors = _colors_index(str(structures_dir / "colors"))
+    pae = _pae_index(str(structures_dir / "pae"))
 
     out: dict[str, GeneRecord] = {}
     for gene_name, sub in df.groupby("gene_name", sort=True):
@@ -447,7 +474,7 @@ def load_all() -> dict[str, GeneRecord]:
                 logger.warning("failed to parse %s: %s", llm_path, e)
                 llm = None
 
-        isoforms = [_build_isoform(r, struct_index, colors) for _, r in sub.iterrows()]
+        isoforms = [_build_isoform(r, struct_index, colors, pae) for _, r in sub.iterrows()]
         out[gene_name] = GeneRecord(
             name=gene_name,
             uniprot_id=uniprot_id,

@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 from swissisoform import runner  # noqa: E402, I001
 from swissisoform.assembly import assemble_genes  # noqa: E402
 from swissisoform.export.folding_colors import build_folding_colors  # noqa: E402
+from swissisoform.export.pae import export_pae  # noqa: E402
 from swissisoform.export.structures import export_structures  # noqa: E402
 from swissisoform.pipeline import UpstreamReference  # noqa: E402
 from swissisoform.references import (  # noqa: E402
@@ -66,6 +67,11 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  manifest: {man_path}")
     print(f"  {n_missing} isoforms had no cached structure (too long for Boltz, or not folded)")
     print("View in ChimeraX (colour by bfactor = pLDDT) or molstar.org/viewer")
+
+    # PAE heatmaps for the folding panel — one JSON per structure from the
+    # cached pae.npy (entries folded before PAE capture are skipped).
+    n_pae, n_pae_missing, pae_dir = export_pae(genes, outdir)
+    print(f"wrote {n_pae} PAE map(s) → {pae_dir} ({n_pae_missing} without cached PAE)")
 
     # Precompute the per-residue folding colour maps the site's 3Dmol viewer
     # applies (whole protein by pLDDT, differential region on a diverging ramp).

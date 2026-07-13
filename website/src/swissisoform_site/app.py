@@ -270,6 +270,8 @@ def create_app() -> Flask:
             isoform_cif=iso.isoform_cif,
             canonical_colors=iso.canonical_colors,
             isoform_colors=iso.isoform_colors,
+            canonical_pae=iso.canonical_pae,
+            isoform_pae=iso.isoform_pae,
             diff_start=iso.diff_start,
             diff_end=iso.diff_end,
             diff_space=iso.diff_space,
@@ -317,6 +319,19 @@ def create_app() -> Flask:
         recolouring is decided offline (scripts/export/build_folding_colors.py), not live.
         """
         root = data_dir() / "structures" / "colors"
+        if not (root / filename).is_file():
+            abort(404)
+        return send_from_directory(root, filename, mimetype="application/json")
+
+    @app.get("/structure-pae/<path:filename>")
+    def structure_pae(filename: str) -> Any:
+        """Serve precomputed PAE heatmap JSONs from ``<DATA_DIR>/structures/pae/``.
+
+        The folding panel's canvas renderer fetches these lazily and draws the
+        L×L predicted-aligned-error map (precomputed offline by
+        swissisoform.export.pae).
+        """
+        root = data_dir() / "structures" / "pae"
         if not (root / filename).is_file():
             abort(404)
         return send_from_directory(root, filename, mimetype="application/json")

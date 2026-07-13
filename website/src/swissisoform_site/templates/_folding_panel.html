@@ -10,6 +10,7 @@
    Context vars (set by isoform_page view):
      - canonical_cif / isoform_cif       : CIF filename in /structures/ (or None)
      - canonical_colors / isoform_colors : colour-map filename in /structure-colors/ (or None)
+     - canonical_pae / isoform_pae       : PAE-map filename in /structure-pae/ (or None)
      - diff_start (0-based incl) / diff_end (0-based excl) / diff_space
      - canonical_length_aa / isoform_length_aa : int | None
 #}
@@ -17,6 +18,10 @@
 {% set diff_hi_1based = diff_end if diff_end is not none else 0 %}
 {% set has_diff = (diff_hi_1based|int) > 0 %}
 {% set hi_lo_label = (diff_lo_1based|string) ~ '–' ~ (diff_hi_1based|int|string) %}
+{# The differential region lives on the canonical structure for truncations
+   (diff_space == 'canonical') and on the isoform structure otherwise. #}
+{% set diff_on_canonical = has_diff and diff_space == 'canonical' %}
+{% set diff_on_isoform = has_diff and diff_space != 'canonical' %}
 
 <div id="folding-panel" class="folding-grid">
   <div class="folding-half">
@@ -49,6 +54,70 @@
   {% endif %}
   <span class="folding-explore">Drag to rotate · scroll to zoom · download a CIF to explore in your own viewer.</span>
 </div>
+
+{# Predicted aligned error (PAE) — the L×L confidence map ESMFold2 computes per
+   fold. Only shown when a precomputed map exists for at least one side. #}
+{% if canonical_pae or isoform_pae %}
+<div id="pae-panel" class="pae-grid"
+     data-canonical-pae="{{ (url_for('structure_pae', filename=canonical_pae) if canonical_pae else '') }}"
+     data-isoform-pae="{{ (url_for('structure_pae', filename=isoform_pae) if isoform_pae else '') }}"
+     data-canonical-diff-lo="{{ diff_lo_1based if diff_on_canonical else '' }}"
+     data-canonical-diff-hi="{{ (diff_hi_1based|int) if diff_on_canonical else '' }}"
+     data-isoform-diff-lo="{{ diff_lo_1based if diff_on_isoform else '' }}"
+     data-isoform-diff-hi="{{ (diff_hi_1based|int) if diff_on_isoform else '' }}">
+  <div class="folding-half">
+    <div class="folding-title">Canonical PAE</div>
+    {% if canonical_pae %}
+    <div id="pae-viewer-canonical" class="pae-viewer"></div>
+    {% else %}
+    <div class="pae-viewer pae-empty">PAE not available</div>
+    {% endif %}
+  </div>
+  <div class="folding-half">
+    <div class="folding-title">Isoform PAE</div>
+    {% if isoform_pae %}
+    <div id="pae-viewer-isoform" class="pae-viewer"></div>
+    {% else %}
+    <div class="pae-viewer pae-empty">PAE not available</div>
+    {% endif %}
+  </div>
+</div>
+<div class="folding-legend">
+  <span>Predicted aligned error: expected Cα error (Å) at residue <em>j</em> when the fold is superposed on residue <em>i</em>. Dark = confident relative placement; bright = uncertain.
+  {% if has_diff %}The dashed outline marks the differential region ({{ hi_lo_label }}).{% endif %}</span>
+</div>
+
+<script>
+(function () {
+  var panel = document.getElementById('pae-panel');
+  if (!panel) return;
+  function num(v) { v = parseInt(v, 10); return isNaN(v) ? undefined : v; }
+  function mount() {
+    if (typeof window.swissPAE !== 'function') return false;
+    var d = panel.dataset;
+    if (d.canonicalPae) {
+      window.swissPAE('pae-viewer-canonical', d.canonicalPae,
+        { diffLo: num(d.canonicalDiffLo), diffHi: num(d.canonicalDiffHi) });
+    }
+    if (d.isoformPae) {
+      window.swissPAE('pae-viewer-isoform', d.isoformPae,
+        { diffLo: num(d.isoformDiffLo), diffHi: num(d.isoformDiffHi) });
+    }
+    return true;
+  }
+  var started = false;
+  function start() {
+    if (started) return;
+    if (mount()) { started = true; return; }
+    var t = setInterval(function () { if (mount()) { clearInterval(t); started = true; } }, 40);
+  }
+  var io = new IntersectionObserver(function (entries) {
+    if (entries.some(function (e) { return e.isIntersecting; })) { start(); io.disconnect(); }
+  }, { rootMargin: '200px' });
+  io.observe(panel);
+})();
+</script>
+{% endif %}
 
 <script>
 (function() {
