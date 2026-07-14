@@ -82,21 +82,34 @@
     </div>
   </section>
 
-  <!-- Evidence cards — one flat grid (E/F grouping removed; a different ordering
-       will land later). Each modal hosts its own differential-region evidence. -->
+  <!-- Evidence cards — six thematic groups (Conservation / Detection /
+       Localization / Mutation Landscape / Predicted Structure / Structural
+       Characteristics), replacing the old E/F axis. Each modal hosts its own
+       differential-region evidence. -->
   <section class="evidence-tiles">
     <h2>Evidence <span class="evidence-sub">— click any tile for the differential-region detail</span></h2>
-    <div class="tile-row">
-      <div class="tile-grid">
-        {% for c in criteria %}
-          {% set sl = criterion_slices[c.id] %}
-          {% set llm = criterion_llms[c.id] %}
-          {% include '_evidence_tile.html' %}
-        {% endfor %}
-        {% include '_biophysics_card.html' %}
-        {% include '_sae_card.html' %}
-      </div>
-    </div>
+    {% for group in card_groups %}
+      <section class="tile-group">
+        <h3 class="tile-group-h"><span class="tile-group-tag">{{ group.letter }}</span> {{ group.name }}</h3>
+        <div class="tile-grid">
+          {% for m in group.members %}
+            {% if m == 'biophysics' %}
+              {% set badge = card_badges['biophysics'] %}
+              {% include '_biophysics_card.html' %}
+            {% elif m == 'sae' %}
+              {% set badge = card_badges['sae'] %}
+              {% include '_sae_card.html' %}
+            {% else %}
+              {% set c = criteria_by_id[m] %}
+              {% set sl = criterion_slices[c.id] %}
+              {% set llm = criterion_llms[c.id] %}
+              {% set badge = card_badges[c.id] %}
+              {% include '_evidence_tile.html' %}
+            {% endif %}
+          {% endfor %}
+        </div>
+      </section>
+    {% endfor %}
   </section>
 
   <!-- Clinical variants table -->

@@ -263,9 +263,36 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+/* Thematic card groups (replaces the E/F axis sections). */
+.tile-group { margin-top: 18px; }
+.tile-group:first-of-type { margin-top: 12px; }
+.tile-group-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+  margin: 0 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.tile-group-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  background: #eef2f7;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
 .tile-grid {
   display: grid;
-  /* Fixed 3 columns → each axis's 6 tiles lay out as a clean 3×2 grid. */
+  /* Fixed 3 columns → a group of 2–3 tiles fills a clean single row. */
   grid-template-columns: repeat(3, 1fr);
   gap: 10px;
 }
@@ -312,6 +339,9 @@
   color: #444;
   font-family: ui-monospace, monospace;
 }
+/* Tagline: a muted metric label + the emphasized value on the tile face. */
+.tile-headline-label { color: #8a94a6; font-weight: 500; }
+.tile-headline-value { color: #1e293b; font-weight: 600; }
 /* Tile body content lives in a <template>; this is belt-and-suspenders
    in case the markup is ever rendered inline. */
 .tile-body { display: none; }

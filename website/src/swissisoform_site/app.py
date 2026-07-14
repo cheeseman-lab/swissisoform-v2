@@ -31,6 +31,9 @@ from swissisoform.site.evidence import (
 )
 
 from swissisoform_site.data import (
+    CARD_BADGES,
+    CARD_GROUPS,
+    CRITERIA_BY_ID,
     CRITERIA_FOR_PAGE,
     CRITERION_ABOUT,
     EXISTENCE_CRITERIA,
@@ -258,6 +261,9 @@ def create_app() -> Flask:
             bio=bio,
             criterion_evidence=criterion_evidence_for(iso),
             criteria=CRITERIA_FOR_PAGE,
+            card_groups=CARD_GROUPS,
+            card_badges=CARD_BADGES,
+            criteria_by_id=CRITERIA_BY_ID,
             criterion_slices=criterion_slices,
             criterion_llms=criterion_llms,
             synthesis=synthesis,

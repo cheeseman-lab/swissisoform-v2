@@ -39,19 +39,19 @@ logger = logging.getLogger(__name__)
 EXISTENCE_CRITERIA = [
     ("E1_primate_conservation", "E1", "Primate frame conservation"),
     ("E2_mammalian_conservation", "E2", "Mammalian frame conservation"),
-    ("E3_phylop_coding_selection", "E3", "PhyloP coding selection"),
-    ("E4_multi_cell_line", "E4", "Detected in multiple cell lines"),
-    ("E5_initiation_efficiency", "E5", "Initiation efficiency"),
-    ("E6_mass_spec", "E6", "Mass-spec peptide support"),
+    ("E3_phylop_coding_selection", "E3", "Coding Selection"),
+    ("E4_multi_cell_line", "E4", "Expression Breadth"),
+    ("E5_initiation_efficiency", "E5", "Start-Site Usage"),
+    ("E6_mass_spec", "E6", "Peptide Evidence"),
 ]
 
 FUNCTIONAL_CRITERIA = [
-    ("F1_structured_extension", "F1", "Structured extension (pLDDT)"),
-    ("F2_localization_change", "F2", "Localization change"),
+    ("F1_structured_extension", "F1", "Fold Confidence"),
+    ("F2_localization_change", "F2", "Compartment"),
     ("F3_domain_change", "F3", "Domain (InterProScan) change"),
-    ("F4_targeting_change", "F4", "Targeting (SignalP/TargetP) change"),
-    ("F5_pathogenic_variant_enrichment", "F5", "Germline tolerance & constraint"),
-    ("F6_clinical_variant_overlap", "F6", "Clinical variant overlap"),
+    ("F4_targeting_change", "F4", "Sorting Signals"),
+    ("F5_pathogenic_variant_enrichment", "F5", "Germline Variants"),
+    ("F6_clinical_variant_overlap", "F6", "Clinical Variants"),
 ]
 
 
@@ -718,7 +718,7 @@ def sae_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
 
     Scoring and LLM surfacing are intentionally out of scope for this card — it
     is descriptive over data already in the parquet. (The scored F7 criterion is
-    the separate "Shared region structural changes" RMSD tile.)
+    the separate "Core Fold Perturbation" RMSD tile.)
     """
     raw = iso.raw or {}
     if raw.get("isoform_sae_status") != "ok":
@@ -1305,7 +1305,7 @@ def criterion_evidence_for(iso) -> dict:
         if not eff_rows:
             return None
         return {
-            "title": "Initiation efficiency · canonical vs isoform",
+            "title": "Start-Site Usage · canonical vs isoform",
             "subtitle": (
                 "ribosome initiation efficiency at the canonical start vs this "
                 "alternative start, per cell line"
@@ -1537,7 +1537,7 @@ def criterion_evidence_for(iso) -> dict:
         )
         return {
             "title": "N-terminal targeting (SignalP / TargetP)",
-            "subtitle": "targeting signal changed" if changed else "no targeting change",
+            "subtitle": "sorting signal changed" if changed else "no sorting-signal change",
             "cmp_headers": ["Predictor", "Canonical", "Isoform"],
             "col_classes": CANON_ISO,
             "compare_rows": compare_rows,
@@ -1630,7 +1630,7 @@ def criterion_evidence_for(iso) -> dict:
             kind = "validated" if p.get("validated") else "peptide"
             hits.append({"kind": kind, "name": str(p.get("peptide") or "?")[:40], "span": span})
         return {
-            "title": "Mass-spec peptide support (canonical vs isoform)",
+            "title": "Peptide Evidence (canonical vs isoform)",
             "subtitle": "isoform-unique peptides are direct evidence the alternative protein exists",
             "cmp_headers": ["Feature", "Canonical", "Isoform"],
             "col_classes": CANON_ISO,
@@ -1688,7 +1688,7 @@ def criterion_evidence_for(iso) -> dict:
             **_term("gnomAD variants"),
         }
         return {
-            "title": "Germline tolerance · differential vs shared region",
+            "title": "Germline Variants · differential vs shared region",
             "subtitle": (
                 "gnomAD (population) variant density per nucleotide — depletion "
                 "ratio < 1× means healthy human variation avoids the region "
@@ -1985,73 +1985,149 @@ def llm_for_isoform(gene: GeneRecord, tis_id: str) -> dict[str, Any] | None:
 CRITERIA_FOR_PAGE = [
     {
         "id": "E1_primate_conservation",
+        "headline_label": "Primate Mean Identity",
         "axis": "E",
         "label": "Primate conservation",
         "short_label": "Primates",
     },
     {
         "id": "E2_mammalian_conservation",
+        "headline_label": "Mammalian Mean Identity",
         "axis": "E",
         "label": "Mammalian conservation",
         "short_label": "Mammals",
     },
     {
         "id": "E3_phylop_coding_selection",
+        "headline_label": "PhyloP Unique Region",
         "axis": "E",
-        "label": "PhyloP coding selection",
+        "label": "Coding Selection",
         "short_label": "PhyloP",
     },
     {
         "id": "E4_multi_cell_line",
         "axis": "E",
-        "label": "Multi cell line expression",
+        "label": "Expression Breadth",
         "short_label": "Cell lines",
     },
     {
         "id": "E5_initiation_efficiency",
         "axis": "E",
-        "label": "Initiation efficiency",
+        "label": "Start-Site Usage",
         "short_label": "Init. eff.",
     },
-    {"id": "E6_mass_spec", "axis": "E", "label": "Mass spec", "short_label": "MS"},
+    {
+        "id": "E6_mass_spec",
+        "axis": "E",
+        "label": "Peptide Evidence",
+        "short_label": "MS",
+    },
     {
         "id": "F1_structured_extension",
+        "headline_label": "pLDDT Differential Region",
         "axis": "F",
-        "label": "Structured extension",
+        "label": "Fold Confidence",
         "short_label": "Folding",
     },
     {
         "id": "F2_localization_change",
         "axis": "F",
-        "label": "Localization change",
+        "label": "Compartment",
         "short_label": "Localization",
     },
-    {"id": "F3_domain_change", "axis": "F", "label": "Domain change", "short_label": "Domains"},
+    {
+        "id": "F3_domain_change",
+        "headline_label": "Domain Hits in Region",
+        "axis": "F",
+        "label": "Domain change",
+        "short_label": "Domains",
+    },
     {
         "id": "F4_targeting_change",
         "axis": "F",
-        "label": "Targeting change",
+        "label": "Sorting Signals",
         "short_label": "Targeting",
     },
     {
         "id": "F5_pathogenic_variant_enrichment",
+        "headline_label": "gnomAD Depletion Ratio",
         "axis": "F",
-        "label": "Germline tolerance & constraint",
+        "label": "Germline Variants",
         "short_label": "Germline",
     },
     {
         "id": "F6_clinical_variant_overlap",
+        "headline_label": "Disease Enrichment Ratio",
         "axis": "F",
-        "label": "Clinical variant overlap",
+        "label": "Clinical Variants",
         "short_label": "Variants",
     },
     {
         "id": "F7_shared_structural_change",
+        "headline_label": "Shared-Region RMSD",
         "axis": "F",
-        "label": "Shared region structural changes",
+        "label": "Core Fold Perturbation",
         "short_label": "Shared RMSD",
     },
 ]
+
+
+# Thematic card groups — the six-way organization that replaces the old E/F axis
+# on the isoform page. Order is the display order. ``members`` reference
+# ``CRITERIA_FOR_PAGE`` ids, plus the literals "biophysics" / "sae" for the two
+# descriptive (non-scored) tiles. Each group's members are internally uniform in
+# the old axis, so existing per-tile axis colouring stays coherent.
+CARD_GROUPS = [
+    {
+        "name": "Conservation",
+        "letter": "C",
+        "members": [
+            "E1_primate_conservation",
+            "E2_mammalian_conservation",
+            "E3_phylop_coding_selection",
+        ],
+    },
+    {
+        "name": "Detection",
+        "letter": "D",
+        "members": [
+            "E4_multi_cell_line",
+            "E5_initiation_efficiency",
+            "E6_mass_spec",
+        ],
+    },
+    {
+        "name": "Localization",
+        "letter": "L",
+        "members": ["F2_localization_change", "F4_targeting_change"],
+    },
+    {
+        "name": "Mutation Landscape",
+        "letter": "M",
+        "members": ["F5_pathogenic_variant_enrichment", "F6_clinical_variant_overlap"],
+    },
+    {
+        "name": "Predicted Structure",
+        "letter": "P",
+        "members": ["F1_structured_extension", "F7_shared_structural_change"],
+    },
+    {
+        "name": "Structural Characteristics",
+        "letter": "S",
+        "members": ["F3_domain_change", "biophysics", "sae"],
+    },
+]
+
+# member id -> displayed badge (group letter + 1-based index within its group).
+# Covers the 13 criterion ids plus "biophysics" / "sae".
+CARD_BADGES = {
+    member: f"{group['letter']}{i + 1}"
+    for group in CARD_GROUPS
+    for i, member in enumerate(group["members"])
+}
+
+# by-id view of CRITERIA_FOR_PAGE, for the grouped template loop.
+CRITERIA_BY_ID = {c["id"]: c for c in CRITERIA_FOR_PAGE}
 
 
 def llm_criterion_for_isoform(*, llm_dir: Path, tis_slug: str, criterion_id: str) -> dict | None:

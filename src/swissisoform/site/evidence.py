@@ -22,7 +22,20 @@ import pandas as pd
 PATHOGENIC_CLINSIG_TOKENS = ("pathogenic", "likely_pathogenic", "likely pathogenic")
 
 # Sentinel headline_col for criteria whose headline is computed, not a column.
-_MAX_INITIATION_EFFICIENCY = "__max_initiation_efficiency__"
+_START_SITE_USAGE = "__start_site_usage__"
+_N_CELL_LINES_DETECTED = "__n_cell_lines_detected__"
+_MASSPEC_VALIDATED = "__massspec_validated__"
+# Composed "iso: {a} | canon: {b}" headlines: sentinel -> (isoform_col, canonical_col).
+_ISO_CANON_HEADLINES = {
+    "__localization_iso_canon__": (
+        "isoform_localization_deeploc_prediction",
+        "canonical_localization_deeploc_prediction",
+    ),
+    "__sorting_iso_canon__": (
+        "isoform_targetp_targetp_prediction",
+        "canonical_targetp_targetp_prediction",
+    ),
+}
 
 _INITIATION_EFFICIENCY_SAMPLES = ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen")
 
@@ -464,7 +477,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
     },
     "E3_phylop_coding_selection": {
         "axis": "E",
-        "label": "PhyloP coding selection",
+        "label": "Coding Selection",
         "short_label": "PhyloP",
         "evidence_cols": [
             "isoform_conservation_phylop_unique_region_mean",
@@ -486,7 +499,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
     },
     "E4_multi_cell_line": {
         "axis": "E",
-        "label": "Multi cell line expression",
+        "label": "Expression Breadth",
         "short_label": "Cell lines",
         "evidence_cols": [
             "expr_HeLa_initiation_efficiency",
@@ -508,7 +521,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "expr_RPE1_Sen_p_value",
             "expr_RPE1_Sen_cpm",
         ],
-        "headline_col": None,  # multi-sample — UI shows a small table
+        "headline_col": _N_CELL_LINES_DETECTED,  # computed: # cell lines detected
         "interpretation_hint": (
             "Is the TIS reproducibly detected across multiple cell lines? Count "
             "samples with significant p-values."
@@ -516,7 +529,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
     },
     "E5_initiation_efficiency": {
         "axis": "E",
-        "label": "Initiation efficiency",
+        "label": "Start-Site Usage",
         "short_label": "Init. eff.",
         "evidence_cols": [
             "expr_HeLa_initiation_efficiency",
@@ -538,7 +551,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
         # Computed headline: the maximum per-cell-line initiation efficiency
         # (TIS counts / gene RNA-seq counts ratio) across the six samples — see
         # ``_MAX_INITIATION_EFFICIENCY`` handling in ``slice_criterion``.
-        "headline_col": _MAX_INITIATION_EFFICIENCY,
+        "headline_col": _START_SITE_USAGE,
         "interpretation_hint": (
             "How efficiently is this TIS initiated? Each per-cell-line value is the "
             "TIS read counts / gene RNA-seq counts ratio; the headline is the max "
@@ -548,21 +561,21 @@ CRITERIA: dict[str, dict[str, Any]] = {
     },
     "E6_mass_spec": {
         "axis": "E",
-        "label": "Mass spec",
+        "label": "Peptide Evidence",
         "short_label": "MS",
         "evidence_cols": [
             "isoform_massspec_summary",
             "cmp_massspec_n_hits_in_diff_region",
         ],
         "evidence_hits_col": "cmp_massspec_hits_in_diff_region",
-        "headline_col": "cmp_massspec_n_hits_in_diff_region",
+        "headline_col": _MASSPEC_VALIDATED,
         "interpretation_hint": (
             "Are there PepQuery2 validated peptides in the isoform's unique region?"
         ),
     },
     "F1_structured_extension": {
         "axis": "F",
-        "label": "Structured extension",
+        "label": "Fold Confidence",
         "short_label": "Folding",
         "evidence_cols": [
             "isoform_structure_status",
@@ -600,7 +613,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
     },
     "F2_localization_change": {
         "axis": "F",
-        "label": "Localization change",
+        "label": "Compartment",
         "short_label": "Localization",
         "evidence_cols": [
             "cmp_localization_deeploc_prediction_changed",
@@ -619,7 +632,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "canonical_localization_deeploc_membrane",
             "isoform_localization_deeploc_membrane",
         ],
-        "headline_col": "cmp_localization_deeploc_prediction_changed",
+        "headline_col": "__localization_iso_canon__",
         "interpretation_hint": (
             "Do the isoform's localization features change vs canonical "
             "(DeepLoc prediction / sorting signals / membrane association)?"
@@ -639,7 +652,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
     },
     "F4_targeting_change": {
         "axis": "F",
-        "label": "Targeting change",
+        "label": "Sorting Signals",
         "short_label": "Targeting",
         "evidence_cols": [
             "cmp_signalp_signalp_prediction_changed",
@@ -661,7 +674,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "canonical_targetp_targetp_prediction",
             "isoform_targetp_targetp_prediction",
         ],
-        "headline_col": "cmp_signalp_signalp_prediction_changed",
+        "headline_col": "__sorting_iso_canon__",
         "interpretation_hint": (
             "Do N-terminal sorting signals differ between canonical and isoform — a "
             "secretory signal peptide (SignalP) or a mitochondrial/chloroplast "
@@ -670,7 +683,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
     },
     "F5_pathogenic_variant_enrichment": {
         "axis": "F",
-        "label": "Germline tolerance",
+        "label": "Germline Variants",
         "short_label": "Germline",
         "evidence_cols": [
             "isoform_variant_intersection_gnomad_depletion_ratio",
@@ -698,7 +711,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
     },
     "F6_clinical_variant_overlap": {
         "axis": "F",
-        "label": "Disease variant overlap",
+        "label": "Clinical Variants",
         "short_label": "Disease",
         "evidence_cols": [
             "isoform_variant_intersection_disease_enrichment_ratio",
@@ -722,7 +735,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
     },
     "F7_shared_structural_change": {
         "axis": "F",
-        "label": "Shared region structural changes",
+        "label": "Core Fold Perturbation",
         "short_label": "Shared RMSD",
         "evidence_cols": [
             "isoform_structure_rmsd_shared",
@@ -1354,15 +1367,102 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
 
     evidence = {col: raw.get(col) for col in cfg["evidence_cols"]}
     headline_col = cfg.get("headline_col")
-    if headline_col == _MAX_INITIATION_EFFICIENCY:
-        # Max per-cell-line initiation efficiency (TIS counts / gene RNA-seq
-        # counts ratio) across the six samples; None if no sample is scorable.
-        vals = [
-            raw.get(f"expr_{s}_initiation_efficiency") for s in _INITIATION_EFFICIENCY_SAMPLES
+    # Styled headline: a list of {"t", "strong"} segments so composed taglines can
+    # mute the label parts and bold only the important value(s). None → plain path.
+    headline_segments = None
+    if headline_col == _START_SITE_USAGE:
+        # "alt used {r}× vs canonical": how hard the alternative start is used
+        # relative to the canonical start (both = TIS counts / gene RNA-seq
+        # counts, normalized per cell line), taken in the cell line where the
+        # alt is used most AND a canonical reference is measured. Falls back to
+        # the absolute max alt efficiency when no cell line has a canonical ref.
+        def _num(x: Any) -> float | None:
+            return None if x is None or (isinstance(x, float) and math.isnan(x)) else float(x)
+
+        max_alt = None  # overall highest alt efficiency (fallback)
+        best = None  # (alt_eff, ratio) at highest alt among cells with a canonical ref
+        for s in _INITIATION_EFFICIENCY_SAMPLES:
+            a = _num(raw.get(f"expr_{s}_initiation_efficiency"))
+            if a is None:
+                continue
+            if max_alt is None or a > max_alt:
+                max_alt = a
+            c = _num(raw.get(f"canonical_expr_{s}_initiation_efficiency"))
+            if c is not None and c > 0 and (best is None or a > best[0]):
+                best = (a, a / c)
+        if best is not None:
+            headline = f"alt used {best[1]:.2g}× vs canonical"
+            headline_segments = [
+                {"t": "alt used ", "strong": False},
+                {"t": f"{best[1]:.2g}×", "strong": True},
+                {"t": " vs canonical", "strong": False},
+            ]
+        elif max_alt is not None:
+            headline = f"Max Initiation Efficiency: {max_alt:.3g}"
+            headline_segments = [
+                {"t": "Max Initiation Efficiency: ", "strong": False},
+                {"t": f"{max_alt:.3g}", "strong": True},
+            ]
+        else:
+            headline = None
+        headline_fmt = "str"
+    elif headline_col == _N_CELL_LINES_DETECTED:
+        # "detected in n/m cell lines": n = cell lines with an expression record
+        # for this TIS (present per-sample column, mirrors the E4 scorer's
+        # ``len(site.expression)``); m = the full cell-line panel.
+        n = 0
+        for s in _INITIATION_EFFICIENCY_SAMPLES:
+            v = raw.get(f"expr_{s}_p_value")
+            if v is not None and not (isinstance(v, float) and math.isnan(v)):
+                n += 1
+        m = len(_INITIATION_EFFICIENCY_SAMPLES)
+        headline = f"detected in {n}/{m} cell lines"
+        headline_segments = [
+            {"t": "detected in ", "strong": False},
+            {"t": f"{n}/{m}", "strong": True},
+            {"t": " cell lines", "strong": False},
         ]
-        vals = [v for v in vals if v is not None and not (isinstance(v, float) and math.isnan(v))]
-        headline = max(vals) if vals else None
-        headline_fmt = "float3"
+        headline_fmt = "str"
+    elif headline_col == _MASSPEC_VALIDATED:
+        # "{v}/{u} isoform-unique peptides validated": v = isoform-unique tryptic
+        # peptides matched to public MS spectra by PepQuery2 (the E6 score
+        # numerator), u = total isoform-unique peptides searched. The isoform
+        # digest is scoped to unique peptides, so ``validated_peptides`` == the
+        # validated-unique count. Unscored (—) until PepQuery has run.
+        summary = raw.get("isoform_massspec_summary")
+        if isinstance(summary, dict) and summary.get("pepquery_run"):
+            v = summary.get("validated_peptides") or 0
+            u = summary.get("unique_peptides")
+            if u is None:
+                u = summary.get("total_peptides") or 0
+            headline = f"{v}/{u} isoform-unique peptides validated"
+            headline_segments = [
+                {"t": f"{v}/{u}", "strong": True},
+                {"t": " isoform-unique peptides validated", "strong": False},
+            ]
+        else:
+            headline = None
+        headline_fmt = "str"
+    elif headline_col in _ISO_CANON_HEADLINES:
+        iso_col, canon_col = _ISO_CANON_HEADLINES[headline_col]
+
+        def _pred(x: Any) -> str:
+            if x is None or (isinstance(x, float) and math.isnan(x)):
+                return "—"
+            # DeepLoc joins multiple locations with "|"; render as "a, b" so the
+            # "|" reads only as the iso/canon separator.
+            return str(x).replace("|", ", ")
+
+        iso_v = _pred(raw.get(iso_col))
+        canon_v = _pred(raw.get(canon_col))
+        headline = f"iso: {iso_v} | canon: {canon_v}"
+        headline_segments = [
+            {"t": "iso: ", "strong": False},
+            {"t": iso_v, "strong": True},
+            {"t": " | canon: ", "strong": False},
+            {"t": canon_v, "strong": True},
+        ]
+        headline_fmt = "str"
     else:
         headline = raw.get(headline_col) if headline_col else None
         headline_fmt = CRITERIA_METRIC_LABELS.get(headline_col, {}).get("format", "str")
@@ -1428,6 +1528,7 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         "reason": criterion_entry.get("reason"),
         "headline": headline,
         "headline_fmt": headline_fmt,
+        "headline_segments": headline_segments,
         "evidence": evidence,
         "hits": hits,
         "n_hits_total": n_hits_total,
