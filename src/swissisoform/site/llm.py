@@ -608,8 +608,12 @@ def _check_prereqs(records, out_dir: Path, prereqs: tuple[str, ...]) -> list[str
 
 
 def _run_criterion_pass(records, spec, args, system_prompt, output_schema) -> int:
-    """Per-(isoform, criterion) dispatch — 12 calls per isoform."""
-    from swissisoform.site.evidence import CRITERIA, slice_criterion
+    """Per-(isoform, criterion) dispatch — one call per LLM-eligible criterion."""
+    from swissisoform.site.evidence import (
+        CRITERIA,
+        LLM_EXCLUDED_CRITERIA,
+        slice_criterion,
+    )
 
     api_key = os.environ.get("ANTHROPIC_API_KEY") if not args.dry_run else "dry"
     if not api_key:
@@ -618,7 +622,9 @@ def _run_criterion_pass(records, spec, args, system_prompt, output_schema) -> in
         )
 
     args.out.mkdir(parents=True, exist_ok=True)
-    criterion_ids = list(CRITERIA.keys())  # 12 of them, ordered E1..E6, F1..F6
+    # Ordered E1..E6, F1..F6 — F7 (shared-region RMSD) is intentionally excluded
+    # from LLM interpretation (see LLM_EXCLUDED_CRITERIA).
+    criterion_ids = [c for c in CRITERIA if c not in LLM_EXCLUDED_CRITERIA]
     n_calls = 0
     n_ok = 0
 
@@ -681,7 +687,11 @@ def _build_synthesis_record(isoform: dict, gene_name: str, isoform_out_dir: Path
     payload per criterion) so the model can weigh actual numbers, not just
     headlines.
     """
-    from swissisoform.site.evidence import CRITERIA, slice_criterion
+    from swissisoform.site.evidence import (
+        CRITERIA,
+        LLM_EXCLUDED_CRITERIA,
+        slice_criterion,
+    )
 
     criteria_reads: dict[str, Any] = {}
     pp = isoform_out_dir / "criteria.json"
@@ -689,8 +699,12 @@ def _build_synthesis_record(isoform: dict, gene_name: str, isoform_out_dir: Path
         criteria_reads = json.loads(pp.read_text(encoding="utf-8"))
 
     iso_with_gene = {**isoform, "gene": {"name": gene_name}}
+    # LLM-excluded criteria (e.g. F7) are kept out of the synthesis evidence too,
+    # so the AI summary never editorializes on them.
     criteria_evidence: dict[str, Any] = {
-        cid: slice_criterion(iso_with_gene, cid) for cid in CRITERIA
+        cid: slice_criterion(iso_with_gene, cid)
+        for cid in CRITERIA
+        if cid not in LLM_EXCLUDED_CRITERIA
     }
 
     return {

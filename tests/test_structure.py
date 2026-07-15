@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pytest
 
-from swissisoform.structure.module import StructureModule
 from swissisoform.structure.compare import compare_confidence
 from swissisoform.structure.fold import (
     cache_path,
@@ -22,6 +21,7 @@ from swissisoform.structure.fold import (
     protein_hash,
     write_cache,
 )
+from swissisoform.structure.module import StructureModule
 
 
 def _seed_cache(
@@ -70,6 +70,24 @@ class TestCacheRoundtrip:
         h = "abc123"
         p = cache_path(tmp_path, "boltz", h)
         assert p == tmp_path / "boltz" / h
+
+    def test_pae_path_absent_by_default(self, tmp_path):
+        seq = "MAEPRSTV"
+        h = _seed_cache(tmp_path, seq, plddt=[80.0] * len(seq), ptm=0.83)
+        out = load_cache(h, tmp_path, "boltz")
+        assert out is not None
+        # Entries folded before PAE capture carry no pae.npy.
+        assert out["pae_path"] is None
+
+    def test_pae_path_exposed_when_present(self, tmp_path):
+        np = pytest.importorskip("numpy")
+        seq = "MAEPRSTV"
+        h = _seed_cache(tmp_path, seq, plddt=[80.0] * len(seq), ptm=0.83)
+        base = cache_path(tmp_path, "boltz", h)
+        np.save(base / "pae.npy", np.zeros((len(seq), len(seq)), dtype=np.float16))
+        out = load_cache(h, tmp_path, "boltz")
+        assert out is not None and out["pae_path"] == base / "pae.npy"
+        assert out["pae_path"].exists()
 
     def test_precompute_inline_false_skips_missing(self, tmp_path):
         proteins = {"a": "MAEPRSTV", "b": "MGGGAA"}
@@ -224,9 +242,15 @@ class TestStructureModule:
                 "plddt_diffregion_mean",
                 "plddt_diffregion_std",
                 "plddt_delta_shared",
+                "plddt_shared_mean_isoform",
+                "plddt_shared_mean_canonical",
                 "tm_score",
                 "rmsd_global",
                 "extension_contacts",
+                "rmsd_shared",
+                "tm_score_shared",
+                "shared_region_len",
+                "rmsd_shared_status",
             ]:
                 assert k in keys
 

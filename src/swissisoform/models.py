@@ -26,10 +26,13 @@ __all__ = [
 # Confidence tiers for DifferentialRegion.
 # - "exact": canonical diff (annotated → empty; uORF/altORF/internal/3utr → entire isoform)
 # - "tail_verified": sequence relationship confirmed by ≥95% tail match
+# - "initiator_met": truncation whose alt-start codon is translated as an initiator
+#     Met substituting the canonical residue at the start position; iso[1:] is an
+#     exact suffix of canonical — residue-verified (single-residue junction diff)
 # - "length_fallback": truncation with unmatched sequences; diff derived from length delta
 # - "whole_isoform_fallback": sequences unrelated; entire isoform marked differential
 DiffRegionConfidence = Literal[
-    "exact", "tail_verified", "length_fallback", "whole_isoform_fallback"
+    "exact", "tail_verified", "initiator_met", "length_fallback", "whole_isoform_fallback"
 ]
 
 

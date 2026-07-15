@@ -4,7 +4,7 @@ Two independent scores per TIS derived from the annotations other
 modules have already attached:
 
 - **Existence (E1–E6)** — is this isoform a real biological entity?
-- **Functional impact (F1–F6)** — does it change protein function?
+- **Functional impact (F1–F7)** — does it change protein function?
 
 Each criterion is a small function returning ``(value, reason)`` where
 ``value`` is ``True`` / ``False`` / ``None``. ``None`` means "cannot
@@ -52,6 +52,8 @@ Functional impact:
        ``variant_intersection``)
     F6 Disease-variant density enrichment in unique region vs shared core
        (``variant_intersection.disease_enrichment_ratio``)
+    F7 Shared-region structural change — retained region folds differently
+       (``structure`` shared-region Cα RMSD, pLDDT-gated)
 """
 
 from __future__ import annotations
@@ -101,6 +103,9 @@ from swissisoform.evidence import (
 from swissisoform.evidence import (
     f6_disease_enrichment as _f6,
 )
+from swissisoform.evidence import (
+    f7_shared_rmsd as _f7,
+)
 from swissisoform.evidence.common import _score
 from swissisoform.models import Gene, TranslationInitiationSite
 
@@ -119,6 +124,7 @@ _f3_domain_change = _f3.score
 _f4_targeting_change = _f4.score
 _f5_pathogenic_variant_enrichment = _f5.score
 _f6_clinical_variant_overlap = _f6.score
+_f7_shared_structural_change = _f7.score
 
 __all__ = [
     "EXISTENCE_CRITERIA",
@@ -152,7 +158,7 @@ class EvidenceScoringModule:
         scoring_mod.run([s for g in genes for s in g.tis_sites])
 
     Reads from ``site.isoform_annotations`` and ``site.comparison``,
-    evaluates 12 criteria (6 existence + 6 functional) and writes them onto
+    evaluates 13 criteria (6 existence + 7 functional) and writes them onto
     ``site.isoform_annotations["scoring"]``.
 
     Attributes:

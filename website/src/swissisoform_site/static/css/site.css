@@ -263,9 +263,36 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+/* Thematic card groups (replaces the E/F axis sections). */
+.tile-group { margin-top: 18px; }
+.tile-group:first-of-type { margin-top: 12px; }
+.tile-group-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+  margin: 0 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.tile-group-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  background: #eef2f7;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
 .tile-grid {
   display: grid;
-  /* Fixed 3 columns → each axis's 6 tiles lay out as a clean 3×2 grid. */
+  /* Fixed 3 columns → a group of 2–3 tiles fills a clean single row. */
   grid-template-columns: repeat(3, 1fr);
   gap: 10px;
 }
@@ -282,9 +309,98 @@
 .evidence-tile:hover { box-shadow: 0 2px 6px rgba(0,0,0,0.07); }
 .evidence-tile.axis-E { border-left: 3px solid #2563eb; }
 .evidence-tile.axis-F { border-left: 3px solid #16a34a; }
+
+/* ── CDLMPS category boxes — one colored panel per category. Flag + all
+   submodule cards are always visible; only the LLM reasoning collapses. ── */
+.cat-box {
+  --cat-accent: #64748b;
+  --cat-accent-bg: #f1f5f9;
+  margin-top: 16px;
+  border: 1px solid #e5e7eb;
+  border-left: 4px solid var(--cat-accent);
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px 14px 14px;
+}
+.cat-box:first-of-type { margin-top: 10px; }
+.cat-C { --cat-accent: #059669; --cat-accent-bg: #ecfdf5; }  /* Conservation — emerald */
+.cat-D { --cat-accent: #2563eb; --cat-accent-bg: #eff6ff; }  /* Detection — blue */
+.cat-L { --cat-accent: #7c3aed; --cat-accent-bg: #f5f3ff; }  /* Localization — violet */
+.cat-M { --cat-accent: #e11d48; --cat-accent-bg: #fff1f2; }  /* Mutation Landscape — rose */
+.cat-P { --cat-accent: #d97706; --cat-accent-bg: #fffbeb; }  /* Predicted Structure — amber */
+.cat-S { --cat-accent: #0891b2; --cat-accent-bg: #ecfeff; }  /* Structural Characteristics — cyan */
+
+.cat-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.cat-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--cat-accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.cat-name { font-size: 14px; font-weight: 600; color: #1e293b; }
+
+/* Verdict flag — semantic colors, independent of the category accent. */
+.cat-flag {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.cat-flag::before { content: "\2691"; line-height: 1; }  /* ⚑ */
+.cat-flag-interesting { color: #166534; background: #dcfce7; border-color: #bbf7d0; }
+.cat-flag-neutral { color: #475569; background: #f1f5f9; border-color: #e2e8f0; }
+.cat-flag-not_interesting { color: #991b1b; background: #fee2e2; border-color: #fecaca; }
+.cat-flag-pending { color: #94a3b8; background: transparent; border: 1px dashed #cbd5e1; }
+.cat-flag-pending::before { content: "\2690"; }  /* ⚐ hollow — not yet assessed */
+
+/* Collapsible LLM reasoning — the only disclosure inside a category box. */
+.cat-reasoning { margin: 0 0 10px; }
+.cat-reasoning-summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cat-accent);
+  user-select: none;
+}
+.cat-reasoning-summary::-webkit-details-marker { display: none; }
+.cat-reasoning-summary::after { content: "\25be"; transition: transform 0.15s ease; }  /* ▾ */
+.cat-reasoning[open] .cat-reasoning-summary::after { transform: rotate(180deg); }
+.cat-reasoning-body {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  background: var(--cat-accent-bg);
+  border-radius: 6px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #334155;
+}
+.cat-reasoning-empty { color: #94a3b8; font-style: italic; }
+
+/* Tiles inside a category adopt its accent (overrides the blue/green axis). */
+.cat-box .evidence-tile,
+.cat-box .evidence-tile.axis-E,
+.cat-box .evidence-tile.axis-F { border-left: 3px solid var(--cat-accent); }
 .tile-head {
   display: grid;
-  grid-template-columns: 32px 1fr 24px;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -312,6 +428,9 @@
   color: #444;
   font-family: ui-monospace, monospace;
 }
+/* Tagline: a muted metric label + the emphasized value on the tile face. */
+.tile-headline-label { color: #8a94a6; font-weight: 500; }
+.tile-headline-value { color: #1e293b; font-weight: 600; }
 /* Tile body content lives in a <template>; this is belt-and-suspenders
    in case the markup is ever rendered inline. */
 .tile-body { display: none; }
@@ -507,7 +626,7 @@
 }
 .variants-table th[aria-sort="descending"] .sort-caret::after { content: "\25BC"; }  /* ▼ */
 
-/* SAE F7 card — reuses .variants-scroll / .variants-table / .sortable inside the modal. */
+/* SAE F8 card — reuses .variants-scroll / .variants-table / .sortable inside the modal. */
 .tile-badge-info { background: #e2e8f0; color: #475569; font-size: 9px; font-weight: 700; letter-spacing: .02em; }
 .evidence-modal-wide { max-width: 960px; }
 .sae-modal-intro { font-size: 12px; color: #475569; line-height: 1.6; margin: 0 0 14px; }
@@ -679,6 +798,58 @@
 }
 .folding-legend .swatch.grey { background: #9ca3af; }
 .folding-legend .swatch.red { background: #d62728; }
+
+/* ── PAE (predicted aligned error) heatmaps ── */
+.pae-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.pae-viewer {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 120px;
+}
+.pae-figure { margin: 0; display: flex; flex-direction: column; align-items: center; }
+.pae-canvas {
+  width: 100%;
+  max-width: 362px;
+  height: auto;
+  image-rendering: auto;
+  border: 1px solid #e7e7e7;
+  border-radius: 4px;
+  background: #fff;
+}
+.pae-caption {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 10px;
+  color: #64748b;
+  margin-top: 4px;
+  text-align: center;
+}
+.pae-legend { display: inline-flex; align-items: center; gap: .3rem; }
+.pae-swatch {
+  display: inline-block;
+  width: 2.5rem;
+  height: .55rem;
+  border-radius: 2px;
+  vertical-align: middle;
+  /* mirrors the JS ramp: 0 Å dark green → ~white at PAE_MAX */
+  background: linear-gradient(to right, rgb(0, 68, 27), rgb(90, 174, 97), rgb(247, 252, 245));
+  border: 1px solid #cbd5e1;
+}
+.pae-empty, .pae-fallback {
+  font-size: 11px;
+  color: #94a3b8;
+  padding: 24px 8px;
+  text-align: center;
+}
+.pae-fallback { color: #b91c1c; }
 
 /* ── Differential-region evidence panel ──────────────────────────── */
 .diff-evidence { margin: 1.5rem 0; }

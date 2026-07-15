@@ -47,14 +47,18 @@ def load_cache(
 ) -> dict[str, Any] | None:
     """Load cached fold results by protein hash.
 
-    Returns a dict with keys ``confidence``, ``metrics``, ``cif_path`` (or
-    ``None`` if missing). Returns ``None`` if neither metrics.json nor
-    confidence.json exists for ``hash`` under ``backend``.
+    Returns a dict with keys ``confidence``, ``metrics``, ``cif_path``,
+    ``pae_path`` (each ``None`` if missing). Returns ``None`` if neither
+    metrics.json nor confidence.json exists for ``hash`` under ``backend``.
+
+    ``pae_path`` points at the optional ``pae.npy`` (L×L predicted aligned
+    error, float16); absent for older cache entries folded before PAE capture.
     """
     base = cache_path(cache_dir, backend, h)
     metrics_p = base / "metrics.json"
     confidence_p = base / "confidence.json"
     cif_p = base / "model.cif"
+    pae_p = base / "pae.npy"
     if not metrics_p.exists() and not confidence_p.exists():
         return None
 
@@ -66,6 +70,7 @@ def load_cache(
         with open(metrics_p) as fh:
             out["metrics"] = json.load(fh)
     out["cif_path"] = cif_p if cif_p.exists() else None
+    out["pae_path"] = pae_p if pae_p.exists() else None
     out["base_dir"] = base
     return out
 
@@ -256,7 +261,9 @@ def precompute_fold(
 
     if not skip_missing:
         for h, _ in missing:
-            result.setdefault(h, {"confidence": None, "metrics": None, "cif_path": None})
+            result.setdefault(
+                h, {"confidence": None, "metrics": None, "cif_path": None, "pae_path": None}
+            )
 
     return result
 

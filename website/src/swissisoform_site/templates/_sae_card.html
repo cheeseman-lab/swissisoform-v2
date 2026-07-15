@@ -1,4 +1,4 @@
-{# F7 "SAE features" — a blank (non-scored) evidence card. Reuses the evidence-tile
+{# F8 "SAE features" — a blank (non-scored) evidence card. Reuses the evidence-tile
    structure so isoform_page.js clones the <template> body into the shared modal on click.
    Content: Part 1 (global whole-protein feature comparison, 3 tables) + Part 2
    (features on the differential coordinates). Descriptive only — no E/F score.
@@ -75,15 +75,15 @@
 {% else %}<p class="empty">No interpretable features in this category.</p>{% endif %}
 {% endmacro %}
 
-<div class="evidence-tile axis-F sae-tile" data-criterion="F7_sae" title="SAE interpretability features — descriptive, not scored">
+<div class="evidence-tile axis-F sae-tile" data-criterion="F8_sae" title="SAE interpretability features — descriptive, not scored">
   <button class="tile-head" type="button" aria-haspopup="dialog">
-    <span class="tile-id">F7</span>
-    <span class="tile-label">SAE features</span>
+    <span class="tile-id">{{ badge }}</span>
+    <span class="tile-label">SAE Features</span>
     <span class="tile-badge tile-badge-info">SAE</span>
   </button>
   <div class="tile-headline">
     {% if sae %}
-      {{ sae.counts.isoform_only }} gained · {{ sae.counts.canonical_only }} lost · {{ sae.counts.shared }} shared
+      <span class="tile-headline-value">{{ sae.n_differ }}</span><span class="tile-headline-label"> SAE features differ</span>
     {% else %}
       <span class="text-xs text-slate-400">—</span>
     {% endif %}

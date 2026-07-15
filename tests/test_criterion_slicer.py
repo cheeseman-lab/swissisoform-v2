@@ -10,17 +10,17 @@ import pytest
 from swissisoform.site import evidence as ber
 
 
-def test_criteria_dict_has_exactly_12_entries() -> None:
-    assert len(ber.CRITERIA) == 12
-    # 6 E and 6 F
+def test_criteria_dict_has_exactly_13_entries() -> None:
+    assert len(ber.CRITERIA) == 13
+    # 6 E and 7 F
     e_count = sum(1 for c in ber.CRITERIA.values() if c["axis"] == "E")
     f_count = sum(1 for c in ber.CRITERIA.values() if c["axis"] == "F")
     assert e_count == 6
-    assert f_count == 6
+    assert f_count == 7
 
 
 def test_criterion_ids_match_scoring_module() -> None:
-    """The 12 criterion ids must match what src/swissisoform/modules/scoring.py emits."""
+    """The 13 criterion ids must match what src/swissisoform/modules/scoring.py emits."""
     expected = {
         "E1_primate_conservation",
         "E2_mammalian_conservation",
@@ -34,6 +34,7 @@ def test_criterion_ids_match_scoring_module() -> None:
         "F4_targeting_change",
         "F5_pathogenic_variant_enrichment",
         "F6_clinical_variant_overlap",
+        "F7_shared_structural_change",
     }
     assert set(ber.CRITERIA) == expected
 

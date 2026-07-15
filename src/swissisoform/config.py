@@ -189,6 +189,13 @@ class ScoringConfig:
         f1_gravy_delta_min: F1 distinctness — |Δ GRAVY| cutoff.
         f1_fraction_charged_delta_min: F1 distinctness — |Δ fraction charged|.
         f1_disorder_delta_min: F1 distinctness — |Δ disorder| cutoff.
+        f7_rmsd_shared_min: F7 threshold — minimum shared-region Cα RMSD (Å) to
+            call a significant structural change in the retained region.
+        f7_min_shared_len: F7 guard — minimum shared-region length (aa) below
+            which the RMSD is too noisy to score (criterion → None).
+        f7_plddt_min: F7 confidence gate — minimum of the two per-side mean
+            shared-region pLDDTs required before the RMSD is trusted (a floppy
+            low-confidence region must not read as a structural change).
     """
 
     min_cell_lines: int = 3
@@ -232,6 +239,12 @@ class ScoringConfig:
     f1_gravy_delta_min: float = 0.3  # CALIBRATE ON GENOME-WIDE RUN — provisional
     f1_fraction_charged_delta_min: float = 0.05  # CALIBRATE ON GENOME-WIDE RUN — provisional
     f1_disorder_delta_min: float = 0.05  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    # F7 shared-region structural change. RMSD scale is Å; pLDDT gate is on the
+    # 0–1 ESMFold2 scale (mirror of f1_plddt_threshold). The real RMSD cutoff is
+    # to be picked from the genome-wide distribution (near-zero spike + tail).
+    f7_rmsd_shared_min: float = 2.0  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    f7_min_shared_len: int = 20  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    f7_plddt_min: float = 0.70  # CALIBRATE ON GENOME-WIDE RUN — provisional
     # Dormant per-variant damaging cutoffs (VariantEffectModule still reads
     # f5_llr_damaging_threshold for ΔLLR labeling; F5 scoring no longer uses
     # these — see f5_constraint_enrichment_min / f5_depletion_ratio_max).

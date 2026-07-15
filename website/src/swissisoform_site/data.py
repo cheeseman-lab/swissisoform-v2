@@ -39,19 +39,19 @@ logger = logging.getLogger(__name__)
 EXISTENCE_CRITERIA = [
     ("E1_primate_conservation", "E1", "Primate frame conservation"),
     ("E2_mammalian_conservation", "E2", "Mammalian frame conservation"),
-    ("E3_phylop_coding_selection", "E3", "PhyloP coding selection"),
-    ("E4_multi_cell_line", "E4", "Detected in multiple cell lines"),
-    ("E5_initiation_efficiency", "E5", "Initiation efficiency"),
-    ("E6_mass_spec", "E6", "Mass-spec peptide support"),
+    ("E3_phylop_coding_selection", "E3", "Coding Selection"),
+    ("E4_multi_cell_line", "E4", "Expression Breadth"),
+    ("E5_initiation_efficiency", "E5", "Start-Site Usage"),
+    ("E6_mass_spec", "E6", "Peptide Evidence"),
 ]
 
 FUNCTIONAL_CRITERIA = [
-    ("F1_structured_extension", "F1", "Structured extension (pLDDT)"),
-    ("F2_localization_change", "F2", "Localization change"),
+    ("F1_structured_extension", "F1", "Fold Confidence"),
+    ("F2_localization_change", "F2", "Compartment"),
     ("F3_domain_change", "F3", "Domain (InterProScan) change"),
-    ("F4_targeting_change", "F4", "Targeting (SignalP/TargetP) change"),
-    ("F5_pathogenic_variant_enrichment", "F5", "Germline tolerance & constraint"),
-    ("F6_clinical_variant_overlap", "F6", "Clinical variant overlap"),
+    ("F4_targeting_change", "F4", "Sorting Signals"),
+    ("F5_pathogenic_variant_enrichment", "F5", "Germline Variants"),
+    ("F6_clinical_variant_overlap", "F6", "Clinical Variants"),
 ]
 
 
@@ -102,6 +102,10 @@ class Isoform:
     # Precomputed per-residue colour maps (dual pLDDT ramp; diff region recoloured)
     isoform_colors: str | None
     canonical_colors: str | None
+    # Precomputed PAE (predicted aligned error) heatmap JSONs, or None if the
+    # structure was folded before PAE capture / isn't available.
+    isoform_pae: str | None
+    canonical_pae: str | None
     # All clinical variants in the isoform-unique region (any significance)
     variants_in_unique: list[dict[str, Any]] = field(default_factory=list)
     # Every clinical variant over the isoform's coding region (unique + shared)
@@ -326,6 +330,25 @@ def _lookup_colors(colors: frozenset[str], gene: str, tis_id: str, side: str) ->
     return name if name in colors else None
 
 
+@lru_cache(maxsize=1)
+def _pae_index(pae_dir_str: str) -> frozenset[str]:
+    """Set of precomputed PAE heatmap filenames in ``<structures>/pae/``.
+
+    Maps are named ``<gene>__<side>__<segment>.pae.json`` by
+    ``swissisoform.export.pae.export_pae`` — the same gene + tis-segment used for
+    CIF / colour-map lookup, so the page resolves them deterministically.
+    """
+    pae_dir = Path(pae_dir_str)
+    if not pae_dir.is_dir():
+        return frozenset()
+    return frozenset(p.name for p in pae_dir.glob("*.pae.json"))
+
+
+def _lookup_pae(pae_files: frozenset[str], gene: str, tis_id: str, side: str) -> str | None:
+    name = f"{gene}__{side}__{_tis_id_to_struct_segment(tis_id)}.pae.json"
+    return name if name in pae_files else None
+
+
 # --------------------------------------------------------------------------- #
 # Row -> Isoform
 # --------------------------------------------------------------------------- #
@@ -335,6 +358,7 @@ def _build_isoform(
     row: pd.Series,
     struct_index: dict[tuple[str, str], str],
     colors: frozenset[str] = frozenset(),
+    pae: frozenset[str] = frozenset(),
 ) -> Isoform:
     gene = row["gene_name"]
     tis_id = str(row["tis_id"])
@@ -395,6 +419,8 @@ def _build_isoform(
         canonical_cif=canonical_cif,
         isoform_colors=_lookup_colors(colors, gene, tis_id, "isoform"),
         canonical_colors=_lookup_colors(colors, gene, tis_id, "canonical"),
+        isoform_pae=_lookup_pae(pae, gene, tis_id, "isoform"),
+        canonical_pae=_lookup_pae(pae, gene, tis_id, "canonical"),
         raw=_clean_nan({k: row[k] for k in row.index}),
     )
 
@@ -428,6 +454,7 @@ def load_all() -> dict[str, GeneRecord]:
     df = pd.read_parquet(parquet_path)
     struct_index = _structure_index(str(structures_dir))
     colors = _colors_index(str(structures_dir / "colors"))
+    pae = _pae_index(str(structures_dir / "pae"))
 
     out: dict[str, GeneRecord] = {}
     for gene_name, sub in df.groupby("gene_name", sort=True):
@@ -447,7 +474,7 @@ def load_all() -> dict[str, GeneRecord]:
                 logger.warning("failed to parse %s: %s", llm_path, e)
                 llm = None
 
-        isoforms = [_build_isoform(r, struct_index, colors) for _, r in sub.iterrows()]
+        isoforms = [_build_isoform(r, struct_index, colors, pae) for _, r in sub.iterrows()]
         out[gene_name] = GeneRecord(
             name=gene_name,
             uniprot_id=uniprot_id,
@@ -675,7 +702,7 @@ def _sae_shared_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def sae_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
-    """Everything the F7 "SAE features" card needs, or None when not computed.
+    """Everything the F8 "SAE features" card needs, or None when not computed.
 
     Reads the ``isoform_sae_*`` columns already carried on ``iso.raw`` (populated
     by the SAE SiteModule and flattened into all_paired.parquet). Returns None
@@ -689,8 +716,9 @@ def sae_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
       - Differential coordinates: ``unique_region`` — features firing on just the
         isoform-unique residues (top 30).
 
-    Scoring (a future F7 criterion) and LLM surfacing are intentionally out of
-    scope — this card is descriptive over data already in the parquet.
+    Scoring and LLM surfacing are intentionally out of scope for this card — it
+    is descriptive over data already in the parquet. (The scored F7 criterion is
+    the separate "Core Fold Perturbation" RMSD tile.)
     """
     raw = iso.raw or {}
     if raw.get("isoform_sae_status") != "ok":
@@ -710,12 +738,16 @@ def sae_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
             "delta": _sae_num(raw.get(f"isoform_sae_top_{prefix}_delta_max")),
         }
 
+    _n_iso_only = _int("isoform_sae_n_isoform_only")
+    _n_canon_only = _int("isoform_sae_n_canonical_only")
     return {
         "counts": {
-            "isoform_only": _int("isoform_sae_n_isoform_only"),
-            "canonical_only": _int("isoform_sae_n_canonical_only"),
+            "isoform_only": _n_iso_only,
+            "canonical_only": _n_canon_only,
             "shared": _int("isoform_sae_n_shared"),
         },
+        # SAE features unique to one form (gained + lost) — the face tagline.
+        "n_differ": (_n_iso_only or 0) + (_n_canon_only or 0),
         "mean_abs_delta_shared": _sae_num(raw.get("isoform_sae_mean_abs_delta_shared")),
         "isoform_only": _sae_simple_rows(_sae_records(raw.get("isoform_sae_features_isoform_only"))),
         "canonical_only": _sae_simple_rows(
@@ -729,6 +761,114 @@ def sae_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
         "unique_region_space": raw.get("isoform_sae_unique_region_space"),
         "top_gained": _top("gained"),
         "top_lost": _top("lost"),
+    }
+
+
+# Biophysical properties shown in the standalone Biophysics card (differential vs
+# shared region) — mirrors the table formerly nested in the F1 structure modal.
+_BIOPHYSICS_FEATURES = [
+    ("Isoelectric point (pI)", "pI"),
+    ("Hydropathy (GRAVY)", "gravy"),
+    ("Fraction charged", "fraction_charged"),
+    ("Disorder fraction", "disorder"),
+    ("Disorder-promoting", "fraction_disorder_promoting"),
+    ("Low-complexity fraction", "fraction_lcr"),
+    ("Prion-like fraction", "prionlike_fraction"),
+    ("LLPS score", "llps_score"),
+    ("π–π propensity", "pipi_propensity"),
+    ("Aromaticity", "aromaticity"),
+    ("Instability index", "instability_index"),
+    ("Shannon entropy", "shannon_entropy"),
+    ("Normalized complexity", "normalized_complexity"),
+]
+_BIOPHYSICS_COL_CLASSES = ["", "dm-shared", "dm-ratio"]  # differential | shared | enrichment
+
+
+def biophysics_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
+    """Standalone Biophysics card data (was a sub-section of the F1 modal).
+
+    Descriptive, not scored — reads the ``cmp_biophysics_*`` columns already on
+    ``iso.raw`` (differential/shared/ratio + enriched flag per property) and returns
+    a ``ce``-shaped payload the shared ``_criterion_evidence.html`` renderer consumes.
+    Returns ``None`` when no biophysics comparison columns are present.
+    """
+    raw = getattr(iso, "raw", None) or {}
+    g = raw.get
+    rows = []
+    for label, feat in _BIOPHYSICS_FEATURES:
+        cols = [
+            _fmt_num(g(f"cmp_biophysics_{feat}_unique")),
+            _fmt_num(g(f"cmp_biophysics_{feat}_shared")),
+            _fmt_num(g(f"cmp_biophysics_{feat}_ratio")),
+        ]
+        if all(c is None for c in cols):
+            continue
+        rows.append(
+            {
+                "label": label,
+                "cols": [c if c is not None else "—" for c in cols],
+                "hot": bool(g(f"cmp_biophysics_{feat}_enriched")),
+                **_term(label),
+            }
+        )
+    if not rows:
+        return None
+
+    # Directional headline: how the differential region compares to the shared
+    # core for the three properties F1 keys off. Number = (differential − core);
+    # the sign gives the direction word. Region-vs-core (not the whole-protein
+    # isoform−canonical delta) so small regions aren't diluted and truncations
+    # read the same way as extensions.
+    import math
+
+    headline_segments: list[dict[str, Any]] = []
+    plain_bits: list[str] = []
+    for feat, adjective, noun, eps in (
+        ("gravy", "hydrophobic", "hydropathy", 0.1),
+        ("fraction_charged", "charged", "charge", 0.03),
+        ("disorder", "disordered", "disorder", 0.03),
+    ):
+        try:
+            u = float(g(f"cmp_biophysics_{feat}_unique"))
+            s = float(g(f"cmp_biophysics_{feat}_shared"))
+        except (TypeError, ValueError):
+            continue
+        if math.isnan(u) or math.isnan(s):
+            continue
+        diff = u - s
+        if abs(diff) < eps:
+            word, num = f"similar {noun}", ""
+        else:
+            word = f"{'more' if diff > 0 else 'less'} {adjective}"
+            num = f" ({diff:+.2f})"
+        if headline_segments:
+            headline_segments.append({"t": " · ", "strong": False})
+        headline_segments.append({"t": word, "strong": True})
+        if num:
+            headline_segments.append({"t": num, "strong": False})
+        plain_bits.append(word + num)
+    headline = " · ".join(plain_bits) if plain_bits else f"{len(rows)} properties"
+
+    return {
+        "headline": headline,
+        "headline_segments": headline_segments or None,
+        "evidence": {
+            "about": (
+                "Biophysical character of the isoform-differential region versus the "
+                "shared canonical core — pI, hydropathy, charge, disorder and related "
+                "properties. Descriptive; the folding (F1) score keys off the GRAVY / "
+                "charge / disorder deltas."
+            ),
+            "sections": [
+                {
+                    "title": "Biophysics · differential vs shared region",
+                    "subtitle": "highlighted rows are enriched in the differential region",
+                    "cmp_headers": ["Property", "Differential", "Shared", "Enrichment"],
+                    "col_classes": _BIOPHYSICS_COL_CLASSES,
+                    "compare_rows": rows,
+                }
+            ],
+        },
     }
 
 
@@ -826,6 +966,17 @@ CRITERION_ABOUT = {
         "1×)? Disease variants concentrating in the unique region tie it to "
         "phenotype."
     ),
+    "F7_shared_structural_change": (
+        "The shared region is the stretch of protein identical in both the isoform "
+        "and the canonical (the canonical body for an extension; the post-truncation "
+        "body for a truncation). Folded in both contexts it normally comes out nearly "
+        "identical, so its Cα backbone RMSD ≈ 0. A high shared-region RMSD (superposed "
+        "on the shared residues only, from the ESMFold2 structures) means the "
+        "extension or truncation reorganizes how the retained region folds — a rare, "
+        "high-interest functional signal. TM-score is a length-normalized companion; "
+        "the check only fires when both structures are confidently folded, and "
+        "uORF/altORF isoforms (no shared region) are not evaluable."
+    ),
 }
 
 
@@ -868,6 +1019,10 @@ METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
     "TM-score (iso vs canonical)": ("m-structure", "Global fold similarity (0–1) between isoform and canonical."),
     "RMSD global (Å)": ("m-structure", "Backbone RMSD between isoform and canonical folds."),
     "Extension contacts": ("m-structure", "Inter-residue contacts the differential region makes with the core."),
+    "Shared-region Cα RMSD": ("m-structure", "Backbone RMSD over the shared (identical) residues only, after superposing on them — 0 ≈ identical fold, high = the retained region refolds."),
+    "Shared-region TM-score": ("m-structure", "Length-normalized fold similarity (0–1) of the shared region between isoform and canonical."),
+    "Shared region length": ("m-structure", "Number of residues shared (identical) between the isoform and canonical proteins."),
+    "Min shared-region pLDDT": ("m-structure", "Lower of the two mean shared-region ESMFold2 confidences; the RMSD is only trusted (scored) when this is high."),
     # Localization / targeting
     "Predicted location": ("m-localization", "DeepLoc predicted subcellular compartment."),
     "Sorting signals": ("m-localization", "DeepLoc-detected sorting / targeting signals."),
@@ -936,7 +1091,7 @@ def _term(label: str) -> dict[str, str]:
 
 
 def criterion_evidence_for(iso) -> dict:
-    """Per-criterion differential evidence for the 12 score modals.
+    """Per-criterion differential evidence for the score modals (E1–E6, F1–F7).
 
     Pulls the conservation / structure / biophysics / localization / PLM-VEP /
     function / clinical evidence off the parquet row, sliced finer than a flat
@@ -1178,7 +1333,7 @@ def criterion_evidence_for(iso) -> dict:
         if not eff_rows:
             return None
         return {
-            "title": "Initiation efficiency · canonical vs isoform",
+            "title": "Start-Site Usage · canonical vs isoform",
             "subtitle": (
                 "ribosome initiation efficiency at the canonical start vs this "
                 "alternative start, per cell line"
@@ -1266,44 +1421,81 @@ def criterion_evidence_for(iso) -> dict:
             "compare_rows": [row],
         }
 
-    def sec_biophysics():
-        feats = [
-            ("Isoelectric point (pI)", "pI"),
-            ("Hydropathy (GRAVY)", "gravy"),
-            ("Fraction charged", "fraction_charged"),
-            ("Disorder fraction", "disorder"),
-            ("Disorder-promoting", "fraction_disorder_promoting"),
-            ("Low-complexity fraction", "fraction_lcr"),
-            ("Prion-like fraction", "prionlike_fraction"),
-            ("LLPS score", "llps_score"),
-            ("π–π propensity", "pipi_propensity"),
-            ("Aromaticity", "aromaticity"),
-            ("Instability index", "instability_index"),
-            ("Shannon entropy", "shannon_entropy"),
-            ("Normalized complexity", "normalized_complexity"),
-        ]
-        compare_rows = compare(
-            [
-                (
-                    label,
-                    [
-                        f"cmp_biophysics_{feat}_unique",
-                        f"cmp_biophysics_{feat}_shared",
-                        f"cmp_biophysics_{feat}_ratio",
-                    ],
-                    f"cmp_biophysics_{feat}_enriched",
+    def sec_shared_rmsd():
+        # F7 — strict shared-region Cα RMSD (Kabsch-superposed on the shared
+        # residues only). Global TM/RMSD ride in the caption; the shared-region
+        # metrics are the score basis. When not evaluable, surface the status so
+        # the modal explains itself rather than rendering blank.
+        status = g("isoform_structure_rmsd_shared_status")
+        rmsd = _fmt_num(g("isoform_structure_rmsd_shared"))
+        tm = _fmt_num(g("isoform_structure_tm_score_shared"))
+        n = g("isoform_structure_shared_region_len")
+        pmin = None
+        try:
+            pvals = [
+                float(x)
+                for x in (
+                    g("isoform_structure_plddt_shared_mean_isoform"),
+                    g("isoform_structure_plddt_shared_mean_canonical"),
                 )
-                for label, feat in feats
+                if x is not None and math.isfinite(float(x))
             ]
-        )
-        if not compare_rows:
+            pmin = min(pvals) if pvals else None
+        except (TypeError, ValueError):
+            pmin = None
+
+        detail_rows = []
+        if rmsd is not None:
+            detail_rows.append(
+                {"label": "Shared-region Cα RMSD", "value": f"{rmsd} Å",
+                 **_term("Shared-region Cα RMSD")}
+            )
+        if tm is not None:
+            detail_rows.append(
+                {"label": "Shared-region TM-score", "value": tm,
+                 **_term("Shared-region TM-score")}
+            )
+        if n is not None:
+            detail_rows.append(
+                {"label": "Shared region length", "value": f"{int(n)} aa",
+                 **_term("Shared region length")}
+            )
+        pmin_fmt = _fmt_num(pmin)
+        if pmin_fmt is not None:
+            detail_rows.append(
+                {"label": "Min shared-region pLDDT", "value": pmin_fmt,
+                 **_term("Min shared-region pLDDT")}
+            )
+
+        # Global fold-similarity singletons ride in the caption for context.
+        bits = []
+        gtm = _fmt_num(g("isoform_structure_tm_score"))
+        grmsd = _fmt_num(g("isoform_structure_rmsd_global"))
+        if gtm is not None:
+            bits.append(f"global TM-score {gtm}")
+        if grmsd is not None:
+            bits.append(f"global RMSD {grmsd} Å")
+
+        if not detail_rows:
+            if status and status != "ok":
+                _why = {
+                    "no_shared_region": "no shared region (uORF/altORF, or region too short)",
+                    "unverified_alignment": "isoform/canonical alignment unverified",
+                    "no_cache": "predicted structures not available",
+                }.get(status, status)
+                return {
+                    "title": "Shared-region structural change",
+                    "subtitle": f"not evaluable — {_why}",
+                    "rows": [],
+                }
             return None
+        sub = "Cα RMSD superposed on the shared residues only; TM-score is length-normalized"
+        if bits:
+            sub += " · " + " · ".join(bits)
         return {
-            "title": "Biophysics · differential vs shared region",
-            "subtitle": "highlighted rows are enriched in the differential region",
-            "cmp_headers": ["Property", "Differential", "Shared", "Enrichment"],
-            "col_classes": DIFF_SHARED_3,
-            "compare_rows": compare_rows,
+            "title": "Shared-region structural change",
+            "subtitle": sub,
+            "rows": detail_rows,
         }
 
     def sec_deeploc():
@@ -1373,7 +1565,7 @@ def criterion_evidence_for(iso) -> dict:
         )
         return {
             "title": "N-terminal targeting (SignalP / TargetP)",
-            "subtitle": "targeting signal changed" if changed else "no targeting change",
+            "subtitle": "sorting signal changed" if changed else "no sorting-signal change",
             "cmp_headers": ["Predictor", "Canonical", "Isoform"],
             "col_classes": CANON_ISO,
             "compare_rows": compare_rows,
@@ -1466,7 +1658,7 @@ def criterion_evidence_for(iso) -> dict:
             kind = "validated" if p.get("validated") else "peptide"
             hits.append({"kind": kind, "name": str(p.get("peptide") or "?")[:40], "span": span})
         return {
-            "title": "Mass-spec peptide support (canonical vs isoform)",
+            "title": "Peptide Evidence (canonical vs isoform)",
             "subtitle": "isoform-unique peptides are direct evidence the alternative protein exists",
             "cmp_headers": ["Feature", "Canonical", "Isoform"],
             "col_classes": CANON_ISO,
@@ -1524,7 +1716,7 @@ def criterion_evidence_for(iso) -> dict:
             **_term("gnomAD variants"),
         }
         return {
-            "title": "Germline tolerance · differential vs shared region",
+            "title": "Germline Variants · differential vs shared region",
             "subtitle": (
                 "gnomAD (population) variant density per nucleotide — depletion "
                 "ratio < 1× means healthy human variation avoids the region "
@@ -1745,7 +1937,7 @@ def criterion_evidence_for(iso) -> dict:
         "E4_multi_cell_line": [sec_cell_lines()],
         "E5_initiation_efficiency": [sec_efficiency()],
         "E6_mass_spec": [sec_massspec()],
-        "F1_structured_extension": [sec_structure(), sec_structure_region(), sec_biophysics()],
+        "F1_structured_extension": [sec_structure(), sec_structure_region()],
         "F2_localization_change": [sec_deeploc()],
         "F3_domain_change": [sec_domains_motifs()],
         "F4_targeting_change": [sec_targeting()],
@@ -1760,6 +1952,7 @@ def criterion_evidence_for(iso) -> dict:
             sec_variant_burden("disease", "disease (ClinVar/COSMIC)"),
             sec_variant_scores("disease", "disease (ClinVar/COSMIC)"),
         ],
+        "F7_shared_structural_change": [sec_shared_rmsd()],
     }
 
     out = {}
@@ -1816,7 +2009,7 @@ def llm_for_isoform(gene: GeneRecord, tis_id: str) -> dict[str, Any] | None:
     return None
 
 
-# Drives the 12-tile UI grid on the isoform page (E1..E6, F1..F6).
+# Drives the evidence-tile UI grid on the isoform page (E1..E6, F1..F7).
 CRITERIA_FOR_PAGE = [
     {
         "id": "E1_primate_conservation",
@@ -1833,54 +2026,130 @@ CRITERIA_FOR_PAGE = [
     {
         "id": "E3_phylop_coding_selection",
         "axis": "E",
-        "label": "PhyloP coding selection",
+        "label": "Coding Selection",
         "short_label": "PhyloP",
     },
     {
         "id": "E4_multi_cell_line",
         "axis": "E",
-        "label": "Multi cell line expression",
+        "label": "Expression Breadth",
         "short_label": "Cell lines",
     },
     {
         "id": "E5_initiation_efficiency",
         "axis": "E",
-        "label": "Initiation efficiency",
+        "label": "Start-Site Usage",
         "short_label": "Init. eff.",
     },
-    {"id": "E6_mass_spec", "axis": "E", "label": "Mass spec", "short_label": "MS"},
+    {
+        "id": "E6_mass_spec",
+        "axis": "E",
+        "label": "Peptide Evidence",
+        "short_label": "MS",
+    },
     {
         "id": "F1_structured_extension",
+        "headline_label": "pLDDT Differential Region",
         "axis": "F",
-        "label": "Structured extension",
+        "label": "Fold Confidence",
         "short_label": "Folding",
     },
     {
         "id": "F2_localization_change",
         "axis": "F",
-        "label": "Localization change",
+        "label": "Compartment",
         "short_label": "Localization",
     },
-    {"id": "F3_domain_change", "axis": "F", "label": "Domain change", "short_label": "Domains"},
+    {
+        "id": "F3_domain_change",
+        "axis": "F",
+        "label": "Domain change",
+        "short_label": "Domains",
+    },
     {
         "id": "F4_targeting_change",
         "axis": "F",
-        "label": "Targeting change",
+        "label": "Sorting Signals",
         "short_label": "Targeting",
     },
     {
         "id": "F5_pathogenic_variant_enrichment",
         "axis": "F",
-        "label": "Germline tolerance & constraint",
+        "label": "Germline Variants",
         "short_label": "Germline",
     },
     {
         "id": "F6_clinical_variant_overlap",
         "axis": "F",
-        "label": "Clinical variant overlap",
+        "label": "Clinical Variants",
         "short_label": "Variants",
     },
+    {
+        "id": "F7_shared_structural_change",
+        "headline_label": "Shared-Region RMSD",
+        "axis": "F",
+        "label": "Core Fold Perturbation",
+        "short_label": "Shared RMSD",
+    },
 ]
+
+
+# Thematic card groups — the six-way organization that replaces the old E/F axis
+# on the isoform page. Order is the display order. ``members`` reference
+# ``CRITERIA_FOR_PAGE`` ids, plus the literals "biophysics" / "sae" for the two
+# descriptive (non-scored) tiles. Each group's members are internally uniform in
+# the old axis, so existing per-tile axis colouring stays coherent.
+CARD_GROUPS = [
+    {
+        "name": "Conservation",
+        "letter": "C",
+        "members": [
+            "E1_primate_conservation",
+            "E2_mammalian_conservation",
+            "E3_phylop_coding_selection",
+        ],
+    },
+    {
+        "name": "Detection",
+        "letter": "D",
+        "members": [
+            "E4_multi_cell_line",
+            "E5_initiation_efficiency",
+            "E6_mass_spec",
+        ],
+    },
+    {
+        "name": "Localization",
+        "letter": "L",
+        "members": ["F2_localization_change", "F4_targeting_change"],
+    },
+    {
+        "name": "Mutation Landscape",
+        "letter": "M",
+        "members": ["F5_pathogenic_variant_enrichment", "F6_clinical_variant_overlap"],
+    },
+    {
+        "name": "Predicted Structure",
+        "letter": "P",
+        "members": ["F1_structured_extension", "F7_shared_structural_change"],
+    },
+    {
+        "name": "Structural Characteristics",
+        "letter": "S",
+        "members": ["F3_domain_change", "biophysics", "sae"],
+    },
+]
+
+# member id -> displayed badge (group letter + 1-based index within its group).
+# Covers the 13 criterion ids plus "biophysics" / "sae".
+CARD_BADGES = {
+    member: f"{group['letter']}{i + 1}"
+    for group in CARD_GROUPS
+    for i, member in enumerate(group["members"])
+}
+
+# by-id view of CRITERIA_FOR_PAGE, for the grouped template loop.
+CRITERIA_BY_ID = {c["id"]: c for c in CRITERIA_FOR_PAGE}
 
 
 def llm_criterion_for_isoform(*, llm_dir: Path, tis_slug: str, criterion_id: str) -> dict | None:
@@ -1896,3 +2165,24 @@ def llm_criterion_for_isoform(*, llm_dir: Path, tis_slug: str, criterion_id: str
     except Exception:
         return None
     return blob.get(criterion_id)
+
+
+def category_verdicts_for_isoform(*, llm_dir: Path, tis_slug: str) -> dict:
+    """Per-category LLM verdict + reasoning, keyed by CARD_GROUPS category name.
+
+    Reads an optional ``<llm_dir>/<tis_slug>/categories.json`` — an object keyed
+    by category ``name`` (e.g. "Conservation") →
+    ``{"verdict": "interesting" | "neutral" | "not_interesting", "reasoning": str}``.
+    Returns ``{}`` when the file is absent or unreadable, so the front end falls
+    back to a neutral "pending" flag + a placeholder reasoning line. There is no
+    producer for this yet — the LLM reasons per-criterion (criteria.json) and per
+    whole-isoform (synthesis.json) today; this is the category-level hook.
+    """
+    p = Path(llm_dir) / tis_slug / "categories.json"
+    if not p.exists():
+        return {}
+    try:
+        blob = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return blob if isinstance(blob, dict) else {}

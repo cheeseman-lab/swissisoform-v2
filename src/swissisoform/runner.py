@@ -468,7 +468,12 @@ def build_pipeline(cfg, preds, ref, genes, skip: set[str]) -> AnnotationPipeline
         # Reads the per-protein 6B SAE caches (sae_esmc/<SIZE>); top_k bounds the
         # list columns flattened into all_paired (full inventory lives in the
         # standalone export). Emits status=no_cache when a protein isn't encoded.
-        site_mods.append(SAEFeatureModule(cfg, top_k=30, unique_top_n=30))
+        # min_prevalence=2 drops single-residue (noise) features from the feature
+        # universe BEFORE ranking + the top-30 slice, so the stored top-30 is a
+        # true top-30 of >=2-AA features (and the counts match what's displayed).
+        site_mods.append(
+            SAEFeatureModule(cfg, top_k=30, unique_top_n=30, min_prevalence=2)
+        )
     if "varianteffect" not in skip:
         site_mods.append(
             VariantEffectModule(

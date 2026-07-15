@@ -22,7 +22,48 @@ import pandas as pd
 PATHOGENIC_CLINSIG_TOKENS = ("pathogenic", "likely_pathogenic", "likely pathogenic")
 
 # Sentinel headline_col for criteria whose headline is computed, not a column.
-_MAX_INITIATION_EFFICIENCY = "__max_initiation_efficiency__"
+_START_SITE_USAGE = "__start_site_usage__"
+_N_CELL_LINES_DETECTED = "__n_cell_lines_detected__"
+_MASSPEC_VALIDATED = "__massspec_validated__"
+_CODING_SELECTION = "__coding_selection__"
+_PRIMATE_SIMILARITY = "__primate_similarity__"
+_MAMMALIAN_SIMILARITY = "__mammalian_similarity__"
+# Composed "Unique region {x}% similar across {clade}" headlines (C1/C2):
+# sentinel -> (mean_pident column over the differential region, clade word).
+_SIMILARITY_HEADLINES = {
+    _PRIMATE_SIMILARITY: ("isoform_conservation_frame_primate_mean_pident", "primates"),
+    _MAMMALIAN_SIMILARITY: ("isoform_conservation_frame_mammalian_mean_pident", "mammals"),
+}
+_GNOMAD_FOLD = "__gnomad_fold__"
+_DISEASE_FOLD = "__disease_fold__"
+_DIVERGING_DOMAINS = "__diverging_domains__"
+# Fold-change variant-density headlines (M1/M2): "{noun} {fold}x more/less in
+# unique region — {call}". low/high = call word for ratio <1 / >1.
+_VARIANT_FOLD_HEADLINES = {
+    _GNOMAD_FOLD: {
+        "col": "isoform_variant_intersection_gnomad_depletion_ratio",
+        "noun": "gnomAD variants",
+        "low": "constrained",  # <1: fewer population variants than baseline
+        "high": "tolerant",  # >1: more population variants
+    },
+    _DISEASE_FOLD: {
+        "col": "isoform_variant_intersection_disease_enrichment_ratio",
+        "noun": "Disease variants",
+        "low": "depleted",  # <1: fewer disease variants
+        "high": "enriched",  # >1: more disease variants
+    },
+}
+# Composed "iso: {a} | canon: {b}" headlines: sentinel -> (isoform_col, canonical_col).
+_ISO_CANON_HEADLINES = {
+    "__localization_iso_canon__": (
+        "isoform_localization_deeploc_prediction",
+        "canonical_localization_deeploc_prediction",
+    ),
+    "__sorting_iso_canon__": (
+        "isoform_targetp_targetp_prediction",
+        "canonical_targetp_targetp_prediction",
+    ),
+}
 
 _INITIATION_EFFICIENCY_SAMPLES = ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen")
 
@@ -430,7 +471,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_conservation_frame_primate_canonical_frac_intact",
             "isoform_conservation_frame_primate_canonical_n_species_aligned",
         ],
-        "headline_col": "isoform_conservation_frame_primate_mean_pident",
+        "headline_col": _PRIMATE_SIMILARITY,
         "interpretation_hint": (
             "Is the alternative reading frame conserved across primates? Score on "
             "mean_pident (mean amino-acid % identity to primate orthologs); "
@@ -454,7 +495,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_conservation_frame_mammalian_canonical_frac_intact",
             "isoform_conservation_frame_mammalian_canonical_n_species_aligned",
         ],
-        "headline_col": "isoform_conservation_frame_mammalian_mean_pident",
+        "headline_col": _MAMMALIAN_SIMILARITY,
         "interpretation_hint": (
             "Is the alternative reading frame conserved deeper in mammals? Score on "
             "mean_pident (mean amino-acid % identity to mammalian orthologs); "
@@ -464,7 +505,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
     },
     "E3_phylop_coding_selection": {
         "axis": "E",
-        "label": "PhyloP coding selection",
+        "label": "Coding Selection",
         "short_label": "PhyloP",
         "evidence_cols": [
             "isoform_conservation_phylop_unique_region_mean",
@@ -477,7 +518,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_conservation_phastcons_at_tis",
             "isoform_conservation_phastcons_kozak_mean",
         ],
-        "headline_col": "isoform_conservation_phylop_unique_region_mean",
+        "headline_col": _CODING_SELECTION,
         "interpretation_hint": (
             "Does the unique coding region show purifying selection by phyloP "
             "(absolute mean ≥ ~2 indicates strong constraint)? The shared region "
@@ -486,7 +527,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
     },
     "E4_multi_cell_line": {
         "axis": "E",
-        "label": "Multi cell line expression",
+        "label": "Expression Breadth",
         "short_label": "Cell lines",
         "evidence_cols": [
             "expr_HeLa_initiation_efficiency",
@@ -508,7 +549,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "expr_RPE1_Sen_p_value",
             "expr_RPE1_Sen_cpm",
         ],
-        "headline_col": None,  # multi-sample — UI shows a small table
+        "headline_col": _N_CELL_LINES_DETECTED,  # computed: # cell lines detected
         "interpretation_hint": (
             "Is the TIS reproducibly detected across multiple cell lines? Count "
             "samples with significant p-values."
@@ -516,7 +557,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
     },
     "E5_initiation_efficiency": {
         "axis": "E",
-        "label": "Initiation efficiency",
+        "label": "Start-Site Usage",
         "short_label": "Init. eff.",
         "evidence_cols": [
             "expr_HeLa_initiation_efficiency",
@@ -538,7 +579,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
         # Computed headline: the maximum per-cell-line initiation efficiency
         # (TIS counts / gene RNA-seq counts ratio) across the six samples — see
         # ``_MAX_INITIATION_EFFICIENCY`` handling in ``slice_criterion``.
-        "headline_col": _MAX_INITIATION_EFFICIENCY,
+        "headline_col": _START_SITE_USAGE,
         "interpretation_hint": (
             "How efficiently is this TIS initiated? Each per-cell-line value is the "
             "TIS read counts / gene RNA-seq counts ratio; the headline is the max "
@@ -548,21 +589,21 @@ CRITERIA: dict[str, dict[str, Any]] = {
     },
     "E6_mass_spec": {
         "axis": "E",
-        "label": "Mass spec",
+        "label": "Peptide Evidence",
         "short_label": "MS",
         "evidence_cols": [
             "isoform_massspec_summary",
             "cmp_massspec_n_hits_in_diff_region",
         ],
         "evidence_hits_col": "cmp_massspec_hits_in_diff_region",
-        "headline_col": "cmp_massspec_n_hits_in_diff_region",
+        "headline_col": _MASSPEC_VALIDATED,
         "interpretation_hint": (
             "Are there PepQuery2 validated peptides in the isoform's unique region?"
         ),
     },
     "F1_structured_extension": {
         "axis": "F",
-        "label": "Structured extension",
+        "label": "Fold Confidence",
         "short_label": "Folding",
         "evidence_cols": [
             "isoform_structure_status",
@@ -600,7 +641,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
     },
     "F2_localization_change": {
         "axis": "F",
-        "label": "Localization change",
+        "label": "Compartment",
         "short_label": "Localization",
         "evidence_cols": [
             "cmp_localization_deeploc_prediction_changed",
@@ -619,7 +660,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "canonical_localization_deeploc_membrane",
             "isoform_localization_deeploc_membrane",
         ],
-        "headline_col": "cmp_localization_deeploc_prediction_changed",
+        "headline_col": "__localization_iso_canon__",
         "interpretation_hint": (
             "Do the isoform's localization features change vs canonical "
             "(DeepLoc prediction / sorting signals / membrane association)?"
@@ -634,12 +675,12 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "cmp_interproscan_n_hits_in_diff_region",
         ],
         "evidence_hits_col": "cmp_interproscan_hits_in_diff_region",
-        "headline_col": "cmp_interproscan_n_hits_in_diff_region",
+        "headline_col": _DIVERGING_DOMAINS,
         "interpretation_hint": ("Does the differential region overlap with InterProScan domains?"),
     },
     "F4_targeting_change": {
         "axis": "F",
-        "label": "Targeting change",
+        "label": "Sorting Signals",
         "short_label": "Targeting",
         "evidence_cols": [
             "cmp_signalp_signalp_prediction_changed",
@@ -661,7 +702,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "canonical_targetp_targetp_prediction",
             "isoform_targetp_targetp_prediction",
         ],
-        "headline_col": "cmp_signalp_signalp_prediction_changed",
+        "headline_col": "__sorting_iso_canon__",
         "interpretation_hint": (
             "Do N-terminal sorting signals differ between canonical and isoform — a "
             "secretory signal peptide (SignalP) or a mitochondrial/chloroplast "
@@ -670,7 +711,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
     },
     "F5_pathogenic_variant_enrichment": {
         "axis": "F",
-        "label": "Germline tolerance",
+        "label": "Germline Variants",
         "short_label": "Germline",
         "evidence_cols": [
             "isoform_variant_intersection_gnomad_depletion_ratio",
@@ -686,7 +727,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_plm_vep_status",
         ],
         "evidence_hits_col": "isoform_variant_intersection_hits",
-        "headline_col": "isoform_variant_intersection_gnomad_depletion_ratio",
+        "headline_col": _GNOMAD_FOLD,
         "interpretation_hint": (
             "Is the unique region under germline constraint? Two independent "
             "signals: (1) gnomad_depletion_ratio < 1 means germline variation "
@@ -698,7 +739,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
     },
     "F6_clinical_variant_overlap": {
         "axis": "F",
-        "label": "Disease variant overlap",
+        "label": "Clinical Variants",
         "short_label": "Disease",
         "evidence_cols": [
             "isoform_variant_intersection_disease_enrichment_ratio",
@@ -712,7 +753,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_variant_intersection_n_dropped_outside_coding",
         ],
         "evidence_hits_col": "isoform_variant_intersection_hits",
-        "headline_col": "isoform_variant_intersection_disease_enrichment_ratio",
+        "headline_col": _DISEASE_FOLD,
         "interpretation_hint": (
             "Do disease variants (ClinVar + COSMIC) CONCENTRATE in the isoform's "
             "unique coding region? disease_enrichment_ratio > 1 means the unique "
@@ -720,7 +761,39 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "the raw unique/shared disease and pathogenic counts are context."
         ),
     },
+    "F7_shared_structural_change": {
+        "axis": "F",
+        "label": "Core Fold Perturbation",
+        "short_label": "Shared RMSD",
+        "evidence_cols": [
+            "isoform_structure_rmsd_shared",
+            "isoform_structure_tm_score_shared",
+            "isoform_structure_shared_region_len",
+            "isoform_structure_rmsd_shared_status",
+            "isoform_structure_plddt_shared_mean_isoform",
+            "isoform_structure_plddt_shared_mean_canonical",
+            "isoform_structure_rmsd_global",
+            "isoform_structure_tm_score",
+        ],
+        "headline_col": "isoform_structure_rmsd_shared",
+        "interpretation_hint": (
+            "Does the retained (shared) region fold differently in the isoform vs "
+            "the canonical protein? The shared region is identical in sequence, so a "
+            "high Cα RMSD (Kabsch-superposed on the shared residues only) means the "
+            "extension/truncation reorganizes how that region folds — most isoforms "
+            "read ≈ 0. TM-score is a length-normalized companion. Only scored when "
+            "both structures are confidently folded (min shared-region pLDDT ≥ 0.70); "
+            "uORF/altORF isoforms have no shared region and are not evaluable."
+        ),
+    },
 }
+
+
+# Criteria excluded from the LLM interpretation passes (per-criterion reads +
+# synthesis). They stay fully scored and rendered on the site — the LLM simply
+# does not editorialize on them. F7 (shared-region structural change) is a
+# provisional structural metric we surface descriptively, without an AI blurb.
+LLM_EXCLUDED_CRITERIA: set[str] = {"F7_shared_structural_change"}
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -1166,6 +1239,39 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "Mean AlphaMissense pathogenicity, germline (unique)",
         "format": "float3",
     },
+    # F7 — shared-region structural change (structure)
+    "isoform_structure_rmsd_shared": {
+        "label": "Shared-region Cα RMSD",
+        "format": "angstrom",
+    },
+    "isoform_structure_tm_score_shared": {
+        "label": "Shared-region TM-score",
+        "format": "float3",
+    },
+    "isoform_structure_shared_region_len": {
+        "label": "Shared region length (aa)",
+        "format": "int",
+    },
+    "isoform_structure_rmsd_shared_status": {
+        "label": "Shared-region RMSD status",
+        "format": "str",
+    },
+    "isoform_structure_plddt_shared_mean_isoform": {
+        "label": "Mean shared-region pLDDT (isoform)",
+        "format": "float3",
+    },
+    "isoform_structure_plddt_shared_mean_canonical": {
+        "label": "Mean shared-region pLDDT (canonical)",
+        "format": "float3",
+    },
+    "isoform_structure_rmsd_global": {
+        "label": "Global Cα RMSD (tm-align)",
+        "format": "angstrom",
+    },
+    "isoform_structure_tm_score": {
+        "label": "Global TM-score",
+        "format": "float3",
+    },
 }
 
 # E4/E5 — per-cell-line expression columns (generated programmatically)
@@ -1198,8 +1304,8 @@ def format_metric(value: Any, fmt: str) -> str:
 
     Args:
         value: Raw scalar value from the parquet row.
-        fmt: One of ``"percent"``, ``"int"``, ``"float3"``, ``"sci"``, ``"bool"``,
-            ``"json"``, or ``"str"`` (default).
+        fmt: One of ``"percent"``, ``"int"``, ``"float3"``, ``"angstrom"``,
+            ``"sci"``, ``"bool"``, ``"json"``, or ``"str"`` (default).
 
     Returns:
         Display string. ``None`` / NaN values render as an em dash.
@@ -1224,6 +1330,11 @@ def format_metric(value: Any, fmt: str) -> str:
     if fmt == "float3":
         try:
             return f"{float(value):.3g}"
+        except (TypeError, ValueError):
+            return str(value)
+    if fmt == "angstrom":
+        try:
+            return f"{float(value):.2f} Å"
         except (TypeError, ValueError):
             return str(value)
     if fmt == "sci":
@@ -1284,15 +1395,186 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
 
     evidence = {col: raw.get(col) for col in cfg["evidence_cols"]}
     headline_col = cfg.get("headline_col")
-    if headline_col == _MAX_INITIATION_EFFICIENCY:
-        # Max per-cell-line initiation efficiency (TIS counts / gene RNA-seq
-        # counts ratio) across the six samples; None if no sample is scorable.
-        vals = [
-            raw.get(f"expr_{s}_initiation_efficiency") for s in _INITIATION_EFFICIENCY_SAMPLES
+    # Styled headline: a list of {"t", "strong"} segments so composed taglines can
+    # mute the label parts and bold only the important value(s). None → plain path.
+    headline_segments = None
+    if headline_col == _START_SITE_USAGE:
+        # "alt used {r}× vs canonical": how hard the alternative start is used
+        # relative to the canonical start (both = TIS counts / gene RNA-seq
+        # counts, normalized per cell line), taken in the cell line where the
+        # alt is used most AND a canonical reference is measured. Falls back to
+        # the absolute max alt efficiency when no cell line has a canonical ref.
+        def _num(x: Any) -> float | None:
+            return None if x is None or (isinstance(x, float) and math.isnan(x)) else float(x)
+
+        max_alt = None  # overall highest alt efficiency (fallback)
+        best = None  # (alt_eff, ratio) at highest alt among cells with a canonical ref
+        for s in _INITIATION_EFFICIENCY_SAMPLES:
+            a = _num(raw.get(f"expr_{s}_initiation_efficiency"))
+            if a is None:
+                continue
+            if max_alt is None or a > max_alt:
+                max_alt = a
+            c = _num(raw.get(f"canonical_expr_{s}_initiation_efficiency"))
+            if c is not None and c > 0 and (best is None or a > best[0]):
+                best = (a, a / c)
+        if best is not None:
+            headline = f"alt used {best[1]:.2g}× vs canonical"
+            headline_segments = [
+                {"t": "alt used ", "strong": False},
+                {"t": f"{best[1]:.2g}×", "strong": True},
+                {"t": " vs canonical", "strong": False},
+            ]
+        elif max_alt is not None:
+            headline = f"Max Initiation Efficiency: {max_alt:.3g}"
+            headline_segments = [
+                {"t": "Max Initiation Efficiency: ", "strong": False},
+                {"t": f"{max_alt:.3g}", "strong": True},
+            ]
+        else:
+            headline = None
+        headline_fmt = "str"
+    elif headline_col == _CODING_SELECTION:
+        # Mean PhyloP over the isoform-unique region + a selection call: PhyloP
+        # measures deviation from neutral evolution, so >0 = conserved (purifying
+        # selection), ~0 = neutral, <0 = accelerated. Neutral band = ±1.0.
+        x = raw.get("isoform_conservation_phylop_unique_region_mean")
+        if x is None or (isinstance(x, float) and math.isnan(x)):
+            headline = None
+        else:
+            x = float(x)
+            call = "purifying" if x >= 1.0 else "accelerated" if x <= -1.0 else "neutral"
+            headline = f"Unique region PhyloP: {x:.2f} — {call} selection"
+            headline_segments = [
+                {"t": "Unique region PhyloP: ", "strong": False},
+                {"t": f"{x:.2f}", "strong": True},
+                {"t": " — ", "strong": False},
+                {"t": f"{call} selection", "strong": True},
+            ]
+        headline_fmt = "str"
+    elif headline_col == _N_CELL_LINES_DETECTED:
+        # "detected in n/m cell lines": n = cell lines with an expression record
+        # for this TIS (present per-sample column, mirrors the E4 scorer's
+        # ``len(site.expression)``); m = the full cell-line panel.
+        n = 0
+        for s in _INITIATION_EFFICIENCY_SAMPLES:
+            v = raw.get(f"expr_{s}_p_value")
+            if v is not None and not (isinstance(v, float) and math.isnan(v)):
+                n += 1
+        m = len(_INITIATION_EFFICIENCY_SAMPLES)
+        headline = f"detected in {n}/{m} cell lines"
+        headline_segments = [
+            {"t": "detected in ", "strong": False},
+            {"t": f"{n}/{m}", "strong": True},
+            {"t": " cell lines", "strong": False},
         ]
-        vals = [v for v in vals if v is not None and not (isinstance(v, float) and math.isnan(v))]
-        headline = max(vals) if vals else None
-        headline_fmt = "float3"
+        headline_fmt = "str"
+    elif headline_col == _MASSPEC_VALIDATED:
+        # "{v}/{u} isoform-unique peptides validated": v = isoform-unique tryptic
+        # peptides matched to public MS spectra by PepQuery2 (the E6 score
+        # numerator), u = total isoform-unique peptides searched. The isoform
+        # digest is scoped to unique peptides, so ``validated_peptides`` == the
+        # validated-unique count. Unscored (—) until PepQuery has run.
+        summary = raw.get("isoform_massspec_summary")
+        if isinstance(summary, dict) and summary.get("pepquery_run"):
+            v = summary.get("validated_peptides") or 0
+            u = summary.get("unique_peptides")
+            if u is None:
+                u = summary.get("total_peptides") or 0
+            headline = f"{v}/{u} isoform-unique peptides validated"
+            headline_segments = [
+                {"t": f"{v}/{u}", "strong": True},
+                {"t": " isoform-unique peptides validated", "strong": False},
+            ]
+        else:
+            headline = None
+        headline_fmt = "str"
+    elif headline_col == _DIVERGING_DOMAINS:
+        # Curated count of real domains changed in the differential region — the
+        # same value the F3 score uses (>=1 passes). Rendered "n diverging domains".
+        n = raw.get("cmp_interproscan_n_real_domains_changed_in_diff_region")
+        if n is None or (isinstance(n, float) and math.isnan(n)):
+            headline = None
+        else:
+            n = int(n)
+            noun = "domain" if n == 1 else "domains"
+            count = "No" if n == 0 else str(n)
+            headline = f"{count} diverging {noun}"
+            headline_segments = [
+                {"t": count, "strong": True},
+                {"t": f" diverging {noun}", "strong": False},
+            ]
+        headline_fmt = "str"
+    elif headline_col in _VARIANT_FOLD_HEADLINES:
+        # Fold-change of variant density in the unique region vs baseline, shown
+        # as "{noun} {fold}x more/less in unique region — {call}". gnomAD
+        # (germline): fewer = constrained, more = tolerant. Disease
+        # (ClinVar/COSMIC): more = enriched, fewer = depleted. Within 1.1x
+        # either way = neutral.
+        spec = _VARIANT_FOLD_HEADLINES[headline_col]
+        r = raw.get(spec["col"])
+        if r is None or (isinstance(r, float) and math.isnan(r)) or float(r) <= 0:
+            headline = None
+        else:
+            r = float(r)
+            fold = r if r >= 1 else 1.0 / r
+            if fold < 1.1:
+                headline = f"{spec['noun']} comparable in unique region — neutral"
+                headline_segments = [
+                    {"t": f"{spec['noun']} ", "strong": False},
+                    {"t": "comparable", "strong": True},
+                    {"t": " in unique region — ", "strong": False},
+                    {"t": "neutral", "strong": True},
+                ]
+            else:
+                direction = "more" if r > 1 else "less"
+                call = spec["high"] if r > 1 else spec["low"]
+                headline = f"{spec['noun']} {fold:.2f}× {direction} in unique region — {call}"
+                headline_segments = [
+                    {"t": f"{spec['noun']} ", "strong": False},
+                    {"t": f"{fold:.2f}× {direction}", "strong": True},
+                    {"t": " in unique region — ", "strong": False},
+                    {"t": call, "strong": True},
+                ]
+        headline_fmt = "str"
+    elif headline_col in _SIMILARITY_HEADLINES:
+        # Mean AA % identity of the differential (unique) region to orthologs
+        # across the clade. Rendered as "Unique region {x}% similar across {clade}"
+        # — neutral wording that fits both extensions (isoform-unique gained
+        # region) and truncations (lost canonical region).
+        col, clade = _SIMILARITY_HEADLINES[headline_col]
+        x = raw.get(col)
+        if x is None or (isinstance(x, float) and math.isnan(x)):
+            headline = None
+        else:
+            pct = float(x) * 100
+            headline = f"Unique region {pct:.1f}% similar across {clade}"
+            headline_segments = [
+                {"t": "Unique region ", "strong": False},
+                {"t": f"{pct:.1f}%", "strong": True},
+                {"t": f" similar across {clade}", "strong": False},
+            ]
+        headline_fmt = "str"
+    elif headline_col in _ISO_CANON_HEADLINES:
+        iso_col, canon_col = _ISO_CANON_HEADLINES[headline_col]
+
+        def _pred(x: Any) -> str:
+            if x is None or (isinstance(x, float) and math.isnan(x)):
+                return "—"
+            # DeepLoc joins multiple locations with "|"; render as "a, b" so the
+            # "|" reads only as the iso/canon separator.
+            return str(x).replace("|", ", ")
+
+        iso_v = _pred(raw.get(iso_col))
+        canon_v = _pred(raw.get(canon_col))
+        headline = f"iso: {iso_v} | canon: {canon_v}"
+        headline_segments = [
+            {"t": "iso: ", "strong": False},
+            {"t": iso_v, "strong": True},
+            {"t": " | canon: ", "strong": False},
+            {"t": canon_v, "strong": True},
+        ]
+        headline_fmt = "str"
     else:
         headline = raw.get(headline_col) if headline_col else None
         headline_fmt = CRITERIA_METRIC_LABELS.get(headline_col, {}).get("format", "str")
@@ -1358,6 +1640,7 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         "reason": criterion_entry.get("reason"),
         "headline": headline,
         "headline_fmt": headline_fmt,
+        "headline_segments": headline_segments,
         "evidence": evidence,
         "hits": hits,
         "n_hits_total": n_hits_total,

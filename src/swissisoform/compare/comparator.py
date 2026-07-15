@@ -20,7 +20,9 @@ populated ``gene.canonical_annotations`` and per-TIS
    equal the canonical annotations and no separate annotation run is
    needed; symmetrically for tail-verified truncations, the shared
    region equals the isoform. The enrichment ratio (unique / shared) is
-   reported only for ``tail_verified`` in-frame events.
+   reported for ``tail_verified`` in-frame events and for
+   ``initiator_met`` truncations (whose shared suffix is residue-exact
+   apart from the single leading start Met).
 
 The comparator writes into ``site.comparison[module_name]`` and
 ``site.diff_annotations[module_name]`` in place and returns the same
@@ -431,7 +433,12 @@ class Comparator:
         shared sequence equals either pane (non tail-verified).
         """
         diff_region = site.diff_region
-        if diff_region is None or diff_region.confidence != "tail_verified":
+        # "initiator_met" truncations are residue-verified over the shared suffix
+        # (only the single leading Met differs), so the pane is representative.
+        if diff_region is None or diff_region.confidence not in (
+            "tail_verified",
+            "initiator_met",
+        ):
             return None
         if site.orf_type == ORFType.EXTENDED:
             # Shared region = canonical body (= canonical pane by sequence identity)

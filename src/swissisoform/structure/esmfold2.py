@@ -41,6 +41,29 @@ DEFAULT_NUM_SAMPLING_STEPS = 100
 _MODELS: dict[tuple[str, str], Any] = {}
 
 
+def _write_pae(base: Path, pae: Any, h: str) -> None:
+    """Persist the L×L PAE map to ``base/pae.npy`` (float16), if present.
+
+    ``pae`` is the raw ESMFold2 output tensor (torch), shape ``(L, L)`` or
+    ``(1, L, L)`` for a single chain. Best-effort: any shape/backend surprise
+    logs a warning and skips the file rather than failing the fold.
+    """
+    if pae is None:
+        logger.info("esmfold2: no PAE on result for hash=%s (skipping pae.npy)", h)
+        return
+    try:
+        import numpy as np
+
+        arr = np.asarray(pae.detach().float().cpu().numpy())
+        arr = np.squeeze(arr)
+        if arr.ndim != 2 or arr.shape[0] != arr.shape[1]:
+            logger.warning("esmfold2: unexpected PAE shape %s for hash=%s", arr.shape, h)
+            return
+        np.save(base / "pae.npy", arr.astype(np.float16))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("esmfold2: failed to write PAE for hash=%s: %s", h, exc)
+
+
 def _load_model(model_name: str, device: str):
     """Load (and cache) an ESMFold2 model on ``device``."""
     key = (model_name, device)
@@ -121,9 +144,61 @@ def fold_one(
     with open(base / "confidence.json", "w") as fh:
         json.dump(confidence_payload, fh)
 
+    # PAE (predicted aligned error): ESMFold2 computes the full L×L map every
+    # fold — pTM/ipTM are reductions of it — but the fold result otherwise
+    # discards it. Persist it as its own file (too big for confidence.json).
+    # Cached as float16 (PAE is 0..~32 Å, fp16 is lossless enough) to keep the
+    # per-protein cache small; keyed by protein hash like the rest of the entry.
+    _write_pae(base, getattr(result, "pae", None), h)
+
     metrics = derive_metrics(backend="esmfold2", plddt=plddt, ptm=ptm, status="ok")
     metrics["length"] = len(clean)
     write_cache(
         h, cache_dir=cache_dir, backend="esmfold2", metrics=metrics, cif_text=cif_text
     )
+    return base
+
+
+def fold_pae_only(
+    h: str,
+    seq: str,
+    *,
+    cache_dir: Path | str = DEFAULT_CACHE_DIR,
+    num_loops: int = DEFAULT_NUM_LOOPS,
+    num_sampling_steps: int = DEFAULT_NUM_SAMPLING_STEPS,
+    model_name: str = DEFAULT_MODEL,
+    device: str = "cuda",
+    seed: int = 0,
+) -> Path:
+    """Re-fold one protein and write ONLY ``pae.npy`` into its existing entry.
+
+    Backfill path for entries folded before PAE capture: it recomputes the fold
+    (deterministic, seed-pinned) purely to extract the L×L PAE, and writes just
+    ``pae.npy`` — it never touches ``model.cif`` / ``confidence.json`` /
+    ``metrics.json``, so it is safe to run against a shared/warm cache. Raises on
+    fold error (the caller decides how to count failures).
+    """
+    import torch
+    from esm.models.esmfold2 import (
+        ESMFold2InputBuilder,
+        ProteinInput,
+        StructurePredictionInput,
+    )
+
+    base = cache_path(cache_dir, "esmfold2", h)
+    base.mkdir(parents=True, exist_ok=True)
+    clean = seq.rstrip("*").upper()
+
+    model = _load_model(model_name, device)
+    spi = StructurePredictionInput(sequences=[ProteinInput(id="0", sequence=clean)])
+    with torch.no_grad():
+        result = ESMFold2InputBuilder().fold(
+            model,
+            spi,
+            num_loops=num_loops,
+            num_sampling_steps=num_sampling_steps,
+            num_diffusion_samples=1,
+            seed=seed,
+        )
+    _write_pae(base, getattr(result, "pae", None), h)
     return base

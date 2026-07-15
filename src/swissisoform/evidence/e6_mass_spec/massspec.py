@@ -6,9 +6,11 @@ optionally cross-referencing with pre-computed PepQuery2 validation results.
 ``precompute_pepquery`` runs the PepQuery2 standalone jar (staged by
 ``scripts/setup/setup_databases.py pepquery`` into
 ``data/reference/pepquery/pepquery-2.0.2/pepquery-2.0.2.jar``) over a
-batch of candidate peptides via ``java -jar``.  MS/MS spectra come from
-PepQueryDB on demand via the ``-b`` flag — no local spectral index.
-The returned dict feeds ``MassSpecModule`` at init.
+batch of candidate peptides via ``java -jar``.  MS/MS spectra are searched
+against a local mirror of the PepQueryDB indexed libraries via ``-ms`` when it
+has been staged (``setup_databases.py pepquery-spectra``), else fetched from
+PepQueryDB on demand via ``-b``.  The returned dict feeds ``MassSpecModule`` at
+init.
 """
 
 from __future__ import annotations
@@ -39,9 +41,44 @@ DEFAULT_PEPQUERY_JAR = (
     / "data" / "reference" / "pepquery" / "pepquery-2.0.2" / "pepquery-2.0.2.jar"
 )
 
+# Local mirror of the PepQueryDB indexed MS/MS libraries (one folder of mass-binned
+# *.mgf.gz per dataset), staged by ``setup_databases.py pepquery-spectra``. When a
+# dataset's folder is present, precompute_pepquery searches it via ``-ms`` (local,
+# zero S3) instead of downloading on demand via ``-b``.
+_PEPQUERY_SPECTRA_DIR = (
+    Path(__file__).resolve().parents[4] / "data" / "reference" / "pepquery" / "spectra"
+)
+
 # All transient pipeline scratch lives under one cache root (never the repo root
-# or system /tmp — shared HPC). PepQuery downloads hundreds of MB of spectra here.
+# or system /tmp — shared HPC). With ``-b`` PepQuery downloads spectra here; with a
+# local ``-ms`` mirror it only writes small result tables.
 _SCRATCH_ROOT = Path(__file__).resolve().parents[4] / "data" / "cache" / "tmp"
+
+
+def _pepquery_local_library_dirs(dataset: str) -> list[Path] | None:
+    """Local spectra-library dirs if EVERY comma-token in ``dataset`` is mirrored.
+
+    Returns one :class:`Path` per comma-separated dataset name in ``dataset`` when
+    each has a local folder holding at least one ``*.mgf.gz`` mass-bin (staged by
+    ``setup_databases.py pepquery-spectra``); otherwise ``None`` (→ caller falls
+    back to the on-demand ``-b`` download).
+
+    ``-ms`` cannot take comma-separated folders and the two datasets share bin
+    filenames (both have ``10000.mgf.gz``), so they must be searched one folder at
+    a time. Tag inputs (``"w"``, ``"all"``, …) name dataset *groups*, not a single
+    mirrored folder, so this returns ``None`` for them and the ``-b`` path handles
+    them unchanged.
+    """
+    tokens = [t.strip() for t in dataset.split(",") if t.strip()]
+    if not tokens:
+        return None
+    dirs: list[Path] = []
+    for tok in tokens:
+        d = _PEPQUERY_SPECTRA_DIR / tok
+        if not (d.is_dir() and next(d.glob("*.mgf.gz"), None)):
+            return None
+        dirs.append(d)
+    return dirs
 
 
 def tryptic_digest(
@@ -489,12 +526,15 @@ def precompute_pepquery(
     max_var: int | None = None,
     extra_args: list[str] | None = None,
 ) -> dict[str, set[str]]:
-    """Run PepQuery2 over all unique peptides in one batched invocation.
+    """Run PepQuery2 over all unique peptides in one batched search.
 
-    Pools every peptide across genes into a single flat input file,
-    invokes ``java -jar <pepquery.jar> -b <dataset> -db <ref> -hc
-    -i pep.txt -o outdir/`` exactly once, parses the output, then
-    re-keys the validated set back to gene names.
+    Pools every peptide across genes into a single flat input file and searches
+    the PepQueryDB spectra. If the datasets in ``dataset`` are mirrored locally
+    (``setup_databases.py pepquery-spectra``), each is searched from disk via one
+    ``-ms <folder>`` invocation (no S3 download); otherwise a single
+    ``-b <dataset>`` invocation streams them from PepQueryDB on demand. Either
+    way the per-dataset outputs are parsed and the validated set is re-keyed back
+    to gene names.
 
     PepQueryDB ``-b`` tags (from PepQuery2 docs):
 
@@ -602,43 +642,56 @@ def precompute_pepquery(
         with open(peptides_file, "w") as fh:
             fh.write("\n".join(peptides_sorted) + "\n")
 
-        cmd = [
-            java_bin,
-            "-jar",
-            str(jar),
-            "-b",
-            dataset,
-            "-db",
-            reference_db,
-            "-hc",
-            "-i",
-            str(peptides_file),
-            "-o",
-            str(outdir),
-        ]
+        # Flags shared by every invocation (reference db, high-confidence filter,
+        # the pooled peptide file, and any modification / passthrough flags).
+        common_tail = ["-db", reference_db, "-hc", "-i", str(peptides_file)]
         if fix_mods:
-            cmd += ["-fixMod", fix_mods]
+            common_tail += ["-fixMod", fix_mods]
         if var_mods:
-            cmd += ["-varMod", var_mods]
+            common_tail += ["-varMod", var_mods]
         if max_var is not None:
-            cmd += ["-maxVar", str(max_var)]
+            common_tail += ["-maxVar", str(max_var)]
         if extra_args:
-            cmd.extend(extra_args)
+            common_tail += list(extra_args)
 
-        logger.info("precompute_pepquery: %s", " ".join(cmd))
-        try:
-            proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            if proc.stdout:
-                logger.info("pepquery stdout (tail):\n%s", proc.stdout[-1000:])
-            if proc.stderr:
-                logger.info("pepquery stderr (tail):\n%s", proc.stderr[-1000:])
-        except subprocess.CalledProcessError as exc:
-            logger.error(
-                "precompute_pepquery: pepquery exited %d. stderr=%s",
-                exc.returncode,
-                (exc.stderr or "")[-1000:],
+        # Prefer the local mirror: one `-ms <folder>` search per dataset (PepQuery
+        # rejects comma-separated folders, and the datasets share bin filenames).
+        # Each writes to its own `<outdir>/<dataset>/`, so `_parse_pepquery_output`
+        # aggregates them via the same `*/psm_rank.txt` glob as the `-b` layout.
+        # No mirror → fall back to the on-demand `-b` download (unchanged).
+        local_dirs = _pepquery_local_library_dirs(dataset)
+        if local_dirs:
+            logger.info(
+                "precompute_pepquery: local spectra mirror hit — searching %d "
+                "dataset folder(s) via -ms (no S3 download)",
+                len(local_dirs),
             )
-            return {}
+            cmds = [
+                [java_bin, "-jar", str(jar), "-ms", str(d),
+                 "-o", str(outdir / d.name), *common_tail]
+                for d in local_dirs
+            ]
+        else:
+            cmds = [
+                [java_bin, "-jar", str(jar), "-b", dataset, "-o", str(outdir),
+                 *common_tail]
+            ]
+
+        for cmd in cmds:
+            logger.info("precompute_pepquery: %s", " ".join(cmd))
+            try:
+                proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
+                if proc.stdout:
+                    logger.info("pepquery stdout (tail):\n%s", proc.stdout[-1000:])
+                if proc.stderr:
+                    logger.info("pepquery stderr (tail):\n%s", proc.stderr[-1000:])
+            except subprocess.CalledProcessError as exc:
+                logger.error(
+                    "precompute_pepquery: pepquery exited %d. stderr=%s",
+                    exc.returncode,
+                    (exc.stderr or "")[-1000:],
+                )
+                return {}
 
         validated_peptides = _parse_pepquery_output(outdir)
         logger.info(
