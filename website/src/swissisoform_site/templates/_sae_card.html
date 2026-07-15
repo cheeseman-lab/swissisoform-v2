@@ -78,12 +78,12 @@
 <div class="evidence-tile axis-F sae-tile" data-criterion="F8_sae" title="SAE interpretability features — descriptive, not scored">
   <button class="tile-head" type="button" aria-haspopup="dialog">
     <span class="tile-id">{{ badge }}</span>
-    <span class="tile-label">SAE features</span>
+    <span class="tile-label">SAE Features</span>
     <span class="tile-badge tile-badge-info">SAE</span>
   </button>
   <div class="tile-headline">
     {% if sae %}
-      {{ sae.counts.isoform_only }} gained · {{ sae.counts.canonical_only }} lost · {{ sae.counts.shared }} shared
+      <span class="tile-headline-value">{{ sae.n_differ }}</span><span class="tile-headline-label"> SAE features differ</span>
     {% else %}
       <span class="text-xs text-slate-400">—</span>
     {% endif %}

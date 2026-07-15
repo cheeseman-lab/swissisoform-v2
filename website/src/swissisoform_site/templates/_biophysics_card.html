@@ -11,7 +11,9 @@
     <span class="tile-badge tile-badge-info">BIO</span>
   </button>
   <div class="tile-headline">
-    {% if bio %}{{ bio.headline }}{% else %}<span class="text-xs text-slate-400">—</span>{% endif %}
+    {% if bio and bio.headline_segments %}
+      {% for seg in bio.headline_segments %}<span class="{{ 'tile-headline-value' if seg.strong else 'tile-headline-label' }}">{{ seg.t }}</span>{% endfor %}
+    {% elif bio %}{{ bio.headline }}{% else %}<span class="text-xs text-slate-400">—</span>{% endif %}
   </div>
 
   <template class="tile-body-template">

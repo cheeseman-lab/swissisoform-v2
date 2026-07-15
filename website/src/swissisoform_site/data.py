@@ -738,12 +738,16 @@ def sae_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
             "delta": _sae_num(raw.get(f"isoform_sae_top_{prefix}_delta_max")),
         }
 
+    _n_iso_only = _int("isoform_sae_n_isoform_only")
+    _n_canon_only = _int("isoform_sae_n_canonical_only")
     return {
         "counts": {
-            "isoform_only": _int("isoform_sae_n_isoform_only"),
-            "canonical_only": _int("isoform_sae_n_canonical_only"),
+            "isoform_only": _n_iso_only,
+            "canonical_only": _n_canon_only,
             "shared": _int("isoform_sae_n_shared"),
         },
+        # SAE features unique to one form (gained + lost) — the face tagline.
+        "n_differ": (_n_iso_only or 0) + (_n_canon_only or 0),
         "mean_abs_delta_shared": _sae_num(raw.get("isoform_sae_mean_abs_delta_shared")),
         "isoform_only": _sae_simple_rows(_sae_records(raw.get("isoform_sae_features_isoform_only"))),
         "canonical_only": _sae_simple_rows(
@@ -810,20 +814,44 @@ def biophysics_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
     if not rows:
         return None
 
-    # Compact headline: the three deltas the F1 folding score keys off (isoform − canonical).
-    bits = []
-    for lbl, key in (
-        ("ΔGRAVY", "cmp_biophysics_gravy_delta"),
-        ("Δcharge", "cmp_biophysics_fraction_charged_delta"),
-        ("Δdisorder", "cmp_biophysics_disorder_delta"),
+    # Directional headline: how the differential region compares to the shared
+    # core for the three properties F1 keys off. Number = (differential − core);
+    # the sign gives the direction word. Region-vs-core (not the whole-protein
+    # isoform−canonical delta) so small regions aren't diluted and truncations
+    # read the same way as extensions.
+    import math
+
+    headline_segments: list[dict[str, Any]] = []
+    plain_bits: list[str] = []
+    for feat, adjective, noun, eps in (
+        ("gravy", "hydrophobic", "hydropathy", 0.1),
+        ("fraction_charged", "charged", "charge", 0.03),
+        ("disorder", "disordered", "disorder", 0.03),
     ):
-        v = _fmt_num(g(key))
-        if v is not None:
-            bits.append(f"{lbl} {v}")
-    headline = " · ".join(bits) if bits else f"{len(rows)} properties"
+        try:
+            u = float(g(f"cmp_biophysics_{feat}_unique"))
+            s = float(g(f"cmp_biophysics_{feat}_shared"))
+        except (TypeError, ValueError):
+            continue
+        if math.isnan(u) or math.isnan(s):
+            continue
+        diff = u - s
+        if abs(diff) < eps:
+            word, num = f"similar {noun}", ""
+        else:
+            word = f"{'more' if diff > 0 else 'less'} {adjective}"
+            num = f" ({diff:+.2f})"
+        if headline_segments:
+            headline_segments.append({"t": " · ", "strong": False})
+        headline_segments.append({"t": word, "strong": True})
+        if num:
+            headline_segments.append({"t": num, "strong": False})
+        plain_bits.append(word + num)
+    headline = " · ".join(plain_bits) if plain_bits else f"{len(rows)} properties"
 
     return {
         "headline": headline,
+        "headline_segments": headline_segments or None,
         "evidence": {
             "about": (
                 "Biophysical character of the isoform-differential region versus the "
@@ -1985,21 +2013,18 @@ def llm_for_isoform(gene: GeneRecord, tis_id: str) -> dict[str, Any] | None:
 CRITERIA_FOR_PAGE = [
     {
         "id": "E1_primate_conservation",
-        "headline_label": "Primate Mean Identity",
         "axis": "E",
         "label": "Primate conservation",
         "short_label": "Primates",
     },
     {
         "id": "E2_mammalian_conservation",
-        "headline_label": "Mammalian Mean Identity",
         "axis": "E",
         "label": "Mammalian conservation",
         "short_label": "Mammals",
     },
     {
         "id": "E3_phylop_coding_selection",
-        "headline_label": "PhyloP Unique Region",
         "axis": "E",
         "label": "Coding Selection",
         "short_label": "PhyloP",
@@ -2037,7 +2062,6 @@ CRITERIA_FOR_PAGE = [
     },
     {
         "id": "F3_domain_change",
-        "headline_label": "Domain Hits in Region",
         "axis": "F",
         "label": "Domain change",
         "short_label": "Domains",
@@ -2050,14 +2074,12 @@ CRITERIA_FOR_PAGE = [
     },
     {
         "id": "F5_pathogenic_variant_enrichment",
-        "headline_label": "gnomAD Depletion Ratio",
         "axis": "F",
         "label": "Germline Variants",
         "short_label": "Germline",
     },
     {
         "id": "F6_clinical_variant_overlap",
-        "headline_label": "Disease Enrichment Ratio",
         "axis": "F",
         "label": "Clinical Variants",
         "short_label": "Variants",

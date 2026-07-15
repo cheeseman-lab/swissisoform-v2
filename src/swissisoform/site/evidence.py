@@ -25,6 +25,34 @@ PATHOGENIC_CLINSIG_TOKENS = ("pathogenic", "likely_pathogenic", "likely pathogen
 _START_SITE_USAGE = "__start_site_usage__"
 _N_CELL_LINES_DETECTED = "__n_cell_lines_detected__"
 _MASSPEC_VALIDATED = "__massspec_validated__"
+_CODING_SELECTION = "__coding_selection__"
+_PRIMATE_SIMILARITY = "__primate_similarity__"
+_MAMMALIAN_SIMILARITY = "__mammalian_similarity__"
+# Composed "Unique region {x}% similar across {clade}" headlines (C1/C2):
+# sentinel -> (mean_pident column over the differential region, clade word).
+_SIMILARITY_HEADLINES = {
+    _PRIMATE_SIMILARITY: ("isoform_conservation_frame_primate_mean_pident", "primates"),
+    _MAMMALIAN_SIMILARITY: ("isoform_conservation_frame_mammalian_mean_pident", "mammals"),
+}
+_GNOMAD_FOLD = "__gnomad_fold__"
+_DISEASE_FOLD = "__disease_fold__"
+_DIVERGING_DOMAINS = "__diverging_domains__"
+# Fold-change variant-density headlines (M1/M2): "{noun} {fold}x more/less in
+# unique region — {call}". low/high = call word for ratio <1 / >1.
+_VARIANT_FOLD_HEADLINES = {
+    _GNOMAD_FOLD: {
+        "col": "isoform_variant_intersection_gnomad_depletion_ratio",
+        "noun": "gnomAD variants",
+        "low": "constrained",  # <1: fewer population variants than baseline
+        "high": "tolerant",  # >1: more population variants
+    },
+    _DISEASE_FOLD: {
+        "col": "isoform_variant_intersection_disease_enrichment_ratio",
+        "noun": "Disease variants",
+        "low": "depleted",  # <1: fewer disease variants
+        "high": "enriched",  # >1: more disease variants
+    },
+}
 # Composed "iso: {a} | canon: {b}" headlines: sentinel -> (isoform_col, canonical_col).
 _ISO_CANON_HEADLINES = {
     "__localization_iso_canon__": (
@@ -443,7 +471,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_conservation_frame_primate_canonical_frac_intact",
             "isoform_conservation_frame_primate_canonical_n_species_aligned",
         ],
-        "headline_col": "isoform_conservation_frame_primate_mean_pident",
+        "headline_col": _PRIMATE_SIMILARITY,
         "interpretation_hint": (
             "Is the alternative reading frame conserved across primates? Score on "
             "mean_pident (mean amino-acid % identity to primate orthologs); "
@@ -467,7 +495,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_conservation_frame_mammalian_canonical_frac_intact",
             "isoform_conservation_frame_mammalian_canonical_n_species_aligned",
         ],
-        "headline_col": "isoform_conservation_frame_mammalian_mean_pident",
+        "headline_col": _MAMMALIAN_SIMILARITY,
         "interpretation_hint": (
             "Is the alternative reading frame conserved deeper in mammals? Score on "
             "mean_pident (mean amino-acid % identity to mammalian orthologs); "
@@ -490,7 +518,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_conservation_phastcons_at_tis",
             "isoform_conservation_phastcons_kozak_mean",
         ],
-        "headline_col": "isoform_conservation_phylop_unique_region_mean",
+        "headline_col": _CODING_SELECTION,
         "interpretation_hint": (
             "Does the unique coding region show purifying selection by phyloP "
             "(absolute mean ≥ ~2 indicates strong constraint)? The shared region "
@@ -647,7 +675,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "cmp_interproscan_n_hits_in_diff_region",
         ],
         "evidence_hits_col": "cmp_interproscan_hits_in_diff_region",
-        "headline_col": "cmp_interproscan_n_hits_in_diff_region",
+        "headline_col": _DIVERGING_DOMAINS,
         "interpretation_hint": ("Does the differential region overlap with InterProScan domains?"),
     },
     "F4_targeting_change": {
@@ -699,7 +727,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_plm_vep_status",
         ],
         "evidence_hits_col": "isoform_variant_intersection_hits",
-        "headline_col": "isoform_variant_intersection_gnomad_depletion_ratio",
+        "headline_col": _GNOMAD_FOLD,
         "interpretation_hint": (
             "Is the unique region under germline constraint? Two independent "
             "signals: (1) gnomad_depletion_ratio < 1 means germline variation "
@@ -725,7 +753,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_variant_intersection_n_dropped_outside_coding",
         ],
         "evidence_hits_col": "isoform_variant_intersection_hits",
-        "headline_col": "isoform_variant_intersection_disease_enrichment_ratio",
+        "headline_col": _DISEASE_FOLD,
         "interpretation_hint": (
             "Do disease variants (ClinVar + COSMIC) CONCENTRATE in the isoform's "
             "unique coding region? disease_enrichment_ratio > 1 means the unique "
@@ -1406,6 +1434,24 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         else:
             headline = None
         headline_fmt = "str"
+    elif headline_col == _CODING_SELECTION:
+        # Mean PhyloP over the isoform-unique region + a selection call: PhyloP
+        # measures deviation from neutral evolution, so >0 = conserved (purifying
+        # selection), ~0 = neutral, <0 = accelerated. Neutral band = ±1.0.
+        x = raw.get("isoform_conservation_phylop_unique_region_mean")
+        if x is None or (isinstance(x, float) and math.isnan(x)):
+            headline = None
+        else:
+            x = float(x)
+            call = "purifying" if x >= 1.0 else "accelerated" if x <= -1.0 else "neutral"
+            headline = f"Unique region PhyloP: {x:.2f} — {call} selection"
+            headline_segments = [
+                {"t": "Unique region PhyloP: ", "strong": False},
+                {"t": f"{x:.2f}", "strong": True},
+                {"t": " — ", "strong": False},
+                {"t": f"{call} selection", "strong": True},
+            ]
+        headline_fmt = "str"
     elif headline_col == _N_CELL_LINES_DETECTED:
         # "detected in n/m cell lines": n = cell lines with an expression record
         # for this TIS (present per-sample column, mirrors the E4 scorer's
@@ -1442,6 +1488,72 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
             ]
         else:
             headline = None
+        headline_fmt = "str"
+    elif headline_col == _DIVERGING_DOMAINS:
+        # Curated count of real domains changed in the differential region — the
+        # same value the F3 score uses (>=1 passes). Rendered "n diverging domains".
+        n = raw.get("cmp_interproscan_n_real_domains_changed_in_diff_region")
+        if n is None or (isinstance(n, float) and math.isnan(n)):
+            headline = None
+        else:
+            n = int(n)
+            noun = "domain" if n == 1 else "domains"
+            count = "No" if n == 0 else str(n)
+            headline = f"{count} diverging {noun}"
+            headline_segments = [
+                {"t": count, "strong": True},
+                {"t": f" diverging {noun}", "strong": False},
+            ]
+        headline_fmt = "str"
+    elif headline_col in _VARIANT_FOLD_HEADLINES:
+        # Fold-change of variant density in the unique region vs baseline, shown
+        # as "{noun} {fold}x more/less in unique region — {call}". gnomAD
+        # (germline): fewer = constrained, more = tolerant. Disease
+        # (ClinVar/COSMIC): more = enriched, fewer = depleted. Within 1.1x
+        # either way = neutral.
+        spec = _VARIANT_FOLD_HEADLINES[headline_col]
+        r = raw.get(spec["col"])
+        if r is None or (isinstance(r, float) and math.isnan(r)) or float(r) <= 0:
+            headline = None
+        else:
+            r = float(r)
+            fold = r if r >= 1 else 1.0 / r
+            if fold < 1.1:
+                headline = f"{spec['noun']} comparable in unique region — neutral"
+                headline_segments = [
+                    {"t": f"{spec['noun']} ", "strong": False},
+                    {"t": "comparable", "strong": True},
+                    {"t": " in unique region — ", "strong": False},
+                    {"t": "neutral", "strong": True},
+                ]
+            else:
+                direction = "more" if r > 1 else "less"
+                call = spec["high"] if r > 1 else spec["low"]
+                headline = f"{spec['noun']} {fold:.2f}× {direction} in unique region — {call}"
+                headline_segments = [
+                    {"t": f"{spec['noun']} ", "strong": False},
+                    {"t": f"{fold:.2f}× {direction}", "strong": True},
+                    {"t": " in unique region — ", "strong": False},
+                    {"t": call, "strong": True},
+                ]
+        headline_fmt = "str"
+    elif headline_col in _SIMILARITY_HEADLINES:
+        # Mean AA % identity of the differential (unique) region to orthologs
+        # across the clade. Rendered as "Unique region {x}% similar across {clade}"
+        # — neutral wording that fits both extensions (isoform-unique gained
+        # region) and truncations (lost canonical region).
+        col, clade = _SIMILARITY_HEADLINES[headline_col]
+        x = raw.get(col)
+        if x is None or (isinstance(x, float) and math.isnan(x)):
+            headline = None
+        else:
+            pct = float(x) * 100
+            headline = f"Unique region {pct:.1f}% similar across {clade}"
+            headline_segments = [
+                {"t": "Unique region ", "strong": False},
+                {"t": f"{pct:.1f}%", "strong": True},
+                {"t": f" similar across {clade}", "strong": False},
+            ]
         headline_fmt = "str"
     elif headline_col in _ISO_CANON_HEADLINES:
         iso_col, canon_col = _ISO_CANON_HEADLINES[headline_col]
