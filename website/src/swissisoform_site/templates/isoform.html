@@ -88,9 +88,24 @@
        differential-region evidence. -->
   <section class="evidence-tiles">
     <h2>Evidence <span class="evidence-sub">— click any tile for the differential-region detail</span></h2>
+    {% set flag_labels = {'interesting': 'Interesting', 'neutral': 'Neutral', 'not_interesting': 'Not interesting', 'pending': 'Not assessed'} %}
     {% for group in card_groups %}
-      <section class="tile-group">
-        <h3 class="tile-group-h"><span class="tile-group-tag">{{ group.letter }}</span> {{ group.name }}</h3>
+      {% set cat = category_llms.get(group.name) %}
+      {% set v = (cat.verdict if cat else none) or 'pending' %}
+      <section class="cat-box cat-{{ group.letter }}">
+        <div class="cat-head">
+          <span class="cat-tag">{{ group.letter }}</span>
+          <span class="cat-name">{{ group.name }}</span>
+          <span class="cat-flag cat-flag-{{ v }}">{{ flag_labels[v] }}</span>
+        </div>
+        <details class="cat-reasoning">
+          <summary class="cat-reasoning-summary">LLM reasoning</summary>
+          {% if cat and cat.reasoning %}
+            <div class="cat-reasoning-body">{{ cat.reasoning }}</div>
+          {% else %}
+            <p class="cat-reasoning-body cat-reasoning-empty">Category-level LLM reasoning not yet generated.</p>
+          {% endif %}
+        </details>
         <div class="tile-grid">
           {% for m in group.members %}
             {% if m == 'biophysics' %}

@@ -309,9 +309,98 @@
 .evidence-tile:hover { box-shadow: 0 2px 6px rgba(0,0,0,0.07); }
 .evidence-tile.axis-E { border-left: 3px solid #2563eb; }
 .evidence-tile.axis-F { border-left: 3px solid #16a34a; }
+
+/* ── CDLMPS category boxes — one colored panel per category. Flag + all
+   submodule cards are always visible; only the LLM reasoning collapses. ── */
+.cat-box {
+  --cat-accent: #64748b;
+  --cat-accent-bg: #f1f5f9;
+  margin-top: 16px;
+  border: 1px solid #e5e7eb;
+  border-left: 4px solid var(--cat-accent);
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px 14px 14px;
+}
+.cat-box:first-of-type { margin-top: 10px; }
+.cat-C { --cat-accent: #059669; --cat-accent-bg: #ecfdf5; }  /* Conservation — emerald */
+.cat-D { --cat-accent: #2563eb; --cat-accent-bg: #eff6ff; }  /* Detection — blue */
+.cat-L { --cat-accent: #7c3aed; --cat-accent-bg: #f5f3ff; }  /* Localization — violet */
+.cat-M { --cat-accent: #e11d48; --cat-accent-bg: #fff1f2; }  /* Mutation Landscape — rose */
+.cat-P { --cat-accent: #d97706; --cat-accent-bg: #fffbeb; }  /* Predicted Structure — amber */
+.cat-S { --cat-accent: #0891b2; --cat-accent-bg: #ecfeff; }  /* Structural Characteristics — cyan */
+
+.cat-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.cat-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--cat-accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.cat-name { font-size: 14px; font-weight: 600; color: #1e293b; }
+
+/* Verdict flag — semantic colors, independent of the category accent. */
+.cat-flag {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.cat-flag::before { content: "\2691"; line-height: 1; }  /* ⚑ */
+.cat-flag-interesting { color: #166534; background: #dcfce7; border-color: #bbf7d0; }
+.cat-flag-neutral { color: #475569; background: #f1f5f9; border-color: #e2e8f0; }
+.cat-flag-not_interesting { color: #991b1b; background: #fee2e2; border-color: #fecaca; }
+.cat-flag-pending { color: #94a3b8; background: transparent; border: 1px dashed #cbd5e1; }
+.cat-flag-pending::before { content: "\2690"; }  /* ⚐ hollow — not yet assessed */
+
+/* Collapsible LLM reasoning — the only disclosure inside a category box. */
+.cat-reasoning { margin: 0 0 10px; }
+.cat-reasoning-summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cat-accent);
+  user-select: none;
+}
+.cat-reasoning-summary::-webkit-details-marker { display: none; }
+.cat-reasoning-summary::after { content: "\25be"; transition: transform 0.15s ease; }  /* ▾ */
+.cat-reasoning[open] .cat-reasoning-summary::after { transform: rotate(180deg); }
+.cat-reasoning-body {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  background: var(--cat-accent-bg);
+  border-radius: 6px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #334155;
+}
+.cat-reasoning-empty { color: #94a3b8; font-style: italic; }
+
+/* Tiles inside a category adopt its accent (overrides the blue/green axis). */
+.cat-box .evidence-tile,
+.cat-box .evidence-tile.axis-E,
+.cat-box .evidence-tile.axis-F { border-left: 3px solid var(--cat-accent); }
 .tile-head {
   display: grid;
-  grid-template-columns: 32px 1fr 24px;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 8px;
   width: 100%;

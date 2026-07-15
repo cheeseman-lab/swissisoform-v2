@@ -43,6 +43,7 @@ from swissisoform_site.data import (
     biophysics_card_for_isoform,
     criterion_evidence_for,
     data_dir,
+    category_verdicts_for_isoform,
     llm_criterion_for_isoform,
     llm_synthesis_for_isoform,
     load_all,
@@ -196,6 +197,7 @@ def create_app() -> Flask:
 
         llm_dir = data_dir_path / "llm"
         synthesis = llm_synthesis_for_isoform(llm_dir=llm_dir, tis_slug=tis_slug_str)
+        category_llms = category_verdicts_for_isoform(llm_dir=llm_dir, tis_slug=tis_slug_str)
 
         # Reconstruct the per-isoform record shape slice_criterion wants: a
         # ``{"_raw": ..., "scoring": {"criteria": {name: {"value", "reason"}}}, ...}``
@@ -264,6 +266,7 @@ def create_app() -> Flask:
             card_groups=CARD_GROUPS,
             card_badges=CARD_BADGES,
             criteria_by_id=CRITERIA_BY_ID,
+            category_llms=category_llms,
             criterion_slices=criterion_slices,
             criterion_llms=criterion_llms,
             synthesis=synthesis,

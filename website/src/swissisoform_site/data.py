@@ -2165,3 +2165,24 @@ def llm_criterion_for_isoform(*, llm_dir: Path, tis_slug: str, criterion_id: str
     except Exception:
         return None
     return blob.get(criterion_id)
+
+
+def category_verdicts_for_isoform(*, llm_dir: Path, tis_slug: str) -> dict:
+    """Per-category LLM verdict + reasoning, keyed by CARD_GROUPS category name.
+
+    Reads an optional ``<llm_dir>/<tis_slug>/categories.json`` — an object keyed
+    by category ``name`` (e.g. "Conservation") →
+    ``{"verdict": "interesting" | "neutral" | "not_interesting", "reasoning": str}``.
+    Returns ``{}`` when the file is absent or unreadable, so the front end falls
+    back to a neutral "pending" flag + a placeholder reasoning line. There is no
+    producer for this yet — the LLM reasons per-criterion (criteria.json) and per
+    whole-isoform (synthesis.json) today; this is the category-level hook.
+    """
+    p = Path(llm_dir) / tis_slug / "categories.json"
+    if not p.exists():
+        return {}
+    try:
+        blob = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return blob if isinstance(blob, dict) else {}

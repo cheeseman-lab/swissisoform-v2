@@ -2,9 +2,6 @@
   <button class="tile-head" type="button" aria-haspopup="dialog">
     <span class="tile-id">{{ badge }}</span>
     <span class="tile-label">{{ c.label }}</span>
-    <span class="tile-badge tile-badge-{{ 'true' if sl.value == true else ('false' if sl.value == false else 'none') }}">
-      {% if sl.value == true %}✓{% elif sl.value == false %}✗{% else %}–{% endif %}
-    </span>
   </button>
   <div class="tile-headline">
     {% if sl.headline_segments %}
