@@ -18,7 +18,7 @@ from swissisoform.config import ScoringConfig
 from swissisoform.evidence.common import CriterionResult, _annotation
 from swissisoform.models import TranslationInitiationSite
 
-_NAME = "F7_shared_structural_change"
+_NAME = "P2_shared_structural_change"
 
 
 def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResult:

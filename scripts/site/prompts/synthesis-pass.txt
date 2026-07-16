@@ -1,16 +1,16 @@
 You are writing the whole-isoform biological judgment for one alt-TIS isoform (extension, truncation, or uORF/altORF) in SwissIsoform v2.
 
-Input: (1) the isoform's identity (gene, transcript, ORF type, lengths, differential sequence); (2) the headline existence + functional scores; (3) per-criterion digested reads (`criteria_reads`) plus the raw evidence (`criteria_evidence`).
+Input: (1) the isoform's identity (gene, transcript, ORF type, lengths, differential sequence); (2) the headline existence + functional scores; (3) per-category digested verdicts (`category_reads` — one `{verdict, reasoning}` per CDLMPS category: Conservation, Detection, Localization, Mutation Landscape, Predicted Structure, Structural Characteristics) plus the raw per-criterion evidence (`criteria_evidence`, all 15 criteria).
 
-The 12 criteria, two axes:
-- EXISTENCE (is it real and translated?): E1/E2 AA-identity conservation (primate/mammalian), E3 absolute phyloP constraint, E4 multi-cell-line reproducibility, E5 initiation efficiency, E6 unique-peptide mass spec.
-- FUNCTIONAL (does the differential region change function?): F1 folding + biophysical distinctness, F2 localization-feature change, F3 real-InterPro-domain gain/loss, F4 SignalP/TargetP targeting change, F5 germline tolerance/constraint (gnomAD depletion + ESM-2 — NOT disease burden), F6 disease-variant density enrichment (ClinVar/COSMIC).
+The 15 criteria, grouped as CDLMPS (existence = C+D, functional = L+M+P+S):
+- EXISTENCE (is it real and translated?): C1/C2 AA-identity conservation (primate/mammalian), C3 absolute phyloP constraint, D1 multi-cell-line reproducibility, D2 initiation efficiency, D3 unique-peptide mass spec.
+- FUNCTIONAL (does the differential region change function?): L1 localization-feature change, L2 SignalP/TargetP targeting change, M1 germline tolerance/constraint (gnomAD depletion + ESM-2 — NOT disease burden), M2 disease-variant density enrichment (ClinVar/COSMIC), P1 unique-region folding (pLDDT only), P2 shared-region core-fold perturbation, S1 real-InterPro-domain gain/loss, S2 biophysical distinctness of the differential region, S3 ESM-C SAE unique-region features (provisional labels).
 
 Write a SHORT integrated judgment — do not walk the criteria one by one, and do not pad. In a few tight sentences cover: one EXISTENCE verdict (name the signal that carries it), one FUNCTIONAL verdict (name the signal that carries it), and the single dominant hypothesis for what the isoform does (or doesn't). Mention a tension between criteria only if it changes the verdict. Brevity is required.
 
 Guardrails:
   - Do not contradict the headline scores.
-  - Keep directionality right: F5 is tolerance/constraint (depletion ratio < 1× = important), not pathogenic burden; F6 is disease density.
+  - Keep directionality right: M1 is tolerance/constraint (depletion ratio < 1× = important), not pathogenic burden; M2 is disease density.
   - Cite ClinVar/gnomAD/COSMIC IDs verbatim.
   - Treat any None/absent criterion as an explicit caveat, not a silent omission.
   - Introduce no fact the input does not state — never extrapolate biology (e.g. organelle retargeting) the localization/targeting reads do not report.

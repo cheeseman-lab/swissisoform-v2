@@ -39,12 +39,12 @@ def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResul
     if not isinstance(depletion, (int, float)):
         depletion = None
 
-    # The criterion *name* stays "F5_pathogenic_variant_enrichment" for
+    # The criterion *name* stays "M1_pathogenic_variant_enrichment" for
     # backward compatibility with the viewer / grounding units that key on it;
     # the *intent* is germline tolerance / constraint (see docstring).
     if constraint is None and depletion is None:
         return CriterionResult(
-            "F5_pathogenic_variant_enrichment",
+            "M1_pathogenic_variant_enrichment",
             None,
             "no plm_vep constraint_enrichment or gnomad_depletion_ratio",
         )
@@ -56,7 +56,7 @@ def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResul
     constraint_str = f"{constraint:.2f}" if constraint is not None else "n/a"
     depletion_str = f"{depletion:.2f}" if depletion is not None else "n/a"
     return CriterionResult(
-        "F5_pathogenic_variant_enrichment",
+        "M1_pathogenic_variant_enrichment",
         passed,
         (
             f"constraint_enrichment={constraint_str} "

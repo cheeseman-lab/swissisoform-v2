@@ -1,91 +1,118 @@
-"""Evidence-scoring buckets — dual-axis existence (E1–E6) + functional (F1–F7).
+"""Evidence-scoring buckets — grouped by the six CDLMPS categories.
 
 Each bucket is a subpackage exposing a ``score(site, cfg) -> CriterionResult``
-function. ``EXISTENCE_CRITERIA`` / ``FUNCTIONAL_CRITERIA`` collect them in the
-canonical order consumed by ``EvidenceScoringModule``.
+function. ``CATEGORY_CRITERIA`` maps each category letter to its criteria in the
+canonical order; ``EXISTENCE_CRITERIA`` (C+D) / ``FUNCTIONAL_CRITERIA``
+(L+M+P+S) are derived from it for the two-axis roll-up consumed by
+``EvidenceScoringModule``.
+
+Categories
+----------
+
+    C  Conservation          C1 primate, C2 mammalian, C3 phylop selection
+    D  Detection             D1 multi-cell-line, D2 initiation eff., D3 mass-spec
+    L  Localization          L1 localization change, L2 targeting change
+    M  Mutation Landscape    M1 germline constraint, M2 disease enrichment
+    P  Predicted Structure   P1 structured extension, P2 shared-region RMSD
+    S  Structural Chars.     S1 domain change, S2 biophysics, S3 SAE features
 
 Bucket-specific plumbing (the annotator that produces the evidence) lives in the
 bucket folder; genuinely shared plumbing stays as infrastructure packages::
 
     Bucket                      Plumbing
-    E1 primate conservation     conservation_frame            (shared E1/E2)
-    E2 mammalian conservation   conservation_frame            (shared E1/E2)
-    E3 phylop selection         modules.conservation
-    E4 reproducibility          site.expression               (shared E4/E5)
-    E5 initiation efficiency    site.expression               (shared E4/E5)
-    E6 mass spec                evidence/e6_mass_spec          (owns it)
-    F1 structure                structure + modules.biophysics
-    F2 localization             evidence/f2_localization       (owns it)
-    F3 domains                  evidence/f3_domains            (owns it)
-    F4 targeting                evidence/f4_targeting           (owns it)
-    F5 germline constraint      modules.varianteffect + clinical (shared F5/F6)
-    F6 disease enrichment       modules.variant_intersection + clinical (shared F5/F6)
-    F7 shared structural change structure (shared-region Cα RMSD)
+    C1 primate conservation     conservation_frame            (shared C1/C2)
+    C2 mammalian conservation   conservation_frame            (shared C1/C2)
+    C3 phylop selection         modules.conservation
+    D1 reproducibility          site.expression               (shared D1/D2)
+    D2 initiation efficiency    site.expression               (shared D1/D2)
+    D3 mass spec                evidence/d3_mass_spec          (owns it)
+    L1 localization             evidence/l1_localization       (owns it)
+    L2 targeting                evidence/l2_targeting           (owns it)
+    M1 germline constraint      modules.varianteffect + clinical (shared M1/M2)
+    M2 disease enrichment       modules.variant_intersection + clinical (shared M1/M2)
+    P1 structure                structure (diff-region pLDDT)
+    P2 shared structural change structure (shared-region Cα RMSD)
+    S1 domains                  evidence/s1_domains            (owns it)
+    S2 biophysics               modules.biophysics (region-vs-core)
+    S3 sae                      plm.sae_module
 """
 
 from __future__ import annotations
 
 from swissisoform.evidence import (
-    e1_primate_conservation as e1,
+    c1_primate_conservation as c1,
 )
 from swissisoform.evidence import (
-    e2_mammalian_conservation as e2,
+    c2_mammalian_conservation as c2,
 )
 from swissisoform.evidence import (
-    e3_phylop_selection as e3,
+    c3_phylop_selection as c3,
 )
 from swissisoform.evidence import (
-    e4_reproducibility as e4,
+    d1_reproducibility as d1,
 )
 from swissisoform.evidence import (
-    e5_initiation_efficiency as e5,
+    d2_initiation_efficiency as d2,
 )
 from swissisoform.evidence import (
-    e6_mass_spec as e6,
+    d3_mass_spec as d3,
 )
 from swissisoform.evidence import (
-    f1_structure as f1,
+    l1_localization as l1,
 )
 from swissisoform.evidence import (
-    f2_localization as f2,
+    l2_targeting as l2,
 )
 from swissisoform.evidence import (
-    f3_domains as f3,
+    m1_germline_constraint as m1,
 )
 from swissisoform.evidence import (
-    f4_targeting as f4,
+    m2_disease_enrichment as m2,
 )
 from swissisoform.evidence import (
-    f5_germline_constraint as f5,
+    p1_structure as p1,
 )
 from swissisoform.evidence import (
-    f6_disease_enrichment as f6,
+    p2_shared_rmsd as p2,
 )
 from swissisoform.evidence import (
-    f7_shared_rmsd as f7,
+    s1_domains as s1,
+)
+from swissisoform.evidence import (
+    s2_biophysics as s2,
+)
+from swissisoform.evidence import (
+    s3_sae as s3,
 )
 from swissisoform.evidence.common import Criterion, CriterionResult
 
+# Category-keyed registration — the primary structure. Order within each list
+# is the canonical display / evaluation order.
+CATEGORY_CRITERIA: dict[str, list[Criterion]] = {
+    "C": [c1.score, c2.score, c3.score],
+    "D": [d1.score, d2.score, d3.score],
+    "L": [l1.score, l2.score],
+    "M": [m1.score, m2.score],
+    "P": [p1.score, p2.score],
+    "S": [s1.score, s2.score, s3.score],
+}
+
+# Two-axis roll-up (back-compat): existence = Conservation + Detection,
+# functional = Localization + Mutation + Predicted structure + Structural.
 EXISTENCE_CRITERIA: list[Criterion] = [
-    e1.score,
-    e2.score,
-    e3.score,
-    e4.score,
-    e5.score,
-    e6.score,
+    *CATEGORY_CRITERIA["C"],
+    *CATEGORY_CRITERIA["D"],
 ]
 
 FUNCTIONAL_CRITERIA: list[Criterion] = [
-    f1.score,
-    f2.score,
-    f3.score,
-    f4.score,
-    f5.score,
-    f6.score,
-    f7.score,
+    *CATEGORY_CRITERIA["L"],
+    *CATEGORY_CRITERIA["M"],
+    *CATEGORY_CRITERIA["P"],
+    *CATEGORY_CRITERIA["S"],
 ]
 
 __all__ = [
+    "CATEGORY_CRITERIA",
     "EXISTENCE_CRITERIA",
     "FUNCTIONAL_CRITERIA",
     "Criterion",

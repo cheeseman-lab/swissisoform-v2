@@ -20,7 +20,7 @@ def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResul
     n = len(site.expression)
     passed = n >= cfg.min_cell_lines
     return CriterionResult(
-        "E4_multi_cell_line",
+        "D1_multi_cell_line",
         passed,
         f"n_cell_lines={n} (threshold {cfg.min_cell_lines})",
     )

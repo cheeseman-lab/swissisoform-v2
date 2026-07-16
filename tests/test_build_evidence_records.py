@@ -233,3 +233,98 @@ _NAN_SCHEMA_COLUMNS = (
     "generef_uniprot_function",
     "generef_subcellular_location",
 )
+
+
+# ── CDLMPS categories + slice_category ─────────────────────────────────────
+
+
+def test_categories_cover_all_criteria_once_plus_descriptive():
+    """Every scored criterion appears in exactly one category; plus biophysics/sae."""
+    members = [m for cat in ber.CATEGORIES for m in cat["members"]]
+    scored = [m for m in members if m in ber.CRITERIA]
+    # All 13 criteria (incl. F7) covered exactly once.
+    assert sorted(scored) == sorted(ber.CRITERIA)
+    assert len(scored) == len(set(scored)) == 13
+    # The two descriptive members live once each (both in category S).
+    assert members.count("biophysics") == 1
+    assert members.count("sae") == 1
+    assert not hasattr(ber, "LLM_EXCLUDED_CRITERIA")
+
+
+def _S_CATEGORY() -> dict:
+    return next(c for c in ber.CATEGORIES if c["letter"] == "S")
+
+
+def test_slice_category_bundles_scored_and_descriptive_members():
+    """Category S = S1 domain + S2 biophysics + S3 sae — all scored."""
+    iso_record = {
+        "tis_id": "chr1:100:+:ATG:ENST_A",
+        "gene": {"name": "GENE_A"},
+        "orf_type": "extended",
+        "differential_sequence": "MABC",
+        "diff_space": "isoform",
+        "isoform_length_aa": 60,
+        "canonical_length_aa": 50,
+        "scoring": {
+            "criteria": {
+                "S1_domain_change": {"value": True, "reason": "domain gained"},
+                "S2_biophysics": {"value": True, "reason": "gravy distinct"},
+                "S3_sae": {"value": False, "reason": "n_unique_region_features=0"},
+            }
+        },
+        "_raw": {
+            "isoform_interproscan_summary": {"n_domains": 2},
+            "cmp_interproscan_n_hits_in_diff_region": 1,
+            "cmp_interproscan_n_real_domains_changed_in_diff_region": 1,
+            "cmp_biophysics_gravy_unique": 0.4,
+            "cmp_biophysics_gravy_shared": 0.1,
+            "cmp_biophysics_gravy_ratio": 4.0,
+            "cmp_biophysics_gravy_delta": 0.35,
+            "isoform_sae_status": "ok",
+            "isoform_sae_n_isoform_only": 3,
+            "isoform_sae_n_canonical_only": 1,
+            "isoform_sae_n_shared": 20,
+            "isoform_sae_top_gained_feature_index": 42,
+            "isoform_sae_top_gained_feature_label": "beta strand",
+            "isoform_sae_top_gained_delta_max": 1.2,
+            "isoform_sae_unique_region_top_features": [
+                {"feature_index": 42, "label": "beta strand", "max": 1.2, "prevalence": 4},
+            ],
+        },
+    }
+    out = ber.slice_category(iso_record, _S_CATEGORY())
+    assert out["category"] == "S"
+    assert out["name"] == "Structural Characteristics"
+    assert out["isoform"]["tis_id"] == "chr1:100:+:ATG:ENST_A"
+
+    by_member = {m["member"] if "member" in m else m["criterion_id"]: m for m in out["members"]}
+    assert set(by_member) == {"S1_domain_change", "biophysics", "sae"}
+    # S1 scored criterion carries its value + kind.
+    assert by_member["S1_domain_change"]["kind"] == "criterion"
+    assert by_member["S1_domain_change"]["value"] is True
+    # S2/S3 members now carry the scored value + reason alongside descriptive evidence.
+    assert by_member["biophysics"]["kind"] == "descriptive"
+    assert by_member["biophysics"]["scored"] is True
+    assert by_member["biophysics"]["value"] is True
+    assert by_member["biophysics"]["reason"] == "gravy distinct"
+    assert "gravy_delta" in by_member["biophysics"]["evidence"]
+    assert by_member["sae"]["kind"] == "descriptive"
+    assert by_member["sae"]["scored"] is True
+    assert by_member["sae"]["value"] is False
+    assert by_member["sae"]["evidence"]["counts"]["isoform_only"] == 3
+    assert by_member["sae"]["evidence"]["top_gained"]["feature_index"] == 42
+
+
+def test_slice_category_omits_descriptive_members_without_data():
+    """biophysics/sae members drop out when their columns are absent."""
+    iso_record = {
+        "tis_id": "chr1:100:+:ATG:ENST_A",
+        "gene": {"name": "GENE_A"},
+        "orf_type": "extended",
+        "scoring": {"criteria": {}},
+        "_raw": {},  # no biophysics cols, sae status missing
+    }
+    out = ber.slice_category(iso_record, _S_CATEGORY())
+    members = [m.get("member", m.get("criterion_id")) for m in out["members"]]
+    # F3 (scored) survives even with no data; biophysics/sae are omitted.
+    assert members == ["S1_domain_change"]

@@ -22,19 +22,19 @@ def test_criteria_dict_has_exactly_13_entries() -> None:
 def test_criterion_ids_match_scoring_module() -> None:
     """The 13 criterion ids must match what src/swissisoform/modules/scoring.py emits."""
     expected = {
-        "E1_primate_conservation",
-        "E2_mammalian_conservation",
-        "E3_phylop_coding_selection",
-        "E4_multi_cell_line",
-        "E5_initiation_efficiency",
-        "E6_mass_spec",
-        "F1_structured_extension",
-        "F2_localization_change",
-        "F3_domain_change",
-        "F4_targeting_change",
-        "F5_pathogenic_variant_enrichment",
-        "F6_clinical_variant_overlap",
-        "F7_shared_structural_change",
+        "C1_primate_conservation",
+        "C2_mammalian_conservation",
+        "C3_phylop_coding_selection",
+        "D1_multi_cell_line",
+        "D2_initiation_efficiency",
+        "D3_mass_spec",
+        "P1_structured_extension",
+        "L1_localization_change",
+        "S1_domain_change",
+        "L2_targeting_change",
+        "M1_pathogenic_variant_enrichment",
+        "M2_clinical_variant_overlap",
+        "P2_shared_structural_change",
     }
     assert set(ber.CRITERIA) == expected
 
@@ -45,8 +45,8 @@ def test_unknown_criterion_raises_key_error() -> None:
 
 
 def test_slice_carries_criterion_metadata() -> None:
-    sl = ber.slice_criterion({"tis_id": "x"}, "E1_primate_conservation")
-    assert sl["criterion_id"] == "E1_primate_conservation"
+    sl = ber.slice_criterion({"tis_id": "x"}, "C1_primate_conservation")
+    assert sl["criterion_id"] == "C1_primate_conservation"
     assert sl["axis"] == "E"
     assert sl["label"] == "Primate conservation"
     assert "frame" in sl["interpretation_hint"].lower()
@@ -60,7 +60,7 @@ def test_slice_includes_isoform_identity() -> None:
             "orf_type": "truncated",
             "diff_space": "canonical",
         },
-        "E1_primate_conservation",
+        "C1_primate_conservation",
     )
     assert sl["isoform"]["tis_id"] == "T1"
     assert sl["isoform"]["gene_name"] == "G1"
@@ -73,26 +73,26 @@ def test_slice_extracts_value_and_reason_from_scoring() -> None:
             "tis_id": "x",
             "scoring": {
                 "criteria": {
-                    "E1_primate_conservation": {"value": True, "reason": "0.96 >= 0.30"},
+                    "C1_primate_conservation": {"value": True, "reason": "0.96 >= 0.30"},
                 },
             },
         },
-        "E1_primate_conservation",
+        "C1_primate_conservation",
     )
     assert sl["value"] is True
     assert sl["reason"] == "0.96 >= 0.30"
 
 
 def test_slice_extracts_headline_from_raw() -> None:
-    # E1 headline is now mean_pident (frac_intact is context only).
+    # C1 headline is a composed similarity string over mean_pident.
     sl = ber.slice_criterion(
         {
             "tis_id": "x",
             "_raw": {"isoform_conservation_frame_primate_mean_pident": 0.96},
         },
-        "E1_primate_conservation",
+        "C1_primate_conservation",
     )
-    assert sl["headline"] == 0.96
+    assert sl["headline"] == "Unique region 96.0% similar across primates"
 
 
 def test_slice_extracts_all_evidence_cols() -> None:
@@ -104,7 +104,7 @@ def test_slice_extracts_all_evidence_cols() -> None:
         # Should not be picked up:
         "isoform_conservation_frame_mammalian_frac_intact": 0.05,
     }
-    sl = ber.slice_criterion({"_raw": raw}, "E1_primate_conservation")
+    sl = ber.slice_criterion({"_raw": raw}, "C1_primate_conservation")
     assert sl["evidence"]["isoform_conservation_frame_primate_mean_pident"] == 0.96
     assert sl["evidence"]["isoform_conservation_frame_primate_frac_intact"] == 0.88
     assert sl["evidence"]["isoform_conservation_frame_primate_n_species_aligned"] == 25
@@ -121,11 +121,11 @@ def test_real_trnt1_record_e1_e2_e3() -> None:
     iso = rec["isoforms"][0]
     iso_with_gene = {**iso, "gene": {"name": "TRNT1"}}
 
-    e1 = ber.slice_criterion(iso_with_gene, "E1_primate_conservation")
+    e1 = ber.slice_criterion(iso_with_gene, "C1_primate_conservation")
     assert e1["headline"] is not None
     assert 0 <= e1["headline"] <= 1
 
-    e3 = ber.slice_criterion(iso_with_gene, "E3_phylop_coding_selection")
+    e3 = ber.slice_criterion(iso_with_gene, "C3_phylop_coding_selection")
     assert "isoform_conservation_phylop_unique_region_mean" in e3["evidence"]
 
 
@@ -142,6 +142,6 @@ def test_f5_extracts_variants_as_hits() -> None:
             "isoform_variant_intersection_gnomad_depletion_ratio": 0.5,
         },
     }
-    sl = ber.slice_criterion(iso, "F5_pathogenic_variant_enrichment")
+    sl = ber.slice_criterion(iso, "M1_pathogenic_variant_enrichment")
     assert len(sl["hits"]) == 2
-    assert sl["headline"] == 0.5
+    assert sl["headline"] == "gnomAD variants 2.00× less in unique region — constrained"

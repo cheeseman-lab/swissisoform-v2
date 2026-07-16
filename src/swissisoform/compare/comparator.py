@@ -39,7 +39,7 @@ from swissisoform.compare.paired import PairedComparison
 from swissisoform.models import Gene, ORFType, TranslationInitiationSite
 
 try:
-    from swissisoform.evidence.f3_domains.interproscan import is_real_functional_domain
+    from swissisoform.evidence.s1_domains.interproscan import is_real_functional_domain
 except ImportError:  # interproscan helper not yet available — degrade to "all real"
     def is_real_functional_domain(hit: dict[str, Any]) -> bool:
         """Fallback: treat every InterProScan hit as a real domain."""

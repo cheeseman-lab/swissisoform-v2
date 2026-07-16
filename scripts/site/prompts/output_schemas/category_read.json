@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CategoryRead",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "reasoning"],
+  "properties": {
+    "verdict": {"type": "string", "enum": ["interesting", "neutral", "not_interesting"]},
+    "reasoning": {"type": "string", "minLength": 1, "maxLength": 1500}
+  }
+}

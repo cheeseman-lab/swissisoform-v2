@@ -20,12 +20,12 @@ def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResul
     ]
     if not efficiencies:
         return CriterionResult(
-            "E5_initiation_efficiency", None, "no initiation_efficiency values"
+            "D2_initiation_efficiency", None, "no initiation_efficiency values"
         )
     best = max(efficiencies)
     passed = best >= cfg.initiation_efficiency_min
     return CriterionResult(
-        "E5_initiation_efficiency",
+        "D2_initiation_efficiency",
         passed,
         f"max_efficiency={best:.3f} (threshold {cfg.initiation_efficiency_min})",
     )

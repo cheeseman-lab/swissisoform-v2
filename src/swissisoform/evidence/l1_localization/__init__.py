@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from swissisoform.config import ScoringConfig
 from swissisoform.evidence.common import CriterionResult
-from swissisoform.evidence.f2_localization.localization import (
+from swissisoform.evidence.l1_localization.localization import (
     LocalizationModule,
     precompute_deeploc,
 )
@@ -31,7 +31,7 @@ def score(
     cmp = site.comparison.get("localization")
     if not isinstance(cmp, dict):
         return CriterionResult(
-            "F2_localization_change", None, "localization comparison missing"
+            "L1_localization_change", None, "localization comparison missing"
         )
     # The comparator emits ``{field}_changed`` keys for categorical shifts.
     changed_keys = [k for k in cmp if k.endswith("_changed") and cmp.get(k) is True]
@@ -39,15 +39,15 @@ def score(
         # Distinguish "comparator ran, no change" from "no comparator data"
         if any(k.endswith("_changed") for k in cmp):
             return CriterionResult(
-                "F2_localization_change",
+                "L1_localization_change",
                 False,
                 "localization features unchanged (prediction/signals/membrane)",
             )
         return CriterionResult(
-            "F2_localization_change", None, "no *_changed fields emitted"
+            "L1_localization_change", None, "no *_changed fields emitted"
         )
     return CriterionResult(
-        "F2_localization_change",
+        "L1_localization_change",
         True,
         f"localization features changed (prediction/signals/membrane): "
         f"{','.join(sorted(changed_keys))}",

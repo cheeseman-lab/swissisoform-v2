@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from swissisoform.evidence.f4_targeting.targetp import TargetPModule, _protein_hash
+from swissisoform.evidence.l2_targeting.targetp import TargetPModule, _protein_hash
 
 
 class TestTargetPModule:

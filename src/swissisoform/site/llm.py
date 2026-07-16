@@ -214,8 +214,8 @@ class PassSpec:
     name: str
     system_prompt_filename: str
     output_schema_filename: str
-    output_filename_template: str  # e.g. "{gene}.json", "{tis_slug}/criteria.json"
-    iterates_criteria: bool = False  # True for the per-criterion pass
+    output_filename_template: str  # e.g. "{gene}.json", "{tis_slug}/categories.json"
+    iterates_categories: bool = False  # True for the per-category pass
     requires_prereq: tuple[str, ...] = ()  # other pass names that must have produced output
 
 
@@ -226,19 +226,19 @@ PASS_REGISTRY: dict[str, PassSpec] = {
         output_schema_filename="output_schema.json",
         output_filename_template="{gene}.json",
     ),
-    "criteria": PassSpec(
-        name="criteria",
-        system_prompt_filename="criterion-pass.txt",
-        output_schema_filename="output_schemas/criterion_read.json",
-        output_filename_template="{tis_slug}/criteria.json",
-        iterates_criteria=True,
+    "category": PassSpec(
+        name="category",
+        system_prompt_filename="category-pass.txt",
+        output_schema_filename="output_schemas/category_read.json",
+        output_filename_template="{tis_slug}/categories.json",
+        iterates_categories=True,
     ),
     "synthesis": PassSpec(
         name="synthesis",
         system_prompt_filename="synthesis-pass.txt",
         output_schema_filename="output_schemas/synthesis.json",
         output_filename_template="{tis_slug}/synthesis.json",
-        requires_prereq=("criteria",),
+        requires_prereq=("category",),
     ),
 }
 
@@ -530,8 +530,8 @@ def main(argv: list[str] | None = None, *, prompts_dir: Path | None = None) -> i
             )
             return 2
 
-    if spec.iterates_criteria:
-        return _run_criterion_pass(records, spec, args, system_prompt, output_schema)
+    if spec.iterates_categories:
+        return _run_category_pass(records, spec, args, system_prompt, output_schema)
 
     if spec.name == "synthesis":
         return _run_synthesis_pass(records, spec, args, system_prompt, output_schema)
@@ -607,13 +607,16 @@ def _check_prereqs(records, out_dir: Path, prereqs: tuple[str, ...]) -> list[str
     return missing
 
 
-def _run_criterion_pass(records, spec, args, system_prompt, output_schema) -> int:
-    """Per-(isoform, criterion) dispatch — one call per LLM-eligible criterion."""
-    from swissisoform.site.evidence import (
-        CRITERIA,
-        LLM_EXCLUDED_CRITERIA,
-        slice_criterion,
-    )
+def _run_category_pass(records, spec, args, system_prompt, output_schema) -> int:
+    """Per-(isoform, category) dispatch — one call per CDLMPS category.
+
+    Each call bundles all of the category's members (scored criteria + the
+    descriptive biophysics/sae cards, incl. F7) into one slice and asks the model
+    for a single ``{verdict, reasoning}``. Writes ``{tis_slug}/categories.json`` as
+    a dict keyed by category name (the shape ``category_verdicts_for_isoform``
+    consumes).
+    """
+    from swissisoform.site.evidence import CATEGORIES, slice_category
 
     api_key = os.environ.get("ANTHROPIC_API_KEY") if not args.dry_run else "dry"
     if not api_key:
@@ -622,9 +625,6 @@ def _run_criterion_pass(records, spec, args, system_prompt, output_schema) -> in
         )
 
     args.out.mkdir(parents=True, exist_ok=True)
-    # Ordered E1..E6, F1..F6 — F7 (shared-region RMSD) is intentionally excluded
-    # from LLM interpretation (see LLM_EXCLUDED_CRITERIA).
-    criterion_ids = [c for c in CRITERIA if c not in LLM_EXCLUDED_CRITERIA]
     n_calls = 0
     n_ok = 0
 
@@ -645,13 +645,17 @@ def _run_criterion_pass(records, spec, args, system_prompt, output_schema) -> in
             if not args.dry_run:
                 out_dir.mkdir(parents=True, exist_ok=True)
 
+            iso_with_gene = {**iso, "gene": {"name": gene_name}}
             results: dict[str, Any] = {}
-            for cid in criterion_ids:
-                criterion_record = slice_criterion({**iso, "gene": {"name": gene_name}}, cid)
-                prompt = build_prompt(criterion_record, system_prompt, output_schema)
+            for category in CATEGORIES:
+                category_record = slice_category(iso_with_gene, category)
+                prompt = build_prompt(category_record, system_prompt, output_schema)
                 n_calls += 1
                 if args.dry_run:
-                    print(f"[{n_calls}] {gene_name} {tis_slug_val} criterion: {cid}")
+                    print(
+                        f"[{n_calls}] {gene_name} {tis_slug_val} category: "
+                        f"{category['letter']} ({category['name']}) input chars: {len(prompt.user)}"
+                    )
                     continue
                 try:
                     response_text = call_llm(
@@ -662,11 +666,11 @@ def _run_criterion_pass(records, spec, args, system_prompt, output_schema) -> in
                         api_key=api_key,
                     )
                     payload = parse_response(response_text)
-                    results[cid] = payload
+                    results[category["name"]] = payload
                     n_ok += 1
                 except Exception as e:
-                    print(f"[{n_calls}] {cid} FAIL: {e}", file=sys.stderr)
-                    results[cid] = {"error": str(e)}
+                    print(f"[{n_calls}] {category['letter']} FAIL: {e}", file=sys.stderr)
+                    results[category["name"]] = {"error": str(e)}
 
             if args.dry_run:
                 continue
@@ -680,31 +684,23 @@ def _run_criterion_pass(records, spec, args, system_prompt, output_schema) -> in
 
 
 def _build_synthesis_record(isoform: dict, gene_name: str, isoform_out_dir: Path) -> dict:
-    """Build the synthesis-pass input from the disk-cached criteria.json output.
+    """Build the synthesis-pass input from the disk-cached categories.json output.
 
-    Carries both the digested per-criterion reads (``criteria_reads``) and the
-    raw underlying evidence (``criteria_evidence``, one ``slice_criterion``
-    payload per criterion) so the model can weigh actual numbers, not just
-    headlines.
+    Carries both the digested per-category reads (``category_reads`` — the
+    ``{verdict, reasoning}`` per CDLMPS category) and the raw underlying evidence
+    (``criteria_evidence``, one ``slice_criterion`` payload per criterion, all 13
+    incl. F7) so the model can weigh actual numbers, not just the category verdicts.
     """
-    from swissisoform.site.evidence import (
-        CRITERIA,
-        LLM_EXCLUDED_CRITERIA,
-        slice_criterion,
-    )
+    from swissisoform.site.evidence import CRITERIA, slice_criterion
 
-    criteria_reads: dict[str, Any] = {}
-    pp = isoform_out_dir / "criteria.json"
+    category_reads: dict[str, Any] = {}
+    pp = isoform_out_dir / "categories.json"
     if pp.exists():
-        criteria_reads = json.loads(pp.read_text(encoding="utf-8"))
+        category_reads = json.loads(pp.read_text(encoding="utf-8"))
 
     iso_with_gene = {**isoform, "gene": {"name": gene_name}}
-    # LLM-excluded criteria (e.g. F7) are kept out of the synthesis evidence too,
-    # so the AI summary never editorializes on them.
     criteria_evidence: dict[str, Any] = {
-        cid: slice_criterion(iso_with_gene, cid)
-        for cid in CRITERIA
-        if cid not in LLM_EXCLUDED_CRITERIA
+        cid: slice_criterion(iso_with_gene, cid) for cid in CRITERIA
     }
 
     return {
@@ -719,7 +715,7 @@ def _build_synthesis_record(isoform: dict, gene_name: str, isoform_out_dir: Path
         },
         "scoring": isoform.get("scoring") or {},
         "key_metrics": isoform.get("key_metrics") or {},
-        "criteria_reads": criteria_reads,
+        "category_reads": category_reads,
         "criteria_evidence": criteria_evidence,
     }
 

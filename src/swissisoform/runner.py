@@ -29,14 +29,14 @@ from swissisoform.combine import combine_filtered_samples, dedupe_unique_protein
 from swissisoform.compare.comparator import compare_genes
 from swissisoform.config import PipelineConfig, ScoringConfig
 from swissisoform.conservation_frame.module import ConservationFrameModule
-from swissisoform.evidence.e6_mass_spec import (
+from swissisoform.evidence.d3_mass_spec import (
     MassSpecModule,
     collect_unique_peptides,
     precompute_pepquery,
 )
-from swissisoform.evidence.f2_localization import LocalizationModule, precompute_deeploc
-from swissisoform.evidence.f3_domains import InterProScanModule, precompute_interproscan
-from swissisoform.evidence.f4_targeting import (
+from swissisoform.evidence.l1_localization import LocalizationModule, precompute_deeploc
+from swissisoform.evidence.s1_domains import InterProScanModule, precompute_interproscan
+from swissisoform.evidence.l2_targeting import (
     SignalPModule,
     TargetPModule,
     precompute_signalp,

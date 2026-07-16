@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from swissisoform.evidence.f3_domains.interproscan import InterProScanModule, _protein_hash
+from swissisoform.evidence.s1_domains.interproscan import InterProScanModule, _protein_hash
 
 
 class TestInterProScanModule:

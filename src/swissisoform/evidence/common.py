@@ -19,7 +19,7 @@ class CriterionResult:
     """Per-criterion result.
 
     Attributes:
-        name: Stable identifier (``"E1_primate_conservation"``).
+        name: Stable identifier (``"C1_primate_conservation"``).
         value: ``True`` (evidence present), ``False`` (evidence absent),
             or ``None`` (cannot evaluate — upstream data missing).
         reason: Short free-text explanation for humans and audits.

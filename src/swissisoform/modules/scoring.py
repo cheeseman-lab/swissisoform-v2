@@ -1,10 +1,12 @@
-"""Module: Evidence Scoring — dual-axis existence + functional impact.
+"""Module: Evidence Scoring — CDLMPS categories, dual-axis roll-up.
 
-Two independent scores per TIS derived from the annotations other
-modules have already attached:
+Fifteen criteria per TIS, grouped into the six CDLMPS categories and derived
+from the annotations other modules have already attached. The two-axis
+roll-up is kept for back-compat: existence = Conservation + Detection,
+functional = Localization + Mutation + Predicted-structure + Structural.
 
-- **Existence (E1–E6)** — is this isoform a real biological entity?
-- **Functional impact (F1–F7)** — does it change protein function?
+- **Existence (C + D)** — is this isoform a real biological entity?
+- **Functional impact (L + M + P + S)** — does it change protein function?
 
 Each criterion is a small function returning ``(value, reason)`` where
 ``value`` is ``True`` / ``False`` / ``None``. ``None`` means "cannot
@@ -15,45 +17,55 @@ driven by missing data apart from one driven by genuine non-evidence.
 
 Criteria that depend on modules whose caches are not yet populated
 (structure, PLM VEP) return ``None`` at evaluation time based on the
-annotation status.  F5 scores germline tolerance / constraint over the
-isoform-unique region (ESM-C constraint enrichment + gnomAD depletion).
+annotation status.
 
-The 12 criterion ``score`` functions and their shared types/helpers live in
-the ``swissisoform.evidence`` package — one folder per bucket. They are
-imported here so ``EvidenceScoringModule`` keeps its public home in
+The 15 criterion ``score`` functions and their shared types/helpers live in
+the ``swissisoform.evidence`` package — one folder per bucket, registered by
+category in ``CATEGORY_CRITERIA``. They are imported here so
+``EvidenceScoringModule`` keeps its public home in
 ``swissisoform.modules.scoring``.
 
 Criteria
 --------
 
-Existence:
-    E1 primate amino-acid identity over the unique region
+Conservation (C):
+    C1 primate amino-acid identity over the unique region
        (``conservation_frame.primate_mean_pident``)
-    E2 mammalian amino-acid identity over the unique region
+    C2 mammalian amino-acid identity over the unique region
        (``conservation_frame.mammalian_mean_pident``)
-    E3 absolute PhyloP unique-region mean above coding-selection threshold
+    C3 absolute PhyloP unique-region mean above coding-selection threshold
        (``conservation``)
-    E4 Multi-cell-line support (``site.expression``)
-    E5 Ribosome initiation efficiency threshold (``site.expression``)
-    E6 Mass-spec validation — PepQuery2-validated unique peptide hits
-       in public MS spectra (``massspec``).  Reports ``None`` until the
-       PepQuery2 precompute lands.  In-silico tryptic
-       detectability alone is NOT treated as evidence.
 
-Functional impact:
-    F1 Structured + biophysically-distinct differential region
-       (``structure`` pLDDT AND ``comparison['biophysics']`` deltas)
-    F2 Localization features changed (``comparison['localization']``)
-    F3 Real InterPro domain gained / lost in the diff region
-       (``comparison['interproscan']``)
-    F4 Targeting change (``comparison['signalp']`` / ``comparison['targetp']``)
-    F5 Germline tolerance / constraint over the unique region
+Detection (D):
+    D1 Multi-cell-line support (``site.expression``)
+    D2 Ribosome initiation efficiency threshold (``site.expression``)
+    D3 Mass-spec validation — PepQuery2-validated unique peptide hits
+       in public MS spectra (``massspec``).
+
+Localization (L):
+    L1 Localization features changed (``comparison['localization']``)
+    L2 Targeting change (``comparison['signalp']`` / ``comparison['targetp']``)
+
+Mutation Landscape (M):
+    M1 Germline tolerance / constraint over the unique region
        (ESM-C ``plm_vep`` constraint enrichment OR gnomAD depletion via
        ``variant_intersection``)
-    F6 Disease-variant density enrichment in unique region vs shared core
+    M2 Disease-variant density enrichment in unique region vs shared core
        (``variant_intersection.disease_enrichment_ratio``)
-    F7 Shared-region structural change — retained region folds differently
+
+Predicted Structure (P):
+    P1 Structured differential region — diff-region pLDDT above threshold
+       (``structure``); folding only.
+    P2 Shared-region structural change — retained region folds differently
        (``structure`` shared-region Cα RMSD, pLDDT-gated)
+
+Structural Characteristics (S):
+    S1 Real InterPro domain gained / lost in the diff region
+       (``comparison['interproscan']``)
+    S2 Biophysically distinct differential region — region-vs-core gravy /
+       fraction-charged / disorder (``comparison['biophysics']``)
+    S3 Interpretable SAE features firing in the unique region
+       (``isoform_annotations['sae']``)
 """
 
 from __future__ import annotations
@@ -62,71 +74,81 @@ from typing import Any
 
 from swissisoform.config import PipelineConfig, ScoringConfig
 from swissisoform.evidence import (
+    CATEGORY_CRITERIA,
     EXISTENCE_CRITERIA,
     FUNCTIONAL_CRITERIA,
     Criterion,
     CriterionResult,
 )
 from swissisoform.evidence import (
-    e1_primate_conservation as _e1,
+    c1_primate_conservation as _c1,
 )
 from swissisoform.evidence import (
-    e2_mammalian_conservation as _e2,
+    c2_mammalian_conservation as _c2,
 )
 from swissisoform.evidence import (
-    e3_phylop_selection as _e3,
+    c3_phylop_selection as _c3,
 )
 from swissisoform.evidence import (
-    e4_reproducibility as _e4,
+    d1_reproducibility as _d1,
 )
 from swissisoform.evidence import (
-    e5_initiation_efficiency as _e5,
+    d2_initiation_efficiency as _d2,
 )
 from swissisoform.evidence import (
-    e6_mass_spec as _e6,
+    d3_mass_spec as _d3,
 )
 from swissisoform.evidence import (
-    f1_structure as _f1,
+    l1_localization as _l1,
 )
 from swissisoform.evidence import (
-    f2_localization as _f2,
+    l2_targeting as _l2,
 )
 from swissisoform.evidence import (
-    f3_domains as _f3,
+    m1_germline_constraint as _m1,
 )
 from swissisoform.evidence import (
-    f4_targeting as _f4,
+    m2_disease_enrichment as _m2,
 )
 from swissisoform.evidence import (
-    f5_germline_constraint as _f5,
+    p1_structure as _p1,
 )
 from swissisoform.evidence import (
-    f6_disease_enrichment as _f6,
+    p2_shared_rmsd as _p2,
 )
 from swissisoform.evidence import (
-    f7_shared_rmsd as _f7,
+    s1_domains as _s1,
+)
+from swissisoform.evidence import (
+    s2_biophysics as _s2,
+)
+from swissisoform.evidence import (
+    s3_sae as _s3,
 )
 from swissisoform.evidence.common import _score
 from swissisoform.models import Gene, TranslationInitiationSite
 
 # Backward-compatible aliases — the original private criterion functions are
 # now ``score`` entry points in their bucket packages. Kept so existing
-# imports (tests, ad-hoc callers) of ``_eN_*`` / ``_fN_*`` keep working.
-_e1_primate_conservation = _e1.score
-_e2_mammalian_conservation = _e2.score
-_e3_phylop_coding_selection = _e3.score
-_e4_multi_cell_line = _e4.score
-_e5_initiation_efficiency = _e5.score
-_e6_mass_spec = _e6.score
-_f1_structured_extension = _f1.score
-_f2_localization_change = _f2.score
-_f3_domain_change = _f3.score
-_f4_targeting_change = _f4.score
-_f5_pathogenic_variant_enrichment = _f5.score
-_f6_clinical_variant_overlap = _f6.score
-_f7_shared_structural_change = _f7.score
+# imports (tests, ad-hoc callers) keep working under the CDLMPS ids.
+_c1_primate_conservation = _c1.score
+_c2_mammalian_conservation = _c2.score
+_c3_phylop_coding_selection = _c3.score
+_d1_multi_cell_line = _d1.score
+_d2_initiation_efficiency = _d2.score
+_d3_mass_spec = _d3.score
+_l1_localization_change = _l1.score
+_l2_targeting_change = _l2.score
+_m1_pathogenic_variant_enrichment = _m1.score
+_m2_clinical_variant_overlap = _m2.score
+_p1_structured_extension = _p1.score
+_p2_shared_structural_change = _p2.score
+_s1_domain_change = _s1.score
+_s2_biophysics = _s2.score
+_s3_sae = _s3.score
 
 __all__ = [
+    "CATEGORY_CRITERIA",
     "EXISTENCE_CRITERIA",
     "FUNCTIONAL_CRITERIA",
     "Criterion",
@@ -143,8 +165,8 @@ __all__ = [
 class EvidenceScoringModule:
     """Dual-axis evidence scoring over TIS annotations.
 
-    **Run order is load-bearing.**  Several criteria (F2
-    ``localization_change`` today; any future Scope-A consumer)
+    **Run order is load-bearing.**  Several criteria (L1
+    ``localization_change`` and S2 ``biophysics`` today; any future Scope-A consumer)
     read ``site.comparison``, which is populated by
     ``swissisoform.compare.comparator.compare_genes``.  This module
     must therefore run **after** ``compare_genes``, i.e. NOT inside
@@ -158,8 +180,8 @@ class EvidenceScoringModule:
         scoring_mod.run([s for g in genes for s in g.tis_sites])
 
     Reads from ``site.isoform_annotations`` and ``site.comparison``,
-    evaluates 13 criteria (6 existence + 7 functional) and writes them onto
-    ``site.isoform_annotations["scoring"]``.
+    evaluates 15 criteria (6 existence [C+D] + 9 functional [L+M+P+S]) and
+    writes them onto ``site.isoform_annotations["scoring"]``.
 
     Attributes:
         MODULE_NAME: ``"scoring"``.

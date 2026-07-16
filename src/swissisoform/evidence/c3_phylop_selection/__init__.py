@@ -18,23 +18,23 @@ def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResul
     """
     ann = _annotation(site, "conservation")
     if ann is None:
-        return CriterionResult("E3_phylop_coding_selection", None, "conservation not run")
+        return CriterionResult("C3_phylop_coding_selection", None, "conservation not run")
     summary = ann.get("summary") if isinstance(ann, dict) else None
     status = summary.get("region_status") if isinstance(summary, dict) else None
     if status != "ok":
         return CriterionResult(
-            "E3_phylop_coding_selection", None, f"region_status={status}"
+            "C3_phylop_coding_selection", None, f"region_status={status}"
         )
     val = ann.get("phylop_unique_region_mean")
     if val is None:
         return CriterionResult(
-            "E3_phylop_coding_selection", None, "phylop_unique_region_mean unavailable"
+            "C3_phylop_coding_selection", None, "phylop_unique_region_mean unavailable"
         )
     passed = val >= cfg.e3_phylop_min
     enrich = ann.get("phylop_enrichment")
     enrich_str = f"{enrich:.2f}" if isinstance(enrich, (int, float)) else "n/a"
     return CriterionResult(
-        "E3_phylop_coding_selection",
+        "C3_phylop_coding_selection",
         passed,
         f"phylop_unique={val:.2f} (threshold {cfg.e3_phylop_min}); "
         f"enrichment={enrich_str} (context)",

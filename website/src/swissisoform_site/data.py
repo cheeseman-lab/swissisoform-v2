@@ -11,7 +11,7 @@ layout under ``SWISSISOFORM_DATA_DIR`` (default ``./data``):
     <DATA_DIR>/structures/*.cif              # baked ESMFold2/Boltz isoform structures
     <DATA_DIR>/structures/colors/*.colors.json  # per-residue 3Dmol colouring
     <DATA_DIR>/llm/<slug>/                   # optional — per-isoform interpretation
-                                             #   (synthesis.json + criteria.json)
+                                             #   (synthesis.json + categories.json)
 
 LLM JSONs are produced by a separate pipeline and may not be present yet.
 Missing files degrade gracefully (the page renders with a placeholder).
@@ -32,26 +32,31 @@ from typing import Any
 import pandas as pd
 from markupsafe import escape
 
+# Single source of truth for the CDLMPS category → member mapping. Lives in the
+# backend evidence module (which the LLM per-category pass also consumes) and is
+# copied into the site package by prepare_deploy.sh, so UI and LLM never drift.
+from swissisoform.site.evidence import CATEGORIES as _CATEGORIES
+
 logger = logging.getLogger(__name__)
 
 
 # Evidence axis labels. Order is load-bearing — the templates iterate these.
 EXISTENCE_CRITERIA = [
-    ("E1_primate_conservation", "E1", "Primate frame conservation"),
-    ("E2_mammalian_conservation", "E2", "Mammalian frame conservation"),
-    ("E3_phylop_coding_selection", "E3", "Coding Selection"),
-    ("E4_multi_cell_line", "E4", "Expression Breadth"),
-    ("E5_initiation_efficiency", "E5", "Start-Site Usage"),
-    ("E6_mass_spec", "E6", "Peptide Evidence"),
+    ("C1_primate_conservation", "C1", "Primate frame conservation"),
+    ("C2_mammalian_conservation", "C2", "Mammalian frame conservation"),
+    ("C3_phylop_coding_selection", "C3", "Coding Selection"),
+    ("D1_multi_cell_line", "D1", "Expression Breadth"),
+    ("D2_initiation_efficiency", "D2", "Start-Site Usage"),
+    ("D3_mass_spec", "D3", "Peptide Evidence"),
 ]
 
 FUNCTIONAL_CRITERIA = [
-    ("F1_structured_extension", "F1", "Fold Confidence"),
-    ("F2_localization_change", "F2", "Compartment"),
-    ("F3_domain_change", "F3", "Domain (InterProScan) change"),
-    ("F4_targeting_change", "F4", "Sorting Signals"),
-    ("F5_pathogenic_variant_enrichment", "F5", "Germline Variants"),
-    ("F6_clinical_variant_overlap", "F6", "Clinical Variants"),
+    ("L1_localization_change", "L1", "Compartment"),
+    ("L2_targeting_change", "L2", "Sorting Signals"),
+    ("M1_pathogenic_variant_enrichment", "M1", "Germline Variants"),
+    ("M2_clinical_variant_overlap", "M2", "Clinical Variants"),
+    ("P1_structured_extension", "P1", "Fold Confidence"),
+    ("S1_domain_change", "S1", "Domain (InterProScan) change"),
 ]
 
 
@@ -896,63 +901,63 @@ def _fmt_num(v, pct=False):
 # Plain-English "what this means" for each criterion — shown at the top of the
 # criterion modal so a reader knows how to interpret the evidence below it.
 CRITERION_ABOUT = {
-    "E1_primate_conservation": (
+    "C1_primate_conservation": (
         "How well is the isoform-unique region conserved at the amino-acid level "
         "across primates (mean percent identity)? High AA identity in close "
         "relatives argues the alternative protein is real and translated, not a "
         "sequencing or annotation artifact. (Reading-frame intactness is shown "
         "as context.)"
     ),
-    "E2_mammalian_conservation": (
+    "C2_mammalian_conservation": (
         "The same amino-acid identity test across mammals. Conservation over "
         "deeper evolutionary distance is stronger evidence the ORF is under "
         "selection to be translated. (Reading-frame intactness is shown as "
         "context.)"
     ),
-    "E3_phylop_coding_selection": (
+    "C3_phylop_coding_selection": (
         "phyloP / phastCons measure per-base evolutionary constraint. A high "
         "absolute phyloP over the differential region means the sequence itself "
         "is under strong purifying selection — evidence it is coding and does "
         "something. (Enrichment over the shared core is shown as context only.)"
     ),
-    "E4_multi_cell_line": (
+    "D1_multi_cell_line": (
         "Is the alternative start used in more than one cell line? Reproducible "
         "initiation across independent samples argues against a one-off ribosome "
         "artifact."
     ),
-    "E5_initiation_efficiency": (
+    "D2_initiation_efficiency": (
         "How efficiently ribosomes initiate at this start (TIS) relative to "
         "background, per cell line. Strong, reproducible initiation supports a "
         "genuine translation event."
     ),
-    "E6_mass_spec": (
+    "D3_mass_spec": (
         "Were tryptic peptides unique to the differential region detected by "
         "mass spec? Direct peptide evidence is the strongest proof the isoform "
         "protein exists."
     ),
-    "F1_structured_extension": (
+    "P1_structured_extension": (
         "Does the gained/lost region fold into ordered structure (pLDDT) and "
         "shift the protein's biophysical character (charge, hydropathy, "
         "disorder)? Structured, biophysically distinct regions are more likely "
         "to be functional."
     ),
-    "F2_localization_change": (
+    "L1_localization_change": (
         "Do the predicted localization features (DeepLoc prediction, sorting "
         "signals, or membrane association) differ between the canonical and the "
         "isoform? A protein with changed localization features acts in a "
         "different cellular context."
     ),
-    "F3_domain_change": (
+    "S1_domain_change": (
         "Does the isoform gain or lose a real InterPro functional domain in the "
         "differential region (disorder/structural-only signatures excluded)? "
         "Gaining or losing a domain changes function directly."
     ),
-    "F4_targeting_change": (
+    "L2_targeting_change": (
         "Do N-terminal targeting signals (SignalP secretion, TargetP "
         "mitochondrial/chloroplast) differ between canonical and isoform? "
         "N-terminal changes most directly add or remove targeting peptides."
     ),
-    "F5_pathogenic_variant_enrichment": (
+    "M1_pathogenic_variant_enrichment": (
         "Does healthy human germline variation (gnomAD) avoid this region "
         "(depletion ratio < 1×), and is it intrinsically constrained (ESM-C "
         "constraint enrichment)? Depletion of population variation plus high "
@@ -960,13 +965,13 @@ CRITERION_ABOUT = {
         "important. gnomAD is a tolerance catalogue, not a disease one; "
         "disease/cancer variants (ClinVar / COSMIC) live in F6."
     ),
-    "F6_clinical_variant_overlap": (
+    "M2_clinical_variant_overlap": (
         "Are disease (ClinVar / COSMIC) variants enriched per nucleotide in the "
         "differential region versus the shared core (disease enrichment ratio ≥ "
         "1×)? Disease variants concentrating in the unique region tie it to "
         "phenotype."
     ),
-    "F7_shared_structural_change": (
+    "P2_shared_structural_change": (
         "The shared region is the stretch of protein identical in both the isoform "
         "and the canonical (the canonical body for an extension; the post-truncation "
         "body for a truncation). Folded in both contexts it normally comes out nearly "
@@ -1931,28 +1936,28 @@ def criterion_evidence_for(iso) -> dict:
 
     # ---- assign sections to criteria --------------------------------------
     assignments = {
-        "E1_primate_conservation": [sec_frame("primate")],
-        "E2_mammalian_conservation": [sec_frame("mammalian")],
-        "E3_phylop_coding_selection": [sec_phylop(), sec_start_site()],
-        "E4_multi_cell_line": [sec_cell_lines()],
-        "E5_initiation_efficiency": [sec_efficiency()],
-        "E6_mass_spec": [sec_massspec()],
-        "F1_structured_extension": [sec_structure(), sec_structure_region()],
-        "F2_localization_change": [sec_deeploc()],
-        "F3_domain_change": [sec_domains_motifs()],
-        "F4_targeting_change": [sec_targeting()],
-        "F5_pathogenic_variant_enrichment": [
+        "C1_primate_conservation": [sec_frame("primate")],
+        "C2_mammalian_conservation": [sec_frame("mammalian")],
+        "C3_phylop_coding_selection": [sec_phylop(), sec_start_site()],
+        "D1_multi_cell_line": [sec_cell_lines()],
+        "D2_initiation_efficiency": [sec_efficiency()],
+        "D3_mass_spec": [sec_massspec()],
+        "P1_structured_extension": [sec_structure(), sec_structure_region()],
+        "L1_localization_change": [sec_deeploc()],
+        "S1_domain_change": [sec_domains_motifs()],
+        "L2_targeting_change": [sec_targeting()],
+        "M1_pathogenic_variant_enrichment": [
             sec_germline_tolerance(),
             sec_constraint(),
             sec_variant_burden("gnomad", "germline (gnomAD)"),
             sec_variant_scores("gnomad", "germline (gnomAD)"),
         ],
-        "F6_clinical_variant_overlap": [
+        "M2_clinical_variant_overlap": [
             sec_clinical_burden(),
             sec_variant_burden("disease", "disease (ClinVar/COSMIC)"),
             sec_variant_scores("disease", "disease (ClinVar/COSMIC)"),
         ],
-        "F7_shared_structural_change": [sec_shared_rmsd()],
+        "P2_shared_structural_change": [sec_shared_rmsd()],
     }
 
     out = {}
@@ -2012,80 +2017,80 @@ def llm_for_isoform(gene: GeneRecord, tis_id: str) -> dict[str, Any] | None:
 # Drives the evidence-tile UI grid on the isoform page (E1..E6, F1..F7).
 CRITERIA_FOR_PAGE = [
     {
-        "id": "E1_primate_conservation",
+        "id": "C1_primate_conservation",
         "axis": "E",
         "label": "Primate conservation",
         "short_label": "Primates",
     },
     {
-        "id": "E2_mammalian_conservation",
+        "id": "C2_mammalian_conservation",
         "axis": "E",
         "label": "Mammalian conservation",
         "short_label": "Mammals",
     },
     {
-        "id": "E3_phylop_coding_selection",
+        "id": "C3_phylop_coding_selection",
         "axis": "E",
         "label": "Coding Selection",
         "short_label": "PhyloP",
     },
     {
-        "id": "E4_multi_cell_line",
+        "id": "D1_multi_cell_line",
         "axis": "E",
         "label": "Expression Breadth",
         "short_label": "Cell lines",
     },
     {
-        "id": "E5_initiation_efficiency",
+        "id": "D2_initiation_efficiency",
         "axis": "E",
         "label": "Start-Site Usage",
         "short_label": "Init. eff.",
     },
     {
-        "id": "E6_mass_spec",
+        "id": "D3_mass_spec",
         "axis": "E",
         "label": "Peptide Evidence",
         "short_label": "MS",
     },
     {
-        "id": "F1_structured_extension",
+        "id": "P1_structured_extension",
         "headline_label": "pLDDT Differential Region",
         "axis": "F",
         "label": "Fold Confidence",
         "short_label": "Folding",
     },
     {
-        "id": "F2_localization_change",
+        "id": "L1_localization_change",
         "axis": "F",
         "label": "Compartment",
         "short_label": "Localization",
     },
     {
-        "id": "F3_domain_change",
+        "id": "S1_domain_change",
         "axis": "F",
         "label": "Domain change",
         "short_label": "Domains",
     },
     {
-        "id": "F4_targeting_change",
+        "id": "L2_targeting_change",
         "axis": "F",
         "label": "Sorting Signals",
         "short_label": "Targeting",
     },
     {
-        "id": "F5_pathogenic_variant_enrichment",
+        "id": "M1_pathogenic_variant_enrichment",
         "axis": "F",
         "label": "Germline Variants",
         "short_label": "Germline",
     },
     {
-        "id": "F6_clinical_variant_overlap",
+        "id": "M2_clinical_variant_overlap",
         "axis": "F",
         "label": "Clinical Variants",
         "short_label": "Variants",
     },
     {
-        "id": "F7_shared_structural_change",
+        "id": "P2_shared_structural_change",
         "headline_label": "Shared-Region RMSD",
         "axis": "F",
         "label": "Core Fold Perturbation",
@@ -2099,45 +2104,11 @@ CRITERIA_FOR_PAGE = [
 # ``CRITERIA_FOR_PAGE`` ids, plus the literals "biophysics" / "sae" for the two
 # descriptive (non-scored) tiles. Each group's members are internally uniform in
 # the old axis, so existing per-tile axis colouring stays coherent.
+# Derived from the backend CATEGORIES (same {name, letter, members} shape) so the
+# grouped tile layout and the per-category LLM pass share one definition.
 CARD_GROUPS = [
-    {
-        "name": "Conservation",
-        "letter": "C",
-        "members": [
-            "E1_primate_conservation",
-            "E2_mammalian_conservation",
-            "E3_phylop_coding_selection",
-        ],
-    },
-    {
-        "name": "Detection",
-        "letter": "D",
-        "members": [
-            "E4_multi_cell_line",
-            "E5_initiation_efficiency",
-            "E6_mass_spec",
-        ],
-    },
-    {
-        "name": "Localization",
-        "letter": "L",
-        "members": ["F2_localization_change", "F4_targeting_change"],
-    },
-    {
-        "name": "Mutation Landscape",
-        "letter": "M",
-        "members": ["F5_pathogenic_variant_enrichment", "F6_clinical_variant_overlap"],
-    },
-    {
-        "name": "Predicted Structure",
-        "letter": "P",
-        "members": ["F1_structured_extension", "F7_shared_structural_change"],
-    },
-    {
-        "name": "Structural Characteristics",
-        "letter": "S",
-        "members": ["F3_domain_change", "biophysics", "sae"],
-    },
+    {"name": c["name"], "letter": c["letter"], "members": list(c["members"])}
+    for c in _CATEGORIES
 ]
 
 # member id -> displayed badge (group letter + 1-based index within its group).
@@ -2152,31 +2123,15 @@ CARD_BADGES = {
 CRITERIA_BY_ID = {c["id"]: c for c in CRITERIA_FOR_PAGE}
 
 
-def llm_criterion_for_isoform(*, llm_dir: Path, tis_slug: str, criterion_id: str) -> dict | None:
-    """Return one criterion LLM read from disk, or None if missing.
-
-    Reads ``<llm_dir>/<tis_slug>/criteria.json`` and indexes by criterion_id.
-    """
-    p = Path(llm_dir) / tis_slug / "criteria.json"
-    if not p.exists():
-        return None
-    try:
-        blob = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    return blob.get(criterion_id)
-
-
 def category_verdicts_for_isoform(*, llm_dir: Path, tis_slug: str) -> dict:
     """Per-category LLM verdict + reasoning, keyed by CARD_GROUPS category name.
 
-    Reads an optional ``<llm_dir>/<tis_slug>/categories.json`` — an object keyed
-    by category ``name`` (e.g. "Conservation") →
-    ``{"verdict": "interesting" | "neutral" | "not_interesting", "reasoning": str}``.
-    Returns ``{}`` when the file is absent or unreadable, so the front end falls
-    back to a neutral "pending" flag + a placeholder reasoning line. There is no
-    producer for this yet — the LLM reasons per-criterion (criteria.json) and per
-    whole-isoform (synthesis.json) today; this is the category-level hook.
+    Reads ``<llm_dir>/<tis_slug>/categories.json`` — an object keyed by category
+    ``name`` (e.g. "Conservation") →
+    ``{"verdict": "interesting" | "neutral" | "not_interesting", "reasoning": str}``,
+    produced by the ``category`` LLM pass (``llm.py``). Returns ``{}`` when the
+    file is absent or unreadable, so the front end falls back to a neutral
+    "pending" flag + a placeholder reasoning line.
     """
     p = Path(llm_dir) / tis_slug / "categories.json"
     if not p.exists():

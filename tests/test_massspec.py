@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from swissisoform.assembly import install_initiator_met
 from swissisoform.contract import ORFType
-from swissisoform.evidence.e6_mass_spec.massspec import (
+from swissisoform.evidence.d3_mass_spec.massspec import (
     MassSpecModule,
     diagnostic_peptides,
 )
@@ -200,7 +200,7 @@ class TestMassSpecModule:
         queried" — and E6 returned None instead of False for TRNT1 / CDC34 /
         SRSF2.
         """
-        from swissisoform.evidence.e6_mass_spec.massspec import _regroup_by_gene
+        from swissisoform.evidence.d3_mass_spec.massspec import _regroup_by_gene
         peptide_to_genes = {
             "PEPONE": {"GENE_A"},
             "PEPTWO": {"GENE_A", "GENE_B"},
@@ -252,7 +252,7 @@ class TestDiagnosticPeptides:
     PROT = "MGATPPGDPTRRKAAAAAAAAKLLLLLLLLLK"
 
     def test_orf_type_none_is_full_digest_no_nme(self):
-        from swissisoform.evidence.e6_mass_spec.massspec import tryptic_digest
+        from swissisoform.evidence.d3_mass_spec.massspec import tryptic_digest
 
         full = {p["peptide"] for p in tryptic_digest(self.PROT)}
         out = diagnostic_peptides(self.PROT, orf_type=None)
@@ -287,7 +287,7 @@ class TestDiagnosticPeptides:
         assert {p["peptide"] for p in out if not p["nme"]} == full
 
     def test_whole_isoform_is_full_digest(self):
-        from swissisoform.evidence.e6_mass_spec.massspec import tryptic_digest
+        from swissisoform.evidence.d3_mass_spec.massspec import tryptic_digest
 
         full = {p["peptide"] for p in tryptic_digest(self.PROT)}
         out = diagnostic_peptides(self.PROT, orf_type=ORFType.UORF)

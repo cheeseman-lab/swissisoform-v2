@@ -131,7 +131,7 @@ def _diff_space_from_orf_type(orf_type: Any) -> str | None:
 
 
 def _build_scoring(row: pd.Series) -> dict[str, Any]:
-    """Pack E1–E6 / F1–F6 criteria + reasons into the spec's nested shape."""
+    """Pack the CDLMPS criteria (C+D existence, L+M+P+S functional) + reasons."""
     criteria_raw = _get(row, "isoform_scoring_criteria") or {}
     reasons_raw = _get(row, "isoform_scoring_reasons") or {}
 
@@ -455,7 +455,7 @@ def summarise(out_dir: Path) -> None:
 # ──────────────────────────────────────────────────────────────────────────
 
 CRITERIA: dict[str, dict[str, Any]] = {
-    "E1_primate_conservation": {
+    "C1_primate_conservation": {
         "axis": "E",
         "label": "Primate conservation",
         "short_label": "Primates",
@@ -479,7 +479,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "_canonical_ twins for a within-gene baseline."
         ),
     },
-    "E2_mammalian_conservation": {
+    "C2_mammalian_conservation": {
         "axis": "E",
         "label": "Mammalian conservation",
         "short_label": "Mammals",
@@ -503,7 +503,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "within-gene baseline."
         ),
     },
-    "E3_phylop_coding_selection": {
+    "C3_phylop_coding_selection": {
         "axis": "E",
         "label": "Coding Selection",
         "short_label": "PhyloP",
@@ -525,7 +525,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "and enrichment ratio are context only, not the basis for the call."
         ),
     },
-    "E4_multi_cell_line": {
+    "D1_multi_cell_line": {
         "axis": "E",
         "label": "Expression Breadth",
         "short_label": "Cell lines",
@@ -555,7 +555,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "samples with significant p-values."
         ),
     },
-    "E5_initiation_efficiency": {
+    "D2_initiation_efficiency": {
         "axis": "E",
         "label": "Start-Site Usage",
         "short_label": "Init. eff.",
@@ -587,7 +587,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "baseline."
         ),
     },
-    "E6_mass_spec": {
+    "D3_mass_spec": {
         "axis": "E",
         "label": "Peptide Evidence",
         "short_label": "MS",
@@ -601,7 +601,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "Are there PepQuery2 validated peptides in the isoform's unique region?"
         ),
     },
-    "F1_structured_extension": {
+    "P1_structured_extension": {
         "axis": "F",
         "label": "Fold Confidence",
         "short_label": "Folding",
@@ -639,7 +639,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "ratios (GRAVY, fraction_charged, disorder) report distinctness."
         ),
     },
-    "F2_localization_change": {
+    "L1_localization_change": {
         "axis": "F",
         "label": "Compartment",
         "short_label": "Localization",
@@ -666,7 +666,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "(DeepLoc prediction / sorting signals / membrane association)?"
         ),
     },
-    "F3_domain_change": {
+    "S1_domain_change": {
         "axis": "F",
         "label": "Domain change",
         "short_label": "Domains",
@@ -678,7 +678,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
         "headline_col": _DIVERGING_DOMAINS,
         "interpretation_hint": ("Does the differential region overlap with InterProScan domains?"),
     },
-    "F4_targeting_change": {
+    "L2_targeting_change": {
         "axis": "F",
         "label": "Sorting Signals",
         "short_label": "Targeting",
@@ -709,7 +709,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "transit peptide (TargetP)?"
         ),
     },
-    "F5_pathogenic_variant_enrichment": {
+    "M1_pathogenic_variant_enrichment": {
         "axis": "F",
         "label": "Germline Variants",
         "short_label": "Germline",
@@ -737,7 +737,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "constraint, not damaging-variant burden."
         ),
     },
-    "F6_clinical_variant_overlap": {
+    "M2_clinical_variant_overlap": {
         "axis": "F",
         "label": "Clinical Variants",
         "short_label": "Disease",
@@ -761,7 +761,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "the raw unique/shared disease and pathogenic counts are context."
         ),
     },
-    "F7_shared_structural_change": {
+    "P2_shared_structural_change": {
         "axis": "F",
         "label": "Core Fold Perturbation",
         "short_label": "Shared RMSD",
@@ -789,11 +789,79 @@ CRITERIA: dict[str, dict[str, Any]] = {
 }
 
 
-# Criteria excluded from the LLM interpretation passes (per-criterion reads +
-# synthesis). They stay fully scored and rendered on the site — the LLM simply
-# does not editorialize on them. F7 (shared-region structural change) is a
-# provisional structural metric we surface descriptively, without an AI blurb.
-LLM_EXCLUDED_CRITERIA: set[str] = {"F7_shared_structural_change"}
+# ──────────────────────────────────────────────────────────────────────────
+# CDLMPS evidence categories — the single source of truth for how the scored
+# criteria (and the two descriptive cards, biophysics + sae) group into the six
+# category boxes shown on the site. The LLM interpretation runs one read per
+# category (see ``slice_category`` + the ``category`` pass in ``llm.py``); the
+# website derives its ``CARD_GROUPS`` from this list so UI and LLM never drift.
+#
+# ``members`` mixes scored-criterion ids (keys in ``CRITERIA``) with the two
+# members ``"biophysics"`` / ``"sae"`` — sliced by ``slice_biophysics`` /
+# ``slice_sae``, which carry the S2/S3 scored value + reason plus their richer
+# descriptive evidence. All 15 criteria — including P2 — are covered exactly
+# once; there is no LLM-excluded criterion.
+CATEGORIES: list[dict[str, Any]] = [
+    {
+        "letter": "C",
+        "name": "Conservation",
+        "members": [
+            "C1_primate_conservation",
+            "C2_mammalian_conservation",
+            "C3_phylop_coding_selection",
+        ],
+    },
+    {
+        "letter": "D",
+        "name": "Detection",
+        "members": [
+            "D1_multi_cell_line",
+            "D2_initiation_efficiency",
+            "D3_mass_spec",
+        ],
+    },
+    {
+        "letter": "L",
+        "name": "Localization",
+        "members": ["L1_localization_change", "L2_targeting_change"],
+    },
+    {
+        "letter": "M",
+        "name": "Mutation Landscape",
+        "members": ["M1_pathogenic_variant_enrichment", "M2_clinical_variant_overlap"],
+    },
+    {
+        "letter": "P",
+        "name": "Predicted Structure",
+        "members": ["P1_structured_extension", "P2_shared_structural_change"],
+    },
+    {
+        "letter": "S",
+        "name": "Structural Characteristics",
+        "members": ["S1_domain_change", "biophysics", "sae"],
+    },
+]
+
+# Descriptive (non-scored) members that carry an LLM slice but no criterion value.
+DESCRIPTIVE_MEMBERS: dict[str, str] = {"biophysics": "Biophysics", "sae": "SAE features"}
+
+# Biophysical properties fed into the biophysics descriptive slice — (label, key)
+# over the ``cmp_biophysics_<key>_{unique,shared,ratio}`` differential columns.
+_BIOPHYSICS_FEATURES: list[tuple[str, str]] = [
+    ("Isoelectric point (pI)", "pI"),
+    ("Hydropathy (GRAVY)", "gravy"),
+    ("Fraction charged", "fraction_charged"),
+    ("Disorder fraction", "disorder"),
+    ("Disorder-promoting", "fraction_disorder_promoting"),
+    ("Low-complexity fraction", "fraction_lcr"),
+    ("Prion-like fraction", "prionlike_fraction"),
+    ("LLPS score", "llps_score"),
+    ("π–π propensity", "pipi_propensity"),
+    ("Aromaticity", "aromaticity"),
+    ("Instability index", "instability_index"),
+    ("Shannon entropy", "shannon_entropy"),
+    ("Normalized complexity", "normalized_complexity"),
+]
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -1596,8 +1664,8 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
                 MAX_HITS = 30
                 # Criteria whose claim is about the isoform-unique region.
                 unique_region_criteria = {
-                    "F5_pathogenic_variant_enrichment",
-                    "F6_clinical_variant_overlap",
+                    "M1_pathogenic_variant_enrichment",
+                    "M2_clinical_variant_overlap",
                 }
                 prioritize_unique = criterion_id in unique_region_criteria
                 if n_hits_total > MAX_HITS:
@@ -1645,4 +1713,174 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         "hits": hits,
         "n_hits_total": n_hits_total,
         "n_hits_shown": len(hits),
+    }
+
+
+def _iso_identity_block(isoform_record: dict[str, Any]) -> dict[str, Any]:
+    """Shared isoform-identity block used by criterion + category slices."""
+    return {
+        "tis_id": isoform_record.get("tis_id"),
+        "gene_name": (isoform_record.get("gene") or {}).get("name"),
+        "orf_type": isoform_record.get("orf_type"),
+        "differential_sequence": isoform_record.get("differential_sequence"),
+        "diff_space": isoform_record.get("diff_space"),
+        "isoform_length_aa": isoform_record.get("isoform_length_aa"),
+        "canonical_length_aa": isoform_record.get("canonical_length_aa"),
+    }
+
+
+def _scored_criterion(isoform_record: dict[str, Any], name: str) -> dict[str, Any]:
+    """Return ``{value, reason}`` for a scored criterion, or empty when absent."""
+    scoring = (isoform_record.get("scoring") or {}).get("criteria") or {}
+    entry = scoring.get(name)
+    return entry if isinstance(entry, dict) else {}
+
+
+def slice_biophysics(isoform_record: dict[str, Any]) -> dict[str, Any] | None:
+    """S2 biophysics slice for the LLM (category S member).
+
+    Reads the ``cmp_biophysics_<feat>_{unique,shared,ratio}`` differential columns
+    (plus the three GRAVY/charge/disorder region-vs-core deltas) into a compact
+    numeric ``evidence`` dict, and carries the S2 scored ``value``/``reason`` from
+    ``isoform_scoring_criteria['S2_biophysics']`` alongside. Numbers only — no HTML,
+    no UI formatting. Returns ``None`` when no biophysics comparison columns are
+    present.
+    """
+    raw = isoform_record.get("_raw") or {}
+    evidence: dict[str, Any] = {}
+    for label, feat in _BIOPHYSICS_FEATURES:
+        vals = {
+            "unique": _to_native(raw.get(f"cmp_biophysics_{feat}_unique")),
+            "shared": _to_native(raw.get(f"cmp_biophysics_{feat}_shared")),
+            "ratio": _to_native(raw.get(f"cmp_biophysics_{feat}_ratio")),
+            "enriched": _to_native(raw.get(f"cmp_biophysics_{feat}_enriched")),
+        }
+        if all(v is None for v in (vals["unique"], vals["shared"], vals["ratio"])):
+            continue
+        evidence[label] = vals
+    # The three whole-protein deltas (context alongside the region-vs-core levers).
+    for feat in ("gravy_delta", "fraction_charged_delta", "disorder_delta"):
+        v = _to_native(raw.get(f"cmp_biophysics_{feat}"))
+        if v is not None:
+            evidence[feat] = v
+    if not evidence:
+        return None
+    crit = _scored_criterion(isoform_record, "S2_biophysics")
+    return {
+        "member": "biophysics",
+        "label": "Biophysics",
+        "scored": True,
+        "value": crit.get("value"),
+        "reason": crit.get("reason"),
+        "interpretation_hint": (
+            "S2 — biophysical distinctness of the isoform-differential region vs the "
+            "shared canonical core (unique/shared/ratio per property). The scored "
+            "value keys off the gravy/fraction_charged/disorder region-vs-core levers "
+            "(|unique − shared| ≥ cutoff, any one firing → distinct); a large shift "
+            "means the unique region is physicochemically distinct from the core."
+        ),
+        "evidence": evidence,
+    }
+
+
+def slice_sae(isoform_record: dict[str, Any]) -> dict[str, Any] | None:
+    """S3 SAE-feature slice for the LLM (category S member).
+
+    Reads the ``isoform_sae_*`` columns: interpretable-feature counts, the top
+    gained/lost features, and the isoform-unique-region features (capped), and
+    carries the S3 scored ``value``/``reason`` from
+    ``isoform_scoring_criteria['S3_sae']`` alongside. Returns ``None`` when the SAE
+    step did not run (status != "ok").
+    """
+    raw = isoform_record.get("_raw") or {}
+    if raw.get("isoform_sae_status") != "ok":
+        return None
+
+    def _records(value: Any, cap: int = 15) -> list[dict[str, Any]]:
+        native = _to_native(value)
+        if not isinstance(native, list):
+            return []
+        recs = [r for r in native if isinstance(r, dict)]
+        return recs[:cap]
+
+    def _top(prefix: str) -> dict[str, Any] | None:
+        idx = _to_native(raw.get(f"isoform_sae_top_{prefix}_feature_index"))
+        if idx is None:
+            return None
+        return {
+            "feature_index": idx,
+            "label": _to_native(raw.get(f"isoform_sae_top_{prefix}_feature_label")),
+            "delta_max": _to_native(raw.get(f"isoform_sae_top_{prefix}_delta_max")),
+        }
+
+    evidence = {
+        "counts": {
+            "isoform_only": _to_native(raw.get("isoform_sae_n_isoform_only")),
+            "canonical_only": _to_native(raw.get("isoform_sae_n_canonical_only")),
+            "shared": _to_native(raw.get("isoform_sae_n_shared")),
+        },
+        "mean_abs_delta_shared": _to_native(raw.get("isoform_sae_mean_abs_delta_shared")),
+        "unique_region_space": _to_native(raw.get("isoform_sae_unique_region_space")),
+        "n_unique_region_features": _to_native(raw.get("isoform_sae_n_unique_region_features")),
+        "top_gained": _top("gained"),
+        "top_lost": _top("lost"),
+        "unique_region_features": _records(raw.get("isoform_sae_unique_region_top_features")),
+    }
+    crit = _scored_criterion(isoform_record, "S3_sae")
+    return {
+        "member": "sae",
+        "label": "SAE features",
+        "scored": True,
+        "value": crit.get("value"),
+        "reason": crit.get("reason"),
+        "interpretation_hint": (
+            "S3 — sparse-autoencoder (ESM-C) interpretability features that differ "
+            "between the isoform and canonical protein. The scored value keys off "
+            "n_unique_region_features (features firing on just the isoform-unique "
+            "residues) ≥ cutoff. isoform_only/canonical_only counts are features "
+            "gained/lost. Feature labels are provisional. Interpret only what the "
+            "labels support — do not invent function."
+        ),
+        "evidence": evidence,
+    }
+
+
+def slice_category(isoform_record: dict[str, Any], category: dict[str, Any]) -> dict[str, Any]:
+    """Bundle every member of one CDLMPS category into a single LLM-input slice.
+
+    Args:
+        isoform_record: A full per-isoform record (as passed to ``slice_criterion``).
+        category: One entry from ``CATEGORIES`` (``{letter, name, members}``).
+
+    Returns:
+        Dict with the category identity (``letter``, ``name``), the shared isoform
+        identity block, and ``members`` — a list of per-member slices. Scored
+        criteria yield the full ``slice_criterion`` payload (with ``kind="criterion"``);
+        the descriptive members (biophysics/sae) yield their compact slice
+        (``kind="descriptive"``). Descriptive members with no data are omitted.
+    """
+    members: list[dict[str, Any]] = []
+    for member in category["members"]:
+        if member in CRITERIA:
+            entry = slice_criterion(isoform_record, member)
+            entry["kind"] = "criterion"
+            members.append(entry)
+        elif member == "biophysics":
+            entry = slice_biophysics(isoform_record)
+            if entry is not None:
+                entry["kind"] = "descriptive"
+                members.append(entry)
+        elif member == "sae":
+            entry = slice_sae(isoform_record)
+            if entry is not None:
+                entry["kind"] = "descriptive"
+                members.append(entry)
+        else:  # pragma: no cover - guards against a stale CATEGORIES entry
+            raise KeyError(f"Unknown category member: {member!r}")
+
+    return {
+        "category": category["letter"],
+        "name": category["name"],
+        "isoform": _iso_identity_block(isoform_record),
+        "members": members,
     }

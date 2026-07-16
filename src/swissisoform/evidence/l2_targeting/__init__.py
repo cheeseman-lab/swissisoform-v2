@@ -6,8 +6,8 @@ from typing import Any
 
 from swissisoform.config import ScoringConfig
 from swissisoform.evidence.common import CriterionResult
-from swissisoform.evidence.f4_targeting.signalp import SignalPModule, precompute_signalp
-from swissisoform.evidence.f4_targeting.targetp import TargetPModule, precompute_targetp
+from swissisoform.evidence.l2_targeting.signalp import SignalPModule, precompute_signalp
+from swissisoform.evidence.l2_targeting.targetp import TargetPModule, precompute_targetp
 from swissisoform.models import TranslationInitiationSite
 
 __all__ = [
@@ -46,7 +46,7 @@ def score(
 
     if sp_state is None and tp_state is None:
         return CriterionResult(
-            "F4_targeting_change", None, "signalp/targetp comparisons not available"
+            "L2_targeting_change", None, "signalp/targetp comparisons not available"
         )
     if sp_state is True or tp_state is True:
         hits = []
@@ -54,5 +54,5 @@ def score(
             hits.append("signalp")
         if tp_state is True:
             hits.append("targetp")
-        return CriterionResult("F4_targeting_change", True, f"changed in: {','.join(hits)}")
-    return CriterionResult("F4_targeting_change", False, "no targeting change flagged")
+        return CriterionResult("L2_targeting_change", True, f"changed in: {','.join(hits)}")
+    return CriterionResult("L2_targeting_change", False, "no targeting change flagged")

@@ -147,8 +147,9 @@ class ScoringConfig:
     """Configuration for evidence scoring (Module 10).
 
     Evidence scoring produces two independent scores per TIS:
-    ``existence_score`` (E1–E6 — does this isoform really exist?) and
-    ``functional_score`` (F1–F6 — does it change function?). Each
+    ``existence_score`` (Conservation + Detection — does this isoform really
+    exist?) and ``functional_score`` (Localization + Mutation + Predicted
+    structure + Structural characteristics — does it change function?). Each
     criterion returns ``True`` / ``False`` / ``None``; the score is the
     count of ``True``. Thresholds below are the cutoffs for turning
     continuous signals into the boolean criterion outputs.
@@ -186,9 +187,12 @@ class ScoringConfig:
             which germline variation is judged to avoid the unique region.
         f6_disease_enrichment_min: F6 threshold — disease-variant density
             enrichment (unique vs shared) zero-point.
-        f1_gravy_delta_min: F1 distinctness — |Δ GRAVY| cutoff.
-        f1_fraction_charged_delta_min: F1 distinctness — |Δ fraction charged|.
-        f1_disorder_delta_min: F1 distinctness — |Δ disorder| cutoff.
+        s2_gravy_delta_min: S2 distinctness — |gravy_unique − gravy_shared| cutoff.
+        s2_fraction_charged_delta_min: S2 distinctness — |fraction_charged
+            region-vs-core| cutoff.
+        s2_disorder_delta_min: S2 distinctness — |disorder region-vs-core| cutoff.
+        s3_sae_min_unique_features: S3 threshold — minimum count of interpretable
+            SAE features firing in the isoform-unique region.
         f7_rmsd_shared_min: F7 threshold — minimum shared-region Cα RMSD (Å) to
             call a significant structural change in the retained region.
         f7_min_shared_len: F7 guard — minimum shared-region length (aa) below
@@ -231,14 +235,20 @@ class ScoringConfig:
     # F5 germline tolerance/constraint thresholds.
     f5_constraint_enrichment_min: float = 2.0  # CALIBRATE ON GENOME-WIDE RUN — provisional
     f5_depletion_ratio_max: float = 0.80  # CALIBRATE ON GENOME-WIDE RUN — provisional
-    # F1 threshold for mean pLDDT over the differential region. Scale
+    # P1 threshold for mean pLDDT over the differential region. Scale
     # matches whatever the structure backend emits: Boltz-2 emits 0–1
     # (so use 0.70); AlphaFold-style backends emit 0–100 (use 70.0).
+    # (Field name kept ``f1_*`` for back-compat; P1 is the renamed F1.)
     f1_plddt_threshold: float = 0.70
-    # F1 biophysical-distinctness cutoffs (any one satisfied → distinct).
-    f1_gravy_delta_min: float = 0.3  # CALIBRATE ON GENOME-WIDE RUN — provisional
-    f1_fraction_charged_delta_min: float = 0.05  # CALIBRATE ON GENOME-WIDE RUN — provisional
-    f1_disorder_delta_min: float = 0.05  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    # S2 biophysical-distinctness cutoffs (region-vs-core; any one satisfied →
+    # distinct). Migrated from the old F1 distinctness half, now applied to the
+    # ``<feat>_unique`` vs ``<feat>_shared`` Scope-A keys rather than the
+    # whole-protein ``_delta``.
+    s2_gravy_delta_min: float = 0.3  # PROVISIONAL — set in threshold discussion
+    s2_fraction_charged_delta_min: float = 0.05  # PROVISIONAL — set in threshold discussion
+    s2_disorder_delta_min: float = 0.05  # PROVISIONAL — set in threshold discussion
+    # S3 SAE unique-region feature count threshold.
+    s3_sae_min_unique_features: int = 1  # PROVISIONAL — set in threshold discussion
     # F7 shared-region structural change. RMSD scale is Å; pLDDT gate is on the
     # 0–1 ESMFold2 scale (mirror of f1_plddt_threshold). The real RMSD cutoff is
     # to be picked from the genome-wide distribution (near-zero spike + tail).

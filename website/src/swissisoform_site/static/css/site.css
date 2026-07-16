@@ -506,24 +506,6 @@
 .evidence-tile.axis-F .tile-hint-icon {
   background: #16a34a;
 }
-.tile-llm {
-  margin: 0 0 12px;
-  padding: 10px 12px;
-  background: #fff;
-  border: 1px solid #e5e7eb;
-  border-radius: 4px;
-}
-.tile-llm .rp-headline { margin: 0 0 6px; font-size: 13px; }
-.tile-llm .rp-summary { margin: 0; font-size: 12px; line-height: 1.55; color: #1f2937; }
-.tile-llm-empty {
-  padding: 8px 12px;
-  background: #fff;
-  border: 1px dashed #d1d5db;
-  border-radius: 4px;
-  margin: 0 0 12px;
-  color: #888;
-  font-style: italic;
-}
 .tile-metrics summary, .tile-hits summary {
   cursor: pointer;
   font-weight: 600;
@@ -669,9 +651,6 @@
 .var-badge-clinvar { background: #dbeafe; color: #1e40af; }
 .var-badge-gnomad  { background: #dcfce7; color: #166534; }
 .var-badge-cosmic  { background: #fae8ff; color: #86198f; }
-
-.rp-headline { margin: 4px 0; }
-.rp-summary { line-height: 1.5; color: #222; }
 
 .empty { color: #888; font-style: italic; }
 .placeholder { color: #999; font-style: italic; padding: 8px 0; }

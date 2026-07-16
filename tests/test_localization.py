@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from swissisoform.evidence.f2_localization.localization import LocalizationModule
+from swissisoform.evidence.l1_localization.localization import LocalizationModule
 
 
 class TestLocalizationModule:

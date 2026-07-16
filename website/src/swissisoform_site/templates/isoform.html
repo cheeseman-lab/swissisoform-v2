@@ -117,7 +117,6 @@
             {% else %}
               {% set c = criteria_by_id[m] %}
               {% set sl = criterion_slices[c.id] %}
-              {% set llm = criterion_llms[c.id] %}
               {% set badge = card_badges[c.id] %}
               {% include '_evidence_tile.html' %}
             {% endif %}

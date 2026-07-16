@@ -142,18 +142,17 @@ def test_transcript_skeleton_loaded_for_known_transcript():
     assert len(sample.exons) >= 1
 
 
-def test_llm_criterion_for_isoform_returns_none_when_missing(tmp_path):
-    """llm_criterion_for_isoform tolerates a missing JSON file."""
+def test_category_verdicts_for_isoform_returns_empty_when_missing(tmp_path):
+    """category_verdicts_for_isoform tolerates a missing JSON file."""
     if str(WEBSITE_SRC) not in sys.path:
         sys.path.insert(0, str(WEBSITE_SRC))
-    from swissisoform_site.data import llm_criterion_for_isoform
+    from swissisoform_site.data import category_verdicts_for_isoform
 
-    out = llm_criterion_for_isoform(
+    out = category_verdicts_for_isoform(
         llm_dir=tmp_path,
         tis_slug="chr1-100-ATG-ENST_A",
-        criterion_id="E1_primate_conservation",
     )
-    assert out is None
+    assert out == {}
 
 
 def test_synthesis_narrative_html_converts_markdown():
@@ -308,22 +307,22 @@ def test_criterion_evidence_folds_into_score_popups(client):
     ce = criterion_evidence_for(iso)
     # Every criterion has an entry with a plain-English "about" descriptor.
     assert set(ce) >= {
-        "E1_primate_conservation",
-        "E3_phylop_coding_selection",
-        "F1_structured_extension",
-        "F2_localization_change",
+        "C1_primate_conservation",
+        "C3_phylop_coding_selection",
+        "P1_structured_extension",
+        "L1_localization_change",
     }
-    assert ce["F2_localization_change"]["about"]
+    assert ce["L1_localization_change"]["about"]
     # F1 hosts comparative biophysics (differential vs shared, not whole-protein).
     bio = next(
-        s for s in ce["F1_structured_extension"]["sections"]
+        s for s in ce["P1_structured_extension"]["sections"]
         if s["title"].startswith("Biophysics")
     )
     pi = next(r for r in bio["compare_rows"] if "pI" in r["label"])
     assert pi["cols"][0] != pi["cols"][1]  # differential vs shared core
     # F2 renders a canonical-vs-isoform table (not flat rows), and MSRA's
     # mito->peroxisome retargeting flags it.
-    loc = ce["F2_localization_change"]["sections"][0]
+    loc = ce["L1_localization_change"]["sections"][0]
     assert loc["highlight"] is True
     assert loc["cmp_headers"] == ["Property", "Canonical", "Isoform"]
     assert loc["compare_rows"] and len(loc["compare_rows"][0]["cols"]) == 2
@@ -343,14 +342,14 @@ def test_domains_massspec_are_canonical_vs_isoform(client):
     iso = load_all()["CBX1"].isoforms[0]
     ce = criterion_evidence_for(iso)
 
-    f3 = ce["F3_domain_change"]["sections"][0]
+    f3 = ce["S1_domain_change"]["sections"][0]
     assert f3["cmp_headers"] == ["Feature", "Canonical", "Isoform"]
     dom = next(r for r in f3["compare_rows"] if r["label"] == "InterPro domains")
     assert len(dom["cols"]) == 2  # canonical | isoform counts
     # gained/lost features surface in the Details box
     assert any(h["kind"] in ("gained", "lost") for h in f3.get("hits", []))
 
-    e6 = ce["E6_mass_spec"]["sections"][0]
+    e6 = ce["D3_mass_spec"]["sections"][0]
     assert e6["cmp_headers"] == ["Feature", "Canonical", "Isoform"]
     uniq = next(r for r in e6["compare_rows"] if r["label"] == "Isoform-unique peptides")
     assert uniq["cols"][0] == "—"  # uniqueness is an isoform-only property
@@ -375,8 +374,8 @@ def test_comparison_tables_use_two_standard_flavors(client):
                     pair = hdr[1:3]
                     ok = pair in (["Canonical", "Isoform"], ["Differential", "Shared"])
                     frame_exception = cid in (
-                        "E1_primate_conservation",
-                        "E2_mammalian_conservation",
+                        "C1_primate_conservation",
+                        "C2_mammalian_conservation",
                     )
                     if not ok and not frame_exception:
                         offenders.append((cid, tuple(hdr)))
@@ -406,7 +405,7 @@ def test_f6_clinical_burden_is_length_normalized(client):
     from swissisoform_site.data import criterion_evidence_for, load_all
 
     iso = load_all()["CBX1"].isoforms[0]
-    sec = criterion_evidence_for(iso)["F6_clinical_variant_overlap"]["sections"][0]
+    sec = criterion_evidence_for(iso)["M2_clinical_variant_overlap"]["sections"][0]
     # Standardized Flavor-2 columns: Differential | Shared | Enrichment (the
     # enrichment is the length-normalized per-residue ratio).
     assert sec["cmp_headers"][1:] == ["Differential", "Shared", "Enrichment"]

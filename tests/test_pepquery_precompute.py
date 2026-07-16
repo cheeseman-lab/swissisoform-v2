@@ -13,7 +13,7 @@ from swissisoform.models import (
     ORFType,
     TranslationInitiationSite,
 )
-from swissisoform.evidence.e6_mass_spec.massspec import (
+from swissisoform.evidence.d3_mass_spec.massspec import (
     _parse_pepquery_output,
     _pepquery_cache_key,
     _regroup_by_gene,

@@ -23,17 +23,17 @@ def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResul
     ann = _annotation(site, "variant_intersection")
     if not _status_ok(ann):
         return CriterionResult(
-            "F6_clinical_variant_overlap", None, "variant_intersection not run"
+            "M2_clinical_variant_overlap", None, "variant_intersection not run"
         )
     ratio = ann.get("disease_enrichment_ratio") if ann else None
     if not isinstance(ratio, (int, float)):
         return CriterionResult(
-            "F6_clinical_variant_overlap", None, "disease_enrichment_ratio unavailable"
+            "M2_clinical_variant_overlap", None, "disease_enrichment_ratio unavailable"
         )
     n_unique = ann.get("n_disease_in_unique_region")
     n_shared = ann.get("n_disease_in_shared_region")
     return CriterionResult(
-        "F6_clinical_variant_overlap",
+        "M2_clinical_variant_overlap",
         ratio >= cfg.f6_disease_enrichment_min,
         f"disease_enrichment_ratio={ratio:.2f} "
         f"(≥{cfg.f6_disease_enrichment_min}); "
