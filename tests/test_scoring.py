@@ -224,27 +224,13 @@ class TestE6MassSpec:
 
 
 def _distinct_biophysics() -> dict[str, float]:
-    """Region-vs-core biophysics that clears the provisional S2 distinctness cutoffs."""
-    return {
-        "gravy_unique": 0.5,
-        "gravy_shared": 0.0,
-        "fraction_charged_unique": 0.1,
-        "fraction_charged_shared": 0.1,
-        "disorder_unique": 0.2,
-        "disorder_shared": 0.2,
-    }
+    """Whole-protein biophysics deltas that clear a provisional S2 cutoff (gravy)."""
+    return {"gravy_delta": 0.5, "fraction_charged_delta": 0.0, "disorder_delta": 0.0}
 
 
 def _identical_biophysics() -> dict[str, float]:
-    """Region-vs-core biophysics below every S2 distinctness cutoff."""
-    return {
-        "gravy_unique": 0.0,
-        "gravy_shared": 0.0,
-        "fraction_charged_unique": 0.1,
-        "fraction_charged_shared": 0.1,
-        "disorder_unique": 0.2,
-        "disorder_shared": 0.2,
-    }
+    """Whole-protein biophysics deltas below every S2 cutoff."""
+    return {"gravy_delta": 0.0, "fraction_charged_delta": 0.0, "disorder_delta": 0.0}
 
 
 class TestP1StructuredExtension:
@@ -306,38 +292,38 @@ class TestP1StructuredExtension:
 
 
 class TestS2Biophysics:
-    """S2 — region-vs-core distinctness over gravy / fraction_charged / disorder."""
+    """S2 — whole-protein biophysical shift over gravy / fraction_charged / disorder."""
 
     def test_no_comparison_none(self):
         """No biophysics comparison → None."""
         res = _s2_biophysics(_site(), ScoringConfig())
         assert res.value is None
 
-    def test_distinct_true(self):
-        """A region-vs-core lever clears its cutoff → True."""
+    def test_shifted_true(self):
+        """A whole-protein delta clears its cutoff → True."""
         site = _site()
         site.comparison["biophysics"] = _distinct_biophysics()
         res = _s2_biophysics(site, ScoringConfig())
         assert res.value is True
         assert res.name == "S2_biophysics"
 
-    def test_identical_false(self):
-        """All region-vs-core deltas below cutoff → False."""
+    def test_unshifted_false(self):
+        """All whole-protein deltas below cutoff → False."""
         site = _site()
         site.comparison["biophysics"] = _identical_biophysics()
         res = _s2_biophysics(site, ScoringConfig())
         assert res.value is False
 
     def test_no_descriptors_none(self):
-        """Comparison present but none of the three pairs numeric → None."""
+        """Comparison present but no *_delta lever numeric → None."""
         site = _site()
-        site.comparison["biophysics"] = {"pI_unique": 5.0, "pI_shared": 6.0}
+        site.comparison["biophysics"] = {"pI_delta": 2.0}
         res = _s2_biophysics(site, ScoringConfig())
         assert res.value is None
 
 
 class TestS3Sae:
-    """S3 — interpretable SAE features firing in the isoform-unique region."""
+    """S3 — presence of differential (gained/lost) interpretable SAE features."""
 
     def test_no_annotation_none(self):
         res = _s3_sae(_site(), ScoringConfig())
@@ -345,20 +331,42 @@ class TestS3Sae:
 
     def test_status_not_ok_none(self):
         site = _site()
-        site.isoform_annotations["sae"] = {"status": "no_cache", "n_unique_region_features": 3}
+        site.isoform_annotations["sae"] = {
+            "status": "no_cache",
+            "n_isoform_only": 3,
+            "n_canonical_only": 1,
+        }
+        res = _s3_sae(site, ScoringConfig())
+        assert res.value is None
+
+    def test_counts_unavailable_none(self):
+        site = _site()
+        site.isoform_annotations["sae"] = {
+            "status": "ok",
+            "n_isoform_only": None,
+            "n_canonical_only": None,
+        }
         res = _s3_sae(site, ScoringConfig())
         assert res.value is None
 
     def test_features_present_true(self):
         site = _site()
-        site.isoform_annotations["sae"] = {"status": "ok", "n_unique_region_features": 2}
+        site.isoform_annotations["sae"] = {
+            "status": "ok",
+            "n_isoform_only": 2,
+            "n_canonical_only": 0,
+        }
         res = _s3_sae(site, ScoringConfig())
         assert res.value is True
         assert res.name == "S3_sae"
 
-    def test_no_features_false(self):
+    def test_no_differential_features_false(self):
         site = _site()
-        site.isoform_annotations["sae"] = {"status": "ok", "n_unique_region_features": 0}
+        site.isoform_annotations["sae"] = {
+            "status": "ok",
+            "n_isoform_only": 0,
+            "n_canonical_only": 0,
+        }
         res = _s3_sae(site, ScoringConfig())
         assert res.value is False
 

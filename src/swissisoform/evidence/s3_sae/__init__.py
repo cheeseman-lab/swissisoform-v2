@@ -1,4 +1,4 @@
-"""S3 — SAE interpretable features in the differential region. Plumbing: plm.sae_module."""
+"""S3 — presence of differential SAE features (isoform vs canonical). Plumbing: plm.sae_module."""
 
 from __future__ import annotations
 
@@ -9,23 +9,24 @@ from swissisoform.models import TranslationInitiationSite
 __all__ = ["score"]
 
 
-def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResult:
-    """S3: interpretable SAE features firing in the isoform-unique region.
+def score(
+    site: TranslationInitiationSite, cfg: ScoringConfig  # noqa: ARG001
+) -> CriterionResult:
+    """S3: are there any differential interpretable SAE features at all?
 
-    Reads ``site.isoform_annotations['sae']`` written by ``SAEFeatureModule``,
-    which counts sparse-autoencoder features (ESM-C residual stream, top-K)
-    that are differentially active in the isoform-unique region versus the
-    shared core. The count (``n_unique_region_features``) is label-agnostic —
-    the pipeline already applies a prevalence >= 2 filter — so a non-zero count
-    means the differential region carries interpretable structure the core
-    does not.
+    Reads ``site.isoform_annotations['sae']`` written by ``SAEFeatureModule``.
+    SAE features are a descriptive interpretability signal, so the honest scored
+    claim is not "how much changed" (the LLM weighs that from the feature list)
+    but simply whether the isoform uses interpretable features the canonical does
+    not, or vice versa. It is a presence check with no magnitude threshold:
 
-    ``True`` when ``n_unique_region_features >= cfg.s3_sae_min_unique_features``.
-    Returns ``None`` when the SAE annotation is missing, its ``status`` is not
-    ``ok`` (no cache / not run), or the count is unavailable — so an unrun SAE
-    stage never masquerades as evidence-absent.
-
-    Threshold is PROVISIONAL — set in threshold discussion.
+    * ``True``  — at least one feature is categorically gained or lost
+      (``n_isoform_only + n_canonical_only > 0``).
+    * ``False`` — zero differential features (the two proteins are identical in
+      feature space).
+    * ``None``  — the SAE step did not run (no cache / ``status != 'ok'``), or the
+      gained/lost counts are unavailable — so an unrun stage never reads as
+      evidence-absent.
     """
     ann = _annotation(site, "sae")
     if ann is None:
@@ -33,15 +34,14 @@ def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResul
     status = ann.get("status")
     if status != "ok":
         return CriterionResult("S3_sae", None, f"sae status={status}")
-    n = ann.get("n_unique_region_features")
-    if n is None:
-        return CriterionResult("S3_sae", None, "n_unique_region_features unavailable")
-    try:
-        n = int(n)
-    except (TypeError, ValueError):
-        return CriterionResult("S3_sae", None, f"n_unique_region_features not numeric ({n!r})")
+    iso_only = ann.get("n_isoform_only")
+    can_only = ann.get("n_canonical_only")
+    if not isinstance(iso_only, (int, float)) or not isinstance(can_only, (int, float)):
+        return CriterionResult("S3_sae", None, "sae gained/lost feature counts unavailable")
+    n_gained, n_lost = int(iso_only), int(can_only)
+    n_diff = n_gained + n_lost
     return CriterionResult(
         "S3_sae",
-        n >= cfg.s3_sae_min_unique_features,
-        f"n_unique_region_features={n} (threshold {cfg.s3_sae_min_unique_features})",
+        n_diff > 0,
+        f"differential SAE features: {n_gained} gained + {n_lost} lost = {n_diff}",
     )

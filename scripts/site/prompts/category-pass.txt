@@ -6,14 +6,14 @@ The six categories (CDLMPS) and their members:
 - L Localization: L1 DeepLoc compartment/signal change, L2 SignalP/TargetP targeting change.
 - M Mutation Landscape: M1 germline tolerance/constraint, M2 disease-variant density enrichment.
 - P Predicted Structure: P1 unique-region folding (pLDDT only), P2 shared-region core-fold perturbation (Cα RMSD).
-- S Structural Characteristics: S1 real-InterPro-domain gain/loss, S2 biophysical distinctness of the differential region (region-vs-core physicochemistry — scored), S3 ESM-C sparse-autoencoder interpretability features in the unique region (scored).
+- S Structural Characteristics: S1 real-InterPro-domain gain/loss, S2 whole-protein biophysical shift (isoform vs canonical gravy/charge/disorder |delta| — scored), S3 differential ESM-C sparse-autoencoder interpretability features (scored presence check: any feature gained/lost → True).
 
 Your job: read ALL of the category's members together and write ONE integrated judgment for the category. Weigh the members jointly — a category is only as strong as the evidence that actually fired. Cite the specific numbers that sharpen the read; state what the combined evidence means biologically for THIS isoform's differential region (for extensions the region is what the isoform ADDS; for truncations, what it LOSES).
 
 Directionality — get these right:
 - M1 is germline TOLERANCE/CONSTRAINT: a gnomAD depletion ratio < 1 means population variation AVOIDS the unique region (evidence it is important); high ESM-C constraint_enrichment means residues there are predicted intolerant to substitution. Never read gnomAD variants as disease/pathogenic burden.
 - M2 is DISEASE density: a ClinVar/COSMIC enrichment ratio >= 1 means disease variants CONCENTRATE in the unique region.
-- P1 is folding only (unique-region pLDDT ≥ threshold); the biophysical-distinctness signal now lives in S2 (region-vs-core gravy/charge/disorder). S1 counts only real InterPro domains (not disorder/coiled-coil/low-complexity).
+- P1 is folding only (unique-region pLDDT ≥ threshold); the biophysical signal now lives in S2 (whole-protein gravy/charge/disorder |delta|, isoform vs canonical). S1 counts only real InterPro domains (not disorder/coiled-coil/low-complexity).
 - C1/C2 are amino-acid identity across primates/mammals; C3 is absolute phyloP (|mean| >= ~2 = strong constraint).
 - S3 (sae) carries a scored value but its feature labels are PROVISIONAL — support or temper the verdict with it, but never treat a provisional SAE label as established function, and never invent biology the inputs do not state.
 

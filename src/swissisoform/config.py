@@ -187,12 +187,12 @@ class ScoringConfig:
             which germline variation is judged to avoid the unique region.
         f6_disease_enrichment_min: F6 threshold — disease-variant density
             enrichment (unique vs shared) zero-point.
-        s2_gravy_delta_min: S2 distinctness — |gravy_unique − gravy_shared| cutoff.
-        s2_fraction_charged_delta_min: S2 distinctness — |fraction_charged
-            region-vs-core| cutoff.
-        s2_disorder_delta_min: S2 distinctness — |disorder region-vs-core| cutoff.
-        s3_sae_min_unique_features: S3 threshold — minimum count of interpretable
-            SAE features firing in the isoform-unique region.
+        s2_gravy_delta_min: S2 shift — |gravy_delta| cutoff (whole-protein
+            isoform − canonical mean hydropathy).
+        s2_fraction_charged_delta_min: S2 shift — |fraction_charged_delta| cutoff
+            (whole-protein isoform − canonical).
+        s2_disorder_delta_min: S2 shift — |disorder_delta| cutoff (whole-protein
+            isoform − canonical). (S3 SAE is a threshold-free presence check.)
         f7_rmsd_shared_min: F7 threshold — minimum shared-region Cα RMSD (Å) to
             call a significant structural change in the retained region.
         f7_min_shared_len: F7 guard — minimum shared-region length (aa) below
@@ -240,15 +240,13 @@ class ScoringConfig:
     # (so use 0.70); AlphaFold-style backends emit 0–100 (use 70.0).
     # (Field name kept ``f1_*`` for back-compat; P1 is the renamed F1.)
     f1_plddt_threshold: float = 0.70
-    # S2 biophysical-distinctness cutoffs (region-vs-core; any one satisfied →
-    # distinct). Migrated from the old F1 distinctness half, now applied to the
-    # ``<feat>_unique`` vs ``<feat>_shared`` Scope-A keys rather than the
-    # whole-protein ``_delta``.
+    # S2 whole-protein biophysical-shift cutoffs (isoform − canonical |delta|;
+    # any one satisfied → shifted). This is the frame the old F1 distinctness
+    # half used (folding, F1's other half, is now P1). S3 SAE takes no threshold
+    # — it is a presence check on gained/lost interpretable features.
     s2_gravy_delta_min: float = 0.3  # PROVISIONAL — set in threshold discussion
     s2_fraction_charged_delta_min: float = 0.05  # PROVISIONAL — set in threshold discussion
     s2_disorder_delta_min: float = 0.05  # PROVISIONAL — set in threshold discussion
-    # S3 SAE unique-region feature count threshold.
-    s3_sae_min_unique_features: int = 1  # PROVISIONAL — set in threshold discussion
     # F7 shared-region structural change. RMSD scale is Å; pLDDT gate is on the
     # 0–1 ESMFold2 scale (mirror of f1_plddt_threshold). The real RMSD cutoff is
     # to be picked from the genome-wide distribution (near-zero spike + tail).

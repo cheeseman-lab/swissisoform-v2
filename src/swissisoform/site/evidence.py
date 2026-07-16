@@ -1773,11 +1773,11 @@ def slice_biophysics(isoform_record: dict[str, Any]) -> dict[str, Any] | None:
         "value": crit.get("value"),
         "reason": crit.get("reason"),
         "interpretation_hint": (
-            "S2 — biophysical distinctness of the isoform-differential region vs the "
-            "shared canonical core (unique/shared/ratio per property). The scored "
-            "value keys off the gravy/fraction_charged/disorder region-vs-core levers "
-            "(|unique − shared| ≥ cutoff, any one firing → distinct); a large shift "
-            "means the unique region is physicochemically distinct from the core."
+            "S2 — whole-protein biophysical shift, isoform vs canonical. The scored "
+            "value keys off the gravy/fraction_charged/disorder whole-protein deltas "
+            "(|isoform − canonical| ≥ cutoff, any one firing → shifted). The "
+            "unique/shared/ratio columns are extra region-vs-core context; the scored "
+            "call itself is the whole-protein delta."
         ),
         "evidence": evidence,
     }
@@ -1835,11 +1835,11 @@ def slice_sae(isoform_record: dict[str, Any]) -> dict[str, Any] | None:
         "reason": crit.get("reason"),
         "interpretation_hint": (
             "S3 — sparse-autoencoder (ESM-C) interpretability features that differ "
-            "between the isoform and canonical protein. The scored value keys off "
-            "n_unique_region_features (features firing on just the isoform-unique "
-            "residues) ≥ cutoff. isoform_only/canonical_only counts are features "
-            "gained/lost. Feature labels are provisional. Interpret only what the "
-            "labels support — do not invent function."
+            "between the isoform and canonical protein. The scored value is a "
+            "presence check: True when any feature is gained or lost "
+            "(isoform_only + canonical_only > 0), False only when the two proteins "
+            "are identical in feature space. Feature labels are provisional. "
+            "Interpret only what the labels support — do not invent function."
         ),
         "evidence": evidence,
     }
