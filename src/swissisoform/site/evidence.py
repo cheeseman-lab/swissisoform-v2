@@ -612,6 +612,13 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_structure_plddt_diffregion_mean",
             "isoform_structure_plddt_diffregion_std",
             "isoform_structure_plddt_delta_shared",
+            "isoform_structure_ptm_isoform",
+            "isoform_structure_ptm_canonical",
+            "isoform_structure_pae_diff_vs_diff",
+            "isoform_structure_pae_body_vs_body",
+            "isoform_structure_pae_diff_vs_body",
+            "isoform_structure_pae_status",
+            "isoform_structure_extension_contacts",
             "cmp_biophysics_pI_unique",
             "cmp_biophysics_pI_shared",
             "cmp_biophysics_pI_ratio",
@@ -659,6 +666,29 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_localization_deeploc_signals",
             "canonical_localization_deeploc_membrane",
             "isoform_localization_deeploc_membrane",
+            # Top-class confidence + per-compartment probability vector — lets a
+            # confident call be told from a borderline one, and confidence
+            # SHIFTS register even when the argmax label doesn't flip.
+            "isoform_localization_deeploc_top_prob",
+            "canonical_localization_deeploc_top_prob",
+            "isoform_localization_deeploc_prob_cytoplasm",
+            "isoform_localization_deeploc_prob_nucleus",
+            "isoform_localization_deeploc_prob_extracellular",
+            "isoform_localization_deeploc_prob_cell_membrane",
+            "isoform_localization_deeploc_prob_mitochondrion",
+            "isoform_localization_deeploc_prob_endoplasmic_reticulum",
+            "isoform_localization_deeploc_prob_golgi_apparatus",
+            "isoform_localization_deeploc_prob_lysosome_vacuole",
+            "isoform_localization_deeploc_prob_peroxisome",
+            "canonical_localization_deeploc_prob_cytoplasm",
+            "canonical_localization_deeploc_prob_nucleus",
+            "canonical_localization_deeploc_prob_extracellular",
+            "canonical_localization_deeploc_prob_cell_membrane",
+            "canonical_localization_deeploc_prob_mitochondrion",
+            "canonical_localization_deeploc_prob_endoplasmic_reticulum",
+            "canonical_localization_deeploc_prob_golgi_apparatus",
+            "canonical_localization_deeploc_prob_lysosome_vacuole",
+            "canonical_localization_deeploc_prob_peroxisome",
         ],
         "headline_col": "__localization_iso_canon__",
         "interpretation_hint": (
@@ -774,6 +804,11 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_structure_plddt_shared_mean_canonical",
             "isoform_structure_rmsd_global",
             "isoform_structure_tm_score",
+            "isoform_structure_ptm_isoform",
+            "isoform_structure_ptm_canonical",
+            "isoform_structure_pae_body_vs_body",
+            "isoform_structure_pae_diff_vs_body",
+            "isoform_structure_pae_status",
         ],
         "headline_col": "isoform_structure_rmsd_shared",
         "interpretation_hint": (
@@ -1020,6 +1055,26 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
     "isoform_structure_plddt_delta_shared": {
         "label": "Δ pLDDT (isoform vs canonical, shared region)",
         "format": "float3",
+    },
+    # P — global fold trust (pTM) + PAE region blocks
+    "isoform_structure_ptm_isoform": {"label": "pTM (isoform fold)", "format": "float3"},
+    "isoform_structure_ptm_canonical": {"label": "pTM (canonical fold)", "format": "float3"},
+    "isoform_structure_pae_diff_vs_diff": {
+        "label": "Mean PAE within differential region (Å)",
+        "format": "float2",
+    },
+    "isoform_structure_pae_body_vs_body": {
+        "label": "Mean PAE within fold body (Å)",
+        "format": "float2",
+    },
+    "isoform_structure_pae_diff_vs_body": {
+        "label": "Mean PAE differential↔body (Å; high = dangling)",
+        "format": "float2",
+    },
+    "isoform_structure_pae_status": {"label": "PAE availability", "format": "str"},
+    "isoform_structure_extension_contacts": {
+        "label": "Extension↔body Cα contacts (<8 Å)",
+        "format": "int",
     },
     # F1 — biophysical distinctness (unique vs shared region)
     "cmp_biophysics_gravy_delta": {"label": "Δ GRAVY (isoform − canonical)", "format": "float3"},
@@ -1365,6 +1420,28 @@ for _sample in ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"):
         "label": f"{_display}: canonical initiation efficiency",
         "format": "float3",
     }
+
+# L1 — DeepLoc per-compartment probabilities + top-class confidence (both sides)
+for _side in ("isoform", "canonical"):
+    CRITERIA_METRIC_LABELS[f"{_side}_localization_deeploc_top_prob"] = {
+        "label": f"DeepLoc top-class probability ({_side})",
+        "format": "float3",
+    }
+    for _compartment, _suffix in (
+        ("Cytoplasm", "cytoplasm"),
+        ("Nucleus", "nucleus"),
+        ("Extracellular", "extracellular"),
+        ("Cell membrane", "cell_membrane"),
+        ("Mitochondrion", "mitochondrion"),
+        ("Endoplasmic reticulum", "endoplasmic_reticulum"),
+        ("Golgi apparatus", "golgi_apparatus"),
+        ("Lysosome/Vacuole", "lysosome_vacuole"),
+        ("Peroxisome", "peroxisome"),
+    ):
+        CRITERIA_METRIC_LABELS[f"{_side}_localization_deeploc_prob_{_suffix}"] = {
+            "label": f"DeepLoc P({_compartment}) ({_side})",
+            "format": "float3",
+        }
 
 
 def format_metric(value: Any, fmt: str) -> str:

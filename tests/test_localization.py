@@ -53,16 +53,44 @@ class TestLocalizationModule:
 
     def test_run_populates_annotations(self, synthetic_tis, config):
         """Each site has isoform_annotations['localization'] with all keys."""
+        from swissisoform.evidence.l1_localization.localization import (
+            _DEEPLOC_COMPARTMENTS,
+        )
+
         module = LocalizationModule(config)
         result = module.run(synthetic_tis)
         expected_keys = {
             "deeploc_prediction",
             "deeploc_signals",
             "deeploc_membrane",
+            "deeploc_top_prob",
+            *_DEEPLOC_COMPARTMENTS.values(),
         }
         for site in result:
             ann = site.isoform_annotations["localization"]
             assert set(ann.keys()) == expected_keys
+
+    def test_compartment_probs_threaded(self, synthetic_tis, config):
+        """Per-compartment probabilities + top_prob reach the annotation dict."""
+        tis_id = synthetic_tis[0].tis_id
+        predictions = {
+            tis_id: {
+                "deeploc": "Nucleus",
+                "deeploc_signals": "",
+                "deeploc_membrane": "Soluble",
+                "deeploc_prob_nucleus": 0.91,
+                "deeploc_prob_cytoplasm": 0.06,
+                "deeploc_top_prob": 0.91,
+            }
+        }
+        module = LocalizationModule(config, predictions=predictions)
+        module.run(synthetic_tis)
+        ann = synthetic_tis[0].isoform_annotations["localization"]
+        assert ann["deeploc_top_prob"] == 0.91
+        assert ann["deeploc_prob_nucleus"] == 0.91
+        assert ann["deeploc_prob_cytoplasm"] == 0.06
+        # A compartment not provided stays None, never KeyErrors.
+        assert ann["deeploc_prob_peroxisome"] is None
 
     def test_run_matches_by_tis_id(self, synthetic_tis, config):
         """Provide prediction for one tis_id, verify it's found."""

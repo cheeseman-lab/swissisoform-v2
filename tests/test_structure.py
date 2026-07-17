@@ -251,8 +251,57 @@ class TestStructureModule:
                 "tm_score_shared",
                 "shared_region_len",
                 "rmsd_shared_status",
+                "ptm_isoform",
+                "ptm_canonical",
+                "pae_diff_vs_diff",
+                "pae_body_vs_body",
+                "pae_diff_vs_body",
+                "pae_status",
             ]:
                 assert k in keys
+
+    def test_ptm_surfaced_from_cache(self, synthetic_tis, config, tmp_path):
+        """pTM is read straight from metrics.json for both sides."""
+        site = next(s for s in synthetic_tis if s.tis_id == "chr1:940:+:CTG")
+        iso_n = len(site.isoform_protein.rstrip("*"))
+        can_n = len(site.canonical_protein.rstrip("*"))
+        _seed_cache(tmp_path, site.isoform_protein, plddt=[70.0] * iso_n, ptm=0.81)
+        _seed_cache(tmp_path, site.canonical_protein, plddt=[70.0] * can_n, ptm=0.42)
+        module = StructureModule(config, cache_dir=tmp_path, backend="boltz")
+        ann = module.annotate_site(site)
+        assert ann["ptm_isoform"] == pytest.approx(0.81)
+        assert ann["ptm_canonical"] == pytest.approx(0.42)
+
+    def test_pae_blocks_on_extension(self, synthetic_tis, config, tmp_path):
+        """PAE blocks compute on the isoform fold when pae.npy is present."""
+        np = pytest.importorskip("numpy")
+        site = next(s for s in synthetic_tis if s.tis_id == "chr1:940:+:CTG")
+        iso_n = len(site.isoform_protein.rstrip("*"))
+        can_n = len(site.canonical_protein.rstrip("*"))
+        h_iso = _seed_cache(tmp_path, site.isoform_protein, plddt=[70.0] * iso_n, ptm=0.7)
+        _seed_cache(tmp_path, site.canonical_protein, plddt=[70.0] * can_n, ptm=0.7)
+        # Low intra-diff PAE, high diff↔body PAE (a "dangling" extension).
+        pae = np.full((iso_n, iso_n), 20.0, dtype=np.float16)
+        d = site.diff_region.isoform_end
+        pae[:d, :d] = 2.0  # rigid extension internally
+        np.save(cache_path(tmp_path, "boltz", h_iso) / "pae.npy", pae)
+        module = StructureModule(config, cache_dir=tmp_path, backend="boltz")
+        ann = module.annotate_site(site)
+        assert ann["pae_status"] == "ok"
+        assert ann["pae_diff_vs_diff"] == pytest.approx(2.0, abs=0.1)
+        assert ann["pae_diff_vs_body"] > ann["pae_diff_vs_diff"]
+
+    def test_pae_status_no_pae_when_absent(self, synthetic_tis, config, tmp_path):
+        """No pae.npy → pae_status='no_pae', block means null."""
+        site = next(s for s in synthetic_tis if s.tis_id == "chr1:940:+:CTG")
+        iso_n = len(site.isoform_protein.rstrip("*"))
+        can_n = len(site.canonical_protein.rstrip("*"))
+        _seed_cache(tmp_path, site.isoform_protein, plddt=[70.0] * iso_n, ptm=0.7)
+        _seed_cache(tmp_path, site.canonical_protein, plddt=[70.0] * can_n, ptm=0.7)
+        module = StructureModule(config, cache_dir=tmp_path, backend="boltz")
+        ann = module.annotate_site(site)
+        assert ann["pae_status"] == "no_pae"
+        assert ann["pae_diff_vs_diff"] is None
 
 
 class TestStructuralMetricsLazy:
@@ -265,3 +314,46 @@ class TestStructuralMetricsLazy:
         assert out["tm_score"] is None
         assert out["rmsd_global"] is None
         assert out["extension_contacts"] is None
+
+
+class TestPaeRegionBlocks:
+    """PAE region-block partitioning — pure numpy arithmetic."""
+
+    def test_none_matrix(self):
+        from swissisoform.structure.compare import pae_region_blocks
+
+        assert pae_region_blocks(None, 0, 5)["pae_status"] == "no_pae"
+
+    def test_no_diff_region(self):
+        np = pytest.importorskip("numpy")
+        from swissisoform.structure.compare import pae_region_blocks
+
+        m = np.zeros((10, 10), dtype=np.float16)
+        assert pae_region_blocks(m, None, None)["pae_status"] == "no_diff_region"
+
+    def test_whole_is_diff_no_body(self):
+        np = pytest.importorskip("numpy")
+        from swissisoform.structure.compare import pae_region_blocks
+
+        m = np.full((8, 8), 5.0, dtype=np.float16)
+        out = pae_region_blocks(m, 0, 8)
+        assert out["pae_status"] == "no_body"
+        assert out["pae_diff_vs_diff"] == pytest.approx(5.0)
+        assert out["pae_body_vs_body"] is None
+
+    def test_block_means_and_asymmetry(self):
+        np = pytest.importorskip("numpy")
+        from swissisoform.structure.compare import pae_region_blocks
+
+        # diff = [0,2); body = [2,6). Distinct constant fill per block pair.
+        m = np.zeros((6, 6), dtype=float)
+        m[:2, :2] = 1.0  # diff-diff
+        m[2:, 2:] = 9.0  # body-body
+        m[:2, 2:] = 4.0  # diff→body
+        m[2:, :2] = 6.0  # body→diff
+        out = pae_region_blocks(m, 0, 2)
+        assert out["pae_status"] == "ok"
+        assert out["pae_diff_vs_diff"] == pytest.approx(1.0)
+        assert out["pae_body_vs_body"] == pytest.approx(9.0)
+        # inter-block averages BOTH off-diagonal rectangles: (4+6)/2 = 5.
+        assert out["pae_diff_vs_body"] == pytest.approx(5.0)

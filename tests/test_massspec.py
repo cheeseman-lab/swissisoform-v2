@@ -171,6 +171,36 @@ class TestMassSpecModule:
         assert result["summary"]["pepquery_run"] is True
         assert result["summary"]["validated_peptides"] >= 1
 
+    def test_per_psm_metrics_threaded(self, config):
+        """New dict schema: per-PSM confidence reaches hits + summary roll-up."""
+        protein = "MAAAAAALLLLLLLRKKKKKKKR*"
+        first_pep = MassSpecModule(config)._tryptic_digest(protein)[0]["peptide"]
+        validated = {
+            "TESTGENE": {
+                first_pep: {"hyperscore": 55.0, "pvalue": 1e-4, "n_psms": 3}
+            }
+        }
+        module = MassSpecModule(config, validated_peptides=validated)
+        result = module.annotate(protein, gene_name="TESTGENE")
+        hit = next(h for h in result["hits"] if h["peptide"] == first_pep)
+        assert hit["pepquery_hyperscore"] == 55.0
+        assert hit["pepquery_pvalue"] == 1e-4
+        assert hit["pepquery_n_psms"] == 3
+        assert result["summary"]["best_hyperscore"] == 55.0
+        assert result["summary"]["min_pvalue"] == 1e-4
+        assert result["summary"]["total_psms"] == 3
+
+    def test_legacy_set_schema_still_validates(self, config):
+        """A legacy set-based cache still marks validation; PSM metrics are None."""
+        protein = "MAAAAAALLLLLLLRKKKKKKKR*"
+        first_pep = MassSpecModule(config)._tryptic_digest(protein)[0]["peptide"]
+        module = MassSpecModule(config, validated_peptides={"TESTGENE": {first_pep}})
+        result = module.annotate(protein, gene_name="TESTGENE")
+        hit = next(h for h in result["hits"] if h["peptide"] == first_pep)
+        assert hit["validated"] is True
+        assert hit["pepquery_hyperscore"] is None
+        assert result["summary"]["best_hyperscore"] is None
+
     def test_run_no_sites_lost(self, synthetic_tis, config):
         """run() must preserve all input sites."""
         module = MassSpecModule(config)
@@ -206,15 +236,19 @@ class TestMassSpecModule:
             "PEPTWO": {"GENE_A", "GENE_B"},
             "PEPTHREE": {"GENE_C"},  # GENE_C queried but PepQuery doesn't validate it
         }
-        validated = {"PEPONE", "PEPTWO"}  # GENE_A and GENE_B get hits; GENE_C does not
+        # GENE_A and GENE_B get hits; GENE_C does not.
+        validated = {
+            "PEPONE": {"hyperscore": 30.0, "pvalue": 0.01, "n_psms": 1},
+            "PEPTWO": {"hyperscore": 40.0, "pvalue": 0.001, "n_psms": 2},
+        }
         out = _regroup_by_gene(validated, peptide_to_genes)
         assert set(out.keys()) == {"GENE_A", "GENE_B", "GENE_C"}, (
             "every queried gene must appear in the output, including ones with "
             "zero validated peptides"
         )
-        assert out["GENE_C"] == set(), "queried-but-unvalidated gene has empty set"
-        assert out["GENE_A"] == {"PEPONE", "PEPTWO"}
-        assert out["GENE_B"] == {"PEPTWO"}
+        assert out["GENE_C"] == {}, "queried-but-unvalidated gene has empty map"
+        assert set(out["GENE_A"]) == {"PEPONE", "PEPTWO"}
+        assert set(out["GENE_B"]) == {"PEPTWO"}
 
         # And downstream: MassSpecModule on GENE_C now correctly reports
         # pepquery_run=True (it ran) + validated_peptides=0 (found nothing).

@@ -243,15 +243,20 @@ class MassSpecModule:
     def __init__(
         self,
         config: PipelineConfig,
-        validated_peptides: dict[str, set[str]] | None = None,
+        validated_peptides: dict[str, dict[str, dict[str, Any]]]
+        | dict[str, set[str]]
+        | None = None,
     ) -> None:
         """Initialize with pipeline configuration.
 
         Args:
             config: Pipeline configuration.
-            validated_peptides: Optional pre-computed PepQuery results.
-                Dict mapping gene_name -> set of validated peptide sequences.
-                If provided, peptides found in this set are marked as validated.
+            validated_peptides: Optional pre-computed PepQuery results — a dict
+                mapping ``gene_name -> {peptide: {hyperscore, pvalue, n_psms}}``
+                (the shape :func:`precompute_pepquery` now returns). A legacy
+                ``gene_name -> set[peptide]`` mapping is also accepted for
+                membership-only validation (per-PSM metrics then report as
+                ``None``).
         """
         self.config = config
         self.validated_peptides = validated_peptides or {}
@@ -343,10 +348,13 @@ class MassSpecModule:
             canonical_digested = self._tryptic_digest(canonical_protein)
             canonical_pep_seqs = {p["peptide"] for p in canonical_digested}
 
-        # Get validated peptide set for this gene.  Only truthy when
-        # PepQuery2 has actually been precomputed for this gene.
-        gene_validated: set[str] = (
-            self.validated_peptides.get(gene_name, set()) if gene_known else set()
+        # Get validated peptides for this gene.  Only non-empty when PepQuery2
+        # has actually been precomputed for this gene.  New callers pass a
+        # ``{peptide: {hyperscore, pvalue, n_psms}}`` map; legacy callers (older
+        # tests) may pass a bare ``set`` — both support ``in`` membership, and
+        # the per-PSM metrics are read only when a dict is present.
+        gene_validated: Any = (
+            self.validated_peptides.get(gene_name, {}) if gene_known else {}
         )
 
         # Annotate each peptide
@@ -374,6 +382,15 @@ class MassSpecModule:
             if validated is True:
                 validated_count += 1
 
+            # Per-PSM confidence for a validated peptide (graded MS evidence,
+            # not just a boolean): best hyperscore, most-significant p-value,
+            # and the number of independent spectra that matched it.
+            psm = (
+                gene_validated.get(pep["peptide"])
+                if (validated and isinstance(gene_validated, dict))
+                else None
+            )
+
             hits.append(
                 {
                     "peptide": pep["peptide"],
@@ -383,10 +400,23 @@ class MassSpecModule:
                     "unique_to_isoform": unique,
                     "validated": validated,
                     "nme": pep.get("nme", False),
+                    "pepquery_hyperscore": psm.get("hyperscore") if psm else None,
+                    "pepquery_pvalue": psm.get("pvalue") if psm else None,
+                    "pepquery_n_psms": psm.get("n_psms") if psm else None,
                 }
             )
 
         lengths = [h["length"] for h in hits]
+        # Whole-protein confidence roll-up over the validated peptides.
+        psm_scores = [
+            h["pepquery_hyperscore"] for h in hits if h["pepquery_hyperscore"] is not None
+        ]
+        psm_pvals = [
+            h["pepquery_pvalue"] for h in hits if h["pepquery_pvalue"] is not None
+        ]
+        psm_counts = [
+            h["pepquery_n_psms"] for h in hits if h["pepquery_n_psms"] is not None
+        ]
         summary = {
             "total_peptides": len(hits),
             "unique_peptides": unique_count if canonical_known else None,
@@ -394,6 +424,9 @@ class MassSpecModule:
             "min_peptide_length": min(lengths),
             "max_peptide_length": max(lengths),
             "pepquery_run": pepquery_run,
+            "best_hyperscore": max(psm_scores) if psm_scores else None,
+            "min_pvalue": min(psm_pvals) if psm_pvals else None,
+            "total_psms": sum(psm_counts) if psm_counts else None,
         }
 
         return {"hits": hits, "summary": summary}
@@ -468,8 +501,27 @@ def collect_unique_peptides(
     return out
 
 
-def _parse_pepquery_output(outdir: Path) -> set[str]:
-    """Return the set of peptide sequences PepQuery2 flagged as confident.
+# Cache-schema version for the pepquery result JSON. Bumped from the legacy
+# bare-list format (schema-less) to the per-peptide PSM-metric dict — old
+# bare-list caches are treated as a MISS (re-run) so they don't serve without
+# the new confidence fields.
+_PEPQUERY_CACHE_SCHEMA = 2
+
+
+def _to_float(value: Any) -> float | None:
+    """Best-effort float; ``None`` for missing/NaN/unparseable."""
+    try:
+        import pandas as pd
+
+        if value is None or pd.isna(value):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_pepquery_output(outdir: Path) -> dict[str, dict[str, Any]]:
+    """Return per-validated-peptide PSM confidence from PepQuery2 output.
 
     PepQuery2 writes one ``psm_rank.txt`` **per searched dataset** under
     ``<outdir>/<dataset_name>/psm_rank.txt`` (alongside ``psm.txt``,
@@ -480,6 +532,15 @@ def _parse_pepquery_output(outdir: Path) -> set[str]:
 
     Globs every matching file so comma-separated ``-b`` runs (which
     produce one subdir per dataset) aggregate cleanly.
+
+    Returns:
+        ``{peptide: {"hyperscore": float|None, "pvalue": float|None,
+        "n_psms": int}}`` for every validated peptide. Aggregated across that
+        peptide's confident PSMs: ``hyperscore`` = best (max) match score,
+        ``pvalue`` = smallest (most significant) p-value, ``n_psms`` = number of
+        confident spectrum matches (independent spectra supporting the peptide).
+        The keys ARE the validated-peptide set — a strong match by many spectra
+        at low p-value is far stronger evidence than a single borderline PSM.
     """
     rank_files = [
         p for p in outdir.glob("*/psm_rank.txt") if p.parent.name != "database"
@@ -488,11 +549,11 @@ def _parse_pepquery_output(outdir: Path) -> set[str]:
         logger.warning(
             "pepquery: no psm_rank.txt under %s/*/ — no peptides validated", outdir
         )
-        return set()
+        return {}
 
     import pandas as pd
 
-    validated: set[str] = set()
+    validated: dict[str, dict[str, Any]] = {}
     for rank_file in rank_files:
         try:
             df = pd.read_csv(rank_file, sep="\t")
@@ -508,7 +569,22 @@ def _parse_pepquery_output(outdir: Path) -> set[str]:
             hit = df[df["rank"] == 1]
         else:
             hit = df
-        validated.update(hit["peptide"].astype(str).tolist())
+        for _, row in hit.iterrows():
+            pep = str(row["peptide"])
+            score = _to_float(row.get("score"))
+            pval = _to_float(row.get("pvalue"))
+            agg = validated.setdefault(
+                pep, {"hyperscore": None, "pvalue": None, "n_psms": 0}
+            )
+            agg["n_psms"] += 1
+            if score is not None:
+                agg["hyperscore"] = (
+                    score if agg["hyperscore"] is None else max(agg["hyperscore"], score)
+                )
+            if pval is not None:
+                agg["pvalue"] = (
+                    pval if agg["pvalue"] is None else min(agg["pvalue"], pval)
+                )
 
     return validated
 
@@ -525,7 +601,7 @@ def precompute_pepquery(
     var_mods: str | None = None,
     max_var: int | None = None,
     extra_args: list[str] | None = None,
-) -> dict[str, set[str]]:
+) -> dict[str, dict[str, dict[str, Any]]]:
     """Run PepQuery2 over all unique peptides in one batched search.
 
     Pools every peptide across genes into a single flat input file and searches
@@ -578,9 +654,9 @@ def precompute_pepquery(
             filter (``-hc``) on.
 
     Returns:
-        ``{gene: {validated_peptide, ...}}``.  Empty dict (with WARN)
-        when the conda env is missing or the subprocess fails — callers
-        hand this into ``MassSpecModule`` which gracefully degrades
+        ``{gene: {validated_peptide: {hyperscore, pvalue, n_psms}}}``.  Empty
+        dict (with WARN) when the conda env is missing or the subprocess fails —
+        callers hand this into ``MassSpecModule`` which gracefully degrades
         ``pepquery_run`` to False.
     """
     if not peptides_by_gene:
@@ -612,10 +688,17 @@ def precompute_pepquery(
     cache_key = _pepquery_cache_key(dataset, reference_db, peptides_sorted, mods_sig)
     cache_path = (Path(cache_dir) / f"{cache_key}.json") if cache_dir else None
     if cache_path and cache_path.exists():
-        logger.info("precompute_pepquery: cache hit %s", cache_path)
         with open(cache_path) as fh:
-            validated_peptides = set(json.load(fh))
-        return _regroup_by_gene(validated_peptides, peptide_to_genes)
+            cached = json.load(fh)
+        validated_peptides = _load_pepquery_cache(cached)
+        if validated_peptides is not None:
+            logger.info("precompute_pepquery: cache hit %s", cache_path)
+            return _regroup_by_gene(validated_peptides, peptide_to_genes)
+        logger.info(
+            "precompute_pepquery: legacy/mismatched cache at %s — re-running "
+            "to capture per-PSM confidence",
+            cache_path,
+        )
 
     jar = Path(jar_path) if jar_path else DEFAULT_PEPQUERY_JAR
     if not jar.exists():
@@ -703,7 +786,10 @@ def precompute_pepquery(
         if cache_path:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             with open(cache_path, "w") as fh:
-                json.dump(sorted(validated_peptides), fh)
+                json.dump(
+                    {"schema": _PEPQUERY_CACHE_SCHEMA, "peptides": validated_peptides},
+                    fh,
+                )
             logger.info("precompute_pepquery: cached → %s", cache_path)
 
         # On a zero-hit run, preserve only the small text reports
@@ -737,28 +823,41 @@ def _save_pepquery_reports(outdir: Path, dest: Path) -> None:
     logger.info("precompute_pepquery: 0 validated — saved reports to %s", dest)
 
 
+def _load_pepquery_cache(cached: Any) -> dict[str, dict[str, Any]] | None:
+    """Return the peptide→PSM-metrics map from a cache payload, or ``None``.
+
+    ``None`` signals a cache MISS: either the legacy bare-list format (a JSON
+    ``list`` of peptide strings, which lacks the per-PSM confidence fields) or a
+    schema mismatch. The caller then re-runs PepQuery to capture the metrics.
+    """
+    if isinstance(cached, dict) and cached.get("schema") == _PEPQUERY_CACHE_SCHEMA:
+        peptides = cached.get("peptides")
+        return peptides if isinstance(peptides, dict) else {}
+    return None
+
+
 def _regroup_by_gene(
-    validated: set[str], peptide_to_genes: dict[str, set[str]]
-) -> dict[str, set[str]]:
-    """Map ``validated`` peptide set back to ``{gene: {peptide, ...}}``.
+    validated: dict[str, dict[str, Any]], peptide_to_genes: dict[str, set[str]]
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """Map ``validated`` peptides back to ``{gene: {peptide: psm_metrics}}``.
 
     Every gene that had peptides submitted to PepQuery2 is present in the
-    output — with an empty set if none of its peptides matched a confident
+    output — with an empty dict if none of its peptides matched a confident
     spectrum. This lets :class:`MassSpecModule` distinguish "PepQuery ran but
     found no MS evidence" (the gene IS in the dict, validated count is 0)
     from "PepQuery never queried this gene" (the gene is NOT in the dict).
     Without this guarantee, queried-but-unvalidated genes look identical to
-    unqueried ones and E6 incorrectly reports ``None`` instead of ``False``.
+    unqueried ones and D3 incorrectly reports ``None`` instead of ``False``.
     """
-    out: dict[str, set[str]] = {}
-    # Initialize every queried gene with an empty set so it shows up in the
+    out: dict[str, dict[str, dict[str, Any]]] = {}
+    # Initialize every queried gene with an empty dict so it shows up in the
     # output even when PepQuery validated zero of its peptides.
     for genes in peptide_to_genes.values():
         for gene in genes:
-            out.setdefault(gene, set())
-    for pep in validated:
+            out.setdefault(gene, {})
+    for pep, metrics in validated.items():
         for gene in peptide_to_genes.get(pep, ()):
-            out[gene].add(pep)
+            out[gene][pep] = metrics
     return out
 
 

@@ -30,6 +30,24 @@ def _protein_hash(protein: str) -> str:
 
 DEEPLOC_CONDA_ENV = "swissisoform-v2-deeploc"
 
+# DeepLoc-2 per-compartment probability columns (CSV header → output suffix).
+# The argmax label lives in ``Localizations``; these are the underlying class
+# probabilities that say HOW confident that call is and let confidence SHIFTS
+# register even when the argmax doesn't flip. Plastid is omitted (plant-only,
+# ~0 for human). ``row.get`` yields ``None`` for any header not present, so a
+# DeepLoc version that renames a column degrades gracefully rather than crashing.
+_DEEPLOC_COMPARTMENTS: dict[str, str] = {
+    "Cytoplasm": "deeploc_prob_cytoplasm",
+    "Nucleus": "deeploc_prob_nucleus",
+    "Extracellular": "deeploc_prob_extracellular",
+    "Cell membrane": "deeploc_prob_cell_membrane",
+    "Mitochondrion": "deeploc_prob_mitochondrion",
+    "Endoplasmic reticulum": "deeploc_prob_endoplasmic_reticulum",
+    "Golgi apparatus": "deeploc_prob_golgi_apparatus",
+    "Lysosome/Vacuole": "deeploc_prob_lysosome_vacuole",
+    "Peroxisome": "deeploc_prob_peroxisome",
+}
+
 
 def precompute_deeploc(
     proteins: dict[str, str] | list[str],
@@ -169,11 +187,22 @@ def precompute_deeploc(
     result: dict[str, dict[str, Any]] = {}
     for _, row in df.iterrows():
         key = str(row["Protein_ID"])
-        result[key] = {
+        entry: dict[str, Any] = {
             "deeploc": row.get("Localizations"),
             "deeploc_signals": row.get("Signals"),
             "deeploc_membrane": row.get("Membrane types"),
         }
+        # Per-compartment class probabilities + the top-class confidence. These
+        # were previously parsed-past and discarded with the tempdir below.
+        probs: list[float] = []
+        for col, out_key in _DEEPLOC_COMPARTMENTS.items():
+            val = row.get(col)
+            fval = float(val) if val is not None and not pd.isna(val) else None
+            entry[out_key] = fval
+            if fval is not None:
+                probs.append(fval)
+        entry["deeploc_top_prob"] = max(probs) if probs else None
+        result[key] = entry
     # Clean up the per-call tempdir (FASTA + DeepLoc output CSV) so repeat
     # runs don't accumulate ``deeploc_*`` directories in the repo root.
     try:
@@ -201,6 +230,8 @@ class LocalizationModule:
         "localization_deeploc_prediction",
         "localization_deeploc_signals",
         "localization_deeploc_membrane",
+        "localization_deeploc_top_prob",
+        *(f"localization_{k}" for k in _DEEPLOC_COMPARTMENTS.values()),
     ]
     SCOPE: str = "C"
 
@@ -237,12 +268,7 @@ class LocalizationModule:
             ``None`` if the sequence is not in the predictions dict.
         """
         h = _protein_hash(protein)
-        pred = self.predictions.get(h, {})
-        return {
-            "deeploc_prediction": pred.get("deeploc"),
-            "deeploc_signals": pred.get("deeploc_signals"),
-            "deeploc_membrane": pred.get("deeploc_membrane"),
-        }
+        return self._format_prediction(self.predictions.get(h, {}))
 
     def annotate_by_key(self, key: str) -> dict[str, Any]:
         """Look up predictions by arbitrary key (legacy).
@@ -250,12 +276,25 @@ class LocalizationModule:
         Retained for callers that key on tis_id or gene_name instead of
         protein sequence.  Prefer :meth:`annotate` for new code.
         """
-        pred = self.predictions.get(key, {})
-        return {
+        return self._format_prediction(self.predictions.get(key, {}))
+
+    @staticmethod
+    def _format_prediction(pred: dict[str, Any]) -> dict[str, Any]:
+        """Shape a raw prediction dict into the module's output columns.
+
+        Passes the argmax label/signals/membrane through, plus the
+        per-compartment class probabilities and the top-class confidence
+        (all ``None`` when the sequence wasn't scored).
+        """
+        out: dict[str, Any] = {
             "deeploc_prediction": pred.get("deeploc"),
             "deeploc_signals": pred.get("deeploc_signals"),
             "deeploc_membrane": pred.get("deeploc_membrane"),
+            "deeploc_top_prob": pred.get("deeploc_top_prob"),
         }
+        for out_key in _DEEPLOC_COMPARTMENTS.values():
+            out[out_key] = pred.get(out_key)
+        return out
 
     def run(self, tis_sites: list[TranslationInitiationSite]) -> list[TranslationInitiationSite]:
         """Attach localization annotations to each TIS site's isoform protein.

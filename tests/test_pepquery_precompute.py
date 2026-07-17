@@ -7,17 +7,17 @@ and output parsing.
 
 from __future__ import annotations
 
-from swissisoform.models import (
-    DifferentialRegion,
-    Gene,
-    ORFType,
-    TranslationInitiationSite,
-)
 from swissisoform.evidence.d3_mass_spec.massspec import (
     _parse_pepquery_output,
     _pepquery_cache_key,
     _regroup_by_gene,
     collect_unique_peptides,
+)
+from swissisoform.models import (
+    DifferentialRegion,
+    Gene,
+    ORFType,
+    TranslationInitiationSite,
 )
 
 
@@ -135,19 +135,37 @@ class TestCacheKey:
 
 class TestParsePepqueryOutput:
     def test_no_file_returns_empty(self, tmp_path):
-        assert _parse_pepquery_output(tmp_path) == set()
+        assert _parse_pepquery_output(tmp_path) == {}
 
     def test_confident_yes_extracted_in_dataset_subdir(self, tmp_path):
         # PepQuery2 writes output/<dataset>/psm_rank.txt, not output/psm_rank.txt
         dataset_dir = tmp_path / "CPTAC_LUAD_Discovery_Study_Proteome_PDC000153"
         dataset_dir.mkdir()
         (dataset_dir / "psm_rank.txt").write_text(
-            "peptide\tconfident\trank\n"
-            "VALIDHIT\tYes\t1\n"
-            "REJECTED\tNo\t1\n"
-            "ALSOHIT\tyes\t1\n"
+            "peptide\tscore\tpvalue\tconfident\trank\n"
+            "VALIDHIT\t42.0\t0.001\tYes\t1\n"
+            "REJECTED\t5.0\t0.4\tNo\t1\n"
+            "ALSOHIT\t30.0\t0.01\tyes\t1\n"
         )
-        assert _parse_pepquery_output(tmp_path) == {"VALIDHIT", "ALSOHIT"}
+        out = _parse_pepquery_output(tmp_path)
+        assert set(out) == {"VALIDHIT", "ALSOHIT"}
+        assert out["VALIDHIT"]["hyperscore"] == 42.0
+        assert out["VALIDHIT"]["pvalue"] == 0.001
+        assert out["VALIDHIT"]["n_psms"] == 1
+
+    def test_aggregates_multiple_psms_per_peptide(self, tmp_path):
+        # Two confident PSMs for the same peptide → best score, min p-value, count 2.
+        ds = tmp_path / "ds"
+        ds.mkdir()
+        (ds / "psm_rank.txt").write_text(
+            "peptide\tscore\tpvalue\tconfident\n"
+            "PEPK\t20.0\t0.01\tYes\n"
+            "PEPK\t35.0\t0.002\tYes\n"
+        )
+        out = _parse_pepquery_output(tmp_path)
+        assert out["PEPK"]["hyperscore"] == 35.0
+        assert out["PEPK"]["pvalue"] == 0.002
+        assert out["PEPK"]["n_psms"] == 2
 
     def test_multiple_datasets_union(self, tmp_path):
         for ds, peps in (
@@ -157,14 +175,17 @@ class TestParsePepqueryOutput:
             d = tmp_path / ds
             d.mkdir()
             (d / "psm_rank.txt").write_text("peptide\tconfident\n" + peps)
-        assert _parse_pepquery_output(tmp_path) == {"A", "C"}
+        out = _parse_pepquery_output(tmp_path)
+        assert set(out) == {"A", "C"}
+        # 'A' is confident in both datasets → 2 spectra.
+        assert out["A"]["n_psms"] == 2
 
     def test_ignores_database_subdir(self, tmp_path):
         # The FMIndex build leaves output/database/ — no psm_rank.txt but
         # glob must not trip over it either.
         (tmp_path / "database").mkdir()
         (tmp_path / "database" / "some_index.fmi").write_text("binary")
-        assert _parse_pepquery_output(tmp_path) == set()
+        assert _parse_pepquery_output(tmp_path) == {}
 
     def test_falls_back_to_rank_when_no_confident_col(self, tmp_path):
         ds = tmp_path / "any_dataset"
@@ -174,7 +195,7 @@ class TestParsePepqueryOutput:
             "R1HIT\t1\n"
             "R2MISS\t2\n"
         )
-        assert _parse_pepquery_output(tmp_path) == {"R1HIT"}
+        assert set(_parse_pepquery_output(tmp_path)) == {"R1HIT"}
 
 
 class TestRegroupByGene:
@@ -183,14 +204,19 @@ class TestRegroupByGene:
             "SHARED": {"GENE_A", "GENE_B"},
             "UNIQUE": {"GENE_A"},
         }
-        out = _regroup_by_gene({"SHARED", "UNIQUE"}, peptide_to_genes)
-        assert out["GENE_A"] == {"SHARED", "UNIQUE"}
-        assert out["GENE_B"] == {"SHARED"}
+        validated = {
+            "SHARED": {"hyperscore": 40.0, "pvalue": 0.001, "n_psms": 3},
+            "UNIQUE": {"hyperscore": 22.0, "pvalue": 0.02, "n_psms": 1},
+        }
+        out = _regroup_by_gene(validated, peptide_to_genes)
+        assert set(out["GENE_A"]) == {"SHARED", "UNIQUE"}
+        assert set(out["GENE_B"]) == {"SHARED"}
+        assert out["GENE_A"]["SHARED"]["n_psms"] == 3
 
     def test_unvalidated_peptide_absent(self):
-        # The unvalidated peptide must not appear in any gene's set, but the
-        # queried gene itself stays present with an empty set — that is how
-        # MassSpecModule tells "queried, no evidence" (E6=False) apart from
-        # "never queried" (E6=None). See _regroup_by_gene's docstring.
+        # The unvalidated peptide must not appear in any gene's map, but the
+        # queried gene itself stays present with an empty dict — that is how
+        # MassSpecModule tells "queried, no evidence" (D3=False) apart from
+        # "never queried" (D3=None). See _regroup_by_gene's docstring.
         peptide_to_genes = {"UNVALIDATED": {"GENE_A"}}
-        assert _regroup_by_gene(set(), peptide_to_genes) == {"GENE_A": set()}
+        assert _regroup_by_gene({}, peptide_to_genes) == {"GENE_A": {}}
