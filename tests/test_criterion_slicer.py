@@ -10,17 +10,18 @@ import pytest
 from swissisoform.site import evidence as ber
 
 
-def test_criteria_dict_has_exactly_13_entries() -> None:
-    assert len(ber.CRITERIA) == 13
-    # 6 E and 7 F
+def test_criteria_dict_has_exactly_15_entries() -> None:
+    # 13 flat criteria + S2 biophysics + S3 SAE (now first-class scored criteria).
+    assert len(ber.CRITERIA) == 15
+    # 6 E and 9 F (S2/S3 are functional-axis)
     e_count = sum(1 for c in ber.CRITERIA.values() if c["axis"] == "E")
     f_count = sum(1 for c in ber.CRITERIA.values() if c["axis"] == "F")
     assert e_count == 6
-    assert f_count == 7
+    assert f_count == 9
 
 
 def test_criterion_ids_match_scoring_module() -> None:
-    """The 13 criterion ids must match what src/swissisoform/modules/scoring.py emits."""
+    """The 15 criterion ids must match what src/swissisoform/modules/scoring.py emits."""
     expected = {
         "C1_primate_conservation",
         "C2_mammalian_conservation",
@@ -35,6 +36,8 @@ def test_criterion_ids_match_scoring_module() -> None:
         "M1_pathogenic_variant_enrichment",
         "M2_clinical_variant_overlap",
         "P2_shared_structural_change",
+        "S2_biophysics",
+        "S3_sae",
     }
     assert set(ber.CRITERIA) == expected
 
@@ -122,8 +125,9 @@ def test_real_trnt1_record_e1_e2_e3() -> None:
     iso_with_gene = {**iso, "gene": {"name": "TRNT1"}}
 
     e1 = ber.slice_criterion(iso_with_gene, "C1_primate_conservation")
+    # C1's headline is a styled string now ("Unique region X% similar across primates").
     assert e1["headline"] is not None
-    assert 0 <= e1["headline"] <= 1
+    assert isinstance(e1["headline"], str) and e1["headline"]
 
     e3 = ber.slice_criterion(iso_with_gene, "C3_phylop_coding_selection")
     assert "isoform_conservation_phylop_unique_region_mean" in e3["evidence"]

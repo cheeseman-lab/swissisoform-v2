@@ -600,8 +600,11 @@ def _check_prereqs(records, out_dir: Path, prereqs: tuple[str, ...]) -> list[str
         for iso in gene_record.get("isoforms", []) or []:
             tis_slug = _tis_slug(iso.get("tis_id"))
             for prereq in prereqs:
-                pp = out_dir / tis_slug / f"{prereq}.json"
-                if not pp.exists():
+                # Resolve the prereq's ACTUAL output path from its PassSpec — the
+                # pass name ("category") differs from its filename ("categories.json"),
+                # so f"{prereq}.json" would look for the wrong file.
+                rel = PASS_REGISTRY[prereq].output_filename_template.format(tis_slug=tis_slug)
+                if not (out_dir / rel).exists():
                     missing.append(tis_slug)
                     break
     return missing
@@ -610,8 +613,8 @@ def _check_prereqs(records, out_dir: Path, prereqs: tuple[str, ...]) -> list[str
 def _run_category_pass(records, spec, args, system_prompt, output_schema) -> int:
     """Per-(isoform, category) dispatch — one call per CDLMPS category.
 
-    Each call bundles all of the category's members (scored criteria + the
-    descriptive biophysics/sae cards, incl. F7) into one slice and asks the model
+    Each call bundles all of the category's members (all first-class scored
+    criteria, including S2 biophysics + S3 SAE) into one slice and asks the model
     for a single ``{verdict, reasoning}``. Writes ``{tis_slug}/categories.json`` as
     a dict keyed by category name (the shape ``category_verdicts_for_isoform``
     consumes).
@@ -688,8 +691,8 @@ def _build_synthesis_record(isoform: dict, gene_name: str, isoform_out_dir: Path
 
     Carries both the digested per-category reads (``category_reads`` — the
     ``{verdict, reasoning}`` per CDLMPS category) and the raw underlying evidence
-    (``criteria_evidence``, one ``slice_criterion`` payload per criterion, all 13
-    incl. F7) so the model can weigh actual numbers, not just the category verdicts.
+    (``criteria_evidence``, one ``slice_criterion`` payload per criterion, all 15
+    incl. S2/S3) so the model can weigh actual numbers, not just the category verdicts.
     """
     from swissisoform.site.evidence import CRITERIA, slice_criterion
 

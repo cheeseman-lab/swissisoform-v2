@@ -108,11 +108,11 @@
         </details>
         <div class="tile-grid">
           {% for m in group.members %}
-            {% if m == 'biophysics' %}
-              {% set badge = card_badges['biophysics'] %}
+            {% if m == 'S2_biophysics' %}
+              {% set badge = card_badges['S2_biophysics'] %}
               {% include '_biophysics_card.html' %}
-            {% elif m == 'sae' %}
-              {% set badge = card_badges['sae'] %}
+            {% elif m == 'S3_sae' %}
+              {% set badge = card_badges['S3_sae'] %}
               {% include '_sae_card.html' %}
             {% else %}
               {% set c = criteria_by_id[m] %}

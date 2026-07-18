@@ -344,8 +344,8 @@ def test_category_pass_dry_run_emits_one_call_per_category(monkeypatch, tmp_path
     )
     captured = capsys.readouterr().out
     assert rc == 0
-    # 6 CDLMPS categories × 1 isoform = 6 dry-run "category:" prints (all 13
-    # criteria incl. F7 are covered across the categories).
+    # 6 CDLMPS categories × 1 isoform = 6 dry-run "category:" prints (all 15
+    # criteria incl. S2/S3 are covered across the categories).
     assert captured.count("category:") == 6
 
 
@@ -442,5 +442,8 @@ def test_synthesis_input_record_pulls_category_reads(monkeypatch, tmp_path):
     assert "Conservation" in rec["category_reads"]
     assert "Mutation Landscape" in rec["category_reads"]
     assert rec["category_reads"]["Conservation"]["verdict"] == "interesting"
-    # All 13 criteria (incl. F7) are carried in the raw evidence for synthesis.
+    # All 15 criteria (incl. S2/S3) are carried in the raw evidence for synthesis —
+    # S2/S3 tolerate the _raw-less fixture (empty evidence, never raise).
     assert "P2_shared_structural_change" in rec["criteria_evidence"]
+    assert "S2_biophysics" in rec["criteria_evidence"]
+    assert "S3_sae" in rec["criteria_evidence"]

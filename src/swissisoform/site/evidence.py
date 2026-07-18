@@ -821,21 +821,57 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "uORF/altORF isoforms have no shared region and are not evaluable."
         ),
     },
+    # S2/S3 are first-class scored criteria whose evidence is nested (a biophysics
+    # property table / SAE feature records) rather than flat columns, so they carry
+    # no ``evidence_cols``/``headline_col`` and instead delegate to an
+    # ``evidence_builder`` hook (attached after the builders are defined, below).
+    # ``omit_if_empty`` reproduces the old descriptive behaviour: when the builder
+    # has no data the member is dropped from the category display.
+    "S2_biophysics": {
+        "axis": "F",
+        "label": "Biophysics",
+        "short_label": "Biophysics",
+        "evidence_cols": [],
+        "headline_col": None,
+        "omit_if_empty": True,
+        "interpretation_hint": (
+            "S2 — whole-protein biophysical shift, isoform vs canonical. The scored "
+            "value keys off the gravy/fraction_charged/disorder whole-protein deltas "
+            "(|isoform − canonical| ≥ cutoff, any one firing → shifted). The "
+            "unique/shared/ratio columns are extra region-vs-core context; the scored "
+            "call itself is the whole-protein delta."
+        ),
+    },
+    "S3_sae": {
+        "axis": "F",
+        "label": "SAE features",
+        "short_label": "SAE",
+        "evidence_cols": [],
+        "headline_col": None,
+        "omit_if_empty": True,
+        "interpretation_hint": (
+            "S3 — sparse-autoencoder (ESM-C) interpretability features that differ "
+            "between the isoform and canonical protein. The scored value is a "
+            "presence check: True when any feature is gained or lost "
+            "(isoform_only + canonical_only > 0), False only when the two proteins "
+            "are identical in feature space. Feature labels are provisional. "
+            "Interpret only what the labels support — do not invent function."
+        ),
+    },
 }
 
 
 # ──────────────────────────────────────────────────────────────────────────
 # CDLMPS evidence categories — the single source of truth for how the scored
-# criteria (and the two descriptive cards, biophysics + sae) group into the six
-# category boxes shown on the site. The LLM interpretation runs one read per
-# category (see ``slice_category`` + the ``category`` pass in ``llm.py``); the
-# website derives its ``CARD_GROUPS`` from this list so UI and LLM never drift.
+# criteria group into the six category boxes shown on the site. The LLM
+# interpretation runs one read per category (see ``slice_category`` + the
+# ``category`` pass in ``llm.py``); the website derives its ``CARD_GROUPS`` from
+# this list so UI and LLM never drift.
 #
-# ``members`` mixes scored-criterion ids (keys in ``CRITERIA``) with the two
-# members ``"biophysics"`` / ``"sae"`` — sliced by ``slice_biophysics`` /
-# ``slice_sae``, which carry the S2/S3 scored value + reason plus their richer
-# descriptive evidence. All 15 criteria — including P2 — are covered exactly
-# once; there is no LLM-excluded criterion.
+# ``members`` are all keys in ``CRITERIA`` — every member (including S2 biophysics
+# and S3 SAE) is a first-class scored criterion sliced through ``slice_criterion``.
+# All 15 criteria — including P2 — are covered exactly once; there is no
+# LLM-excluded criterion.
 CATEGORIES: list[dict[str, Any]] = [
     {
         "letter": "C",
@@ -873,14 +909,11 @@ CATEGORIES: list[dict[str, Any]] = [
     {
         "letter": "S",
         "name": "Structural Characteristics",
-        "members": ["S1_domain_change", "biophysics", "sae"],
+        "members": ["S1_domain_change", "S2_biophysics", "S3_sae"],
     },
 ]
 
-# Descriptive (non-scored) members that carry an LLM slice but no criterion value.
-DESCRIPTIVE_MEMBERS: dict[str, str] = {"biophysics": "Biophysics", "sae": "SAE features"}
-
-# Biophysical properties fed into the biophysics descriptive slice — (label, key)
+# Biophysical properties fed into the biophysics evidence builder — (label, key)
 # over the ``cmp_biophysics_<key>_{unique,shared,ratio}`` differential columns.
 _BIOPHYSICS_FEATURES: list[tuple[str, str]] = [
     ("Isoelectric point (pI)", "pI"),
@@ -1507,7 +1540,7 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         isoform_record: A full per-isoform record (one entry from
             ``build_gene_record(...)["isoforms"]``) with the ``"_raw"`` mirror
             of the parquet row.
-        criterion_id: One of the 12 keys in ``CRITERIA``.
+        criterion_id: One of the keys in ``CRITERIA``.
 
     Returns:
         Dict with:
@@ -1537,6 +1570,33 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         "isoform_length_aa": isoform_record.get("isoform_length_aa"),
         "canonical_length_aa": isoform_record.get("canonical_length_aa"),
     }
+
+    # Criteria whose evidence is nested (S2 biophysics table / S3 SAE features)
+    # delegate evidence construction to their ``evidence_builder`` hook and skip
+    # the flat evidence_cols + headline_col machinery. The return shape is
+    # identical to a normal criterion so every downstream consumer is uniform;
+    # ``evidence`` is empty (→ omitted by ``slice_category`` when ``omit_if_empty``)
+    # when the builder has no data.
+    builder = cfg.get("evidence_builder")
+    if builder is not None:
+        built = builder(isoform_record) or {}
+        return {
+            "criterion_id": criterion_id,
+            "axis": cfg["axis"],
+            "label": cfg["label"],
+            "short_label": cfg["short_label"],
+            "interpretation_hint": cfg["interpretation_hint"],
+            "isoform": iso_block,
+            "value": criterion_entry.get("value"),
+            "reason": criterion_entry.get("reason"),
+            "headline": built.get("headline"),
+            "headline_fmt": "str",
+            "headline_segments": built.get("headline_segments"),
+            "evidence": built.get("evidence", {}),
+            "hits": [],
+            "n_hits_total": 0,
+            "n_hits_shown": 0,
+        }
 
     evidence = {col: raw.get(col) for col in cfg["evidence_cols"]}
     headline_col = cfg.get("headline_col")
@@ -1806,22 +1866,17 @@ def _iso_identity_block(isoform_record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _scored_criterion(isoform_record: dict[str, Any], name: str) -> dict[str, Any]:
-    """Return ``{value, reason}`` for a scored criterion, or empty when absent."""
-    scoring = (isoform_record.get("scoring") or {}).get("criteria") or {}
-    entry = scoring.get(name)
-    return entry if isinstance(entry, dict) else {}
-
-
-def slice_biophysics(isoform_record: dict[str, Any]) -> dict[str, Any] | None:
-    """S2 biophysics slice for the LLM (category S member).
+def _biophysics_evidence(isoform_record: dict[str, Any]) -> dict[str, Any] | None:
+    """S2 biophysics evidence builder — the ``evidence_builder`` hook for CRITERIA.
 
     Reads the ``cmp_biophysics_<feat>_{unique,shared,ratio}`` differential columns
-    (plus the three GRAVY/charge/disorder region-vs-core deltas) into a compact
-    numeric ``evidence`` dict, and carries the S2 scored ``value``/``reason`` from
-    ``isoform_scoring_criteria['S2_biophysics']`` alongside. Numbers only — no HTML,
-    no UI formatting. Returns ``None`` when no biophysics comparison columns are
-    present.
+    (plus the three GRAVY/charge/disorder whole-protein deltas) into a compact
+    numeric ``evidence`` dict. Numbers only — no HTML, no UI formatting. The
+    surrounding ``slice_criterion`` supplies the criterion identity + scored
+    value/reason; this builds only the nested evidence the flat ``evidence_cols``
+    model cannot express. Returns ``None`` when no biophysics comparison columns
+    are present (→ S2 slice carries empty evidence and is omitted from the
+    category display via ``omit_if_empty``).
     """
     raw = isoform_record.get("_raw") or {}
     evidence: dict[str, Any] = {}
@@ -1842,32 +1897,18 @@ def slice_biophysics(isoform_record: dict[str, Any]) -> dict[str, Any] | None:
             evidence[feat] = v
     if not evidence:
         return None
-    crit = _scored_criterion(isoform_record, "S2_biophysics")
-    return {
-        "member": "biophysics",
-        "label": "Biophysics",
-        "scored": True,
-        "value": crit.get("value"),
-        "reason": crit.get("reason"),
-        "interpretation_hint": (
-            "S2 — whole-protein biophysical shift, isoform vs canonical. The scored "
-            "value keys off the gravy/fraction_charged/disorder whole-protein deltas "
-            "(|isoform − canonical| ≥ cutoff, any one firing → shifted). The "
-            "unique/shared/ratio columns are extra region-vs-core context; the scored "
-            "call itself is the whole-protein delta."
-        ),
-        "evidence": evidence,
-    }
+    return {"evidence": evidence}
 
 
-def slice_sae(isoform_record: dict[str, Any]) -> dict[str, Any] | None:
-    """S3 SAE-feature slice for the LLM (category S member).
+def _sae_evidence(isoform_record: dict[str, Any]) -> dict[str, Any] | None:
+    """S3 SAE-feature evidence builder — the ``evidence_builder`` hook for CRITERIA.
 
     Reads the ``isoform_sae_*`` columns: interpretable-feature counts, the top
-    gained/lost features, and the isoform-unique-region features (capped), and
-    carries the S3 scored ``value``/``reason`` from
-    ``isoform_scoring_criteria['S3_sae']`` alongside. Returns ``None`` when the SAE
-    step did not run (status != "ok").
+    gained/lost features, and the isoform-unique-region features (capped). The
+    surrounding ``slice_criterion`` supplies the criterion identity + scored
+    value/reason; this builds only the nested evidence. Returns ``None`` when the
+    SAE step did not run (status != "ok") (→ S3 slice carries empty evidence and
+    is omitted from the category display via ``omit_if_empty``).
     """
     raw = isoform_record.get("_raw") or {}
     if raw.get("isoform_sae_status") != "ok":
@@ -1903,23 +1944,16 @@ def slice_sae(isoform_record: dict[str, Any]) -> dict[str, Any] | None:
         "top_lost": _top("lost"),
         "unique_region_features": _records(raw.get("isoform_sae_unique_region_top_features")),
     }
-    crit = _scored_criterion(isoform_record, "S3_sae")
-    return {
-        "member": "sae",
-        "label": "SAE features",
-        "scored": True,
-        "value": crit.get("value"),
-        "reason": crit.get("reason"),
-        "interpretation_hint": (
-            "S3 — sparse-autoencoder (ESM-C) interpretability features that differ "
-            "between the isoform and canonical protein. The scored value is a "
-            "presence check: True when any feature is gained or lost "
-            "(isoform_only + canonical_only > 0), False only when the two proteins "
-            "are identical in feature space. Feature labels are provisional. "
-            "Interpret only what the labels support — do not invent function."
-        ),
-        "evidence": evidence,
-    }
+    return {"evidence": evidence}
+
+
+# Attach the evidence-builder hooks now that the builders are defined. S2/S3 carry
+# nested evidence (biophysics property table / SAE feature records) that the flat
+# ``evidence_cols`` model cannot express, so ``slice_criterion`` delegates their
+# evidence construction to these. Set here (not in the CRITERIA literal) because
+# the builders are defined after the dict.
+CRITERIA["S2_biophysics"]["evidence_builder"] = _biophysics_evidence
+CRITERIA["S3_sae"]["evidence_builder"] = _sae_evidence
 
 
 def slice_category(isoform_record: dict[str, Any], category: dict[str, Any]) -> dict[str, Any]:
@@ -1931,29 +1965,21 @@ def slice_category(isoform_record: dict[str, Any], category: dict[str, Any]) -> 
 
     Returns:
         Dict with the category identity (``letter``, ``name``), the shared isoform
-        identity block, and ``members`` — a list of per-member slices. Scored
-        criteria yield the full ``slice_criterion`` payload (with ``kind="criterion"``);
-        the descriptive members (biophysics/sae) yield their compact slice
-        (``kind="descriptive"``). Descriptive members with no data are omitted.
+        identity block, and ``members`` — a list of per-member slices. Every member
+        is a first-class criterion sliced through ``slice_criterion`` (all tagged
+        ``kind="criterion"``); a member whose ``CRITERIA`` entry sets
+        ``omit_if_empty`` and produced no evidence (e.g. S2/S3 when biophysics/SAE
+        did not run) is dropped from the display.
     """
     members: list[dict[str, Any]] = []
     for member in category["members"]:
-        if member in CRITERIA:
-            entry = slice_criterion(isoform_record, member)
-            entry["kind"] = "criterion"
-            members.append(entry)
-        elif member == "biophysics":
-            entry = slice_biophysics(isoform_record)
-            if entry is not None:
-                entry["kind"] = "descriptive"
-                members.append(entry)
-        elif member == "sae":
-            entry = slice_sae(isoform_record)
-            if entry is not None:
-                entry["kind"] = "descriptive"
-                members.append(entry)
-        else:  # pragma: no cover - guards against a stale CATEGORIES entry
+        if member not in CRITERIA:  # pragma: no cover - guards a stale CATEGORIES entry
             raise KeyError(f"Unknown category member: {member!r}")
+        entry = slice_criterion(isoform_record, member)
+        if CRITERIA[member].get("omit_if_empty") and not entry["evidence"]:
+            continue
+        entry["kind"] = "criterion"
+        members.append(entry)
 
     return {
         "category": category["letter"],

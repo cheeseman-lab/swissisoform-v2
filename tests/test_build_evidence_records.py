@@ -238,25 +238,27 @@ _NAN_SCHEMA_COLUMNS = (
 # ── CDLMPS categories + slice_category ─────────────────────────────────────
 
 
-def test_categories_cover_all_criteria_once_plus_descriptive():
-    """Every scored criterion appears in exactly one category; plus biophysics/sae."""
+def test_categories_cover_all_criteria_once():
+    """Every scored criterion (incl. S2 biophysics + S3 SAE) appears in exactly one category."""
     members = [m for cat in ber.CATEGORIES for m in cat["members"]]
-    scored = [m for m in members if m in ber.CRITERIA]
-    # All 13 criteria (incl. F7) covered exactly once.
-    assert sorted(scored) == sorted(ber.CRITERIA)
-    assert len(scored) == len(set(scored)) == 13
-    # The two descriptive members live once each (both in category S).
-    assert members.count("biophysics") == 1
-    assert members.count("sae") == 1
+    # All members are first-class criteria now — no descriptive magic strings.
+    assert all(m in ber.CRITERIA for m in members)
+    # All 15 criteria covered exactly once.
+    assert sorted(members) == sorted(ber.CRITERIA)
+    assert len(members) == len(set(members)) == 15
+    # S2/S3 live once each, in category S.
+    assert members.count("S2_biophysics") == 1
+    assert members.count("S3_sae") == 1
     assert not hasattr(ber, "LLM_EXCLUDED_CRITERIA")
+    assert not hasattr(ber, "DESCRIPTIVE_MEMBERS")
 
 
 def _S_CATEGORY() -> dict:
     return next(c for c in ber.CATEGORIES if c["letter"] == "S")
 
 
-def test_slice_category_bundles_scored_and_descriptive_members():
-    """Category S = S1 domain + S2 biophysics + S3 sae — all scored."""
+def test_slice_category_bundles_scored_members():
+    """Category S = S1 domain + S2 biophysics + S3 sae — all first-class criteria."""
     iso_record = {
         "tis_id": "chr1:100:+:ATG:ENST_A",
         "gene": {"name": "GENE_A"},
@@ -297,26 +299,23 @@ def test_slice_category_bundles_scored_and_descriptive_members():
     assert out["name"] == "Structural Characteristics"
     assert out["isoform"]["tis_id"] == "chr1:100:+:ATG:ENST_A"
 
-    by_member = {m["member"] if "member" in m else m["criterion_id"]: m for m in out["members"]}
-    assert set(by_member) == {"S1_domain_change", "biophysics", "sae"}
-    # S1 scored criterion carries its value + kind.
-    assert by_member["S1_domain_change"]["kind"] == "criterion"
+    by_member = {m["criterion_id"]: m for m in out["members"]}
+    assert set(by_member) == {"S1_domain_change", "S2_biophysics", "S3_sae"}
+    # Every member is a first-class criterion — uniform kind + criterion_id.
+    assert all(m["kind"] == "criterion" for m in out["members"])
     assert by_member["S1_domain_change"]["value"] is True
-    # S2/S3 members now carry the scored value + reason alongside descriptive evidence.
-    assert by_member["biophysics"]["kind"] == "descriptive"
-    assert by_member["biophysics"]["scored"] is True
-    assert by_member["biophysics"]["value"] is True
-    assert by_member["biophysics"]["reason"] == "gravy distinct"
-    assert "gravy_delta" in by_member["biophysics"]["evidence"]
-    assert by_member["sae"]["kind"] == "descriptive"
-    assert by_member["sae"]["scored"] is True
-    assert by_member["sae"]["value"] is False
-    assert by_member["sae"]["evidence"]["counts"]["isoform_only"] == 3
-    assert by_member["sae"]["evidence"]["top_gained"]["feature_index"] == 42
+    # S2/S3 carry the scored value + reason via the criterion path, plus their
+    # rich nested evidence built by the evidence_builder hook.
+    assert by_member["S2_biophysics"]["value"] is True
+    assert by_member["S2_biophysics"]["reason"] == "gravy distinct"
+    assert "gravy_delta" in by_member["S2_biophysics"]["evidence"]
+    assert by_member["S3_sae"]["value"] is False
+    assert by_member["S3_sae"]["evidence"]["counts"]["isoform_only"] == 3
+    assert by_member["S3_sae"]["evidence"]["top_gained"]["feature_index"] == 42
 
 
-def test_slice_category_omits_descriptive_members_without_data():
-    """biophysics/sae members drop out when their columns are absent."""
+def test_slice_category_omits_empty_builder_members_without_data():
+    """S2/S3 (omit_if_empty) drop out when their columns are absent; S1 survives."""
     iso_record = {
         "tis_id": "chr1:100:+:ATG:ENST_A",
         "gene": {"name": "GENE_A"},
@@ -325,6 +324,6 @@ def test_slice_category_omits_descriptive_members_without_data():
         "_raw": {},  # no biophysics cols, sae status missing
     }
     out = ber.slice_category(iso_record, _S_CATEGORY())
-    members = [m.get("member", m.get("criterion_id")) for m in out["members"]]
-    # F3 (scored) survives even with no data; biophysics/sae are omitted.
+    members = [m["criterion_id"] for m in out["members"]]
+    # S1 (flat criterion) survives even with no data; S2/S3 are omitted (omit_if_empty).
     assert members == ["S1_domain_change"]
