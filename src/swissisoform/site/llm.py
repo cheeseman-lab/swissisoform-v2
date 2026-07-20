@@ -940,7 +940,7 @@ def _build_synthesis_record(isoform: dict, gene_name: str, isoform_out_dir: Path
     (``criteria_evidence``, one ``slice_criterion`` payload per criterion, all 15
     incl. S2/S3) so the model can weigh actual numbers, not just the category verdicts.
     """
-    from swissisoform.site.evidence import CRITERIA, slice_criterion
+    from swissisoform.site.evidence import CRITERIA, _diff_region_location, slice_criterion
 
     category_reads: dict[str, Any] = {}
     pp = isoform_out_dir / "categories.json"
@@ -957,6 +957,7 @@ def _build_synthesis_record(isoform: dict, gene_name: str, isoform_out_dir: Path
             "tis_id": isoform.get("tis_id"),
             "gene_name": gene_name,
             "orf_type": isoform.get("orf_type"),
+            "differential_region_location": _diff_region_location(isoform.get("orf_type")),
             "differential_sequence": isoform.get("differential_sequence"),
             "diff_space": isoform.get("diff_space"),
             "isoform_length_aa": isoform.get("isoform_length_aa"),

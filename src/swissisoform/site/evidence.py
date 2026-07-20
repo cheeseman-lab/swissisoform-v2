@@ -1853,12 +1853,47 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
     }
 
 
+def _diff_region_location(orf_type: Any) -> str | None:
+    """Explicit N-terminal directionality fact for the identity block.
+
+    Alt-TIS isoforms differ ONLY at the N-terminus (the start codon moves; the
+    C-terminus and stop are invariant). Stated as a hard input fact so the LLM
+    cannot mislabel the differential region as C-terminal from a training prior
+    (e.g. CDC34's well-known C-terminal tail). Returns None when there is no
+    differential region (annotated) or the orf_type is unknown.
+    """
+    if orf_type is None:
+        return None
+    s = str(orf_type).strip().lower()
+    if s == "truncated":
+        return (
+            "N-terminal: the differential region is the N-terminal segment of the "
+            "CANONICAL protein that this isoform REMOVES (the alt start codon is "
+            "downstream); the shared C-terminal portion is retained unchanged. The "
+            "removed region is NOT C-terminal."
+        )
+    if s == "extended":
+        return (
+            "N-terminal: the differential region is the N-terminal segment this "
+            "isoform ADDS ahead of the canonical start; the canonical protein is "
+            "retained unchanged downstream. The added region is NOT C-terminal."
+        )
+    if s in {"uorf", "uoorf", "internal_oof", "3utr_orf", "alt_orf"}:
+        return (
+            "Separate ORF: the entire isoform sequence is the differential region "
+            "and does not share reading frame with the canonical CDS; there is no "
+            "shared region."
+        )
+    return None
+
+
 def _iso_identity_block(isoform_record: dict[str, Any]) -> dict[str, Any]:
     """Shared isoform-identity block used by criterion + category slices."""
     return {
         "tis_id": isoform_record.get("tis_id"),
         "gene_name": (isoform_record.get("gene") or {}).get("name"),
         "orf_type": isoform_record.get("orf_type"),
+        "differential_region_location": _diff_region_location(isoform_record.get("orf_type")),
         "differential_sequence": isoform_record.get("differential_sequence"),
         "diff_space": isoform_record.get("diff_space"),
         "isoform_length_aa": isoform_record.get("isoform_length_aa"),

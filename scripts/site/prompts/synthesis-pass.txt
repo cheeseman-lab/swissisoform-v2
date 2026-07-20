@@ -1,6 +1,6 @@
 You are writing the whole-isoform biological judgment for one alt-TIS isoform (extension, truncation, or uORF/altORF) in SwissIsoform v2.
 
-Input: (1) the isoform's identity (gene, transcript, ORF type, lengths, differential sequence); (2) `category_reads` — one `{verdict, reasoning}` per CDLMPS category (Conservation, Detection, Localization, Mutation Landscape, Predicted Structure, Structural Characteristics), your primary material; (3) `criteria_evidence` — the raw per-criterion numbers that back those verdicts (all 15 criteria); (4) coarse existence/functional headline scores (a two-axis roll-up — a consistency check, not the framing).
+Input: (1) the isoform's identity (gene, transcript, ORF type, lengths, differential sequence, and `differential_region_location` — an explicit statement of where the differential region sits; trust it verbatim over any prior about this gene); (2) `category_reads` — one `{verdict, reasoning}` per CDLMPS category (Conservation, Detection, Localization, Mutation Landscape, Predicted Structure, Structural Characteristics), your primary material; (3) `criteria_evidence` — the raw per-criterion numbers that back those verdicts (all 15 criteria); (4) coarse existence/functional headline scores (a two-axis roll-up — a consistency check, not the framing).
 
 The 15 criteria, grouped by CDLMPS category (the six `category_reads` verdicts are your primary material; the criteria are what backs each):
 - C Conservation: C1 primate AA-identity, C2 mammalian AA-identity, C3 absolute phyloP constraint over the unique region.
@@ -10,18 +10,19 @@ The 15 criteria, grouped by CDLMPS category (the six `category_reads` verdicts a
 - P Predicted Structure: P1 unique-region folding (pLDDT only), P2 shared-region core-fold perturbation (Cα RMSD).
 - S Structural Characteristics: S1 real-InterPro-domain gain/loss, S2 whole-protein biophysical shift (isoform vs canonical), S3 differential ESM-C SAE features (presence check; provisional labels).
 
-Write a SHORT, integrated judgment as exactly two moves — do NOT walk the categories or criteria one by one, and do NOT pad:
-1. One or two sentences summarizing what carries real signal and what is flat or absent — group the evidence by what matters, not a roll-call of every dimension.
-2. The single dominant hypothesis for what this isoform does (or doesn't do) to its differential region — the most likely biological reading, stated plainly and anchored by the one or two numbers that carry it.
-Mention a tension between criteria ONLY when it would change the verdict; otherwise omit it. Refer to evidence by name or by what it measures ("cross-mammalian conservation", "ribosome-profiling breadth", "the localization change"), NEVER by ID code (C1, D3, S2, …). No preamble, no restating the scores, no laundry list. Hard stop at 6 sentences for the narrative — fewer is fine, never more.
+Write a SHORT, hypothesis-led judgment. This is NOT a summary of the category reads and criteria shown below — do NOT walk the categories or criteria one by one, do NOT audit "what has signal and what is flat," and do NOT pad. Lead with the hypothesis; then marshal the evidence that backs it. Exactly two moves, in this order:
+1. HYPOTHESIS (lead). Open with the single most likely biological reading of what this isoform does — or fails to do — to its differential region, stated plainly as a claim. This is the takeaway and it comes first.
+2. SUPPORT (follow). Then give the one to three signals that most directly back that hypothesis, anchored by the specific numbers that carry them ("100% primate/mammalian identity", "mean phyloP 4.95", "10% initiation efficiency"). Frame them as support for the claim above, not as a standalone tally.
+Mention a contradicting signal ONLY when it would change the hypothesis or its confidence; otherwise omit it. Refer to evidence by name or by what it measures ("cross-mammalian conservation", "ribosome-profiling breadth", "the localization change"), NEVER by ID code (C1, D3, S2, …). No preamble, no restating the scores, no laundry list. Hard stop at 6 sentences for the narrative — fewer is fine, never more.
 
 Guardrails:
+  - Differential-region directionality: alt-TIS isoforms differ ONLY at the N-terminus — an extension ADDS N-terminal sequence, a truncation REMOVES N-terminal sequence; the C-terminus and stop codon are invariant. Never describe the differential region (or the sequence it adds/loses) as C-terminal, even when it is acidic or otherwise looks like a tail.
   - Do not contradict the category verdicts or the headline scores.
   - Keep directionality right: germline tolerance/constraint (gnomAD depletion ratio < 1× = important) is NOT pathogenic burden; disease-variant density is a separate signal.
   - Introduce no fact the input does not state — never extrapolate biology (e.g. organelle retargeting) the localization/targeting reads do not report.
 
 Output JSON only (no code fences), fields:
   - "tis_id": verbatim from the input.
-  - "headline": one sentence (≤160 chars) — the single dominant call for this isoform.
-  - "narrative": the two-move judgment above, one paragraph, ≤6 sentences (fewer is fine, never more). HTML-safe Markdown (**bold**, *italic*, `code`); no links/images.
+  - "headline": one sentence (≤160 chars) — the hypothesized function, stated as the single dominant call for this isoform.
+  - "narrative": the two-move judgment above (hypothesis first, then supporting evidence), one paragraph, ≤6 sentences (fewer is fine, never more). HTML-safe Markdown (**bold**, *italic*, `code`); no links/images.
   - "caveats": (optional) one short line ONLY if a material gap changes confidence; omit otherwise.
