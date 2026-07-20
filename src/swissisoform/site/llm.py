@@ -38,6 +38,17 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_TEMPERATURE = 0.0
 DEFAULT_MAX_TOKENS = 4000
 
+# Standard (non-batch) token pricing, USD per token, by model id. The Message
+# Batches API bills the SAME token counts at HALF these rates — batch mode saves
+# no tokens (identical prompts), only cost (the 50% discount).
+_PRICING: dict[str, tuple[float, float]] = {  # model -> (input $/tok, output $/tok)
+    "claude-sonnet-4-6": (3.0e-6, 15.0e-6),
+    "claude-sonnet-5": (3.0e-6, 15.0e-6),
+    "claude-opus-4-8": (5.0e-6, 25.0e-6),
+    "claude-haiku-4-5": (1.0e-6, 5.0e-6),
+}
+_BATCH_DISCOUNT = 0.5
+
 # Synthetic evidence record used by --dry-run when no llm_evidence dir exists.
 _SYNTHETIC_RECORD: dict[str, Any] = {
     "gene": {
@@ -279,20 +290,50 @@ def _add_usage(acc: dict[str, dict[str, int]], key: str, ev: dict[str, int]) -> 
     slot["calls"] += 1
 
 
-def _write_usage_report(out_dir: Path, pass_name: str, model: str, per_isoform: dict) -> None:
-    """Write a per-isoform + total token report JSON and print a one-line summary."""
+def _write_usage_report(
+    out_dir: Path, pass_name: str, model: str, per_isoform: dict, *, batch: bool = False
+) -> None:
+    """Write a per-isoform + total token/cost report JSON and print a summary.
+
+    Cost is computed from ``_PRICING[model]``. When ``batch`` is True the reported
+    cost applies the 50% Message-Batches discount — token counts are unchanged
+    (batch saves no tokens), so ``batch_savings_usd`` is purely the price delta.
+    """
+    pin, pout = _PRICING.get(model, (0.0, 0.0))
+    mult = _BATCH_DISCOUNT if batch else 1.0
+
     total = {**dict.fromkeys(_USAGE_KEYS, 0), "calls": 0}
-    for slot in per_isoform.values():
-        for k in total:
+    for slug, slot in per_isoform.items():
+        for k in _USAGE_KEYS + ("calls",):
             total[k] += slot.get(k, 0)
+        slot["cost_usd"] = round((slot["input"] * pin + slot["output"] * pout) * mult, 4)
+
+    direct = total["input"] * pin + total["output"] * pout
+    cost = direct * mult
+    total["cost_usd"] = round(cost, 4)
+    total["direct_cost_usd"] = round(direct, 4)
+    total["batch_savings_usd"] = round(direct - cost, 4)
+
     out_dir.mkdir(parents=True, exist_ok=True)
-    report = {"pass": pass_name, "model": model, "total": total, "per_isoform": per_isoform}
+    report = {
+        "pass": pass_name,
+        "model": model,
+        "batch": batch,
+        "pricing_usd_per_mtok": {"input": pin * 1e6, "output": pout * 1e6},
+        "note": "batch bills identical tokens at 50% price; no token savings, only cost",
+        "total": total,
+        "per_isoform": per_isoform,
+    }
     (out_dir / f"_usage_{pass_name}.json").write_text(json.dumps(report, indent=2))
-    print(
-        f"[usage] {pass_name}: {total['calls']} calls, {total['input']:,} input + "
-        f"{total['output']:,} output tokens (cache_read {total['cache_read']:,}) "
-        f"-> {out_dir / f'_usage_{pass_name}.json'}"
+
+    tag = "batch" if batch else "direct"
+    line = (
+        f"[usage] {pass_name} ({tag}): {total['calls']} calls, "
+        f"{total['input']:,} in + {total['output']:,} out tokens, ${cost:.3f}"
     )
+    if batch:
+        line += f"  (direct = ${direct:.3f}; batch saves ${direct - cost:.3f} = 50%, same tokens)"
+    print(line + f"  -> {out_dir / f'_usage_{pass_name}.json'}")
 
 
 def call_llm(
@@ -347,6 +388,80 @@ def call_llm(
         raise RuntimeError("anthropic SDK returned empty content list")
     _record_usage(getattr(response, "usage", None))
     return response.content[0].text
+
+
+def _empty_usage() -> dict[str, int]:
+    return dict.fromkeys(_USAGE_KEYS, 0)
+
+
+def call_llm_batch(
+    items: list[tuple[str, Prompt]],
+    *,
+    model: str,
+    temperature: float,
+    max_tokens: int,
+    api_key: str,
+    poll_interval: int = 15,
+) -> dict[str, dict[str, Any]]:
+    """Run ``items`` through the Anthropic Message Batches API (50% token price).
+
+    ``items`` is a list of ``(custom_id, Prompt)``. Submits one batch, polls until
+    it ends (usually minutes, up to 24h), and returns
+    ``{custom_id: {"text": str|None, "usage": {...}, "error": str|None}}``.
+    Results arrive in any order — keyed by ``custom_id`` (must be ``[A-Za-z0-9_-]``,
+    ≤64 chars; callers pass index-based ids like ``c0``/``s3``). Same tokens as
+    direct calls; the saving is the batch price discount, applied at report time.
+    """
+    anthropic = _try_import_anthropic()
+    if anthropic is None:
+        raise RuntimeError("anthropic SDK required for --batch mode (pip install anthropic).")
+    from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
+    from anthropic.types.messages.batch_create_params import Request
+
+    client = anthropic.Anthropic(api_key=api_key)
+    requests = [
+        Request(
+            custom_id=cid,
+            params=MessageCreateParamsNonStreaming(
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system=p.system,
+                messages=[{"role": "user", "content": [{"type": "text", "text": p.user}]}],
+            ),
+        )
+        for cid, p in items
+    ]
+    batch = client.messages.batches.create(requests=requests)
+    print(f"[batch] submitted {len(requests)} requests -> {batch.id} ({batch.processing_status})")
+    while True:
+        b = client.messages.batches.retrieve(batch.id)
+        if b.processing_status == "ended":
+            break
+        time.sleep(poll_interval)
+
+    out: dict[str, dict[str, Any]] = {}
+    for r in client.messages.batches.results(batch.id):
+        cid = r.custom_id
+        if r.result.type == "succeeded":
+            msg = r.result.message
+            text = next((blk.text for blk in msg.content if blk.type == "text"), None)
+            u = getattr(msg, "usage", None)
+            usage = (
+                {
+                    "input": getattr(u, "input_tokens", 0) or 0,
+                    "output": getattr(u, "output_tokens", 0) or 0,
+                    "cache_read": getattr(u, "cache_read_input_tokens", 0) or 0,
+                    "cache_creation": getattr(u, "cache_creation_input_tokens", 0) or 0,
+                }
+                if u is not None
+                else _empty_usage()
+            )
+            out[cid] = {"text": text, "usage": usage, "error": None if text else "empty response"}
+        else:
+            err = getattr(r.result, "error", None)
+            out[cid] = {"text": None, "usage": _empty_usage(), "error": f"{r.result.type}: {err}"}
+    return out
 
 
 # ── Output validation ────────────────────────────────────────────────────
@@ -509,6 +624,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument(
+        "--batch",
+        action="store_true",
+        help="Submit the category/synthesis pass via the Message Batches API "
+        "(50%% token price, same tokens, results usually minutes / <24h). For the "
+        "full offline runs; leave off for the interactive single-gene spot-checks.",
+    )
+    parser.add_argument(
         "--pass",
         dest="pass_name",
         default="default",
@@ -670,6 +792,9 @@ def _run_category_pass(records, spec, args, system_prompt, output_schema) -> int
     a dict keyed by category name (the shape ``category_verdicts_for_isoform``
     consumes).
     """
+    if getattr(args, "batch", False) and not args.dry_run:
+        return _run_category_pass_batch(records, spec, args, system_prompt, output_schema)
+
     from swissisoform.site.evidence import CATEGORIES, slice_category
 
     api_key = os.environ.get("ANTHROPIC_API_KEY") if not args.dry_run else "dry"
@@ -740,6 +865,73 @@ def _run_category_pass(records, spec, args, system_prompt, output_schema) -> int
     return 0 if n_ok == n_calls else 1
 
 
+def _run_category_pass_batch(records, spec, args, system_prompt, output_schema) -> int:
+    """Category pass via the Message Batches API.
+
+    One batch of all (isoform, category) calls at 50% token price; identical
+    prompts/outputs to the sequential path.
+    """
+    from swissisoform.site.evidence import CATEGORIES, slice_category
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY is not set.")
+    args.out.mkdir(parents=True, exist_ok=True)
+
+    items: list[tuple[str, Prompt]] = []  # (custom_id, prompt)
+    meta: dict[str, tuple[str, str]] = {}  # custom_id -> (tis_slug, category_name)
+    iso_results: dict[str, dict[str, Any]] = {}  # tis_slug -> {category_name: payload}
+    iso_out: dict[str, Path] = {}  # tis_slug -> categories.json path
+    for gene_name, gene_record in records.items():
+        for iso in gene_record.get("isoforms", []) or []:
+            tis_slug_val = _tis_slug(iso.get("tis_id"))
+            out_path = args.out / spec.output_filename_template.format(tis_slug=tis_slug_val)
+            if out_path.exists() and not args.force:
+                continue
+            iso_with_gene = {**iso, "gene": {"name": gene_name}}
+            iso_results.setdefault(tis_slug_val, {})
+            iso_out[tis_slug_val] = out_path
+            for category in CATEGORIES:
+                record = slice_category(iso_with_gene, category)
+                cid = f"c{len(items)}"
+                items.append((cid, build_prompt(record, system_prompt, output_schema)))
+                meta[cid] = (tis_slug_val, category["name"])
+
+    if not items:
+        print("category: nothing to do (all outputs exist; use --force to rebuild).")
+        return 0
+
+    responses = call_llm_batch(
+        items, model=args.model, temperature=args.temperature,
+        max_tokens=args.max_tokens, api_key=api_key,
+    )
+
+    usage_by_slug: dict[str, dict[str, int]] = {}
+    n_ok = 0
+    for cid, (tis_slug_val, cat_name) in meta.items():
+        r = responses.get(cid) or {"text": None, "usage": _empty_usage(), "error": "missing result"}
+        _add_usage(usage_by_slug, tis_slug_val, r["usage"])
+        if r["error"] or not r["text"]:
+            print(f"[{cid}] {cat_name} FAIL: {r['error']}", file=sys.stderr)
+            iso_results[tis_slug_val][cat_name] = {"error": r["error"] or "empty"}
+            continue
+        try:
+            iso_results[tis_slug_val][cat_name] = parse_response(r["text"])
+            n_ok += 1
+        except Exception as e:
+            print(f"[{cid}] {cat_name} parse FAIL: {e}", file=sys.stderr)
+            iso_results[tis_slug_val][cat_name] = {"error": str(e)}
+
+    for tis_slug_val, results in iso_results.items():
+        out_path = iso_out[tis_slug_val]
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(results, indent=2, ensure_ascii=False))
+
+    _write_usage_report(args.out, "category", args.model, usage_by_slug, batch=True)
+    print(f"category: {n_ok}/{len(items)} successful (batch)")
+    return 0 if n_ok == len(items) else 1
+
+
 def _build_synthesis_record(isoform: dict, gene_name: str, isoform_out_dir: Path) -> dict:
     """Build the synthesis-pass input from the disk-cached categories.json output.
 
@@ -778,6 +970,9 @@ def _build_synthesis_record(isoform: dict, gene_name: str, isoform_out_dir: Path
 
 
 def _run_synthesis_pass(records, spec, args, system_prompt, output_schema) -> int:
+    if getattr(args, "batch", False) and not args.dry_run:
+        return _run_synthesis_pass_batch(records, spec, args, system_prompt, output_schema)
+
     api_key = os.environ.get("ANTHROPIC_API_KEY") if not args.dry_run else "dry"
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY is not set. Export it or pass --dry-run.")
@@ -827,3 +1022,62 @@ def _run_synthesis_pass(records, spec, args, system_prompt, output_schema) -> in
     _write_usage_report(args.out, "synthesis", args.model, usage_by_slug)
     print(f"synthesis: {n_ok}/{n_calls} successful")
     return 0 if n_ok == n_calls else 1
+
+
+def _run_synthesis_pass_batch(records, spec, args, system_prompt, output_schema) -> int:
+    """Synthesis pass via the Message Batches API.
+
+    One batch, one request per isoform, at 50% token price. Runs after the
+    category batch (it reads each isoform's categories.json).
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY is not set.")
+    args.out.mkdir(parents=True, exist_ok=True)
+
+    items: list[tuple[str, Prompt]] = []  # (custom_id, prompt)
+    meta: dict[str, str] = {}  # custom_id -> tis_slug
+    out_by_slug: dict[str, Path] = {}  # tis_slug -> synthesis.json path
+    for gene_name, gene_record in records.items():
+        for iso in gene_record.get("isoforms", []) or []:
+            tis_slug = _tis_slug(iso.get("tis_id"))
+            iso_dir = args.out / tis_slug
+            out_path = iso_dir / "synthesis.json"
+            if out_path.exists() and not args.force:
+                continue
+            record = _build_synthesis_record(iso, gene_name, iso_dir)
+            cid = f"s{len(items)}"
+            items.append((cid, build_prompt(record, system_prompt, output_schema)))
+            meta[cid] = tis_slug
+            out_by_slug[tis_slug] = out_path
+
+    if not items:
+        print("synthesis: nothing to do (all outputs exist; use --force to rebuild).")
+        return 0
+
+    responses = call_llm_batch(
+        items, model=args.model, temperature=args.temperature,
+        max_tokens=args.max_tokens, api_key=api_key,
+    )
+
+    usage_by_slug: dict[str, dict[str, int]] = {}
+    n_ok = 0
+    for cid, tis_slug in meta.items():
+        r = responses.get(cid) or {"text": None, "usage": _empty_usage(), "error": "missing result"}
+        _add_usage(usage_by_slug, tis_slug, r["usage"])
+        if r["error"] or not r["text"]:
+            print(f"[{cid}] {tis_slug} FAIL: {r['error']}", file=sys.stderr)
+            continue
+        try:
+            payload = parse_response(r["text"])
+        except Exception as e:
+            print(f"[{cid}] {tis_slug} parse FAIL: {e}", file=sys.stderr)
+            continue
+        out_path = out_by_slug[tis_slug]
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
+        n_ok += 1
+
+    _write_usage_report(args.out, "synthesis", args.model, usage_by_slug, batch=True)
+    print(f"synthesis: {n_ok}/{len(items)} successful (batch)")
+    return 0 if n_ok == len(items) else 1

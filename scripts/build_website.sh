@@ -15,6 +15,7 @@
 # Usage (from repo root):
 #   bash scripts/build_website.sh                 # full rebuild incl. LLM
 #   bash scripts/build_website.sh --skip-llm      # reuse existing llm/, no API calls
+#   bash scripts/build_website.sh --batch         # LLM via Batches API (50% token price)
 #   RUN=cheeseman_13gene bash scripts/build_website.sh
 #   RUN=cheeseman_test PRESET=cheeseman_test bash scripts/build_website.sh
 #     RUN   = output dir under data/output/ (drives every stage's paths + staging)
@@ -30,8 +31,10 @@ conda activate swissisoform-v2
 [[ -f .env ]] && set -a && . ./.env && set +a   # ANTHROPIC_API_KEY for the LLM stage
 
 skip_llm=0
+llm_batch=""   # --batch → Message Batches API (50% token price) for the LLM stage
 for arg in "$@"; do
     [[ "$arg" == "--skip-llm" ]] && skip_llm=1
+    [[ "$arg" == "--batch" ]] && llm_batch="--batch"
 done
 
 RUN="${RUN:-cheeseman_13gene}"
@@ -71,9 +74,9 @@ else
     # raw variant hits and blows past the API context limit). Writes
     # {tis_slug}/categories.json and {tis_slug}/synthesis.json.
     run_stage llm_category python scripts/site/run_llm_interpretation.py \
-        --records "${OUT}/llm_evidence/" --out "${OUT}/llm/" --pass category
+        --records "${OUT}/llm_evidence/" --out "${OUT}/llm/" --pass category $llm_batch
     run_stage llm_synthesis python scripts/site/run_llm_interpretation.py \
-        --records "${OUT}/llm_evidence/" --out "${OUT}/llm/" --pass synthesis
+        --records "${OUT}/llm_evidence/" --out "${OUT}/llm/" --pass synthesis $llm_batch
 fi
 
 run_stage structures python scripts/export/export_structures.py --preset "$PRESET"
