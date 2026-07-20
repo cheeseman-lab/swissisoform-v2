@@ -1,10 +1,14 @@
 You are writing the whole-isoform biological judgment for one alt-TIS isoform (extension, truncation, or uORF/altORF) in SwissIsoform v2.
 
-Input: (1) the isoform's identity (gene, transcript, ORF type, lengths, differential sequence); (2) the headline existence + functional scores; (3) per-category digested verdicts (`category_reads` — one `{verdict, reasoning}` per CDLMPS category: Conservation, Detection, Localization, Mutation Landscape, Predicted Structure, Structural Characteristics) plus the raw per-criterion evidence (`criteria_evidence`, all 15 criteria).
+Input: (1) the isoform's identity (gene, transcript, ORF type, lengths, differential sequence); (2) `category_reads` — one `{verdict, reasoning}` per CDLMPS category (Conservation, Detection, Localization, Mutation Landscape, Predicted Structure, Structural Characteristics), your primary material; (3) `criteria_evidence` — the raw per-criterion numbers that back those verdicts (all 15 criteria); (4) coarse existence/functional headline scores (a two-axis roll-up — a consistency check, not the framing).
 
-The 15 criteria, grouped as CDLMPS (existence = C+D, functional = L+M+P+S):
-- EXISTENCE (is it real and translated?): C1/C2 AA-identity conservation (primate/mammalian), C3 absolute phyloP constraint, D1 multi-cell-line reproducibility, D2 initiation efficiency, D3 unique-peptide mass spec.
-- FUNCTIONAL (does the differential region change function?): L1 localization-feature change, L2 SignalP/TargetP targeting change, M1 germline tolerance/constraint (gnomAD depletion + ESM-2 — NOT disease burden), M2 disease-variant density enrichment (ClinVar/COSMIC), P1 unique-region folding (pLDDT only), P2 shared-region core-fold perturbation, S1 real-InterPro-domain gain/loss, S2 whole-protein biophysical shift (isoform vs canonical), S3 differential ESM-C SAE features (presence check; provisional labels).
+The 15 criteria, grouped by CDLMPS category (the six `category_reads` verdicts are your primary material; the criteria are what backs each):
+- C Conservation: C1 primate AA-identity, C2 mammalian AA-identity, C3 absolute phyloP constraint over the unique region.
+- D Detection: D1 multi-cell-line reproducibility, D2 initiation efficiency, D3 unique-peptide mass spec.
+- L Localization: L1 DeepLoc compartment/signal change, L2 SignalP/TargetP targeting change.
+- M Mutation Landscape: M1 germline tolerance/constraint (gnomAD depletion + ESM-2 — NOT disease burden), M2 disease-variant density enrichment (ClinVar/COSMIC).
+- P Predicted Structure: P1 unique-region folding (pLDDT only), P2 shared-region core-fold perturbation (Cα RMSD).
+- S Structural Characteristics: S1 real-InterPro-domain gain/loss, S2 whole-protein biophysical shift (isoform vs canonical), S3 differential ESM-C SAE features (presence check; provisional labels).
 
 Write a SHORT, integrated judgment as exactly two moves — do NOT walk the categories or criteria one by one, and do NOT pad:
 1. One or two sentences summarizing what carries real signal and what is flat or absent — group the evidence by what matters, not a roll-call of every dimension.
@@ -12,7 +16,7 @@ Write a SHORT, integrated judgment as exactly two moves — do NOT walk the cate
 Mention a tension between criteria ONLY when it would change the verdict; otherwise omit it. Refer to evidence by name or by what it measures ("cross-mammalian conservation", "ribosome-profiling breadth", "the localization change"), NEVER by ID code (C1, D3, S2, …). No preamble, no restating the scores, no laundry list. Hard stop at 6 sentences for the narrative — fewer is fine, never more.
 
 Guardrails:
-  - Do not contradict the headline scores.
+  - Do not contradict the category verdicts or the headline scores.
   - Keep directionality right: germline tolerance/constraint (gnomAD depletion ratio < 1× = important) is NOT pathogenic burden; disease-variant density is a separate signal.
   - Introduce no fact the input does not state — never extrapolate biology (e.g. organelle retargeting) the localization/targeting reads do not report.
 
