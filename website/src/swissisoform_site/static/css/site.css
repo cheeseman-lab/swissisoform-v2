@@ -207,7 +207,7 @@
 .syn-headline { margin: 4px 0 8px; }
 .syn-narrative { line-height: 1.55; }
 .syn-findings { margin: 8px 0; padding-left: 22px; }
-.syn-caveats { color: #666; font-size: 13px; }
+.syn-caveats { margin-top: 10px; color: #666; font-size: 13px; }
 
 /* AI-summary dropdown (pinned to the top of the isoform page) */
 .synthesis-dd { padding: 0; overflow: hidden; border-radius: 4px; }

@@ -41,11 +41,6 @@
     <div class="synthesis-body">
       {% if synthesis %}
         <div class="syn-narrative">{{ (synthesis.narrative_html or synthesis.narrative or '') | safe }}</div>
-        {% if synthesis.key_findings %}
-          <ul class="syn-findings">
-            {% for f in synthesis.key_findings %}<li>{{ f }}</li>{% endfor %}
-          </ul>
-        {% endif %}
         {% if synthesis.caveats %}
           <p class="syn-caveats"><em>{{ synthesis.caveats }}</em></p>
         {% endif %}

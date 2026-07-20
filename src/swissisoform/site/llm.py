@@ -246,6 +246,55 @@ PASS_REGISTRY: dict[str, PassSpec] = {
 # ── LLM call dispatch ─────────────────────────────────────────────────────
 
 
+# Per-call token usage, appended by call_llm and drained by the pass runners so
+# they can attribute cost per isoform. Single-threaded, so a module list is safe.
+_USAGE_EVENTS: list[dict[str, int]] = []
+_USAGE_KEYS = ("input", "output", "cache_read", "cache_creation")
+
+
+def _record_usage(usage: Any) -> None:
+    """Append one call's token counts (zeros when the backend gives no usage)."""
+    if usage is None:
+        _USAGE_EVENTS.append(dict.fromkeys(_USAGE_KEYS, 0))
+        return
+    _USAGE_EVENTS.append(
+        {
+            "input": getattr(usage, "input_tokens", 0) or 0,
+            "output": getattr(usage, "output_tokens", 0) or 0,
+            "cache_read": getattr(usage, "cache_read_input_tokens", 0) or 0,
+            "cache_creation": getattr(usage, "cache_creation_input_tokens", 0) or 0,
+        }
+    )
+
+
+def _drain_usage() -> dict[str, int]:
+    """Pop the most recent recorded call usage (zeros if none)."""
+    return _USAGE_EVENTS.pop() if _USAGE_EVENTS else dict.fromkeys(_USAGE_KEYS, 0)
+
+
+def _add_usage(acc: dict[str, dict[str, int]], key: str, ev: dict[str, int]) -> None:
+    slot = acc.setdefault(key, {**dict.fromkeys(_USAGE_KEYS, 0), "calls": 0})
+    for k in _USAGE_KEYS:
+        slot[k] += ev.get(k, 0)
+    slot["calls"] += 1
+
+
+def _write_usage_report(out_dir: Path, pass_name: str, model: str, per_isoform: dict) -> None:
+    """Write a per-isoform + total token report JSON and print a one-line summary."""
+    total = {**dict.fromkeys(_USAGE_KEYS, 0), "calls": 0}
+    for slot in per_isoform.values():
+        for k in total:
+            total[k] += slot.get(k, 0)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    report = {"pass": pass_name, "model": model, "total": total, "per_isoform": per_isoform}
+    (out_dir / f"_usage_{pass_name}.json").write_text(json.dumps(report, indent=2))
+    print(
+        f"[usage] {pass_name}: {total['calls']} calls, {total['input']:,} input + "
+        f"{total['output']:,} output tokens (cache_read {total['cache_read']:,}) "
+        f"-> {out_dir / f'_usage_{pass_name}.json'}"
+    )
+
+
 def call_llm(
     prompt: Prompt,
     *,
@@ -276,6 +325,7 @@ def call_llm(
             raise RuntimeError(f"mozzarellm AnthropicClient.query failed: {error}")
         if not response_text:
             raise RuntimeError("mozzarellm AnthropicClient.query returned empty response")
+        _record_usage(None)  # mozzarellm.query does not surface token usage
         return response_text
 
     anthropic = _try_import_anthropic()
@@ -295,6 +345,7 @@ def call_llm(
     )
     if not response.content:
         raise RuntimeError("anthropic SDK returned empty content list")
+    _record_usage(getattr(response, "usage", None))
     return response.content[0].text
 
 
@@ -630,6 +681,7 @@ def _run_category_pass(records, spec, args, system_prompt, output_schema) -> int
     args.out.mkdir(parents=True, exist_ok=True)
     n_calls = 0
     n_ok = 0
+    usage_by_slug: dict[str, dict[str, int]] = {}
 
     for gene_name, gene_record in records.items():
         for iso in gene_record.get("isoforms", []) or []:
@@ -668,6 +720,7 @@ def _run_category_pass(records, spec, args, system_prompt, output_schema) -> int
                         max_tokens=args.max_tokens,
                         api_key=api_key,
                     )
+                    _add_usage(usage_by_slug, tis_slug_val, _drain_usage())
                     payload = parse_response(response_text)
                     results[category["name"]] = payload
                     n_ok += 1
@@ -682,6 +735,7 @@ def _run_category_pass(records, spec, args, system_prompt, output_schema) -> int
 
     if args.dry_run:
         return 0
+    _write_usage_report(args.out, "category", args.model, usage_by_slug)
     print(f"{spec.name}: {n_ok}/{n_calls} successful")
     return 0 if n_ok == n_calls else 1
 
@@ -731,6 +785,7 @@ def _run_synthesis_pass(records, spec, args, system_prompt, output_schema) -> in
     args.out.mkdir(parents=True, exist_ok=True)
     n_ok = 0
     n_calls = 0
+    usage_by_slug: dict[str, dict[str, int]] = {}
     for gene_name, gene_record in records.items():
         for iso in gene_record.get("isoforms", []) or []:
             tis_slug = _tis_slug(iso.get("tis_id"))
@@ -758,6 +813,7 @@ def _run_synthesis_pass(records, spec, args, system_prompt, output_schema) -> in
                     max_tokens=args.max_tokens,
                     api_key=api_key,
                 )
+                _add_usage(usage_by_slug, tis_slug, _drain_usage())
                 payload = parse_response(response_text)
                 iso_dir.mkdir(parents=True, exist_ok=True)
                 out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
@@ -768,5 +824,6 @@ def _run_synthesis_pass(records, spec, args, system_prompt, output_schema) -> in
 
     if args.dry_run:
         return 0
+    _write_usage_report(args.out, "synthesis", args.model, usage_by_slug)
     print(f"synthesis: {n_ok}/{n_calls} successful")
     return 0 if n_ok == n_calls else 1

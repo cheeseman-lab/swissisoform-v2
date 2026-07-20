@@ -6,18 +6,18 @@ The 15 criteria, grouped as CDLMPS (existence = C+D, functional = L+M+P+S):
 - EXISTENCE (is it real and translated?): C1/C2 AA-identity conservation (primate/mammalian), C3 absolute phyloP constraint, D1 multi-cell-line reproducibility, D2 initiation efficiency, D3 unique-peptide mass spec.
 - FUNCTIONAL (does the differential region change function?): L1 localization-feature change, L2 SignalP/TargetP targeting change, M1 germline tolerance/constraint (gnomAD depletion + ESM-2 — NOT disease burden), M2 disease-variant density enrichment (ClinVar/COSMIC), P1 unique-region folding (pLDDT only), P2 shared-region core-fold perturbation, S1 real-InterPro-domain gain/loss, S2 whole-protein biophysical shift (isoform vs canonical), S3 differential ESM-C SAE features (presence check; provisional labels).
 
-Write a SHORT integrated judgment — do not walk the criteria one by one, and do not pad. In a few tight sentences cover: one EXISTENCE verdict (name the signal that carries it), one FUNCTIONAL verdict (name the signal that carries it), and the single dominant hypothesis for what the isoform does (or doesn't). Mention a tension between criteria only if it changes the verdict. Brevity is required.
+Write a SHORT, integrated judgment as exactly two moves — do NOT walk the categories or criteria one by one, and do NOT pad:
+1. One or two sentences summarizing what carries real signal and what is flat or absent — group the evidence by what matters, not a roll-call of every dimension.
+2. The single dominant hypothesis for what this isoform does (or doesn't do) to its differential region — the most likely biological reading, stated plainly and anchored by the one or two numbers that carry it.
+Mention a tension between criteria ONLY when it would change the verdict; otherwise omit it. Refer to evidence by name or by what it measures ("cross-mammalian conservation", "ribosome-profiling breadth", "the localization change"), NEVER by ID code (C1, D3, S2, …). No preamble, no restating the scores, no laundry list. Hard stop at 6 sentences for the narrative — fewer is fine, never more.
 
 Guardrails:
   - Do not contradict the headline scores.
-  - Keep directionality right: M1 is tolerance/constraint (depletion ratio < 1× = important), not pathogenic burden; M2 is disease density.
-  - Cite ClinVar/gnomAD/COSMIC IDs verbatim.
-  - Treat any None/absent criterion as an explicit caveat, not a silent omission.
+  - Keep directionality right: germline tolerance/constraint (gnomAD depletion ratio < 1× = important) is NOT pathogenic burden; disease-variant density is a separate signal.
   - Introduce no fact the input does not state — never extrapolate biology (e.g. organelle retargeting) the localization/targeting reads do not report.
 
 Output JSON only (no code fences), fields:
   - "tis_id": verbatim from the input.
-  - "headline": one sentence (≤160 chars), combined existence + functional call.
-  - "narrative": the integrated judgment, 3–5 sentences / ≤110 words, one paragraph. HTML-safe Markdown (**bold**, *italic*, `code`); no links/images. Be concise — no preamble, no restating scores.
-  - "key_findings": exactly 3 short items (≤15 words each).
-  - "caveats": one line on what is missing or uncertain (omit if nothing material).
+  - "headline": one sentence (≤160 chars) — the single dominant call for this isoform.
+  - "narrative": the two-move judgment above, one paragraph, ≤6 sentences (fewer is fine, never more). HTML-safe Markdown (**bold**, *italic*, `code`); no links/images.
+  - "caveats": (optional) one short line ONLY if a material gap changes confidence; omit otherwise.

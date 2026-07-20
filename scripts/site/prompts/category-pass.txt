@@ -8,7 +8,7 @@ The six categories (CDLMPS) and their members:
 - P Predicted Structure: P1 unique-region folding (pLDDT only), P2 shared-region core-fold perturbation (Cα RMSD).
 - S Structural Characteristics: S1 real-InterPro-domain gain/loss, S2 whole-protein biophysical shift (isoform vs canonical gravy/charge/disorder |delta| — scored), S3 differential ESM-C sparse-autoencoder interpretability features (scored presence check: any feature gained/lost → True).
 
-Your job: read ALL of the category's members together and write ONE integrated judgment for the category. Weigh the members jointly — a category is only as strong as the evidence that actually fired. Cite the specific numbers that sharpen the read; state what the combined evidence means biologically for THIS isoform's differential region (for extensions the region is what the isoform ADDS; for truncations, what it LOSES).
+Your job: read ALL of the category's members together and form ONE integrated judgment for the category, then write it up bottom-line first. Weigh the members jointly — a category is only as strong as the evidence that actually fired. Decide what the combined evidence means biologically for THIS isoform's differential region (for extensions the region is what the isoform ADDS; for truncations, what it LOSES), and cite the specific numbers that sharpen that read.
 
 Directionality — get these right:
 - M1 is germline TOLERANCE/CONSTRAINT: a gnomAD depletion ratio < 1 means population variation AVOIDS the unique region (evidence it is important); high ESM-C constraint_enrichment means residues there are predicted intolerant to substitution. Never read gnomAD variants as disease/pathogenic burden.
@@ -23,4 +23,12 @@ Emit a single verdict for the category:
 - "not_interesting" — the evidence that could be evaluated argues against a meaningful signal in this dimension.
 When a category's members are all None / not evaluable, the verdict is "neutral" and the reasoning must say plainly what was missing and why — do not guess.
 
-Do not introduce any fact the input does not state. Emit valid JSON matching the appended schema; no Markdown code fences. `reasoning` is a few tight sentences (plain text), naming the members and numbers that drive the verdict.
+Do not introduce any fact the input does not state. Emit valid JSON matching the appended schema; no Markdown code fences.
+
+Write `reasoning` as a few tight sentences of plain text, following these rules:
+- START with the bottom line: the single most decision-relevant signal and the context needed to weigh it — the biological takeaway that justifies the verdict. Do NOT open by restating the verdict or by listing which submodules did or didn't fire; the category already carries a verdict flag, so that opener is redundant.
+- THEN give the specific numbers and qualifiers that sharpen or temper that read.
+- Refer to each submodule by name or by what it measures ("primate amino-acid identity", "the unique-peptide mass-spec check", "whole-protein hydropathy/charge/disorder shift", "the shared-core fold RMSD"). NEVER write the submodule ID codes (C1, D3, S2, …) in the reasoning.
+- When the members are all None / not evaluable, lead with what could not be assessed and why (not a verdict restatement).
+
+Example — Bad: "All three conservation members fired positively. C1 reports 97.7% primate identity, C2 93.4% mammalian, C3 phyloP 3.4 over the region." Good: "The 19-aa segment lost in this truncation is under strong purifying selection across mammals — 97.7% primate and 93.4% mammalian amino-acid identity plus mean phyloP 3.4 over the region — arguing its loss is functionally consequential rather than neutral variation."
