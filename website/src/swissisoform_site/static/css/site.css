@@ -43,6 +43,166 @@
 }
 #gene-search::placeholder { color: #94a3b8; }
 #gene-search:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15); }
+
+/* ----- Functional query — UniProt keyword facet ---------------------- */
+.kw-facet { position: relative; margin-top: 8px; }
+#kw-input {
+  width: 100%;
+  font-size: 14px;
+  padding: 9px 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #fff;
+  color: #0f172a;
+  outline: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+#kw-input::placeholder { color: #94a3b8; }
+#kw-input:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15); }
+
+.kw-dropdown {
+  position: absolute;
+  z-index: 20;
+  left: 0; right: 0;
+  margin-top: 4px;
+  max-height: 280px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  padding: 4px;
+}
+.kw-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #1e293b;
+  font-size: 13px;
+  cursor: pointer;
+}
+.kw-option:hover { background: #eef2ff; }
+.kw-option-count { color: #94a3b8; font-size: 12px; font-variant-numeric: tabular-nums; }
+
+.kw-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+.kw-selected { display: flex; flex-wrap: wrap; gap: 6px; }
+.kw-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px 3px 10px;
+  border-radius: 999px;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  color: #3730a3;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.kw-tag-x {
+  border: 0;
+  background: transparent;
+  color: #6366f1;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.kw-tag-x:hover { color: #312e81; }
+.kw-mode { font-size: 12.5px; color: #64748b; display: inline-flex; align-items: center; gap: 8px; }
+.kw-mode label { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
+.kw-clear {
+  border: 0; background: transparent; color: #64748b;
+  font-size: 12.5px; cursor: pointer; text-decoration: underline;
+}
+.kw-clear:hover { color: #1e293b; }
+.result-count { font-size: 12.5px; color: #64748b; margin: 8px 0 0; }
+
+/* ----- Search + refine — two columns; controls fill the space to the
+   right of the search bars (wraps below on narrow screens) -------------- */
+.search-and-refine {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 28px;
+  margin: 0 0 12px;
+}
+.search-and-refine .landing-search { margin: 0; flex: 0 1 520px; }
+.refine-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 4px;
+}
+.refine-label { font-size: 12.5px; color: #64748b; margin-right: 2px; }
+.cat-filter, .sort-control { display: inline-flex; align-items: center; gap: 6px; }
+.cat-toggles { display: inline-flex; gap: 4px; }
+.cat-toggle {
+  width: 26px;
+  height: 26px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  background: #fff;
+  color: #94a3b8;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.cat-toggle:hover { border-color: #a5b4fc; color: #6366f1; }
+.cat-toggle.active {
+  background: #4f46e5;
+  border-color: #4f46e5;
+  color: #fff;
+}
+#sort-mode {
+  font-size: 13px;
+  padding: 5px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  color: #0f172a;
+  cursor: pointer;
+}
+#sort-mode:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15); }
+
+/* Per-card keyword chips (clickable — adds the term to the filter). */
+.gene-card-kw { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.kw-chip {
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.kw-chip:hover { background: #eef2ff; border-color: #c7d2fe; color: #3730a3; }
+.kw-toggle {
+  border: 0;
+  background: transparent;
+  color: #6366f1;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 5px;
+  cursor: pointer;
+}
+.kw-toggle:hover { text-decoration: underline; }
+
 .landing-examples { font-size: 13px; color: #64748b; margin: 0; }
 .landing-examples a { color: #4f46e5; text-decoration: none; }
 .landing-examples a:hover { text-decoration: underline; }
@@ -367,6 +527,30 @@
 .cat-flag-pending { color: #94a3b8; background: transparent; border: 1px dashed #cbd5e1; }
 .cat-flag-pending::before { content: "\2690"; }  /* ⚐ hollow — not yet assessed */
 
+/* CDLMPS lineup — the six category letters, replacing the old E/F badges.
+   A letter "fires" (interesting / not_interesting) with a semantic colour;
+   neutral + unscored stay quiet. Reuses the .cat-flag-* hue palette. */
+.cdlmps {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.cdlmps-label {
+  margin-right: 5px;
+  font-family: inherit;
+  font-weight: 600;
+  color: #64748b;
+  letter-spacing: normal;
+}
+.cdlmps-letter { color: #e2e8f0; }  /* default — faded, like pending */
+.cdlmps-interesting { color: #16a34a; }      /* fires — vivid green */
+.cdlmps-not_interesting { color: #dc2626; }  /* fires — vivid red */
+.cdlmps-neutral { color: #cbd5e1; }          /* doesn't fire — greyed out */
+.cdlmps-pending { color: #e2e8f0; }          /* not assessed — faintest */
+
 /* Collapsible LLM reasoning — the only disclosure inside a category box. */
 .cat-reasoning { margin: 0 0 10px; }
 .cat-reasoning-summary {
@@ -602,6 +786,8 @@
 /* SAE F8 card — reuses .variants-scroll / .variants-table / .sortable inside the modal. */
 .evidence-modal-wide { max-width: 960px; }
 .sae-modal-intro { font-size: 12px; color: #475569; line-height: 1.6; margin: 0 0 14px; }
+.sae-about-link { color: #4f46e5; text-decoration: none; font-weight: 600; white-space: nowrap; }
+.sae-about-link:hover { text-decoration: underline; }
 .sae-part { margin-top: 18px; }
 .sae-part:first-of-type { margin-top: 4px; }
 .sae-part-h { font-size: 13px; font-weight: 700; color: #0f172a; margin: 0 0 2px; padding-bottom: 4px; border-bottom: 1px solid #e5e7eb; }
@@ -613,6 +799,9 @@
 /* Collapse each SAE table to its top 10 rows; the expander toggles `.collapsed`.
    :nth-child tracks live DOM order, so after a sort this shows the current top 10. */
 .sae-table-block.collapsed .variants-scroll tbody tr:nth-child(n+11) { display: none; }
+/* Generic / "unknown" features (grouped last by data.py) stay hidden while collapsed,
+   even when a table has fewer than 10 non-generic rows. Revealed on "Show all". */
+.sae-table-block.collapsed .variants-scroll tbody tr.sae-generic { display: none; }
 .sae-expand-btn {
   margin-top: 6px;
   font-size: 11px;
@@ -957,6 +1146,23 @@
 .about-axis-h { font-size: .95rem; font-weight: 700; margin: 0 0 .6rem; padding-left: .55rem; }
 .about-axis-h.axis-E { border-left: 3px solid #2563eb; }
 .about-axis-h.axis-F { border-left: 3px solid #16a34a; }
+/* CDLMPS category grid on the About page. */
+.about-cats { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem 2rem; margin-top: 1rem; }
+@media (max-width: 720px) { .about-cats { grid-template-columns: 1fr; } }
+.about-cat-h { font-size: .95rem; font-weight: 700; margin: 0 0 .4rem; display: flex; align-items: center; gap: .5rem; }
+.about-cat-letter {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.4rem; height: 1.4rem; border-radius: 6px;
+  font-family: ui-monospace, monospace; font-weight: 700; font-size: .78rem;
+  color: #fff; background: #64748b;
+}
+.about-cat-h.cat-C .about-cat-letter { background: #2563eb; }
+.about-cat-h.cat-D .about-cat-letter { background: #0891b2; }
+.about-cat-h.cat-L .about-cat-letter { background: #7c3aed; }
+.about-cat-h.cat-M .about-cat-letter { background: #dc2626; }
+.about-cat-h.cat-P .about-cat-letter { background: #16a34a; }
+.about-cat-h.cat-S .about-cat-letter { background: #ca8a04; }
+
 .about-crit { margin: 0; }
 .about-crit dt { font-size: .88rem; font-weight: 600; color: #0f172a; margin-top: .7rem; }
 .about-crit dd { font-size: .84rem; line-height: 1.5; color: #475569; margin: .1rem 0 0; }

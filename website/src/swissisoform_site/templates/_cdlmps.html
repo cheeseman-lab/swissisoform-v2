@@ -1,0 +1,15 @@
+{# CDLMPS verdict lineup — six category letters, each coloured by its LLM
+   verdict (interesting / not_interesting fire; neutral / missing stay quiet).
+   ``verdicts`` is the raw categories.json blob: category name -> {verdict, ...}.
+   Iterates the CARD_GROUPS Jinja global (C-D-L-M-P-S order). #}
+{% macro cdlmps(verdicts, label=None) -%}
+<span class="cdlmps">
+  {%- if label %}<span class="cdlmps-label">{{ label }}</span>{% endif -%}
+  {%- for group in CARD_GROUPS -%}
+    {%- set cat = (verdicts or {}).get(group.name) -%}
+    {%- set v = (cat.verdict if cat else none) or 'pending' -%}
+    <span class="cdlmps-letter cdlmps-{{ v }}"
+          title="{{ group.name }}: {{ v|replace('_', ' ') }}">{{ group.letter }}</span>
+  {%- endfor -%}
+</span>
+{%- endmacro %}

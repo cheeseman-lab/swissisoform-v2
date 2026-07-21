@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_cdlmps.html" as sc %}
 {% block title %}{{ isoform.gene_name }} · {{ isoform.tis_id }} · SwissIsoform V2{% endblock %}
 
 {% block head_extra %}
@@ -24,8 +25,7 @@
       {% if isoform.uniprot_id %}
         <a href="https://www.uniprot.org/uniprotkb/{{ isoform.uniprot_id }}/entry" target="_blank" rel="noopener">UniProt {{ isoform.uniprot_id }}</a> ·
       {% endif %}
-      <strong>E {{ isoform.existence_score if isoform.existence_score is not none else '?' }}/{{ isoform.existence_evaluable if isoform.existence_evaluable is not none else '?' }}</strong>{% if isoform.existence_high_confidence %} hc{% endif %} ·
-      <strong>F {{ isoform.functional_score if isoform.functional_score is not none else '?' }}/{{ isoform.functional_evaluable if isoform.functional_evaluable is not none else '?' }}</strong>{% if isoform.functional_high_confidence %} hc{% endif %}
+      {{ sc.cdlmps(category_llms) }}
     </p>
     <p class="iso-head-tis"><span class="font-mono text-xs text-slate-500">{{ isoform.tis_id }}</span></p>
   </header>

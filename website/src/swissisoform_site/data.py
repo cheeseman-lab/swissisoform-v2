@@ -86,6 +86,9 @@ class Isoform:
     functional_evaluable: int | None
     criteria: dict[str, bool | None]
     reasons: dict[str, str]
+    # Per-category LLM verdicts (raw ``categories.json`` blob): category name ->
+    # {"verdict": "interesting"|"neutral"|"not_interesting", "reasoning": str}.
+    category_verdicts: dict[str, dict[str, Any]]
     # Key metrics
     localization_canonical: str | None
     localization_isoform: str | None
@@ -118,6 +121,47 @@ class Isoform:
     # Raw row (kept for /api/data.json)
     raw: dict[str, Any] = field(default_factory=dict)
 
+    def _verdict_counts(self) -> tuple[int, int, int]:
+        """(# interesting, # not_interesting, # fired) over the six CDLMPS categories.
+
+        A category "fires" when its LLM verdict is ``interesting`` or
+        ``not_interesting`` (``neutral`` and missing do not).
+        """
+        n_interesting = 0
+        n_not = 0
+        for group in CARD_GROUPS:
+            cat = self.category_verdicts.get(group["name"]) or {}
+            v = cat.get("verdict")
+            if v == "interesting":
+                n_interesting += 1
+            elif v == "not_interesting":
+                n_not += 1
+        return n_interesting, n_not, n_interesting + n_not
+
+    @property
+    def n_interesting(self) -> int:
+        return self._verdict_counts()[0]
+
+    @property
+    def n_fired(self) -> int:
+        return self._verdict_counts()[2]
+
+    @property
+    def net_score(self) -> int:
+        """Net CDLMPS score: +1 per green (interesting), −1 per red (not_interesting)."""
+        n_int, n_not, _ = self._verdict_counts()
+        return n_int - n_not
+
+    @property
+    def fired_categories(self) -> list[str]:
+        """Category letters (CARD_GROUPS order) whose verdict fires (green or red)."""
+        out = []
+        for group in CARD_GROUPS:
+            cat = self.category_verdicts.get(group["name"]) or {}
+            if cat.get("verdict") in ("interesting", "not_interesting"):
+                out.append(group["letter"])
+        return out
+
 
 @dataclass
 class GeneRecord:
@@ -128,10 +172,28 @@ class GeneRecord:
     uniprot_url: str | None
     function: str | None
     location: str | None
+    # UniProt keywords (controlled vocabulary) — powers the functional query facet.
+    keywords: list[str]
     canonical_len: int | None
     isoforms: list[Isoform]
     llm: dict[str, Any] | None
     canonical_cif: str | None
+
+    @property
+    def best_isoform(self) -> "Isoform | None":
+        """The highest net-CDLMPS-score isoform — headline for the gene card.
+
+        Ranks by net_score (green +1, red −1) descending; ties fall back to
+        more green, then the existing evidence scores, then ``aa_len`` so genes
+        with no LLM verdicts still surface a deterministic representative.
+        """
+        if not self.isoforms:
+            return None
+
+        def _key(iso: Isoform) -> tuple[int, int, int, int]:
+            return (iso.net_score, iso.n_interesting, iso.existence_score or 0, iso.aa_len or 0)
+
+        return max(self.isoforms, key=_key)
 
 
 # --------------------------------------------------------------------------- #
@@ -190,6 +252,14 @@ def _maybe_str(v: Any) -> str | None:
         return None
     s = str(v)
     return s if s and s.lower() != "nan" else None
+
+
+def _split_terms(v: Any) -> list[str]:
+    """Split a ``"; "``-joined term string (e.g. generef keywords) into a list."""
+    s = _maybe_str(v)
+    if not s:
+        return []
+    return [t.strip() for t in s.split(";") if t.strip()]
 
 
 def _maybe_bool(v: Any) -> bool | None:
@@ -364,9 +434,16 @@ def _build_isoform(
     struct_index: dict[tuple[str, str], str],
     colors: frozenset[str] = frozenset(),
     pae: frozenset[str] = frozenset(),
+    llm_dir: Path | None = None,
 ) -> Isoform:
     gene = row["gene_name"]
     tis_id = str(row["tis_id"])
+
+    category_verdicts = (
+        category_verdicts_for_isoform(llm_dir=llm_dir, tis_slug=tis_slug(tis_id))
+        if llm_dir is not None
+        else {}
+    )
 
     # Pathogenic variants in the unique region — pull from the clinical hits
     # rather than the variant-intersection module so we get hgvsp + source.
@@ -403,6 +480,7 @@ def _build_isoform(
         functional_evaluable=_maybe_int(row.get("isoform_scoring_functional_evaluable")),
         criteria=_criteria_dict(row.get("isoform_scoring_criteria")),
         reasons=_reasons_dict(row.get("isoform_scoring_reasons")),
+        category_verdicts=category_verdicts,
         localization_canonical=_maybe_str(row.get("cmp_localization_deeploc_prediction_canonical")),
         localization_isoform=_maybe_str(row.get("cmp_localization_deeploc_prediction_isoform")),
         localization_changed=_maybe_bool(row.get("cmp_localization_deeploc_prediction_changed")),
@@ -479,13 +557,16 @@ def load_all() -> dict[str, GeneRecord]:
                 logger.warning("failed to parse %s: %s", llm_path, e)
                 llm = None
 
-        isoforms = [_build_isoform(r, struct_index, colors, pae) for _, r in sub.iterrows()]
+        isoforms = [
+            _build_isoform(r, struct_index, colors, pae, llm_dir) for _, r in sub.iterrows()
+        ]
         out[gene_name] = GeneRecord(
             name=gene_name,
             uniprot_id=uniprot_id,
             uniprot_url=uniprot_url,
             function=_maybe_str(head.get("generef_uniprot_function")),
             location=_maybe_str(head.get("generef_subcellular_location")),
+            keywords=_split_terms(head.get("generef_keywords")),
             canonical_len=_maybe_int(head.get("canonical_len")),
             isoforms=isoforms,
             llm=llm,
@@ -633,10 +714,9 @@ def _sae_records(raw_val: Any) -> list[dict[str, Any]]:
     return [dict(d) for d in items if hasattr(d, "keys")]
 
 
-# Display filters requested by collaborators: drop uninterpretable features and
-# features that fire on only a single residue (noise). Applied at shaping time so
-# the card tables show only interpretable, robustly-present features.
-_SAE_MIN_PREVALENCE = 2
+# The SAE module already filters prevalence >= 2 and keeps the top 30 per category
+# before writing the parquet, so the card only needs to distinguish generic /
+# uninterpretable features (hidden until the table is expanded).
 _SAE_GENERIC_LABELS = {"unknown generic feature", "unknown", ""}
 
 
@@ -645,53 +725,46 @@ def _sae_is_generic(label: Any) -> bool:
     return (str(label).strip().lower() if label is not None else "") in _SAE_GENERIC_LABELS
 
 
-def _sae_prevalent(v: Any) -> bool:
-    """True when a prevalence value clears the min-prevalence display threshold."""
-    n = _sae_num(v)
-    return n is not None and n >= _SAE_MIN_PREVALENCE
-
-
 def _sae_simple_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Shape a simple SAE feature list ({max,mean,prevalence}) into display rows.
 
     Used for the isoform-only, canonical-only, and differential-coordinate
-    (unique-region) feature lists, which share the same per-feature schema. Drops
-    generic-labelled features and any firing on < 2 residues.
+    (unique-region) feature lists, which share the same per-feature schema. The
+    backend already saved the top 30 at prevalence >= 2, so no filtering happens
+    here — each row is tagged ``generic`` and non-generic rows are returned first
+    (activation order preserved) so the card can hide generic ones until expanded.
     """
-    out: list[dict[str, Any]] = []
+    non_generic: list[dict[str, Any]] = []
+    generic: list[dict[str, Any]] = []
     for rec in records:
-        if _sae_is_generic(rec.get("label")) or not _sae_prevalent(rec.get("prevalence")):
-            continue
         idx = rec.get("feature_index")
-        out.append(
+        is_generic = _sae_is_generic(rec.get("label"))
+        (generic if is_generic else non_generic).append(
             {
                 "feature_index": int(idx) if idx is not None else None,
                 "label": rec.get("label") or None,
                 "description": rec.get("description") or None,
                 "activation": _sae_num(rec.get("max")),
                 "prevalence": _sae_num(rec.get("prevalence")),
+                "generic": is_generic,
             }
         )
-    return out
+    return non_generic + generic
 
 
 def _sae_shared_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Shape the shared-feature deltas list into display rows (already |Δ|-sorted).
 
-    Drops generic-labelled features and features firing on < 2 residues in both
-    forms (a feature prevalent in either the isoform or canonical is kept).
+    The backend already saved the top 30 at prevalence >= 2; each row is tagged
+    ``generic`` and non-generic rows are returned first (|Δ| order preserved) so
+    the card can hide generic ones until expanded.
     """
-    out: list[dict[str, Any]] = []
+    non_generic: list[dict[str, Any]] = []
+    generic: list[dict[str, Any]] = []
     for rec in records:
-        if _sae_is_generic(rec.get("label")):
-            continue
-        if not (
-            _sae_prevalent(rec.get("isoform_prevalence"))
-            or _sae_prevalent(rec.get("canonical_prevalence"))
-        ):
-            continue
         idx = rec.get("feature_index")
-        out.append(
+        is_generic = _sae_is_generic(rec.get("label"))
+        (generic if is_generic else non_generic).append(
             {
                 "feature_index": int(idx) if idx is not None else None,
                 "label": rec.get("label") or None,
@@ -701,9 +774,10 @@ def _sae_shared_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "canonical_max": _sae_num(rec.get("canonical_max")),
                 "isoform_prevalence": _sae_num(rec.get("isoform_prevalence")),
                 "canonical_prevalence": _sae_num(rec.get("canonical_prevalence")),
+                "generic": is_generic,
             }
         )
-    return out
+    return non_generic + generic
 
 
 def sae_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
@@ -713,13 +787,16 @@ def sae_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
     by the SAE SiteModule and flattened into all_paired.parquet). Returns None
     when the SAE step did not run for this protein pair (status != "ok").
 
-    Two parts of the card:
+    The SAE module already saved the top 30 features per category (prevalence >= 2,
+    ranked by activation / |Δ|) into the parquet, so this function only shapes them
+    for display: each row is tagged ``generic`` and non-generic rows come first, so
+    the card shows interpretable features by default and reveals generic ones on
+    expand. Two parts:
       - Global (whole-protein feature-set comparison): ``isoform_only`` /
         ``canonical_only`` (features present in only one form) and ``shared``
-        (present in both, ranked by |Δ| activation) — each capped at top 30, with
-        the saved total count for the full category.
+        (present in both, ranked by |Δ| activation), with the saved total count.
       - Differential coordinates: ``unique_region`` — features firing on just the
-        isoform-unique residues (top 30).
+        isoform-unique residues.
 
     Scoring and LLM surfacing are intentionally out of scope for this card — it
     is descriptive over data already in the parquet. (The scored F7 criterion is
@@ -963,7 +1040,7 @@ CRITERION_ABOUT = {
         "constraint enrichment)? Depletion of population variation plus high "
         "sequence constraint mean the region resists change — it is functionally "
         "important. gnomAD is a tolerance catalogue, not a disease one; "
-        "disease/cancer variants (ClinVar / COSMIC) live in F6."
+        "disease/cancer variants (ClinVar / COSMIC) live in M2."
     ),
     "M2_clinical_variant_overlap": (
         "Are disease (ClinVar / COSMIC) variants enriched per nucleotide in the "
@@ -981,6 +1058,20 @@ CRITERION_ABOUT = {
         "high-interest functional signal. TM-score is a length-normalized companion; "
         "the check only fires when both structures are confidently folded, and "
         "uORF/altORF isoforms (no shared region) are not evaluable."
+    ),
+    "S2_biophysics": (
+        "Does the whole-protein biophysical character shift between the canonical "
+        "and the isoform — hydropathy (GRAVY), charged fraction, or intrinsic "
+        "disorder? A meaningful shift on any of these means the alternative region "
+        "changes the protein's physicochemical behaviour (solubility, membrane "
+        "affinity, condensate propensity), independent of whether it folds."
+    ),
+    "S3_sae": (
+        "Do sparse-autoencoder (SAE) interpretability features of the ESM-C protein "
+        "language model differ between the isoform and the canonical — features "
+        "gained or lost in the model's learned feature space? A presence check: it "
+        "fires when any interpretable feature is active in one protein but not the "
+        "other. The score is a binary gained-or-lost check."
     ),
 }
 

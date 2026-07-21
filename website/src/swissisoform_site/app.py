@@ -116,6 +116,7 @@ def create_app() -> Flask:
         CRITERIA_METRIC_LABELS=CRITERIA_METRIC_LABELS,
         format_metric=format_metric,
         variant_url=variant_url,
+        CARD_GROUPS=CARD_GROUPS,
     )
 
     # JSON-friendly NaN cleaner for the API endpoint
@@ -147,11 +148,10 @@ def create_app() -> Flask:
 
     @app.get("/about")
     def about() -> Any:
-        """Static glossary — the 12 evidence criteria + the metrics behind them."""
+        """Static glossary — the 15 CDLMPS evidence criteria + the metrics behind them."""
         return render_template(
             "about.html",
-            existence_criteria=EXISTENCE_CRITERIA,
-            functional_criteria=FUNCTIONAL_CRITERIA,
+            criteria_by_id=CRITERIA_BY_ID,
             criterion_about=CRITERION_ABOUT,
         )
 
@@ -300,6 +300,7 @@ def create_app() -> Flask:
                 "uniprot_url": g.uniprot_url,
                 "function": g.function,
                 "location": g.location,
+                "keywords": g.keywords,
                 "canonical_len": g.canonical_len,
                 "canonical_cif": g.canonical_cif,
                 "llm": g.llm,
