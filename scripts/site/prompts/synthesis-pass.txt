@@ -8,7 +8,7 @@ The 15 criteria, grouped by CDLMPS category (the six `category_reads` verdicts a
 - L Localization: L1 DeepLoc compartment/signal change, L2 SignalP/TargetP targeting change.
 - M Mutation Landscape: M1 germline tolerance/constraint (gnomAD depletion + ESM-2 — NOT disease burden), M2 disease-variant density enrichment (ClinVar/COSMIC).
 - P Predicted Structure: P1 unique-region folding (pLDDT only), P2 shared-region core-fold perturbation (Cα RMSD).
-- S Structural Characteristics: S1 real-InterPro-domain gain/loss, S2 whole-protein biophysical shift (isoform vs canonical), S3 differential ESM-C SAE features (presence check; provisional labels).
+- S Structural Characteristics: S1 real-InterPro-domain gain/loss, S2 whole-protein biophysical shift (isoform vs canonical), S3 differential ESM-C SAE features (magnitude check on the strongest shared-feature activation shift; provisional labels).
 
 Write a SHORT, hypothesis-led judgment. This is NOT a summary of the category reads and criteria shown below — do NOT walk the categories or criteria one by one, do NOT audit "what has signal and what is flat," and do NOT pad. Lead with the hypothesis; then marshal the evidence that backs it. Exactly two moves, in this order:
 1. HYPOTHESIS (lead). Open with the single most likely biological reading of what this isoform does — or fails to do — to its differential region, stated plainly as a claim. This is the takeaway and it comes first.

@@ -1,4 +1,4 @@
-"""S3 — presence of differential SAE features (isoform vs canonical). Plumbing: plm.sae_module."""
+"""S3 — magnitude of differential SAE features (isoform vs canonical). Plumbing: plm.sae_module."""
 
 from __future__ import annotations
 
@@ -9,24 +9,28 @@ from swissisoform.models import TranslationInitiationSite
 __all__ = ["score"]
 
 
-def score(
-    site: TranslationInitiationSite, cfg: ScoringConfig  # noqa: ARG001
-) -> CriterionResult:
-    """S3: are there any differential interpretable SAE features at all?
+def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResult:
+    """S3: is the differential interpretable-SAE signal substantial?
 
     Reads ``site.isoform_annotations['sae']`` written by ``SAEFeatureModule``.
-    SAE features are a descriptive interpretability signal, so the honest scored
-    claim is not "how much changed" (the LLM weighs that from the feature list)
-    but simply whether the isoform uses interpretable features the canonical does
-    not, or vice versa. It is a presence check with no magnitude threshold:
 
-    * ``True``  — at least one feature is categorically gained or lost
-      (``n_isoform_only + n_canonical_only > 0``).
-    * ``False`` — zero differential features (the two proteins are identical in
-      feature space).
-    * ``None``  — the SAE step did not run (no cache / ``status != 'ok'``), or the
-      gained/lost counts are unavailable — so an unrun stage never reads as
-      evidence-absent.
+    The scored claim is a **magnitude** check on the strongest shared-feature
+    activation shift, ``max(|top_gained_delta_max|, |top_lost_delta_max|)``,
+    against ``cfg.s3_top_delta_min``.
+
+    This replaced a categorical presence check
+    (``n_isoform_only + n_canonical_only > 0``) that was **True for 100.0% of the
+    6,462 isoforms** in the genome-wide ``full_catalog`` run, and so carried no
+    information: two proteins of different length always differ in hundreds of
+    features (median 197 gained+lost). The gained/lost counts remain in the reason
+    string as context, but they cannot express *how much* changed — only the
+    per-feature activation deltas can.
+
+    * ``True``  — the top shared-feature |delta| meets the threshold.
+    * ``False`` — a differential exists but no feature shifted that strongly.
+    * ``None``  — the SAE step did not run (no cache / ``status != 'ok'``), or no
+      shared-feature deltas are available (nothing to measure magnitude on) — so an
+      unrun stage never reads as evidence-absent.
     """
     ann = _annotation(site, "sae")
     if ann is None:
@@ -34,14 +38,25 @@ def score(
     status = ann.get("status")
     if status != "ok":
         return CriterionResult("S3_sae", None, f"sae status={status}")
+
+    deltas = [
+        abs(float(v))
+        for v in (ann.get("top_gained_delta_max"), ann.get("top_lost_delta_max"))
+        if isinstance(v, (int, float))
+    ]
+    if not deltas:
+        return CriterionResult("S3_sae", None, "sae shared-feature deltas unavailable")
+    top_delta = max(deltas)
+
     iso_only = ann.get("n_isoform_only")
     can_only = ann.get("n_canonical_only")
-    if not isinstance(iso_only, (int, float)) or not isinstance(can_only, (int, float)):
-        return CriterionResult("S3_sae", None, "sae gained/lost feature counts unavailable")
-    n_gained, n_lost = int(iso_only), int(can_only)
-    n_diff = n_gained + n_lost
+    ctx = ""
+    if isinstance(iso_only, (int, float)) and isinstance(can_only, (int, float)):
+        ctx = f"; {int(iso_only)} gained + {int(can_only)} lost features"
+
     return CriterionResult(
         "S3_sae",
-        n_diff > 0,
-        f"differential SAE features: {n_gained} gained + {n_lost} lost = {n_diff}",
+        top_delta >= cfg.s3_top_delta_min,
+        f"top shared-feature |delta| {top_delta:.2f} vs threshold "
+        f"{cfg.s3_top_delta_min}{ctx}",
     )

@@ -339,36 +339,64 @@ class TestS3Sae:
         res = _s3_sae(site, ScoringConfig())
         assert res.value is None
 
-    def test_counts_unavailable_none(self):
+    def test_deltas_unavailable_none(self):
+        """No shared-feature deltas → nothing to measure magnitude on."""
         site = _site()
         site.isoform_annotations["sae"] = {
             "status": "ok",
-            "n_isoform_only": None,
-            "n_canonical_only": None,
+            "n_isoform_only": 120,
+            "n_canonical_only": 77,
+            "top_gained_delta_max": None,
+            "top_lost_delta_max": None,
         }
         res = _s3_sae(site, ScoringConfig())
         assert res.value is None
 
-    def test_features_present_true(self):
+    def test_large_shift_true(self):
+        """S3 scores on magnitude: the top shared-feature |delta| clears the gate."""
+        cfg = ScoringConfig()
         site = _site()
         site.isoform_annotations["sae"] = {
             "status": "ok",
             "n_isoform_only": 2,
             "n_canonical_only": 0,
+            "top_gained_delta_max": cfg.s3_top_delta_min + 2.5,
+            "top_lost_delta_max": -1.0,
         }
-        res = _s3_sae(site, ScoringConfig())
+        res = _s3_sae(site, cfg)
         assert res.value is True
         assert res.name == "S3_sae"
 
-    def test_no_differential_features_false(self):
+    def test_small_shift_false(self):
+        """Hundreds of differential features do NOT make it True without magnitude.
+
+        The old presence check (n_isoform_only + n_canonical_only > 0) was True for
+        100% of the genome-wide run; this is the case that regression-guards it.
+        """
         site = _site()
         site.isoform_annotations["sae"] = {
             "status": "ok",
-            "n_isoform_only": 0,
-            "n_canonical_only": 0,
+            "n_isoform_only": 300,
+            "n_canonical_only": 250,
+            "top_gained_delta_max": 1.2,
+            "top_lost_delta_max": -0.8,
         }
         res = _s3_sae(site, ScoringConfig())
         assert res.value is False
+
+    def test_negative_shift_counts_by_magnitude(self):
+        """A strongly *lost* feature is as scoreable as a gained one (abs value)."""
+        cfg = ScoringConfig()
+        site = _site()
+        site.isoform_annotations["sae"] = {
+            "status": "ok",
+            "n_isoform_only": 1,
+            "n_canonical_only": 1,
+            "top_gained_delta_max": 0.5,
+            "top_lost_delta_max": -(cfg.s3_top_delta_min + 5.0),
+        }
+        res = _s3_sae(site, cfg)
+        assert res.value is True
 
 
 class TestF2LocalizationChange:

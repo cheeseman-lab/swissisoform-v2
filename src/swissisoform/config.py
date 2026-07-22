@@ -192,7 +192,9 @@ class ScoringConfig:
         s2_fraction_charged_delta_min: S2 shift — |fraction_charged_delta| cutoff
             (whole-protein isoform − canonical).
         s2_disorder_delta_min: S2 shift — |disorder_delta| cutoff (whole-protein
-            isoform − canonical). (S3 SAE is a threshold-free presence check.)
+            isoform − canonical).
+        s3_top_delta_min: S3 threshold — minimum strongest shared-feature SAE
+            activation shift, max(|top_gained_delta_max|, |top_lost_delta_max|).
         f7_rmsd_shared_min: F7 threshold — minimum shared-region Cα RMSD (Å) to
             call a significant structural change in the retained region.
         f7_min_shared_len: F7 guard — minimum shared-region length (aa) below
@@ -242,11 +244,18 @@ class ScoringConfig:
     f1_plddt_threshold: float = 0.70
     # S2 whole-protein biophysical-shift cutoffs (isoform − canonical |delta|;
     # any one satisfied → shifted). This is the frame the old F1 distinctness
-    # half used (folding, F1's other half, is now P1). S3 SAE takes no threshold
-    # — it is a presence check on gained/lost interpretable features.
+    # half used (folding, F1's other half, is now P1).
     s2_gravy_delta_min: float = 0.3  # PROVISIONAL — set in threshold discussion
     s2_fraction_charged_delta_min: float = 0.05  # PROVISIONAL — set in threshold discussion
     s2_disorder_delta_min: float = 0.05  # PROVISIONAL — set in threshold discussion
+    # S3 magnitude gate on the strongest shared-feature activation shift,
+    # max(|top_gained_delta_max|, |top_lost_delta_max|). Calibrated on the
+    # full_catalog genome-wide run (6,462 isoforms): the old categorical presence
+    # check (n_isoform_only + n_canonical_only > 0) was True for 100.0% of rows —
+    # two proteins always differ in hundreds of features (median 197), so it
+    # carried no information. |top delta| spans 0.36–30.85 (median 9.36); 10.0
+    # sits just above the median and fires on ~46% of isoforms.
+    s3_top_delta_min: float = 10.0
     # F7 shared-region structural change. RMSD scale is Å; pLDDT gate is on the
     # 0–1 ESMFold2 scale (mirror of f1_plddt_threshold). The real RMSD cutoff is
     # to be picked from the genome-wide distribution (near-zero spike + tail).
