@@ -619,31 +619,13 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_structure_pae_diff_vs_body",
             "isoform_structure_pae_status",
             "isoform_structure_extension_contacts",
-            "cmp_biophysics_pI_unique",
-            "cmp_biophysics_pI_shared",
-            "cmp_biophysics_pI_ratio",
-            "cmp_biophysics_gravy_unique",
-            "cmp_biophysics_gravy_shared",
-            "cmp_biophysics_gravy_ratio",
-            "cmp_biophysics_disorder_unique",
-            "cmp_biophysics_disorder_shared",
-            "cmp_biophysics_disorder_ratio",
-            "cmp_biophysics_fraction_charged_unique",
-            "cmp_biophysics_fraction_charged_shared",
-            "cmp_biophysics_fraction_charged_ratio",
-            "cmp_biophysics_fraction_disorder_promoting_unique",
-            "cmp_biophysics_fraction_disorder_promoting_shared",
-            "cmp_biophysics_fraction_disorder_promoting_ratio",
-            "cmp_biophysics_gravy_delta",
-            "cmp_biophysics_fraction_charged_delta",
-            "cmp_biophysics_disorder_delta",
         ],
         "headline_col": "isoform_structure_plddt_diffregion_mean",
         "interpretation_hint": (
-            "Does the unique region fold confidently (ESMFold2 pLDDT) AND look "
-            "biophysically distinct from the canonical core? Higher diffregion_mean "
-            "means more structured; the cmp_biophysics unique-vs-shared deltas and "
-            "ratios (GRAVY, fraction_charged, disorder) report distinctness."
+            "Does the unique region fold confidently (ESMFold2 pLDDT)? Higher "
+            "diffregion_mean means more structured. Folding only — the biophysical "
+            "distinctness signal (GRAVY / fraction_charged / disorder) is scored "
+            "separately under S2, so do not weigh it here."
         ),
     },
     "L1_localization_change": {
