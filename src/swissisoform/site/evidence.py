@@ -468,15 +468,20 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_conservation_frame_primate_deepest_species",
             "isoform_conservation_frame_primate_max_depth",
             "isoform_conservation_frame_primate_canonical_mean_pident",
-            "isoform_conservation_frame_primate_canonical_frac_intact",
             "isoform_conservation_frame_primate_canonical_n_species_aligned",
         ],
         "headline_col": _PRIMATE_SIMILARITY,
         "interpretation_hint": (
             "Is the alternative reading frame conserved across primates? Score on "
             "mean_pident (mean amino-acid % identity to primate orthologs); "
-            "frac_intact and start_codon_conserved are context. Compare to the "
-            "_canonical_ twins for a within-gene baseline."
+            "frac_intact and start_codon_conserved are context. For a within-gene "
+            "baseline compare mean_pident to canonical_mean_pident ONLY — like for "
+            "like. frac_intact is the fraction of species whose reading frame "
+            "survives intact across the WHOLE queried span, so it is confounded by "
+            "span length (a short unique region reads high, a long canonical ORF "
+            "reads low for that reason alone). Never compare frac_intact between "
+            "regions of different length, and never read such a gap as a "
+            "conservation difference."
         ),
     },
     "C2_mammalian_conservation": {
@@ -492,15 +497,19 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_conservation_frame_mammalian_deepest_species",
             "isoform_conservation_frame_mammalian_max_depth",
             "isoform_conservation_frame_mammalian_canonical_mean_pident",
-            "isoform_conservation_frame_mammalian_canonical_frac_intact",
             "isoform_conservation_frame_mammalian_canonical_n_species_aligned",
         ],
         "headline_col": _MAMMALIAN_SIMILARITY,
         "interpretation_hint": (
             "Is the alternative reading frame conserved deeper in mammals? Score on "
             "mean_pident (mean amino-acid % identity to mammalian orthologs); "
-            "frac_intact is context. Compare to the _canonical_ twins for a "
-            "within-gene baseline."
+            "frac_intact is context. For a within-gene baseline compare mean_pident "
+            "to canonical_mean_pident ONLY — like for like. frac_intact is the "
+            "fraction of species whose reading frame survives intact across the "
+            "WHOLE queried span, so it is confounded by span length (a short unique "
+            "region reads high, a long canonical ORF reads low for that reason "
+            "alone). Never compare frac_intact between regions of different length, "
+            "and never read such a gap as a conservation difference."
         ),
     },
     "C3_phylop_coding_selection": {
@@ -752,7 +761,19 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "AVOIDS the unique region (density-normalized vs shared core); "
             "(2) ESM-C constraint_enrichment high means residues there are "
             "predicted intolerant to substitution. This measures tolerance/"
-            "constraint, not damaging-variant burden."
+            "constraint, not damaging-variant burden. "
+            "The two are either-or evidence with OPPOSITE directionality (gnomAD "
+            "low = constrained, ESM-C high = constrained); either alone suffices, "
+            "so they need not agree. "
+            "VALID ONLY ON TRUNCATIONS, where the region is canonical coding "
+            "sequence. On an EXTENSION the unique region was 5'UTR/intron and was "
+            "never coding: the gnomAD ratio then measures never-coding variation "
+            "(confounded by UTR/splicing selection and coverage) and the ESM-C "
+            "score is out-of-distribution, reflecting composition rather than "
+            "intolerance — n_constrained_positions_unique is routinely 0 there. "
+            "Do not interpret either value, or their disagreement, as evidence "
+            "about protein constraint on an extension. On separate-ORF isoforms "
+            "there is no shared region, so the ratio is undefined by construction."
         ),
     },
     "M2_clinical_variant_overlap": {
@@ -858,8 +879,15 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "between the isoform and canonical protein. The scored value is a "
             "presence check: True when any feature is gained or lost "
             "(isoform_only + canonical_only > 0), False only when the two proteins "
-            "are identical in feature space. Feature labels are provisional. "
-            "Interpret only what the labels support — do not invent function."
+            "are identical in feature space. "
+            "Treat this as a PRESENCE/ABSENCE signal only. Feature labels are "
+            "auto-generated and provisional, not curated annotation: many carry no "
+            "content (hollow labels are withheld, leaving the feature identified by "
+            "index alone), and many others merely describe the feature's own "
+            "activation pattern or restate sequence composition already scored by "
+            "the whole-protein biophysical shift in this same category. Do NOT name, "
+            "quote or interpret a feature label in the reasoning, and do not let a "
+            "label move the verdict — cite only that features differ, and how many."
         ),
     },
 }
@@ -1939,6 +1967,21 @@ def _biophysics_evidence(isoform_record: dict[str, Any]) -> dict[str, Any] | Non
     return {"evidence": evidence}
 
 
+def _strip_hollow_label(rec: dict[str, Any]) -> dict[str, Any]:
+    """Drop an SAE feature label (and its description) when it carries no content.
+
+    Roughly half of top SAE features are labelled "Unknown generic feature" by the
+    ESM-Atlas dictionary. Handing the model a hollow noun invites it to reason from
+    a label that means "we don't know what this is", so the label and its
+    auto-generated description are removed and the feature is left identified by
+    index + magnitude only. Labels with content are passed through unchanged.
+    """
+    label = rec.get("label")
+    if isinstance(label, str) and "unknown" in label.lower():
+        rec = {k: v for k, v in rec.items() if k not in ("label", "description")}
+    return rec
+
+
 def _sae_evidence(isoform_record: dict[str, Any]) -> dict[str, Any] | None:
     """S3 SAE-feature evidence builder — the ``evidence_builder`` hook for CRITERIA.
 
@@ -1957,18 +2000,19 @@ def _sae_evidence(isoform_record: dict[str, Any]) -> dict[str, Any] | None:
         native = _to_native(value)
         if not isinstance(native, list):
             return []
-        recs = [r for r in native if isinstance(r, dict)]
+        recs = [_strip_hollow_label(r) for r in native if isinstance(r, dict)]
         return recs[:cap]
 
     def _top(prefix: str) -> dict[str, Any] | None:
         idx = _to_native(raw.get(f"isoform_sae_top_{prefix}_feature_index"))
         if idx is None:
             return None
-        return {
+        rec = {
             "feature_index": idx,
             "label": _to_native(raw.get(f"isoform_sae_top_{prefix}_feature_label")),
             "delta_max": _to_native(raw.get(f"isoform_sae_top_{prefix}_delta_max")),
         }
+        return _strip_hollow_label(rec)
 
     evidence = {
         "counts": {
