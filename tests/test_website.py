@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -414,16 +415,41 @@ def test_f6_clinical_burden_is_length_normalized(client):
 
 
 def test_about_page_renders_glossary(client):
-    """The /about route explains the axes, criteria, and the diff_space frame rule."""
+    """The /about route explains the categories, criteria, and diff_space frame rule."""
     r = client.get("/about")
     assert r.status_code == 200
     body = r.data
     assert b"About SwissIsoform" in body
     assert b"diff_space" in body  # the frame rule is spelled out
     assert b"AlphaMissense" in body and b"canonical frame only" in body
-    assert b"Existence (E)" in body and b"Functional (F)" in body
+    assert b"CDLMPS" in body  # the six-category scheme (replaced the old E/F axes)
     # nav link is wired on every page
     assert b'href="/about"' in client.get("/").data
+
+
+def test_about_page_is_navigable(client):
+    """Onboarding, sticky TOC, and a CDLMPS-ordered collapsible glossary.
+
+    The page opens with a plain-language lede plus a "how to read a card" section,
+    carries an in-page TOC, and presents the ~400-line metrics reference as
+    collapsible groups ordered C-D-L-M-P-S (scoring framework last).
+    """
+    body = client.get("/about").data.decode()
+
+    # Onboarding + sticky TOC
+    assert 'id="how-to-read"' in body
+    assert 'class="about-toc"' in body
+
+    # Frame rule sits after the CDLMPS intro, not before it
+    assert body.index('id="cdlmps"') < body.index('id="diff-region"')
+
+    # Glossary groups are collapsible and in CDLMPS order, scoring framework last
+    order = re.findall(r'<details class="about-gloss" id="gloss-([a-z-]+)"', body)
+    assert order == ["c", "d-init", "d-ms", "l", "m", "p", "s", "scoring"], order
+
+    # No dangling in-page anchors
+    ids = set(re.findall(r'id="([^"]+)"', body))
+    assert not {h for h in re.findall(r'href="#([^"]+)"', body)} - ids
 
 
 def test_every_isoform_page_renders_200(client):

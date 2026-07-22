@@ -6,44 +6,74 @@
   <header class="about-head">
     <h1>About SwissIsoform v2</h1>
     <p class="about-lede">
-      SwissIsoform annotates <strong>alternative protein isoforms</strong> found by
-      translation-initiation sequencing (Ribo-TISH). Each alternative start codon
-      (TIS) produces a protein that differs from the canonical one in a defined
-      <strong>differential region</strong>; every page weighs the evidence across
-      six categories — <strong>C</strong>onservation, <strong>D</strong>etection,
+      <strong>Most genes are assumed to make one protein. Many actually start
+      translation in more than one place, producing proteins with different
+      beginnings.</strong> SwissIsoform catalogues those alternative proteins and
+      weighs the evidence that each one is real — and that it does something
+      different from the familiar form of the protein.
+    </p>
+    <p class="about-lede about-lede-sub">
+      In the language of the field: alternative start codons
+      (<strong>t</strong>ranslation-<strong>i</strong>nitiation <strong>s</strong>ites,
+      TIS) are detected by ribosome profiling (Ribo-TISH). Each produces a protein that
+      differs from the canonical one across a defined <strong>differential region</strong>,
+      which is scored across six evidence categories —
+      <strong>C</strong>onservation, <strong>D</strong>etection,
       <strong>L</strong>ocalization, <strong>M</strong>utation landscape,
-      <strong>P</strong>redicted structure, and <strong>S</strong>tructural
+      <strong>P</strong>redicted structure and <strong>S</strong>tructural
       characteristics (<strong>CDLMPS</strong>).
     </p>
   </header>
 
-  <!-- The differential region & the frame rule -->
-  <section class="about-sec">
-    <h2>The differential region &amp; reading frame</h2>
+  <nav class="about-toc" aria-label="On this page">
+    <span class="about-toc-h">On this page</span>
+    <a href="#how-to-read">How to read a card</a>
+    <a href="#cdlmps">CDLMPS categories</a>
+    <a href="#diff-region">Differential region</a>
+    <a href="#gene-index">Gene index</a>
+    <a href="#metrics">Metrics reference</a>
+    <a href="#how-decided">How a criterion is decided</a>
+    <a href="#references">References</a>
+  </nav>
+
+  <!-- Onboarding: how to read a card -->
+  <section class="about-sec" id="how-to-read">
+    <h2>How to read an isoform card</h2>
     <p>
-      The differential region is the part of the isoform that is <em>not shared</em>
-      with the canonical protein. Two cases, and the distinction (<code>diff_space</code>)
-      governs which tools are valid:
+      Every gene in the catalogue gets a card, and they are all built the same way.
+      Reading one takes about ten seconds:
     </p>
     <ul class="about-list">
       <li>
-        <strong>Truncation</strong> (<code>diff_space = canonical</code>) — the isoform
-        starts <em>downstream</em>, losing the canonical N-terminus. The lost region is
-        ordinary canonical-coding sequence, so canonical-frame tools (e.g. AlphaMissense)
-        apply.
+        <strong>Gene symbol and function chips</strong> — what the gene is, plus its
+        curated UniProt keywords as clickable chips you can filter on.
       </li>
       <li>
-        <strong>Extension / uORF / alt-ORF</strong> (<code>diff_space = isoform</code>) —
-        the isoform starts <em>upstream</em> or out-of-frame, so the gained region is
-        <em>not</em> in the canonical reading frame. Canonical-frame predictors are
-        meaningless here (AlphaMissense reports these positions as "intronic" / N/A);
-        only frame-aware tools (ESM-C ΔLLR, alt-ORF consequence) apply.
+        <strong>The CDLMPS lineup</strong> — six letters, one per evidence category,
+        each coloured by an LLM's verdict for that category on this gene's headline
+        isoform: <em>interesting</em>, <em>neutral</em>, or <em>not interesting</em>.
+        The lineup is the fastest read on the card — it tells you <em>which kind</em>
+        of evidence is carrying this isoform.
+      </li>
+      <li>
+        <strong>The <em>Best:</em> isoform</strong> — which isoform the lineup
+        describes, for genes that have more than one.
+      </li>
+      <li>
+        <strong>The interesting index</strong> — the lineup condensed into a single
+        number (green +1, red −1) so the whole catalogue can be sorted by it.
       </li>
     </ul>
+    <p>
+      Open a gene to see every isoform in full: the differential region and where it
+      sits, all fifteen criteria with <strong>✓</strong> / <strong>✗</strong> /
+      <strong>–</strong>, the underlying numbers, and the model's written reasoning for
+      each category.
+    </p>
   </section>
 
-  <!-- The six CDLMPS categories -->
-  <section class="about-sec">
+
+  <section class="about-sec" id="cdlmps">
     <h2>Six evidence categories (CDLMPS)</h2>
     <p>
       Fifteen criteria are grouped into six categories, one per letter of
@@ -76,8 +106,31 @@
     </div>
   </section>
 
-  <!-- Exploring the index -->
-  <section class="about-sec">
+  <section class="about-sec" id="diff-region">
+    <h2>The differential region &amp; reading frame</h2>
+    <p>
+      The differential region is the part of the isoform that is <em>not shared</em>
+      with the canonical protein. Two cases, and the distinction (<code>diff_space</code>)
+      governs which tools are valid:
+    </p>
+    <ul class="about-list">
+      <li>
+        <strong>Truncation</strong> (<code>diff_space = canonical</code>) — the isoform
+        starts <em>downstream</em>, losing the canonical N-terminus. The lost region is
+        ordinary canonical-coding sequence, so canonical-frame tools (e.g. AlphaMissense)
+        apply.
+      </li>
+      <li>
+        <strong>Extension / uORF / alt-ORF</strong> (<code>diff_space = isoform</code>) —
+        the isoform starts <em>upstream</em> or out-of-frame, so the gained region is
+        <em>not</em> in the canonical reading frame. Canonical-frame predictors are
+        meaningless here (AlphaMissense reports these positions as "intronic" / N/A);
+        only frame-aware tools (ESM-C ΔLLR, alt-ORF consequence) apply.
+      </li>
+    </ul>
+  </section>
+
+  <section class="about-sec" id="gene-index">
     <h2>Exploring the gene index</h2>
     <p>
       The landing page lists every gene as a card carrying its
@@ -105,14 +158,13 @@
       <li>
         <strong>Sort — interesting index</strong> — order genes by their best
         isoform's net CDLMPS score (green +1, red −1; see
-        <a href="#m-interesting-index">above</a>), surfacing the most promising
+        <a href="#m-interesting-index">below</a>), surfacing the most promising
         isoforms first.
       </li>
     </ul>
   </section>
 
-  <!-- Detailed per-metric reference -->
-  <section class="about-sec">
+  <section class="about-sec" id="metrics">
     <h2>The metrics behind the criteria</h2>
     <p>
       Every measurement that feeds a CDLMPS criterion is described below: <em>what it
@@ -123,7 +175,8 @@
     </p>
 
     <!-- ============================================================= -->
-    <h3 class="about-axis-h">Conservation — evolutionary constraint (C1 · C2 · C3)</h3>
+    <details class="about-gloss" id="gloss-c" open>
+      <summary class="about-axis-h">Conservation — evolutionary constraint (C1 · C2 · C3)</summary>
     <dl class="about-glossary">
 
       <!-- m-phylop is the original anchor; kept as the parent for the conservation group -->
@@ -184,9 +237,11 @@
         <p class="about-cite">Refs: Zoonomia <a class="ref-cite" href="#ref-zoonomia">[zoonomia]</a></p>
       </dd>
     </dl>
+    </details>
 
     <!-- ============================================================= -->
-    <h3 class="about-axis-h">Detection — initiation &amp; expression (D1 · D2)</h3>
+    <details class="about-gloss" id="gloss-d-init">
+      <summary class="about-axis-h">Detection — initiation &amp; expression (D1 · D2)</summary>
     <dl class="about-glossary">
 
       <!-- m-initiation is the original anchor; kept as the parent for the initiation group -->
@@ -232,9 +287,11 @@
         <p class="about-cite">Refs: Kozak <a class="ref-cite" href="#ref-kozak">[kozak]</a></p>
       </dd>
     </dl>
+    </details>
 
     <!-- ============================================================= -->
-    <h3 class="about-axis-h">Detection — proteomic evidence (D3)</h3>
+    <details class="about-gloss" id="gloss-d-ms">
+      <summary class="about-axis-h">Detection — proteomic evidence (D3)</summary>
     <dl class="about-glossary">
 
       <!-- m-massspec is the original anchor; kept as the parent for the mass-spec group -->
@@ -259,9 +316,106 @@
         <p class="about-cite">Refs: — (consequence of the digest/uniqueness definition)</p>
       </dd>
     </dl>
+    </details>
 
     <!-- ============================================================= -->
-    <h3 class="about-axis-h">Predicted structure &amp; biophysics (P1 · P2 · S2)</h3>
+    <details class="about-gloss" id="gloss-l">
+      <summary class="about-axis-h">Localization &amp; targeting (L1 · L2)</summary>
+    <dl class="about-glossary">
+
+      <!-- m-localization is the original anchor; kept as the parent for the localization group -->
+      <dt id="m-localization">DeepLoc 2.1 — subcellular compartment</dt>
+      <dd id="m-deeploc-compartment">
+        <p><b>What it measures.</b> The predicted primary subcellular localization of a protein (one of ten compartments — nucleus, cytoplasm, mitochondrion, etc.), computed independently for the canonical protein and for each alternative-TIS isoform so that a re-routed N-terminus can be detected.</p>
+        <p><b>How it's calculated.</b> Sequences are scored with <span class="about-code">DeepLoc 2.1</span> in its "Fast" mode (§"Subcellular localization"). Because DeepLoc's dependencies are pinned to a Python 3.8 stack that conflicts with the rest of the pipeline, it is run inside an isolated conda environment whose stdout the main pipeline consumes. To amortize the fixed cost of ESM embedding, all unique canonical and isoform sequences in a batch are written to a single FASTA, DeepLoc is invoked once, and the per-sequence predictions (primary localization plus the signal-peptide / NLS / mitochondrial / peroxisomal sub-predictions and a membrane-type call) are joined back onto records by sequence identity. A protein-hash-keyed lookup memoizes, so identical sequences across genes or cell lines are predicted exactly once per run. Per-residue ESM embeddings are discarded; only the final categorical and probabilistic outputs are stored.</p>
+        <p class="about-cite">Refs: DeepLoc 2.1 <a class="ref-cite" href="#ref-deeploc">[deeploc]</a></p>
+      </dd>
+
+      <dt id="m-deeploc-features-f2">DeepLoc localization-feature change (L1)</dt>
+      <dd>
+        <p><b>What it measures.</b> Criterion <span class="about-code">L1</span> — whether the alternative isoform is predicted to localize or associate differently from the canonical protein. Labelled "localization features changed."</p>
+        <p><b>How it's calculated.</b> The comparator diffs the DeepLoc outputs of the canonical protein against the isoform and fires <span class="about-code">L1</span> if <em>any</em> localization feature differs: the primary-compartment prediction, the detected sorting signals (signal-peptide / NLS / mitochondrial / peroxisomal sub-predictions), or the membrane-type call (§"Evidence criteria"). Keying on the full feature set rather than the single headline compartment label catches a re-routed protein even when the top compartment is unchanged.</p>
+        <p class="about-cite">Refs: DeepLoc 2.1 <a class="ref-cite" href="#ref-deeploc">[deeploc]</a></p>
+      </dd>
+
+      <dt id="m-signalp">SignalP 6.0 — signal peptide</dt>
+      <dd>
+        <p><b>What it measures.</b> Presence and type of an N-terminal secretory signal peptide, predicted per protein (canonical and isoform) — the kind of N-terminal feature an alternative TIS most directly adds or removes.</p>
+        <p><b>How it's calculated.</b> Sequences are scored with <span class="about-code">SignalP 6.0</span>, which predicts the five signal-peptide types using a protein language model (§"Signal and targeting peptides"). It is run once over the batch of unique sequences in its own pinned environment and joined back by sequence identity; for each protein the predicted class, the class probabilities, and the predicted cleavage site are recorded.</p>
+        <p class="about-cite">Refs: SignalP 6.0 <a class="ref-cite" href="#ref-signalp6">[signalp6]</a></p>
+      </dd>
+
+      <dt id="m-targetp">TargetP 2.0 — transit/targeting peptide</dt>
+      <dd>
+        <p><b>What it measures.</b> The broader N-terminal targeting class of a protein (canonical and isoform): signal peptide (SP), mitochondrial transit peptide (mTP), or chloroplast transit peptide (cTP), with the predicted cleavage site where present.</p>
+        <p><b>How it's calculated.</b> Sequences are scored with <span class="about-code">TargetP 2.0</span> (§"Signal and targeting peptides"), run once over the batch of unique sequences in its own pinned environment and joined back by sequence identity. For each protein the predicted class, the class probabilities, and the cleavage site are recorded. Running TargetP alongside SignalP lets the targeting criterion catch a gained or lost signal that either tool alone would miss.</p>
+        <p class="about-cite">Refs: TargetP 2.0 <a class="ref-cite" href="#ref-targetp2">[targetp2]</a></p>
+      </dd>
+
+      <dt id="m-targeting-f4">Targeting-signal change (L2)</dt>
+      <dd>
+        <p><b>What it measures.</b> Criterion <span class="about-code">L2</span> — whether the alternative N-terminus gains or loses an N-terminal targeting peptide relative to the canonical protein.</p>
+        <p><b>How it's calculated.</b> <span class="about-code">L2</span> fires when <span class="about-code">SignalP 6.0</span> or <span class="about-code">TargetP 2.0</span> disagrees on the canonical versus the isoform call (§"Evidence criteria"; §3.6). Combining both predictors gives complementary coverage — secretory signal peptides (SignalP) and the mitochondrial / chloroplast transit classes (TargetP) — so a targeting change either tool alone would miss is still detected.</p>
+        <p class="about-cite">Refs: SignalP 6.0 <a class="ref-cite" href="#ref-signalp6">[signalp6]</a>, TargetP 2.0 <a class="ref-cite" href="#ref-targetp2">[targetp2]</a></p>
+      </dd>
+    </dl>
+    </details>
+
+    <!-- ============================================================= -->
+    <details class="about-gloss" id="gloss-m">
+      <summary class="about-axis-h">Mutation landscape — variant effect &amp; burden (M1 · M2)</summary>
+    <dl class="about-glossary">
+
+      <dt id="m-f5-gnomad-depletion">M1 — gnomAD germline depletion ratio</dt>
+      <dd>
+        <p><b>What it measures.</b> Whether common germline variation <i>avoids</i> the isoform-unique region — a population-genetics signal of purifying constraint. It is one of the two independent inputs that can satisfy criterion <span class="about-code">M1</span> (germline tolerance / constraint).</p>
+        <p><b>How it's calculated.</b> A genomic-intersection step tags every gnomAD v4.1 exome variant by membership in the isoform-unique versus canonical-shared exon intervals (from the assembly layer's transcript-skeleton walker) and exposes the nucleotide length of each region. The depletion ratio is the per-nucleotide variant density of the unique region divided by that of the shared region: <span class="about-code">(n<sub>gnomAD,unique</sub> / nt<sub>unique</sub>) / (n<sub>gnomAD,shared</sub> / nt<sub>shared</sub>)</span>. A value <b>below 1</b> means common variation is depleted from (avoids) the unique region. The ratio is undefined (<span class="about-code">None</span>) when a denominator is zero. <span class="about-code">M1</span> is satisfied when this ratio falls below <b>0.80</b> — a <i>provisional</i> threshold, a config-driven placeholder pending calibration on a genome-wide run, not a principled anchor (§"Per-variant effect scoring", §"Evidence scoring framework"). gnomAD v4.1 exomes are preprocessed from per-chromosome VCFs (PASS records, canonical-transcript VEP, non-null gene symbol) into a gene-indexed parquet read by PyArrow filter pushdown (§"Clinical variant burden").</p>
+        <p class="about-cite">Refs: gnomAD v4.1 <a class="ref-cite" href="#ref-gnomad">[gnomad]</a></p>
+      </dd>
+
+      <dt id="m-f5-esm2-constraint">M1 — ESM-C sequence-constraint enrichment</dt>
+      <dd>
+        <p><b>What it measures.</b> Whether the residues of the isoform-unique region are more constrained by a protein language model than the canonical-shared region — i.e. the language model finds the unique-region sequence less substitutable. This is the second independent signal that can satisfy <span class="about-code">M1</span>.</p>
+        <p><b>How it's calculated.</b> A dedicated language-model module (<span class="about-code">plm_vep</span>) records the ESM-C (EvolutionaryScale) sequence-<i>constraint</i> profile of the protein itself: the mean wild-type-residue log-probability (the model's log-likelihood of the residue actually present, with <i>no</i> alternate allele) taken over the isoform-unique and canonical-shared regions, plus the count of strongly-constrained positions in each. The constraint enrichment is the unique-region mean log-probability profile relative to the shared region. <span class="about-code">M1</span> is satisfied when this enrichment is at or above <b>2.0</b> — a <i>provisional</i> threshold pending genome-wide calibration, not a principled anchor. This constraint signal is distinct from the per-variant ΔLLR scores (which carry an allele change); it scores the wild-type sequence alone (§"Per-variant effect scoring", §"Evidence scoring framework").</p>
+        <p class="about-cite">Refs: ESM-C (EvolutionaryScale); masked-marginal LLR method <a class="ref-cite" href="#ref-esmc">[esmc]</a></p>
+      </dd>
+
+      <!-- m-esm2 is the original anchor; kept as the parent for the per-variant ESM-C metric -->
+      <dt id="m-esm2">Per-variant ESM-C ΔLLR (masked-marginal effect)</dt>
+      <dd id="m-esm2-llr">
+        <p><b>What it measures.</b> The predicted tolerability of a specific amino-acid substitution under a protein language model — how much less likely the alternate residue is than the wild-type residue at that position. More negative ΔLLR indicates a substitution the model tolerates less well. It contributes to the per-variant "damaging" flag (reported as germline/disease context), separate from the <span class="about-code">M1</span> constraint profile above.</p>
+        <p><b>How it's calculated.</b> ESM-C (EvolutionaryScale) supplies a masked-marginal change in log-likelihood, <span class="about-code">ΔLLR = log P(alt) − log P(wt)</span>, evaluated at the variant's residue from the per-position amino-acid distribution of a single full-protein forward pass (cached on disk by protein hash). A missense variant is flagged damaging when its ΔLLR is at or below <b>−7.5</b> — the cutoff Brandes et al. established for the analogous ESM-2-class LLR, carried over as a provisional threshold under ESM-C and pending genome-wide recalibration — or when AlphaMissense calls it <span class="about-code">likely_pathogenic</span>. Loss-of-function consequences (frameshift, stop-gained, splice, start-lost) are damaging on their own, since neither missense predictor sees them. A predicted-damaging gnomAD variant at allele frequency ≥ 10<sup>−3</sup> is gated out of the damaging flag (ACMG allele-frequency benign evidence); ClinVar and COSMIC variants are never gated (§"Per-variant effect scoring").</p>
+        <p class="about-cite">Refs: ESM-C (EvolutionaryScale); masked-marginal LLR method <a class="ref-cite" href="#ref-esmc">[esmc]</a>; Brandes et al. <a class="ref-cite" href="#ref-brandes">[brandes]</a></p>
+      </dd>
+
+      <!-- m-alphamissense is the original anchor (preserved) -->
+      <dt id="m-alphamissense">AlphaMissense pathogenicity <span class="about-warn-chip">canonical frame only</span></dt>
+      <dd>
+        <p><b>What it measures.</b> DeepMind's calibrated missense pathogenicity for a substitution — a 0–1 score with a <span class="about-code">likely_pathogenic</span> / <span class="about-code">ambiguous</span> / <span class="about-code">likely_benign</span> class. Used as one branch of the per-variant damaging flag.</p>
+        <p><b>How it's calculated.</b> The score and class are looked up by genomic coordinate from the AlphaMissense hg38 table. <b>Critical frame caveat:</b> AlphaMissense is defined in the frame of the <i>canonical</i> transcript, so it applies to shared-region variants and to truncation-unique variants (which still lie within the canonical CDS) but is <b>N/A for extension-unique variants</b>, which fall outside the canonical CDS entirely and are re-framed by the alternative TIS. A missense variant is flagged damaging when AlphaMissense calls it <span class="about-code">likely_pathogenic</span> or its ESM-C ΔLLR ≤ −7.5 (§"Per-variant effect scoring").</p>
+        <p class="about-cite">Refs: AlphaMissense <a class="ref-cite" href="#ref-alphamissense">[alphamissense]</a></p>
+      </dd>
+
+      <dt id="m-f6-disease-enrichment">M2 — disease density enrichment (ClinVar + COSMIC)</dt>
+      <dd>
+        <p><b>What it measures.</b> Whether known disease variants <i>concentrate</i> in the isoform-unique region rather than merely being present — i.e. whether the unique N-terminus is a disease hotspot relative to the shared core. This is criterion <span class="about-code">M2</span>.</p>
+        <p><b>How it's calculated.</b> The same genomic-intersection step tags each disease variant (ClinVar + COSMIC) by membership in the isoform-unique versus canonical-shared exon intervals and exposes each region's nucleotide length. The enrichment ratio is the per-nucleotide disease-variant density of the unique region over that of the shared region: <span class="about-code">(n<sub>disease,unique</sub> / nt<sub>unique</sub>) / (n<sub>disease,shared</sub> / nt<sub>shared</sub>)</span>. <span class="about-code">M2</span> is satisfied when this ratio is at or above <b>1.0</b> — a <i>principled anchor</i> (a fixed zero-point: density-equal is the natural neutral line), not a tuned threshold. The ratio is <span class="about-code">None</span> when undefined (zero/missing denominator). ClinVar comes from the GRCh38-filtered <span class="about-code">variant_summary.txt.gz</span> (VCF-format allele columns, genomic plus-strand); COSMIC v102 (GRCh38) from the Sanger Genome Screens Mutant / NonCoding / Targeted Screens distributions, both as filter-pushdown parquet (§"Clinical variant burden", §"Per-variant effect scoring", §"Evidence scoring framework").</p>
+        <p class="about-cite">Refs: ClinVar <a class="ref-cite" href="#ref-clinvar">[clinvar]</a>, COSMIC v102 <a class="ref-cite" href="#ref-cosmic">[cosmic]</a></p>
+      </dd>
+
+      <!-- m-clinical is the original anchor; kept as the parent for the consequence-validation metric -->
+      <dt id="m-clinical">Codon-level consequence validation (isoform frame)</dt>
+      <dd id="m-codon-consequence">
+        <p><b>What it measures.</b> The true molecular consequence of each queried variant <i>in the alternative isoform's reading frame</i> — because source-database HGVSp strings are written in the canonical frame and are invalid for alternative-TIS events, which can re-frame the protein (extensions) or delete the N-terminus (truncations, uORFs). This is what makes every downstream variant count (M1/M2, LoF gating) frame-correct.</p>
+        <p><b>How it's calculated.</b> A dedicated validator re-maps each variant from its genomic position to an isoform-specific coding position using the GTF-derived CDS exon-boundary table for the TIS's transcript. The mapping is strand-aware: on the plus strand, genomic positions within CDS exons get sequential 0-indexed coding positions 5′→3′; on the minus strand, exons are walked in descending genomic order, positions traversed high-to-low, and ref/alt bases complemented before codon assembly. For SNVs, the codon containing the variant is extracted from the isoform's reference coding sequence, translated, and compared with the mutant-codon translation to assign one of <span class="about-code">synonymous_variant</span>, <span class="about-code">missense_variant</span>, <span class="about-code">stop_gained</span>, <span class="about-code">stop_lost</span>, <span class="about-code">reference_mismatch</span>. In-frame indels become <span class="about-code">inframe_insertion</span> / <span class="about-code">inframe_deletion</span> by length differential; frameshifts are labelled <span class="about-code">frameshift_variant</span>; equal-length multi-base substitutions are labelled <span class="about-code">mnv</span> without single-codon translation (deferred). The downstream LoF gate keys on the exact <span class="about-code">stop_gained</span>, <span class="about-code">stop_lost</span>, and <span class="about-code">frameshift_variant</span> terms. Variants outside the isoform's coding interval (upstream of truncated starts, downstream of extended stops, intronic) get protein position <span class="about-code">None</span> but are retained for re-validation against other transcripts and still counted in the per-protein summary (§"Clinical variant burden and codon-level consequence validation").</p>
+        <p class="about-cite">Refs: gnomAD <a class="ref-cite" href="#ref-gnomad">[gnomad]</a>, ClinVar <a class="ref-cite" href="#ref-clinvar">[clinvar]</a>, COSMIC <a class="ref-cite" href="#ref-cosmic">[cosmic]</a></p>
+      </dd>
+    </dl>
+    </details>
+
+    <!-- ============================================================= -->
+    <details class="about-gloss" id="gloss-p">
+      <summary class="about-axis-h">Predicted structure &amp; biophysics (P1 · P2 · S2)</summary>
     <dl class="about-glossary">
 
       <!-- m-structure is the original anchor; kept as the parent for the structure metric -->
@@ -350,50 +504,11 @@
         <p class="about-cite">Refs: ESM-C (EvolutionaryScale) <a class="ref-cite" href="#ref-esmc">[esmc]</a></p>
       </dd>
     </dl>
+    </details>
 
     <!-- ============================================================= -->
-    <h3 class="about-axis-h">Localization &amp; targeting (L1 · L2)</h3>
-    <dl class="about-glossary">
-
-      <!-- m-localization is the original anchor; kept as the parent for the localization group -->
-      <dt id="m-localization">DeepLoc 2.1 — subcellular compartment</dt>
-      <dd id="m-deeploc-compartment">
-        <p><b>What it measures.</b> The predicted primary subcellular localization of a protein (one of ten compartments — nucleus, cytoplasm, mitochondrion, etc.), computed independently for the canonical protein and for each alternative-TIS isoform so that a re-routed N-terminus can be detected.</p>
-        <p><b>How it's calculated.</b> Sequences are scored with <span class="about-code">DeepLoc 2.1</span> in its "Fast" mode (§"Subcellular localization"). Because DeepLoc's dependencies are pinned to a Python 3.8 stack that conflicts with the rest of the pipeline, it is run inside an isolated conda environment whose stdout the main pipeline consumes. To amortize the fixed cost of ESM embedding, all unique canonical and isoform sequences in a batch are written to a single FASTA, DeepLoc is invoked once, and the per-sequence predictions (primary localization plus the signal-peptide / NLS / mitochondrial / peroxisomal sub-predictions and a membrane-type call) are joined back onto records by sequence identity. A protein-hash-keyed lookup memoizes, so identical sequences across genes or cell lines are predicted exactly once per run. Per-residue ESM embeddings are discarded; only the final categorical and probabilistic outputs are stored.</p>
-        <p class="about-cite">Refs: DeepLoc 2.1 <a class="ref-cite" href="#ref-deeploc">[deeploc]</a></p>
-      </dd>
-
-      <dt id="m-deeploc-features-f2">DeepLoc localization-feature change (L1)</dt>
-      <dd>
-        <p><b>What it measures.</b> Criterion <span class="about-code">L1</span> — whether the alternative isoform is predicted to localize or associate differently from the canonical protein. Labelled "localization features changed."</p>
-        <p><b>How it's calculated.</b> The comparator diffs the DeepLoc outputs of the canonical protein against the isoform and fires <span class="about-code">L1</span> if <em>any</em> localization feature differs: the primary-compartment prediction, the detected sorting signals (signal-peptide / NLS / mitochondrial / peroxisomal sub-predictions), or the membrane-type call (§"Evidence criteria"). Keying on the full feature set rather than the single headline compartment label catches a re-routed protein even when the top compartment is unchanged.</p>
-        <p class="about-cite">Refs: DeepLoc 2.1 <a class="ref-cite" href="#ref-deeploc">[deeploc]</a></p>
-      </dd>
-
-      <dt id="m-signalp">SignalP 6.0 — signal peptide</dt>
-      <dd>
-        <p><b>What it measures.</b> Presence and type of an N-terminal secretory signal peptide, predicted per protein (canonical and isoform) — the kind of N-terminal feature an alternative TIS most directly adds or removes.</p>
-        <p><b>How it's calculated.</b> Sequences are scored with <span class="about-code">SignalP 6.0</span>, which predicts the five signal-peptide types using a protein language model (§"Signal and targeting peptides"). It is run once over the batch of unique sequences in its own pinned environment and joined back by sequence identity; for each protein the predicted class, the class probabilities, and the predicted cleavage site are recorded.</p>
-        <p class="about-cite">Refs: SignalP 6.0 <a class="ref-cite" href="#ref-signalp6">[signalp6]</a></p>
-      </dd>
-
-      <dt id="m-targetp">TargetP 2.0 — transit/targeting peptide</dt>
-      <dd>
-        <p><b>What it measures.</b> The broader N-terminal targeting class of a protein (canonical and isoform): signal peptide (SP), mitochondrial transit peptide (mTP), or chloroplast transit peptide (cTP), with the predicted cleavage site where present.</p>
-        <p><b>How it's calculated.</b> Sequences are scored with <span class="about-code">TargetP 2.0</span> (§"Signal and targeting peptides"), run once over the batch of unique sequences in its own pinned environment and joined back by sequence identity. For each protein the predicted class, the class probabilities, and the cleavage site are recorded. Running TargetP alongside SignalP lets the targeting criterion catch a gained or lost signal that either tool alone would miss.</p>
-        <p class="about-cite">Refs: TargetP 2.0 <a class="ref-cite" href="#ref-targetp2">[targetp2]</a></p>
-      </dd>
-
-      <dt id="m-targeting-f4">Targeting-signal change (L2)</dt>
-      <dd>
-        <p><b>What it measures.</b> Criterion <span class="about-code">L2</span> — whether the alternative N-terminus gains or loses an N-terminal targeting peptide relative to the canonical protein.</p>
-        <p><b>How it's calculated.</b> <span class="about-code">L2</span> fires when <span class="about-code">SignalP 6.0</span> or <span class="about-code">TargetP 2.0</span> disagrees on the canonical versus the isoform call (§"Evidence criteria"; §3.6). Combining both predictors gives complementary coverage — secretory signal peptides (SignalP) and the mitochondrial / chloroplast transit classes (TargetP) — so a targeting change either tool alone would miss is still detected.</p>
-        <p class="about-cite">Refs: SignalP 6.0 <a class="ref-cite" href="#ref-signalp6">[signalp6]</a>, TargetP 2.0 <a class="ref-cite" href="#ref-targetp2">[targetp2]</a></p>
-      </dd>
-    </dl>
-
-    <!-- ============================================================= -->
-    <h3 class="about-axis-h">Structural characteristics — domains &amp; motifs (S1)</h3>
+    <details class="about-gloss" id="gloss-s">
+      <summary class="about-axis-h">Structural characteristics — domains &amp; motifs (S1)</summary>
     <dl class="about-glossary">
 
       <!-- m-domains is the original anchor; kept as the parent for the domains/motifs group -->
@@ -418,59 +533,11 @@
         <p class="about-cite">Refs: ELM database <a class="ref-cite" href="#ref-elm">[elm]</a></p>
       </dd>
     </dl>
+    </details>
 
     <!-- ============================================================= -->
-    <h3 class="about-axis-h">Mutation landscape — variant effect &amp; burden (M1 · M2)</h3>
-    <dl class="about-glossary">
-
-      <dt id="m-f5-gnomad-depletion">M1 — gnomAD germline depletion ratio</dt>
-      <dd>
-        <p><b>What it measures.</b> Whether common germline variation <i>avoids</i> the isoform-unique region — a population-genetics signal of purifying constraint. It is one of the two independent inputs that can satisfy criterion <span class="about-code">M1</span> (germline tolerance / constraint).</p>
-        <p><b>How it's calculated.</b> A genomic-intersection step tags every gnomAD v4.1 exome variant by membership in the isoform-unique versus canonical-shared exon intervals (from the assembly layer's transcript-skeleton walker) and exposes the nucleotide length of each region. The depletion ratio is the per-nucleotide variant density of the unique region divided by that of the shared region: <span class="about-code">(n<sub>gnomAD,unique</sub> / nt<sub>unique</sub>) / (n<sub>gnomAD,shared</sub> / nt<sub>shared</sub>)</span>. A value <b>below 1</b> means common variation is depleted from (avoids) the unique region. The ratio is undefined (<span class="about-code">None</span>) when a denominator is zero. <span class="about-code">M1</span> is satisfied when this ratio falls below <b>0.80</b> — a <i>provisional</i> threshold, a config-driven placeholder pending calibration on a genome-wide run, not a principled anchor (§"Per-variant effect scoring", §"Evidence scoring framework"). gnomAD v4.1 exomes are preprocessed from per-chromosome VCFs (PASS records, canonical-transcript VEP, non-null gene symbol) into a gene-indexed parquet read by PyArrow filter pushdown (§"Clinical variant burden").</p>
-        <p class="about-cite">Refs: gnomAD v4.1 <a class="ref-cite" href="#ref-gnomad">[gnomad]</a></p>
-      </dd>
-
-      <dt id="m-f5-esm2-constraint">M1 — ESM-C sequence-constraint enrichment</dt>
-      <dd>
-        <p><b>What it measures.</b> Whether the residues of the isoform-unique region are more constrained by a protein language model than the canonical-shared region — i.e. the language model finds the unique-region sequence less substitutable. This is the second independent signal that can satisfy <span class="about-code">M1</span>.</p>
-        <p><b>How it's calculated.</b> A dedicated language-model module (<span class="about-code">plm_vep</span>) records the ESM-C (EvolutionaryScale) sequence-<i>constraint</i> profile of the protein itself: the mean wild-type-residue log-probability (the model's log-likelihood of the residue actually present, with <i>no</i> alternate allele) taken over the isoform-unique and canonical-shared regions, plus the count of strongly-constrained positions in each. The constraint enrichment is the unique-region mean log-probability profile relative to the shared region. <span class="about-code">M1</span> is satisfied when this enrichment is at or above <b>2.0</b> — a <i>provisional</i> threshold pending genome-wide calibration, not a principled anchor. This constraint signal is distinct from the per-variant ΔLLR scores (which carry an allele change); it scores the wild-type sequence alone (§"Per-variant effect scoring", §"Evidence scoring framework").</p>
-        <p class="about-cite">Refs: ESM-C (EvolutionaryScale); masked-marginal LLR method <a class="ref-cite" href="#ref-esmc">[esmc]</a></p>
-      </dd>
-
-      <!-- m-esm2 is the original anchor; kept as the parent for the per-variant ESM-C metric -->
-      <dt id="m-esm2">Per-variant ESM-C ΔLLR (masked-marginal effect)</dt>
-      <dd id="m-esm2-llr">
-        <p><b>What it measures.</b> The predicted tolerability of a specific amino-acid substitution under a protein language model — how much less likely the alternate residue is than the wild-type residue at that position. More negative ΔLLR indicates a substitution the model tolerates less well. It contributes to the per-variant "damaging" flag (reported as germline/disease context), separate from the <span class="about-code">M1</span> constraint profile above.</p>
-        <p><b>How it's calculated.</b> ESM-C (EvolutionaryScale) supplies a masked-marginal change in log-likelihood, <span class="about-code">ΔLLR = log P(alt) − log P(wt)</span>, evaluated at the variant's residue from the per-position amino-acid distribution of a single full-protein forward pass (cached on disk by protein hash). A missense variant is flagged damaging when its ΔLLR is at or below <b>−7.5</b> — the cutoff Brandes et al. established for the analogous ESM-2-class LLR, carried over as a provisional threshold under ESM-C and pending genome-wide recalibration — or when AlphaMissense calls it <span class="about-code">likely_pathogenic</span>. Loss-of-function consequences (frameshift, stop-gained, splice, start-lost) are damaging on their own, since neither missense predictor sees them. A predicted-damaging gnomAD variant at allele frequency ≥ 10<sup>−3</sup> is gated out of the damaging flag (ACMG allele-frequency benign evidence); ClinVar and COSMIC variants are never gated (§"Per-variant effect scoring").</p>
-        <p class="about-cite">Refs: ESM-C (EvolutionaryScale); masked-marginal LLR method <a class="ref-cite" href="#ref-esmc">[esmc]</a>; Brandes et al. <a class="ref-cite" href="#ref-brandes">[brandes]</a></p>
-      </dd>
-
-      <!-- m-alphamissense is the original anchor (preserved) -->
-      <dt id="m-alphamissense">AlphaMissense pathogenicity <span class="about-warn-chip">canonical frame only</span></dt>
-      <dd>
-        <p><b>What it measures.</b> DeepMind's calibrated missense pathogenicity for a substitution — a 0–1 score with a <span class="about-code">likely_pathogenic</span> / <span class="about-code">ambiguous</span> / <span class="about-code">likely_benign</span> class. Used as one branch of the per-variant damaging flag.</p>
-        <p><b>How it's calculated.</b> The score and class are looked up by genomic coordinate from the AlphaMissense hg38 table. <b>Critical frame caveat:</b> AlphaMissense is defined in the frame of the <i>canonical</i> transcript, so it applies to shared-region variants and to truncation-unique variants (which still lie within the canonical CDS) but is <b>N/A for extension-unique variants</b>, which fall outside the canonical CDS entirely and are re-framed by the alternative TIS. A missense variant is flagged damaging when AlphaMissense calls it <span class="about-code">likely_pathogenic</span> or its ESM-C ΔLLR ≤ −7.5 (§"Per-variant effect scoring").</p>
-        <p class="about-cite">Refs: AlphaMissense <a class="ref-cite" href="#ref-alphamissense">[alphamissense]</a></p>
-      </dd>
-
-      <dt id="m-f6-disease-enrichment">M2 — disease density enrichment (ClinVar + COSMIC)</dt>
-      <dd>
-        <p><b>What it measures.</b> Whether known disease variants <i>concentrate</i> in the isoform-unique region rather than merely being present — i.e. whether the unique N-terminus is a disease hotspot relative to the shared core. This is criterion <span class="about-code">M2</span>.</p>
-        <p><b>How it's calculated.</b> The same genomic-intersection step tags each disease variant (ClinVar + COSMIC) by membership in the isoform-unique versus canonical-shared exon intervals and exposes each region's nucleotide length. The enrichment ratio is the per-nucleotide disease-variant density of the unique region over that of the shared region: <span class="about-code">(n<sub>disease,unique</sub> / nt<sub>unique</sub>) / (n<sub>disease,shared</sub> / nt<sub>shared</sub>)</span>. <span class="about-code">M2</span> is satisfied when this ratio is at or above <b>1.0</b> — a <i>principled anchor</i> (a fixed zero-point: density-equal is the natural neutral line), not a tuned threshold. The ratio is <span class="about-code">None</span> when undefined (zero/missing denominator). ClinVar comes from the GRCh38-filtered <span class="about-code">variant_summary.txt.gz</span> (VCF-format allele columns, genomic plus-strand); COSMIC v102 (GRCh38) from the Sanger Genome Screens Mutant / NonCoding / Targeted Screens distributions, both as filter-pushdown parquet (§"Clinical variant burden", §"Per-variant effect scoring", §"Evidence scoring framework").</p>
-        <p class="about-cite">Refs: ClinVar <a class="ref-cite" href="#ref-clinvar">[clinvar]</a>, COSMIC v102 <a class="ref-cite" href="#ref-cosmic">[cosmic]</a></p>
-      </dd>
-
-      <!-- m-clinical is the original anchor; kept as the parent for the consequence-validation metric -->
-      <dt id="m-clinical">Codon-level consequence validation (isoform frame)</dt>
-      <dd id="m-codon-consequence">
-        <p><b>What it measures.</b> The true molecular consequence of each queried variant <i>in the alternative isoform's reading frame</i> — because source-database HGVSp strings are written in the canonical frame and are invalid for alternative-TIS events, which can re-frame the protein (extensions) or delete the N-terminus (truncations, uORFs). This is what makes every downstream variant count (M1/M2, LoF gating) frame-correct.</p>
-        <p><b>How it's calculated.</b> A dedicated validator re-maps each variant from its genomic position to an isoform-specific coding position using the GTF-derived CDS exon-boundary table for the TIS's transcript. The mapping is strand-aware: on the plus strand, genomic positions within CDS exons get sequential 0-indexed coding positions 5′→3′; on the minus strand, exons are walked in descending genomic order, positions traversed high-to-low, and ref/alt bases complemented before codon assembly. For SNVs, the codon containing the variant is extracted from the isoform's reference coding sequence, translated, and compared with the mutant-codon translation to assign one of <span class="about-code">synonymous_variant</span>, <span class="about-code">missense_variant</span>, <span class="about-code">stop_gained</span>, <span class="about-code">stop_lost</span>, <span class="about-code">reference_mismatch</span>. In-frame indels become <span class="about-code">inframe_insertion</span> / <span class="about-code">inframe_deletion</span> by length differential; frameshifts are labelled <span class="about-code">frameshift_variant</span>; equal-length multi-base substitutions are labelled <span class="about-code">mnv</span> without single-codon translation (deferred). The downstream LoF gate keys on the exact <span class="about-code">stop_gained</span>, <span class="about-code">stop_lost</span>, and <span class="about-code">frameshift_variant</span> terms. Variants outside the isoform's coding interval (upstream of truncated starts, downstream of extended stops, intronic) get protein position <span class="about-code">None</span> but are retained for re-validation against other transcripts and still counted in the per-protein summary (§"Clinical variant burden and codon-level consequence validation").</p>
-        <p class="about-cite">Refs: gnomAD <a class="ref-cite" href="#ref-gnomad">[gnomad]</a>, ClinVar <a class="ref-cite" href="#ref-clinvar">[clinvar]</a>, COSMIC <a class="ref-cite" href="#ref-cosmic">[cosmic]</a></p>
-      </dd>
-    </dl>
-
-    <!-- ============================================================= -->
-    <h3 class="about-axis-h">Evidence-scoring framework</h3>
+    <details class="about-gloss" id="gloss-scoring">
+      <summary class="about-axis-h">Evidence-scoring framework</summary>
     <dl class="about-glossary">
 
       <dt id="m-evidence-scoring">Evidence scoring (CDLMPS categories)</dt>
@@ -515,10 +582,10 @@
         <p class="about-cite">Refs: SwissIsoform methods §Evidence scoring</p>
       </dd>
     </dl>
+    </details>
   </section>
 
-  <!-- Methodology & validation -->
-  <section class="about-sec">
+  <section class="about-sec" id="how-decided">
     <h2>How a criterion is decided</h2>
     <p>
       Every criterion follows the same four-step shape, so the table reads
@@ -568,8 +635,7 @@
     </p>
   </section>
 
-  <!-- References -->
-  <section class="about-sec">
+  <section class="about-sec" id="references">
     <h2>References</h2>
     <ol class="about-refs">
       <li id="ref-alphamissense">Cheng J, Novati G, Pan J, et al. Accurate proteome-wide missense variant effect prediction with AlphaMissense. <em>Science</em> 381:eadg7492 (2023). <a class="ref-doi" href="https://doi.org/10.1126/science.adg7492" target="_blank" rel="noopener">doi:10.1126/science.adg7492.</a></li>

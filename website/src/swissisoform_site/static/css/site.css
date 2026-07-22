@@ -1201,6 +1201,46 @@
 }
 .about-refs li:target { background: #eff6ff; border-radius: 4px; }
 .about-refs em { color: #334155; }
+
+/* Plain-language opener, then the jargon restatement. */
+.about-lede-sub { color: #64748b; font-size: .88rem; }
+
+/* Sticky in-page table of contents — a compact wrapping link bar that pins to the
+   top of the viewport while you scroll the long metrics reference. */
+.about-toc {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .75rem;
+  margin: 0 0 1.5rem; padding: .55rem .75rem;
+  background: rgba(255, 255, 255, .93);
+  backdrop-filter: blur(6px);
+  border: 1px solid #e2e8f0; border-radius: 8px;
+}
+.about-toc-h {
+  font-size: .68rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .04em; color: #94a3b8;
+}
+.about-toc a {
+  font-size: .8rem; color: #475569; text-decoration: none;
+  border-bottom: 1px solid transparent; padding-bottom: 1px;
+}
+.about-toc a:hover { color: #4f46e5; border-bottom-color: #c7d2fe; }
+@media (max-width: 720px) { .about-toc { position: static; } }
+
+/* Collapsible glossary groups — each is a self-contained <summary> + <dl> unit,
+   so the ~400-line metrics reference is scannable instead of a wall of text. */
+.about-gloss { margin: .4rem 0 .9rem; border-top: 1px solid #f1f5f9; }
+.about-gloss > summary {
+  cursor: pointer; list-style: none; padding: .6rem 0 .6rem .55rem;
+  scroll-margin-top: 4rem;
+}
+.about-gloss > summary::-webkit-details-marker { display: none; }
+.about-gloss > summary::before {
+  content: "▸"; display: inline-block; width: 1em; margin-left: -.2em;
+  color: #94a3b8; transition: transform .12s ease;
+}
+.about-gloss[open] > summary::before { transform: rotate(90deg); }
+.about-gloss > summary:hover { color: #4f46e5; }
+.about-gloss > .about-glossary { margin-left: .55rem; padding-bottom: .5rem; }
 .ref-doi { color: #2563eb; text-decoration: none; word-break: break-all; }
 .ref-doi:hover { text-decoration: underline; }
 
