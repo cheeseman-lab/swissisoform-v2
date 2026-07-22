@@ -339,6 +339,9 @@ class MassSpecModule:
                     "min_peptide_length": None,
                     "max_peptide_length": None,
                     "pepquery_run": pepquery_run,
+                    "best_hyperscore": None,
+                    "min_pvalue": None,
+                    "total_psms": None,
                 },
             }
 
