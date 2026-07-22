@@ -1540,31 +1540,32 @@ def criterion_evidence_for(iso) -> dict:
         except (TypeError, ValueError):
             pmin = None
 
-        detail_rows = []
+        # Only the per-side shared-region pLDDT is genuinely two-sided, so it is the
+        # comparison table. RMSD / TM-score / region length describe the comparison
+        # itself (single-valued), so per the Details-box contract they ride in the
+        # caption rather than as key/value rows.
+        compare_rows = compare(
+            [
+                (
+                    "Shared-region pLDDT",
+                    [
+                        "isoform_structure_plddt_shared_mean_canonical",
+                        "isoform_structure_plddt_shared_mean_isoform",
+                    ],
+                ),
+            ]
+        )
+
+        bits = []
         if rmsd is not None:
-            detail_rows.append(
-                {"label": "Shared-region Cα RMSD", "value": f"{rmsd} Å",
-                 **_term("Shared-region Cα RMSD")}
-            )
+            bits.append(f"shared-region Cα RMSD {rmsd} Å")
         if tm is not None:
-            detail_rows.append(
-                {"label": "Shared-region TM-score", "value": tm,
-                 **_term("Shared-region TM-score")}
-            )
+            bits.append(f"shared TM-score {tm}")
         if n is not None:
-            detail_rows.append(
-                {"label": "Shared region length", "value": f"{int(n)} aa",
-                 **_term("Shared region length")}
-            )
+            bits.append(f"shared region {int(n)} aa")
         pmin_fmt = _fmt_num(pmin)
         if pmin_fmt is not None:
-            detail_rows.append(
-                {"label": "Min shared-region pLDDT", "value": pmin_fmt,
-                 **_term("Min shared-region pLDDT")}
-            )
-
-        # Global fold-similarity singletons ride in the caption for context.
-        bits = []
+            bits.append(f"min shared pLDDT {pmin_fmt}")
         gtm = _fmt_num(g("isoform_structure_tm_score"))
         grmsd = _fmt_num(g("isoform_structure_rmsd_global"))
         if gtm is not None:
@@ -1572,7 +1573,7 @@ def criterion_evidence_for(iso) -> dict:
         if grmsd is not None:
             bits.append(f"global RMSD {grmsd} Å")
 
-        if not detail_rows:
+        if not bits and not compare_rows:
             if status and status != "ok":
                 _why = {
                     "no_shared_region": "no shared region (uORF/altORF, or region too short)",
@@ -1582,17 +1583,17 @@ def criterion_evidence_for(iso) -> dict:
                 return {
                     "title": "Shared-region structural change",
                     "subtitle": f"not evaluable — {_why}",
-                    "rows": [],
                 }
             return None
         sub = "Cα RMSD superposed on the shared residues only; TM-score is length-normalized"
         if bits:
             sub += " · " + " · ".join(bits)
-        return {
-            "title": "Shared-region structural change",
-            "subtitle": sub,
-            "rows": detail_rows,
-        }
+        sec = {"title": "Shared-region structural change", "subtitle": sub}
+        if compare_rows:
+            sec["cmp_headers"] = ["Property", "Canonical", "Isoform"]
+            sec["col_classes"] = CANON_ISO
+            sec["compare_rows"] = compare_rows
+        return sec
 
     def sec_deeploc():
         compare_rows = compare(

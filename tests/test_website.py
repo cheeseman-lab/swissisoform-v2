@@ -89,23 +89,16 @@ def test_api_data_json(client):
     r = client.get("/api/data.json")
     assert r.status_code == 200
     payload = json.loads(r.data)
-    # The cheeseman_13gene parquet ships with 13 genes.
-    assert len(payload) >= 12
-    for gene in [
-        "CBX1",
-        "CDC34",
-        "CDKN1A",
-        "CSNK2A2",
-        "EIF2B1",
-        "FZR1",
-        "MAD2L1",
-        "SRSF2",
-        "TRIP13",
-        "TRNT1",
-        "UBE2D2",
-        "UBE2M",
-    ]:
-        assert gene in payload, f"missing gene in /api/data.json: {gene}"
+    # Dataset-agnostic: whichever run is staged in website/data, every gene in the
+    # parquet must surface in the API with a well-formed isoform list. (Pinning an
+    # explicit gene list broke whenever the staged run changed.)
+    import pandas as pd
+
+    df = pd.read_parquet(WEBSITE_DATA / "all_paired.parquet", columns=["gene_name"])
+    expected = {g for g in df["gene_name"].dropna().unique()}
+    assert expected, "staged parquet has no genes"
+    assert set(payload) >= expected, f"missing from /api/data.json: {expected - set(payload)}"
+    for gene in sorted(expected):
         rec = payload[gene]
         assert "isoforms" in rec
         assert isinstance(rec["isoforms"], list)
@@ -212,8 +205,8 @@ def test_isoform_page_contains_graphs_and_synthesis_block(client):
 
 
 def test_isoform_page_has_evidence_tiles(client):
-    """The V2 isoform page renders 13 scored evidence tiles (E1-E6, F1-F7) plus the
-    descriptive Biophysics and SAE (F8) cards, in one flat grid (no E/F group headers)."""
+    """The V2 isoform page renders the scored evidence tiles plus the bespoke
+    Biophysics (S2) and SAE (S3) cards, in one flat grid (no group headers)."""
     import pandas as pd
     from swissisoform_site.data import tis_slug as make_slug
 
@@ -226,7 +219,9 @@ def test_isoform_page_has_evidence_tiles(client):
     assert body.count(b"evidence-tile") >= 15
     # Grouping headers are gone; the flat grid remains.
     assert b"tile-row-h" not in body
-    assert b'data-criterion="biophysics"' in body
+    # Biophysics is its own card, keyed by the CDLMPS criterion id (was the
+    # pre-rename lowercase "biophysics" when it lived inside the F1 modal).
+    assert b'data-criterion="S2_biophysics"' in body
     # Both axis classes still present (E + F border colors).
     assert b"axis-E" in body
     assert b"axis-F" in body
@@ -288,10 +283,18 @@ def test_isoform_page_has_evidence_modal_element(client):
 
 def test_isoform_page_truncation_marks_differential_region(client):
     """For a truncation, the folding legend names the differential region."""
+    from swissisoform_site.data import load_all
     from swissisoform_site.data import tis_slug as make_slug
 
-    # TRNT1 first isoform is a truncation in the cheeseman_13gene parquet.
-    r = client.get("/genes/TRNT1/isoforms/" + make_slug("chr3:3129127:+:ATG:ENST00000434583.5"))
+    # Pick any truncation from the staged run rather than pinning one tis_id.
+    target = next(
+        ((gn, iso.tis_id) for gn, g in load_all().items() for iso in g.isoforms
+         if str(getattr(iso, "orf_type", "")).lower() == "truncated"),
+        None,
+    )
+    assert target, "staged parquet has no truncation isoform"
+    gene, tis_id = target
+    r = client.get(f"/genes/{gene}/isoforms/" + make_slug(tis_id))
     assert r.status_code == 200
     body = r.data
     # The single viewer's legend flags the lost (differential) region by residue range.
@@ -301,10 +304,31 @@ def test_isoform_page_truncation_marks_differential_region(client):
 
 def test_criterion_evidence_folds_into_score_popups(client):
     """Differential evidence is keyed by criterion id and embedded per modal."""
-    from swissisoform_site.data import criterion_evidence_for, load_all
+    from swissisoform_site.data import (
+        biophysics_card_for_isoform,
+        criterion_evidence_for,
+        load_all,
+    )
     from swissisoform_site.data import tis_slug as make_slug
 
-    iso = load_all()["MSRA"].isoforms[0]
+    # Pick an isoform from the staged run that actually exercises this path: a
+    # flagged localization change plus a biophysics card. (Pinning MSRA broke
+    # whenever the staged run changed.)
+    picked = next(
+        (
+            (gn, iso)
+            for gn, g in load_all().items()
+            for iso in g.isoforms
+            if (criterion_evidence_for(iso).get("L1_localization_change", {}).get("sections"))
+            and criterion_evidence_for(iso)["L1_localization_change"]["sections"][0].get(
+                "highlight"
+            )
+            and biophysics_card_for_isoform(iso)
+        ),
+        None,
+    )
+    assert picked, "no isoform with a flagged localization change + biophysics card"
+    gene_name, iso = picked
     ce = criterion_evidence_for(iso)
     # Every criterion has an entry with a plain-English "about" descriptor.
     assert set(ce) >= {
@@ -314,26 +338,30 @@ def test_criterion_evidence_folds_into_score_popups(client):
         "L1_localization_change",
     }
     assert ce["L1_localization_change"]["about"]
-    # F1 hosts comparative biophysics (differential vs shared, not whole-protein).
-    bio = next(
-        s for s in ce["P1_structured_extension"]["sections"]
-        if s["title"].startswith("Biophysics")
-    )
-    pi = next(r for r in bio["compare_rows"] if "pI" in r["label"])
+    # Biophysics is no longer a sub-section of the P1 (folding) modal — it moved to
+    # its own descriptive card, so P1 must be folding-only.
+    assert not any(
+        s["title"].startswith("Biophysics")
+        for s in ce["P1_structured_extension"]["sections"]
+    ), "P1 should be folding-only; biophysics belongs to the standalone S2 card"
+    bio = biophysics_card_for_isoform(iso)
+    assert bio is not None, "standalone biophysics card missing"
+    sec = bio["evidence"]["sections"][0]
+    assert sec["cmp_headers"] == ["Property", "Differential", "Shared", "Enrichment"]
+    pi = next(r for r in sec["compare_rows"] if "pI" in r["label"])
     assert pi["cols"][0] != pi["cols"][1]  # differential vs shared core
-    # F2 renders a canonical-vs-isoform table (not flat rows), and MSRA's
-    # mito->peroxisome retargeting flags it.
+    # Localization renders a canonical-vs-isoform table (not flat rows), flagged
+    # because this isoform's predicted compartment/signals changed.
     loc = ce["L1_localization_change"]["sections"][0]
     assert loc["highlight"] is True
     assert loc["cmp_headers"] == ["Property", "Canonical", "Isoform"]
     assert loc["compare_rows"] and len(loc["compare_rows"][0]["cols"]) == 2
 
-    r = client.get("/genes/MSRA/isoforms/" + make_slug("chr8:10054582:+:ATG:ENST00000317173.9"))
+    r = client.get(f"/genes/{gene_name}/isoforms/" + make_slug(iso.tis_id))
     assert r.status_code == 200
     body = r.data
     assert b"crit-about" in body  # the per-criterion descriptor block
     assert b"click any tile" in body  # standalone panel dissolved into the tiles
-    assert b"Peroxisomal targeting signal" in body  # evidence still present (in modal template)
 
 
 def test_domains_massspec_are_canonical_vs_isoform(client):
