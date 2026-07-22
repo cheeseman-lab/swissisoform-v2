@@ -21,7 +21,7 @@
       </thead>
       <tbody>
         {% for f in rows %}
-        <tr>
+        <tr{% if f.generic %} class="sae-generic"{% endif %}>
           <td class="var-num" data-sort="{{ f.feature_index if f.feature_index is not none else '' }}">{% if f.feature_index is not none %}#{{ f.feature_index }}{% else %}—{% endif %}</td>
           <td data-sort="{{ (f.label or '')|lower }}">{{ f.label or '—' }}</td>
           <td class="sae-desc" data-sort="{{ (f.description or '')|lower }}">{{ f.description or '—' }}</td>
@@ -32,9 +32,10 @@
       </tbody>
     </table>
   </div>
-  {% if rows|length > 10 %}<button type="button" class="sae-expand-btn" aria-expanded="false">Show all {{ rows|length }}</button>{% endif %}
+  {% set n_generic = rows|selectattr('generic')|list|length %}
+  {% if rows|length > 10 or n_generic %}<button type="button" class="sae-expand-btn" aria-expanded="false">Show all {{ rows|length }}</button>{% endif %}
 </div>
-{% else %}<p class="empty">No interpretable features in this category.</p>{% endif %}
+{% else %}<p class="empty">No features in this category.</p>{% endif %}
 {% endmacro %}
 
 {% macro sae_shared_table(rows) %}
@@ -56,7 +57,7 @@
       </thead>
       <tbody>
         {% for f in rows %}
-        <tr>
+        <tr{% if f.generic %} class="sae-generic"{% endif %}>
           <td class="var-num" data-sort="{{ f.feature_index if f.feature_index is not none else '' }}">{% if f.feature_index is not none %}#{{ f.feature_index }}{% else %}—{% endif %}</td>
           <td data-sort="{{ (f.label or '')|lower }}">{{ f.label or '—' }}</td>
           <td class="sae-desc" data-sort="{{ (f.description or '')|lower }}">{{ f.description or '—' }}</td>
@@ -70,16 +71,16 @@
       </tbody>
     </table>
   </div>
-  {% if rows|length > 10 %}<button type="button" class="sae-expand-btn" aria-expanded="false">Show all {{ rows|length }}</button>{% endif %}
+  {% set n_generic = rows|selectattr('generic')|list|length %}
+  {% if rows|length > 10 or n_generic %}<button type="button" class="sae-expand-btn" aria-expanded="false">Show all {{ rows|length }}</button>{% endif %}
 </div>
-{% else %}<p class="empty">No interpretable features in this category.</p>{% endif %}
+{% else %}<p class="empty">No features in this category.</p>{% endif %}
 {% endmacro %}
 
-<div class="evidence-tile axis-F sae-tile" data-criterion="F8_sae" title="SAE interpretability features — descriptive, not scored">
+<div class="evidence-tile axis-F sae-tile" data-criterion="S3_sae" title="SAE interpretability features — S3 (differential feature presence)">
   <button class="tile-head" type="button" aria-haspopup="dialog">
     <span class="tile-id">{{ badge }}</span>
     <span class="tile-label">SAE Features</span>
-    <span class="tile-badge tile-badge-info">SAE</span>
   </button>
   <div class="tile-headline">
     {% if sae %}
@@ -93,9 +94,12 @@
     {% if sae %}
       <p class="sae-modal-intro">
         Sparse-autoencoder (SAE) interpretability features on the ESM-C residual stream,
-        comparing the isoform against the canonical protein. Descriptive only — not part of
-        the E/F score. Tables show interpretable features firing on ≥ 2 residues, top 10 by
-        default.
+        comparing the isoform against the canonical protein. This is the <strong>S3</strong>
+        criterion — a presence check that fires when any interpretable feature is gained or
+        lost. Only the <strong>top 30 features per category</strong> (ranked by activation,
+        prevalence ≥ 2) are saved; each table shows the top 10 interpretable features, and
+        <strong>generic / "unknown" features are hidden unless you expand it</strong>.
+        <a class="sae-about-link" href="/about#m-sae">What are SAE features? →</a>
       </p>
 
       <div class="sae-part">
@@ -103,15 +107,15 @@
         <p class="sae-part-note">Which SAE features fire in the isoform vs the canonical protein, across the whole sequence.</p>
 
         <h5 class="sae-tbl-h">Isoform-only features
-          <span class="variants-subnote">— {{ sae.counts.isoform_only }} total; {{ sae.isoform_only|length }} interpretable (prevalence ≥ 2)</span></h5>
+          <span class="variants-subnote">— {{ sae.counts.isoform_only }} total (prevalence ≥ 2)</span></h5>
         {{ sae_simple_table(sae.isoform_only) }}
 
         <h5 class="sae-tbl-h">Canonical-only features
-          <span class="variants-subnote">— {{ sae.counts.canonical_only }} total; {{ sae.canonical_only|length }} interpretable (prevalence ≥ 2)</span></h5>
+          <span class="variants-subnote">— {{ sae.counts.canonical_only }} total (prevalence ≥ 2)</span></h5>
         {{ sae_simple_table(sae.canonical_only) }}
 
         <h5 class="sae-tbl-h">Shared features by |Δ| activation
-          <span class="variants-subnote">— {{ sae.counts.shared }} total; {{ sae.shared|length }} interpretable (prevalence ≥ 2)</span></h5>
+          <span class="variants-subnote">— {{ sae.counts.shared }} total (prevalence ≥ 2)</span></h5>
         {{ sae_shared_table(sae.shared) }}
       </div>
 
@@ -123,16 +127,16 @@
           residues.
         </p>
         <h5 class="sae-tbl-h">Unique-region features
-          <span class="variants-subnote">— {{ sae.n_unique_region_features }} distinct; {{ sae.unique_region|length }} interpretable (prevalence ≥ 2)</span></h5>
+          <span class="variants-subnote">— {{ sae.n_unique_region_features }} distinct (prevalence ≥ 2)</span></h5>
         {{ sae_simple_table(sae.unique_region) }}
       </div>
 
       <p class="var-foot sae-foot">
         Top-K sparse-autoencoder activations on the ESM-C residual stream. <strong>Activation</strong>
         is a feature's peak value over its region; <strong>Prevalence</strong> is the number of residues
-        it fires on; <strong>Δ activation</strong> is isoform − canonical. Uninterpretable ("generic")
-        features and those firing on a single residue are hidden. Interpretability labels come from the
-        ESM-C 6B-layer60 SAE atlas and are <em>provisional</em>.
+        it fires on; <strong>Δ activation</strong> is isoform − canonical. Only the top 30 features
+        per category are saved; generic / "unknown" features are hidden until you expand a table.
+        <a class="sae-about-link" href="/about#m-sae">Read more about SAE features →</a>
       </p>
     {% else %}
       <p class="empty">SAE features were not computed for this isoform.</p>

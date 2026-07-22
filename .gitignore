@@ -17,8 +17,6 @@ build/
 docs/methods/*.pdf
 .claude/
 .torch_cache/
-data/reference/
-data/output/*
 # Slurm job logs — transient; keep the dir (sbatch --output needs it) via .gitkeep
 logs/*
 !logs/.gitkeep
@@ -44,8 +42,8 @@ docs/*
 docs/methods/*.pdf
 .superpowers/
 
-# Generated analysis reports (regenerable from the sourceseq tool) — not source.
-data/reports/
+# Do not include data or reference files in the commit.
+data/
 
 # Source-transcript-resolution read-alignment tool (Elizabeth's workstream):
 # salmon / minimap2 / IsoQuant / SRA mapping + envs + download scripts only. It

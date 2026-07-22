@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_cdlmps.html" as sc %}
 {% block title %}SwissIsoform v2 — {{ n_genes }} genes{% endblock %}
 
 {% block content %}
@@ -10,9 +11,11 @@
   <h1 class="landing-title">Alternative protein isoforms</h1>
   <p class="landing-desc">
     Evidence-scored annotation of alternative translation initiation sites detected by
-    Ribo-TISH. Every isoform carries a dual evidence axis — six existence criteria
-    (E1–E6) and six functional-impact criteria (F1–F6) — each grounded in per-isoform
-    structural, conservation, clinical, and proteomic data.
+    Ribo-TISH. Every isoform is read across six evidence categories —
+    <strong>C</strong>onservation, <strong>D</strong>etection, <strong>L</strong>ocalization,
+    <strong>M</strong>utation landscape, <strong>P</strong>redicted structure, and
+    <strong>S</strong>tructural characteristics — each grounded in per-isoform structural,
+    conservation, clinical, and proteomic data.
   </p>
 
   <div class="landing-stats">
@@ -20,9 +23,54 @@
     <div class="stat"><span class="stat-num">{{ stats.iso }}</span><span class="stat-lbl">isoforms</span></div>
   </div>
 
-  <div class="landing-search">
-    <input type="search" id="gene-search" placeholder="Search a gene… (e.g. CBX1, TRIP13)"
-           autocomplete="off" spellcheck="false" aria-label="Search genes">
+  <div class="search-and-refine">
+    <div class="landing-search">
+      <input type="search" id="gene-search" placeholder="Search a gene… (e.g. CBX1, TRIP13)"
+             autocomplete="off" spellcheck="false" aria-label="Search genes">
+
+      <div class="kw-facet">
+        <input type="text" id="kw-input" placeholder="Filter by function… (e.g. Kinase, Cell cycle)"
+               autocomplete="off" spellcheck="false" aria-label="Filter by UniProt keyword"
+               title="Filter genes by UniProt keyword — a curated functional term (Kinase, Cell cycle, DNA-binding…). Type to pick from the terms present in the catalogue.">
+        <div id="kw-dropdown" class="kw-dropdown" hidden></div>
+      </div>
+
+      <div id="kw-controls" class="kw-controls" hidden>
+        <div id="kw-selected" class="kw-selected"></div>
+        <div class="kw-mode" title="all = gene must carry every selected keyword; any = at least one">
+          match
+          <label><input type="radio" name="kwmode" value="and" checked> all</label>
+          <label><input type="radio" name="kwmode" value="or"> any</label>
+        </div>
+        <button type="button" id="kw-clear" class="kw-clear">clear</button>
+      </div>
+
+      <p id="result-count" class="result-count" hidden></p>
+    </div>
+
+    <div class="refine-col">
+      <div class="cat-filter">
+        <span class="refine-label" title="C·D·L·M·P·S — Conservation, Detection, Localization, Mutation landscape, Predicted structure, Structural characteristics">Category</span>
+        <div id="cat-toggles" class="cat-toggles">
+          {% for group in CARD_GROUPS %}
+          <button type="button" class="cat-toggle" data-cat="{{ group.letter }}"
+                  title="{{ group.name }} — keep genes whose Best isoform fires {{ group.name }}">{{ group.letter }}</button>
+          {% endfor %}
+        </div>
+        <span id="cat-mode" class="kw-mode" hidden title="all = Best isoform must fire every selected category; any = at least one">
+          <label><input type="radio" name="catmode" value="and" checked> all</label>
+          <label><input type="radio" name="catmode" value="or"> any</label>
+        </span>
+      </div>
+      <label class="sort-control">
+        <span class="refine-label">Sort</span>
+        <select id="sort-mode"
+                title="Order genes. 'interesting index' ranks by the Best isoform's net CDLMPS score (green +1, red −1).">
+          <option value="name">gene name</option>
+          <option value="firing" title="Net CDLMPS score: +1 per green (interesting) category, −1 per red (not interesting)">interesting index</option>
+        </select>
+      </label>
+    </div>
   </div>
 
   {% if genes %}
@@ -51,22 +99,13 @@
   {% set n_trunc = truncations|length %}
   {% set n_other = others|length %}
 
-  {# Max E and F across this gene's isoforms — headline summary. #}
-  {% set e_max = namespace(score=none, eval=none) %}
-  {% set f_max = namespace(score=none, eval=none) %}
-  {% for iso in gene.isoforms %}
-    {% if iso.existence_score is not none and (e_max.score is none or iso.existence_score > e_max.score) %}
-      {% set e_max.score = iso.existence_score %}
-      {% set e_max.eval = iso.existence_evaluable or 0 %}
-    {% endif %}
-    {% if iso.functional_score is not none and (f_max.score is none or iso.functional_score > f_max.score) %}
-      {% set f_max.score = iso.functional_score %}
-      {% set f_max.eval = iso.functional_evaluable or 0 %}
-    {% endif %}
-  {% endfor %}
-
+  {% set best = gene.best_isoform %}
   <div class="gene-card block bg-white border border-slate-200 rounded-lg p-4 hover:border-slate-400 hover:shadow-sm transition"
-       data-gene="{{ gene.name|lower }}" data-uniprot="{{ (gene.uniprot_id or '')|lower }}">
+       data-gene="{{ gene.name|lower }}" data-uniprot="{{ (gene.uniprot_id or '')|lower }}"
+       data-keywords="{{ gene.keywords|join(';') }}"
+       data-fires="{{ best.fired_categories|join('') if best else '' }}"
+       data-net-score="{{ best.net_score if best else 0 }}"
+       data-fire-interesting="{{ best.n_interesting if best else 0 }}">
 
     <div class="flex items-baseline justify-between mb-2">
       <div class="flex items-baseline gap-2">
@@ -81,11 +120,23 @@
       </span>
     </div>
 
-    {# Headline E/F scores — max across isoforms. #}
-    <div class="flex gap-3 mb-3 text-xs font-mono text-slate-700">
-      <span><span class="text-slate-500">Best E</span> {% if e_max.score is not none %}{{ e_max.score }}/{{ e_max.eval }}{% else %}—{% endif %}</span>
-      <span><span class="text-slate-500">Best F</span> {% if f_max.score is not none %}{{ f_max.score }}/{{ f_max.eval }}{% else %}—{% endif %}</span>
+    {# Headline CDLMPS lineup — the highest net-score isoform (best set above). #}
+    {% if best %}
+    <div class="gene-card-best mb-2">{{ sc.cdlmps(best.category_verdicts, label='Best:') }}</div>
+    {% endif %}
+
+    {# UniProt keyword chips — clickable adds the term to the functional filter;
+       "+N more" expands to reveal every assigned keyword (lazily injected). #}
+    {% if gene.keywords %}
+    <div class="gene-card-kw mb-3" data-expanded="0">
+      {% for kw in gene.keywords[:6] %}
+        <button type="button" class="kw-chip" data-kw="{{ kw }}" title="Add “{{ kw }}” to the function filter">{{ kw }}</button>
+      {% endfor %}
+      {% if gene.keywords|length > 6 %}
+        <button type="button" class="kw-toggle" data-n="{{ gene.keywords|length - 6 }}">+{{ gene.keywords|length - 6 }} more</button>
+      {% endif %}
     </div>
+    {% endif %}
 
     {# Isoform dropdown — native <details> element, no JS. #}
     <details class="iso-dropdown">
@@ -104,19 +155,19 @@
         {% for iso in extensions %}
         <li><a href="{{ url_for('isoform_page', gene_name=gene.name, tis_slug_str=iso.tis_id|slugify) }}">
           <span class="iso-chip ext">EXT</span>
-          {{ iso.tis_id }} · {{ iso.aa_len }} aa · E {% if iso.existence_score is not none %}{{ iso.existence_score }}/{{ iso.existence_evaluable }}{% else %}—{% endif %} · F {% if iso.functional_score is not none %}{{ iso.functional_score }}/{{ iso.functional_evaluable }}{% else %}—{% endif %}
+          {{ iso.tis_id }} · {{ iso.aa_len }} aa · {{ sc.cdlmps(iso.category_verdicts) }}
         </a></li>
         {% endfor %}
         {% for iso in truncations %}
         <li><a href="{{ url_for('isoform_page', gene_name=gene.name, tis_slug_str=iso.tis_id|slugify) }}">
           <span class="iso-chip trunc">TRUNC</span>
-          {{ iso.tis_id }} · {{ iso.aa_len }} aa · E {% if iso.existence_score is not none %}{{ iso.existence_score }}/{{ iso.existence_evaluable }}{% else %}—{% endif %} · F {% if iso.functional_score is not none %}{{ iso.functional_score }}/{{ iso.functional_evaluable }}{% else %}—{% endif %}
+          {{ iso.tis_id }} · {{ iso.aa_len }} aa · {{ sc.cdlmps(iso.category_verdicts) }}
         </a></li>
         {% endfor %}
         {% for iso in others %}
         <li><a href="{{ url_for('isoform_page', gene_name=gene.name, tis_slug_str=iso.tis_id|slugify) }}">
           <span class="iso-chip other">{{ iso.orf_type|upper }}</span>
-          {{ iso.tis_id }} · {{ iso.aa_len }} aa · E {% if iso.existence_score is not none %}{{ iso.existence_score }}/{{ iso.existence_evaluable }}{% else %}—{% endif %} · F {% if iso.functional_score is not none %}{{ iso.functional_score }}/{{ iso.functional_evaluable }}{% else %}—{% endif %}
+          {{ iso.tis_id }} · {{ iso.aa_len }} aa · {{ sc.cdlmps(iso.category_verdicts) }}
         </a></li>
         {% endfor %}
       </ul>
@@ -135,21 +186,243 @@
 {% block scripts %}
 <script>
   (function () {
-    var input = document.getElementById("gene-search");
-    if (!input) return;
+    var nameInput = document.getElementById("gene-search");
+    var kwInput = document.getElementById("kw-input");
+    if (!nameInput) return;
     var cards = Array.prototype.slice.call(document.querySelectorAll(".gene-card"));
     var none = document.getElementById("no-results");
-    input.addEventListener("input", function () {
-      var q = input.value.trim().toLowerCase();
+    var dropdown = document.getElementById("kw-dropdown");
+    var controls = document.getElementById("kw-controls");
+    var selectedBox = document.getElementById("kw-selected");
+    var clearBtn = document.getElementById("kw-clear");
+    var countEl = document.getElementById("result-count");
+
+    // --- Inverted index: keyword(lowercase) -> {name, cards[]}. One pass. ---
+    // Each card carries its own lowercased keyword set for O(1) membership.
+    var index = {};
+    cards.forEach(function (c) {
+      var raw = c.dataset.keywords || "";
+      c._kw = {};
+      (raw ? raw.split(";") : []).forEach(function (k) {
+        k = k.trim();
+        if (!k) return;
+        var key = k.toLowerCase();
+        c._kw[key] = true;
+        if (!index[key]) index[key] = { name: k, cards: [] };
+        index[key].cards.push(c);
+      });
+    });
+    var vocab = Object.keys(index).map(function (key) {
+      return { key: key, name: index[key].name, count: index[key].cards.length };
+    });
+    vocab.sort(function (a, b) { return b.count - a.count || a.name.localeCompare(b.name); });
+
+    // --- CDLMPS firing: per-card fired-letter set + original DOM order. ---
+    var grid = document.getElementById("gene-grid");
+    cards.forEach(function (c, i) {
+      c._order = i;
+      c._fires = {};
+      (c.dataset.fires || "").split("").forEach(function (L) { if (L.trim()) c._fires[L] = true; });
+      c._net = parseInt(c.dataset.netScore || "0", 10) || 0;
+      c._int = parseInt(c.dataset.fireInteresting || "0", 10) || 0;
+    });
+
+    var selected = [];            // array of keyword keys (lowercase)
+    var mode = "and";             // "and" | "or" — keyword match mode
+    var selectedCats = [];        // array of category letters, e.g. ["C","D"]
+    var catMode = "and";          // "and" | "or" — category match mode
+    var sortMode = "name";        // "name" | "firing"
+
+    function currentMode() {
+      var r = document.querySelector('input[name="kwmode"]:checked');
+      return r ? r.value : "and";
+    }
+    function currentCatMode() {
+      var r = document.querySelector('input[name="catmode"]:checked');
+      return r ? r.value : "and";
+    }
+
+    // --- Filtering: name ∩ keywords ∩ fired-categories. ---
+    function apply() {
+      var q = (nameInput.value || "").trim().toLowerCase();
       var shown = 0;
       cards.forEach(function (c) {
-        var hay = (c.dataset.gene || "") + " " + (c.dataset.uniprot || "");
-        var match = !q || hay.indexOf(q) !== -1;
+        var nameMatch = !q ||
+          ((c.dataset.gene || "") + " " + (c.dataset.uniprot || "")).indexOf(q) !== -1;
+        var kwMatch = true;
+        if (selected.length) {
+          kwMatch = (mode === "and")
+            ? selected.every(function (k) { return c._kw[k]; })
+            : selected.some(function (k) { return c._kw[k]; });
+        }
+        var catMatch = true;
+        if (selectedCats.length) {
+          catMatch = (catMode === "and")
+            ? selectedCats.every(function (L) { return c._fires[L]; })
+            : selectedCats.some(function (L) { return c._fires[L]; });
+        }
+        var match = nameMatch && kwMatch && catMatch;
         c.style.display = match ? "" : "none";
         if (match) shown++;
       });
       if (none) none.style.display = shown ? "none" : "block";
+      if (countEl) {
+        var active = q || selected.length || selectedCats.length;
+        countEl.hidden = !active;
+        countEl.textContent = active ? shown + " gene" + (shown === 1 ? "" : "s") : "";
+      }
+    }
+
+    // --- Sorting: net CDLMPS score (firing) or original order (name). ---
+    function applySort() {
+      var arr = cards.slice();
+      if (sortMode === "firing") {
+        arr.sort(function (a, b) {
+          return (b._net - a._net) || (b._int - a._int) ||
+                 (a.dataset.gene || "").localeCompare(b.dataset.gene || "");
+        });
+      } else {
+        arr.sort(function (a, b) { return a._order - b._order; });
+      }
+      arr.forEach(function (c) { grid.appendChild(c); });
+    }
+
+    // --- Selected-keyword chips. ---
+    function renderSelected() {
+      selectedBox.innerHTML = "";
+      selected.forEach(function (key) {
+        var chip = document.createElement("span");
+        chip.className = "kw-tag";
+        chip.textContent = index[key] ? index[key].name : key;
+        var x = document.createElement("button");
+        x.type = "button";
+        x.className = "kw-tag-x";
+        x.setAttribute("aria-label", "Remove");
+        x.textContent = "×";
+        x.addEventListener("click", function () { removeKeyword(key); });
+        chip.appendChild(x);
+        selectedBox.appendChild(chip);
+      });
+      if (controls) controls.hidden = selected.length === 0;
+    }
+
+    function addKeyword(key) {
+      key = (key || "").toLowerCase();
+      if (!index[key] || selected.indexOf(key) !== -1) return;
+      selected.push(key);
+      kwInput.value = "";
+      hideDropdown();
+      renderSelected();
+      apply();
+    }
+    function removeKeyword(key) {
+      selected = selected.filter(function (k) { return k !== key; });
+      renderSelected();
+      apply();
+    }
+
+    // --- Autocomplete dropdown over the vocabulary. ---
+    function hideDropdown() { dropdown.hidden = true; dropdown.innerHTML = ""; }
+    function showDropdown() {
+      var q = (kwInput.value || "").trim().toLowerCase();
+      // Show every matching keyword (the list scrolls); cap only guards against
+      // a pathological DOM on a huge genome-wide vocabulary. Type to narrow.
+      var matches = vocab.filter(function (v) {
+        return selected.indexOf(v.key) === -1 && (!q || v.key.indexOf(q) !== -1);
+      }).slice(0, 500);
+      if (!matches.length) { hideDropdown(); return; }
+      dropdown.innerHTML = "";
+      matches.forEach(function (v) {
+        var row = document.createElement("button");
+        row.type = "button";
+        row.className = "kw-option";
+        row.innerHTML = '<span class="kw-option-name"></span>' +
+                        '<span class="kw-option-count"></span>';
+        row.querySelector(".kw-option-name").textContent = v.name;
+        row.querySelector(".kw-option-count").textContent = v.count;
+        row.addEventListener("mousedown", function (e) { e.preventDefault(); addKeyword(v.key); });
+        dropdown.appendChild(row);
+      });
+      dropdown.hidden = false;
+    }
+
+    // --- Wiring. ---
+    nameInput.addEventListener("input", apply);
+    if (kwInput) {
+      kwInput.addEventListener("input", showDropdown);
+      kwInput.addEventListener("focus", showDropdown);
+      kwInput.addEventListener("blur", function () { setTimeout(hideDropdown, 120); });
+      kwInput.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") {
+          var first = dropdown.querySelector(".kw-option");
+          if (first) { e.preventDefault(); first.dispatchEvent(new MouseEvent("mousedown")); }
+        } else if (e.key === "Escape") {
+          hideDropdown();
+        }
+      });
+    }
+    Array.prototype.forEach.call(document.querySelectorAll('input[name="kwmode"]'), function (r) {
+      r.addEventListener("change", function () { mode = currentMode(); apply(); });
     });
+    if (clearBtn) clearBtn.addEventListener("click", function () {
+      selected = []; renderSelected(); apply();
+    });
+
+    // --- CDLMPS category toggles + all/any + sort. ---
+    var catModeBox = document.getElementById("cat-mode");
+    Array.prototype.forEach.call(document.querySelectorAll(".cat-toggle"), function (btn) {
+      btn.addEventListener("click", function () {
+        var L = btn.dataset.cat;
+        var on = btn.classList.toggle("active");
+        if (on) { if (selectedCats.indexOf(L) === -1) selectedCats.push(L); }
+        else { selectedCats = selectedCats.filter(function (x) { return x !== L; }); }
+        if (catModeBox) catModeBox.hidden = selectedCats.length < 2;
+        apply();
+      });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('input[name="catmode"]'), function (r) {
+      r.addEventListener("change", function () { catMode = currentCatMode(); apply(); });
+    });
+    var sortSelect = document.getElementById("sort-mode");
+    if (sortSelect) sortSelect.addEventListener("change", function () {
+      sortMode = sortSelect.value; applySort();
+    });
+    // Card keyword interactions: "+N more" reveals every keyword; a chip
+    // click adds that term to the functional filter.
+    document.getElementById("gene-grid").addEventListener("click", function (e) {
+      var toggle = e.target.closest(".kw-toggle");
+      if (toggle) {
+        e.preventDefault();
+        var box = toggle.parentNode;                 // .gene-card-kw
+        if (box.dataset.expanded === "1") {
+          Array.prototype.slice.call(box.querySelectorAll(".kw-extra"))
+            .forEach(function (el) { el.remove(); });
+          box.dataset.expanded = "0";
+          toggle.textContent = "+" + toggle.dataset.n + " more";
+        } else {
+          var all = (toggle.closest(".gene-card").dataset.keywords || "")
+            .split(";").map(function (s) { return s.trim(); }).filter(Boolean);
+          all.slice(6).forEach(function (kw) {
+            var b = document.createElement("button");
+            b.type = "button";
+            b.className = "kw-chip kw-extra";
+            b.dataset.kw = kw;
+            b.title = "Add “" + kw + "” to the function filter";
+            b.textContent = kw;
+            box.insertBefore(b, toggle);
+          });
+          box.dataset.expanded = "1";
+          toggle.textContent = "show less";
+        }
+        return;
+      }
+      var chip = e.target.closest(".kw-chip");
+      if (chip) { e.preventDefault(); addKeyword(chip.dataset.kw); }
+    });
+
+    renderSelected();
+    apply();
+    applySort();
   })();
 </script>
 {% endblock %}

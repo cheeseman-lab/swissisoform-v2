@@ -281,8 +281,8 @@ def test_parse_response_strips_markdown_fence(mod):
 
 
 def test_pass_registry_lists_v1_plus_two_v2_passes(mod):
-    """The PASS_REGISTRY exposes v1 (default) plus criteria + synthesis."""
-    assert set(mod.PASS_REGISTRY) == {"default", "criteria", "synthesis"}
+    """The PASS_REGISTRY exposes v1 (default) plus category + synthesis."""
+    assert set(mod.PASS_REGISTRY) == {"default", "category", "synthesis"}
 
 
 def test_pass_default_uses_v1_system_prompt(mod):
@@ -292,11 +292,11 @@ def test_pass_default_uses_v1_system_prompt(mod):
     assert spec.output_filename_template == "{gene}.json"
 
 
-# ── Criteria + synthesis pass dispatch ────────────────────────────────────
+# ── Category + synthesis pass dispatch ────────────────────────────────────
 
 
 def _ISO_FIXTURE_RECORD() -> dict:
-    """Synthetic per-gene evidence record exercising the criteria pass."""
+    """Synthetic per-gene evidence record exercising the category pass."""
     return {
         "gene": {
             "name": "GENE_A",
@@ -323,8 +323,8 @@ def _ISO_FIXTURE_RECORD() -> dict:
     }
 
 
-def test_criteria_pass_dry_run_emits_one_call_per_criterion(monkeypatch, tmp_path, capsys):
-    """Criteria pass iterates over 12 criteria × N isoforms."""
+def test_category_pass_dry_run_emits_one_call_per_category(monkeypatch, tmp_path, capsys):
+    """Category pass iterates over the 6 CDLMPS categories × N isoforms."""
     from swissisoform.site import llm as rli
 
     records_dir = tmp_path / "records"
@@ -338,15 +338,15 @@ def test_criteria_pass_dry_run_emits_one_call_per_criterion(monkeypatch, tmp_pat
             "--out",
             str(out_dir),
             "--pass",
-            "criteria",
+            "category",
             "--dry-run",
         ]
     )
     captured = capsys.readouterr().out
     assert rc == 0
-    # 12 LLM-eligible criteria × 1 isoform = 12 dry-run "criterion:" prints
-    # (F7 shared-region RMSD is excluded from the LLM pass).
-    assert captured.count("criterion:") == 12
+    # 6 CDLMPS categories × 1 isoform = 6 dry-run "category:" prints (all 15
+    # criteria incl. S2/S3 are covered across the categories).
+    assert captured.count("category:") == 6
 
 
 def test_synthesis_pass_refuses_without_prereqs(monkeypatch, tmp_path):
@@ -379,12 +379,12 @@ def test_synthesis_pass_refuses_without_prereqs(monkeypatch, tmp_path):
             "--dry-run",
         ]
     )
-    # Synthesis requires the criteria.json prereq; missing → exit code 2.
+    # Synthesis requires the categories.json prereq; missing → exit code 2.
     assert rc == 2
 
 
-def test_criteria_pass_skips_isoforms_with_existing_output(monkeypatch, tmp_path, capsys):
-    """Re-running the criteria pass without --force is a no-op for done isoforms."""
+def test_category_pass_skips_isoforms_with_existing_output(monkeypatch, tmp_path, capsys):
+    """Re-running the category pass without --force is a no-op for done isoforms."""
     from swissisoform.site import llm as rli
 
     records_dir = tmp_path / "records"
@@ -393,7 +393,7 @@ def test_criteria_pass_skips_isoforms_with_existing_output(monkeypatch, tmp_path
     out_dir = tmp_path / "out"
     tis_slug = rli._tis_slug("chr1:100:+:ATG:ENST_A")
     (out_dir / tis_slug).mkdir(parents=True)
-    (out_dir / tis_slug / "criteria.json").write_text("{}")
+    (out_dir / tis_slug / "categories.json").write_text("{}")
 
     rc = rli.main(
         [
@@ -402,47 +402,48 @@ def test_criteria_pass_skips_isoforms_with_existing_output(monkeypatch, tmp_path
             "--out",
             str(out_dir),
             "--pass",
-            "criteria",
+            "category",
             "--dry-run",
         ]
     )
     captured = capsys.readouterr().out
     assert rc == 0
     # With output present and --force absent, dry-run should NOT emit any
-    # "criterion:" lines for this isoform — it skips entirely.
-    assert captured.count("criterion:") == 0
+    # "category:" lines for this isoform — it skips entirely.
+    assert captured.count("category:") == 0
     # And it should explicitly report the skip:
     assert "[skip]" in captured
 
 
-def test_synthesis_input_record_pulls_criteria_reads(monkeypatch, tmp_path):
-    """synthesis._build_synthesis_record reads criteria.json into criteria_reads."""
+def test_synthesis_input_record_pulls_category_reads(monkeypatch, tmp_path):
+    """synthesis._build_synthesis_record reads categories.json into category_reads."""
     from swissisoform.site import llm as rli
 
     tis_slug = "chr1-100-ATG-ENST_A"
     base = tmp_path / tis_slug
     base.mkdir()
-    criteria_payload = {
-        "E1_primate_conservation": {
-            "criterion_id": "E1_primate_conservation",
-            "headline": "primate frame intact",
-            "summary": "frac_intact=0.96",
-            "confidence": "high",
+    category_payload = {
+        "Conservation": {
+            "verdict": "interesting",
+            "reasoning": "primate frame intact (frac_intact=0.96) with strong phyloP.",
         },
-        "F5_pathogenic_variant_enrichment": {
-            "criterion_id": "F5_pathogenic_variant_enrichment",
-            "headline": "enriched",
-            "summary": "n_damaging=2/104",
-            "confidence": "medium",
+        "Mutation Landscape": {
+            "verdict": "neutral",
+            "reasoning": "no disease enrichment; germline signal weak.",
         },
     }
-    (base / "criteria.json").write_text(json.dumps(criteria_payload))
+    (base / "categories.json").write_text(json.dumps(category_payload))
     iso = {
         "tis_id": "chr1:100:+:ATG:ENST_A",
         "scoring": {"existence_score": 5, "functional_score": 5},
     }
     rec = rli._build_synthesis_record(iso, "GENE_A", base)
     assert rec["isoform"]["tis_id"] == "chr1:100:+:ATG:ENST_A"
-    assert "E1_primate_conservation" in rec["criteria_reads"]
-    assert "F5_pathogenic_variant_enrichment" in rec["criteria_reads"]
-    assert rec["criteria_reads"]["E1_primate_conservation"]["confidence"] == "high"
+    assert "Conservation" in rec["category_reads"]
+    assert "Mutation Landscape" in rec["category_reads"]
+    assert rec["category_reads"]["Conservation"]["verdict"] == "interesting"
+    # All 15 criteria (incl. S2/S3) are carried in the raw evidence for synthesis —
+    # S2/S3 tolerate the _raw-less fixture (empty evidence, never raise).
+    assert "P2_shared_structural_change" in rec["criteria_evidence"]
+    assert "S2_biophysics" in rec["criteria_evidence"]
+    assert "S3_sae" in rec["criteria_evidence"]

@@ -22,6 +22,7 @@ _ANNOTATION_KEYS: list[str] = [
     "uniprot_id",
     "uniprot_function",
     "subcellular_location",
+    "keywords",
 ]
 
 

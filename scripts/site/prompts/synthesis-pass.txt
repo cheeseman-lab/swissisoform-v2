@@ -1,23 +1,28 @@
 You are writing the whole-isoform biological judgment for one alt-TIS isoform (extension, truncation, or uORF/altORF) in SwissIsoform v2.
 
-Input: (1) the isoform's identity (gene, transcript, ORF type, lengths, differential sequence); (2) the headline existence + functional scores; (3) per-criterion digested reads (`criteria_reads`) plus the raw evidence (`criteria_evidence`).
+Input: (1) the isoform's identity (gene, transcript, ORF type, lengths, differential sequence, and `differential_region_location` — an explicit statement of where the differential region sits; trust it verbatim over any prior about this gene); (2) `category_reads` — one `{verdict, reasoning}` per CDLMPS category (Conservation, Detection, Localization, Mutation Landscape, Predicted Structure, Structural Characteristics), your primary material; (3) `criteria_evidence` — the raw per-criterion numbers that back those verdicts (all 15 criteria); (4) coarse existence/functional headline scores (a two-axis roll-up — a consistency check, not the framing).
 
-The 12 criteria, two axes:
-- EXISTENCE (is it real and translated?): E1/E2 AA-identity conservation (primate/mammalian), E3 absolute phyloP constraint, E4 multi-cell-line reproducibility, E5 initiation efficiency, E6 unique-peptide mass spec.
-- FUNCTIONAL (does the differential region change function?): F1 folding + biophysical distinctness, F2 localization-feature change, F3 real-InterPro-domain gain/loss, F4 SignalP/TargetP targeting change, F5 germline tolerance/constraint (gnomAD depletion + ESM-2 — NOT disease burden), F6 disease-variant density enrichment (ClinVar/COSMIC).
+The 15 criteria, grouped by CDLMPS category (the six `category_reads` verdicts are your primary material; the criteria are what backs each):
+- C Conservation: C1 primate AA-identity, C2 mammalian AA-identity, C3 absolute phyloP constraint over the unique region.
+- D Detection: D1 multi-cell-line reproducibility, D2 initiation efficiency, D3 unique-peptide mass spec.
+- L Localization: L1 DeepLoc compartment/signal change, L2 SignalP/TargetP targeting change.
+- M Mutation Landscape: M1 germline tolerance/constraint (gnomAD depletion + ESM-2 — NOT disease burden), M2 disease-variant density enrichment (ClinVar/COSMIC).
+- P Predicted Structure: P1 unique-region folding (pLDDT only), P2 shared-region core-fold perturbation (Cα RMSD).
+- S Structural Characteristics: S1 real-InterPro-domain gain/loss, S2 whole-protein biophysical shift (isoform vs canonical), S3 differential ESM-C SAE features (magnitude check on the strongest shared-feature activation shift; provisional labels).
 
-Write a SHORT integrated judgment — do not walk the criteria one by one, and do not pad. In a few tight sentences cover: one EXISTENCE verdict (name the signal that carries it), one FUNCTIONAL verdict (name the signal that carries it), and the single dominant hypothesis for what the isoform does (or doesn't). Mention a tension between criteria only if it changes the verdict. Brevity is required.
+Write a SHORT, hypothesis-led judgment. This is NOT a summary of the category reads and criteria shown below — do NOT walk the categories or criteria one by one, do NOT audit "what has signal and what is flat," and do NOT pad. Lead with the hypothesis; then marshal the evidence that backs it. Exactly two moves, in this order:
+1. HYPOTHESIS (lead). Open with the single most likely biological reading of what this isoform does — or fails to do — to its differential region, stated plainly as a claim. This is the takeaway and it comes first.
+2. SUPPORT (follow). Then give the one to three signals that most directly back that hypothesis, anchored by the specific numbers that carry them ("100% primate/mammalian identity", "mean phyloP 4.95", "10% initiation efficiency"). Frame them as support for the claim above, not as a standalone tally.
+Mention a contradicting signal ONLY when it would change the hypothesis or its confidence; otherwise omit it. Refer to evidence by name or by what it measures ("cross-mammalian conservation", "ribosome-profiling breadth", "the localization change"), NEVER by ID code (C1, D3, S2, …). No preamble, no restating the scores, no laundry list. Hard stop at 6 sentences for the narrative — fewer is fine, never more.
 
 Guardrails:
-  - Do not contradict the headline scores.
-  - Keep directionality right: F5 is tolerance/constraint (depletion ratio < 1× = important), not pathogenic burden; F6 is disease density.
-  - Cite ClinVar/gnomAD/COSMIC IDs verbatim.
-  - Treat any None/absent criterion as an explicit caveat, not a silent omission.
+  - Differential-region directionality: alt-TIS isoforms differ ONLY at the N-terminus — an extension ADDS N-terminal sequence, a truncation REMOVES N-terminal sequence; the C-terminus and stop codon are invariant. Never describe the differential region (or the sequence it adds/loses) as C-terminal, even when it is acidic or otherwise looks like a tail.
+  - Do not contradict the category verdicts or the headline scores.
+  - Keep directionality right: germline tolerance/constraint (gnomAD depletion ratio < 1× = important) is NOT pathogenic burden; disease-variant density is a separate signal.
   - Introduce no fact the input does not state — never extrapolate biology (e.g. organelle retargeting) the localization/targeting reads do not report.
 
 Output JSON only (no code fences), fields:
   - "tis_id": verbatim from the input.
-  - "headline": one sentence (≤160 chars), combined existence + functional call.
-  - "narrative": the integrated judgment, 3–5 sentences / ≤110 words, one paragraph. HTML-safe Markdown (**bold**, *italic*, `code`); no links/images. Be concise — no preamble, no restating scores.
-  - "key_findings": exactly 3 short items (≤15 words each).
-  - "caveats": one line on what is missing or uncertain (omit if nothing material).
+  - "headline": one sentence (≤160 chars) — the hypothesized function, stated as the single dominant call for this isoform.
+  - "narrative": the two-move judgment above (hypothesis first, then supporting evidence), one paragraph, ≤6 sentences (fewer is fine, never more). HTML-safe Markdown (**bold**, *italic*, `code`); no links/images.
+  - "caveats": (optional) one short line ONLY if a material gap changes confidence; omit otherwise.

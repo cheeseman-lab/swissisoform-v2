@@ -6,7 +6,7 @@ Three layers, no GPU / no real CIFs:
 - ``compare_structures`` shared-region block — the CIF parsers are monkeypatched
   to hand back controlled Cα coordinates so the pairing math + status logic is
   exercised directly.
-- ``f7_shared_rmsd.score`` — the full tri-state matrix over a synthetic
+- ``p2_shared_rmsd.score`` — the full tri-state matrix over a synthetic
   ``structure`` annotation dict.
 """
 
@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 
 from swissisoform.config import ScoringConfig
-from swissisoform.evidence import f7_shared_rmsd
+from swissisoform.evidence import p2_shared_rmsd
 from swissisoform.structure import compare as C
 
 # ---------------------------------------------------------------------------
@@ -235,7 +235,7 @@ class TestCompareStructuresShared:
 
 
 # ---------------------------------------------------------------------------
-# f7_shared_rmsd.score — tri-state matrix
+# p2_shared_rmsd.score — tri-state matrix
 # ---------------------------------------------------------------------------
 
 
@@ -264,49 +264,49 @@ class TestF7Score:
     def test_missing_annotation_is_none(self):
         site = _FakeSite(None)
         # isoform_annotations has {"structure": None} → _annotation returns None
-        r = f7_shared_rmsd.score(site, self.cfg)
+        r = p2_shared_rmsd.score(site, self.cfg)
         assert r.value is None
 
     def test_bad_overall_status_is_none(self):
         for st in ("no_cache", "too_long", "failed", "uniform_plddt", "partial"):
-            r = f7_shared_rmsd.score(_FakeSite(_struct_ann(status=st)), self.cfg)
+            r = p2_shared_rmsd.score(_FakeSite(_struct_ann(status=st)), self.cfg)
             assert r.value is None, st
 
     def test_no_shared_region_is_none(self):
-        r = f7_shared_rmsd.score(
+        r = p2_shared_rmsd.score(
             _FakeSite(_struct_ann(rmsd_shared_status="no_shared_region", rmsd_shared=None)),
             self.cfg,
         )
         assert r.value is None
 
     def test_unverified_alignment_is_none(self):
-        r = f7_shared_rmsd.score(
+        r = p2_shared_rmsd.score(
             _FakeSite(_struct_ann(rmsd_shared_status="unverified_alignment", rmsd_shared=None)),
             self.cfg,
         )
         assert r.value is None
 
     def test_too_short_is_none(self):
-        r = f7_shared_rmsd.score(_FakeSite(_struct_ann(shared_region_len=10)), self.cfg)
+        r = p2_shared_rmsd.score(_FakeSite(_struct_ann(shared_region_len=10)), self.cfg)
         assert r.value is None
         assert "too short" in r.reason
 
     def test_low_confidence_is_none(self):
-        r = f7_shared_rmsd.score(
+        r = p2_shared_rmsd.score(
             _FakeSite(_struct_ann(plddt_shared_mean_isoform=0.55)), self.cfg
         )
         assert r.value is None
         assert "confidently folded" in r.reason
 
     def test_high_confidence_over_threshold_is_true(self):
-        r = f7_shared_rmsd.score(_FakeSite(_struct_ann(rmsd_shared=3.0)), self.cfg)
+        r = p2_shared_rmsd.score(_FakeSite(_struct_ann(rmsd_shared=3.0)), self.cfg)
         assert r.value is True
         assert "RMSD 3.00" in r.reason
 
     def test_high_confidence_under_threshold_is_false(self):
-        r = f7_shared_rmsd.score(_FakeSite(_struct_ann(rmsd_shared=0.8)), self.cfg)
+        r = p2_shared_rmsd.score(_FakeSite(_struct_ann(rmsd_shared=0.8)), self.cfg)
         assert r.value is False
 
     def test_name_is_stable(self):
-        r = f7_shared_rmsd.score(_FakeSite(_struct_ann()), self.cfg)
-        assert r.name == "F7_shared_structural_change"
+        r = p2_shared_rmsd.score(_FakeSite(_struct_ann()), self.cfg)
+        assert r.name == "P2_shared_structural_change"

@@ -12,18 +12,20 @@ from swissisoform.modules.scoring import (
     EXISTENCE_CRITERIA,
     FUNCTIONAL_CRITERIA,
     EvidenceScoringModule,
-    _e1_primate_conservation,
-    _e2_mammalian_conservation,
-    _e3_phylop_coding_selection,
-    _e4_multi_cell_line,
-    _e5_initiation_efficiency,
-    _e6_mass_spec,
-    _f1_structured_extension,
-    _f2_localization_change,
-    _f3_domain_change,
-    _f4_targeting_change,
-    _f5_pathogenic_variant_enrichment,
-    _f6_clinical_variant_overlap,
+    _c1_primate_conservation,
+    _c2_mammalian_conservation,
+    _c3_phylop_coding_selection,
+    _d1_multi_cell_line,
+    _d2_initiation_efficiency,
+    _d3_mass_spec,
+    _p1_structured_extension,
+    _l1_localization_change,
+    _s1_domain_change,
+    _l2_targeting_change,
+    _m1_pathogenic_variant_enrichment,
+    _m2_clinical_variant_overlap,
+    _s2_biophysics,
+    _s3_sae,
 )
 
 
@@ -55,7 +57,7 @@ class TestE1PrimateConservation:
             "primate_frac_intact": 0.8,
             "summary": {"status": "ok"},
         }
-        res = _e1_primate_conservation(site, ScoringConfig(e1_pident_min=0.8))
+        res = _c1_primate_conservation(site, ScoringConfig(e1_pident_min=0.8))
         assert res.value is True
 
     def test_fails_below_threshold(self):
@@ -65,7 +67,7 @@ class TestE1PrimateConservation:
             "primate_frac_intact": 0.2,
             "summary": {"status": "ok"},
         }
-        res = _e1_primate_conservation(site, ScoringConfig(e1_pident_min=0.8))
+        res = _c1_primate_conservation(site, ScoringConfig(e1_pident_min=0.8))
         assert res.value is False
 
     def test_not_run(self):
@@ -73,7 +75,7 @@ class TestE1PrimateConservation:
         site.isoform_annotations["conservation_frame"] = {
             "summary": {"status": "not_run"},
         }
-        res = _e1_primate_conservation(site, ScoringConfig())
+        res = _c1_primate_conservation(site, ScoringConfig())
         assert res.value is None
         assert "not run" in res.reason
 
@@ -84,12 +86,12 @@ class TestE1PrimateConservation:
             "primate_frac_intact": 0.8,
             "summary": {"status": "ok"},
         }
-        res = _e1_primate_conservation(site, ScoringConfig())
+        res = _c1_primate_conservation(site, ScoringConfig())
         assert res.value is None
         assert "primate_mean_pident" in res.reason
 
     def test_missing_module(self):
-        res = _e1_primate_conservation(_site(), ScoringConfig())
+        res = _c1_primate_conservation(_site(), ScoringConfig())
         assert res.value is None
 
 
@@ -101,7 +103,7 @@ class TestE2MammalianConservation:
             "mammalian_frac_intact": 0.4,
             "summary": {"status": "ok"},
         }
-        res = _e2_mammalian_conservation(site, ScoringConfig(e2_pident_min=0.5))
+        res = _c2_mammalian_conservation(site, ScoringConfig(e2_pident_min=0.5))
         assert res.value is True
 
     def test_fails_below_threshold(self):
@@ -111,7 +113,7 @@ class TestE2MammalianConservation:
             "mammalian_frac_intact": 0.4,
             "summary": {"status": "ok"},
         }
-        res = _e2_mammalian_conservation(site, ScoringConfig(e2_pident_min=0.5))
+        res = _c2_mammalian_conservation(site, ScoringConfig(e2_pident_min=0.5))
         assert res.value is False
 
 
@@ -123,7 +125,7 @@ class TestE3Phylop:
             "summary": {"region_status": "ok"},
         }
         # Default e3_phylop_min is 2.0 (absolute purifying-selection anchor).
-        res = _e3_phylop_coding_selection(site, ScoringConfig())
+        res = _c3_phylop_coding_selection(site, ScoringConfig())
         assert res.value is True
 
     def test_fails_below_threshold(self):
@@ -132,7 +134,7 @@ class TestE3Phylop:
             "phylop_unique_region_mean": 1.5,
             "summary": {"region_status": "ok"},
         }
-        res = _e3_phylop_coding_selection(site, ScoringConfig())
+        res = _c3_phylop_coding_selection(site, ScoringConfig())
         assert res.value is False
 
     def test_region_not_ok(self):
@@ -140,7 +142,7 @@ class TestE3Phylop:
         site.isoform_annotations["conservation"] = {
             "summary": {"region_status": "no_skeleton"},
         }
-        res = _e3_phylop_coding_selection(site, ScoringConfig())
+        res = _c3_phylop_coding_selection(site, ScoringConfig())
         assert res.value is None
 
 
@@ -149,13 +151,13 @@ class TestE4MultiCellLine:
         site = _site()
         for cl in ("HeLa", "K562", "U2OS"):
             site.expression[cl] = CellLineExpression(raw_count=10, cpm=1.0, p_value=0.01)
-        res = _e4_multi_cell_line(site, ScoringConfig(min_cell_lines=3))
+        res = _d1_multi_cell_line(site, ScoringConfig(min_cell_lines=3))
         assert res.value is True
 
     def test_fails(self):
         site = _site()
         site.expression["HeLa"] = CellLineExpression(raw_count=10, cpm=1.0, p_value=0.01)
-        res = _e4_multi_cell_line(site, ScoringConfig(min_cell_lines=3))
+        res = _d1_multi_cell_line(site, ScoringConfig(min_cell_lines=3))
         assert res.value is False
 
 
@@ -165,7 +167,7 @@ class TestE5InitiationEfficiency:
         site.expression["HeLa"] = CellLineExpression(
             raw_count=10, cpm=1.0, p_value=0.01, initiation_efficiency=None
         )
-        res = _e5_initiation_efficiency(site, ScoringConfig())
+        res = _d2_initiation_efficiency(site, ScoringConfig())
         assert res.value is None
 
     def test_passes(self):
@@ -173,7 +175,7 @@ class TestE5InitiationEfficiency:
         site.expression["HeLa"] = CellLineExpression(
             raw_count=10, cpm=1.0, p_value=0.01, initiation_efficiency=0.05
         )
-        res = _e5_initiation_efficiency(site, ScoringConfig(initiation_efficiency_min=0.01))
+        res = _d2_initiation_efficiency(site, ScoringConfig(initiation_efficiency_min=0.01))
         assert res.value is True
 
 
@@ -187,7 +189,7 @@ class TestE6MassSpec:
             ],
             "summary": {"pepquery_run": True},
         }
-        res = _e6_mass_spec(
+        res = _d3_mass_spec(
             site, ScoringConfig(massspec_unique_peptides_min=1)
         )
         assert res.value is True
@@ -200,7 +202,7 @@ class TestE6MassSpec:
             ],
             "summary": {"pepquery_run": True},
         }
-        res = _e6_mass_spec(
+        res = _d3_mass_spec(
             site, ScoringConfig(massspec_unique_peptides_min=1)
         )
         assert res.value is False
@@ -211,7 +213,7 @@ class TestE6MassSpec:
             "hits": [{"unique_to_isoform": True, "validated": None}],
             "summary": {"pepquery_run": False},
         }
-        res = _e6_mass_spec(site, ScoringConfig())
+        res = _d3_mass_spec(site, ScoringConfig())
         assert res.value is None
         assert "pepquery" in res.reason.lower()
 
@@ -222,63 +224,53 @@ class TestE6MassSpec:
 
 
 def _distinct_biophysics() -> dict[str, float]:
-    """Comparator biophysics deltas that clear the provisional distinctness cutoffs."""
+    """Whole-protein biophysics deltas that clear a provisional S2 cutoff (gravy)."""
     return {"gravy_delta": 0.5, "fraction_charged_delta": 0.0, "disorder_delta": 0.0}
 
 
 def _identical_biophysics() -> dict[str, float]:
-    """Comparator biophysics deltas below every distinctness cutoff."""
+    """Whole-protein biophysics deltas below every S2 cutoff."""
     return {"gravy_delta": 0.0, "fraction_charged_delta": 0.0, "disorder_delta": 0.0}
 
 
-class TestF1StructuredExtension:
+class TestP1StructuredExtension:
+    """P1 is folding-only — diff-region pLDDT vs threshold (distinctness → S2)."""
+
     def test_no_data(self):
         """No structure annotation → None."""
-        res = _f1_structured_extension(_site(), ScoringConfig())
+        res = _p1_structured_extension(_site(), ScoringConfig())
         assert res.value is None
 
-    def test_folded_and_distinct_true(self):
-        """Folded diff region AND biophysically distinct → True."""
+    def test_folded_true(self):
+        """Folded diff region → True (no biophysics needed)."""
         site = _site()
         site.isoform_annotations["structure"] = {
             "plddt_diffregion_mean": 0.85,
             "status": "ok",
         }
-        site.comparison["biophysics"] = _distinct_biophysics()
-        res = _f1_structured_extension(site, ScoringConfig())
+        res = _p1_structured_extension(site, ScoringConfig())
         assert res.value is True
 
-    def test_folded_but_not_distinct_false(self):
-        """Folded but biophysically identical to the shared core → False."""
+    def test_folded_true_regardless_of_biophysics(self):
+        """P1 no longer couples to distinctness — folded is True even if identical."""
         site = _site()
         site.isoform_annotations["structure"] = {
             "plddt_diffregion_mean": 0.85,
             "status": "ok",
         }
         site.comparison["biophysics"] = _identical_biophysics()
-        res = _f1_structured_extension(site, ScoringConfig())
-        assert res.value is False
+        res = _p1_structured_extension(site, ScoringConfig())
+        assert res.value is True
 
     def test_below_threshold(self):
-        """Unfolded diff region (even if distinct) → False."""
+        """Unfolded diff region → False."""
         site = _site()
         site.isoform_annotations["structure"] = {
             "plddt_diffregion_mean": 0.40,
             "status": "ok",
         }
-        site.comparison["biophysics"] = _distinct_biophysics()
-        res = _f1_structured_extension(site, ScoringConfig())
+        res = _p1_structured_extension(site, ScoringConfig())
         assert res.value is False
-
-    def test_biophysics_missing_none(self):
-        """Structure ok but biophysics comparison absent → None."""
-        site = _site()
-        site.isoform_annotations["structure"] = {
-            "plddt_diffregion_mean": 0.85,
-            "status": "ok",
-        }
-        res = _f1_structured_extension(site, ScoringConfig())
-        assert res.value is None
 
     def test_uniform_plddt_excluded(self):
         site = _site()
@@ -286,8 +278,7 @@ class TestF1StructuredExtension:
             "plddt_diffregion_mean": 0.85,
             "status": "uniform_plddt",
         }
-        site.comparison["biophysics"] = _distinct_biophysics()
-        res = _f1_structured_extension(site, ScoringConfig())
+        res = _p1_structured_extension(site, ScoringConfig())
         assert res.value is None
 
     def test_too_long_excluded(self):
@@ -296,9 +287,116 @@ class TestF1StructuredExtension:
             "plddt_diffregion_mean": None,
             "status": "too_long",
         }
-        site.comparison["biophysics"] = _distinct_biophysics()
-        res = _f1_structured_extension(site, ScoringConfig())
+        res = _p1_structured_extension(site, ScoringConfig())
         assert res.value is None
+
+
+class TestS2Biophysics:
+    """S2 — whole-protein biophysical shift over gravy / fraction_charged / disorder."""
+
+    def test_no_comparison_none(self):
+        """No biophysics comparison → None."""
+        res = _s2_biophysics(_site(), ScoringConfig())
+        assert res.value is None
+
+    def test_shifted_true(self):
+        """A whole-protein delta clears its cutoff → True."""
+        site = _site()
+        site.comparison["biophysics"] = _distinct_biophysics()
+        res = _s2_biophysics(site, ScoringConfig())
+        assert res.value is True
+        assert res.name == "S2_biophysics"
+
+    def test_unshifted_false(self):
+        """All whole-protein deltas below cutoff → False."""
+        site = _site()
+        site.comparison["biophysics"] = _identical_biophysics()
+        res = _s2_biophysics(site, ScoringConfig())
+        assert res.value is False
+
+    def test_no_descriptors_none(self):
+        """Comparison present but no *_delta lever numeric → None."""
+        site = _site()
+        site.comparison["biophysics"] = {"pI_delta": 2.0}
+        res = _s2_biophysics(site, ScoringConfig())
+        assert res.value is None
+
+
+class TestS3Sae:
+    """S3 — presence of differential (gained/lost) interpretable SAE features."""
+
+    def test_no_annotation_none(self):
+        res = _s3_sae(_site(), ScoringConfig())
+        assert res.value is None
+
+    def test_status_not_ok_none(self):
+        site = _site()
+        site.isoform_annotations["sae"] = {
+            "status": "no_cache",
+            "n_isoform_only": 3,
+            "n_canonical_only": 1,
+        }
+        res = _s3_sae(site, ScoringConfig())
+        assert res.value is None
+
+    def test_deltas_unavailable_none(self):
+        """No shared-feature deltas → nothing to measure magnitude on."""
+        site = _site()
+        site.isoform_annotations["sae"] = {
+            "status": "ok",
+            "n_isoform_only": 120,
+            "n_canonical_only": 77,
+            "top_gained_delta_max": None,
+            "top_lost_delta_max": None,
+        }
+        res = _s3_sae(site, ScoringConfig())
+        assert res.value is None
+
+    def test_large_shift_true(self):
+        """S3 scores on magnitude: the top shared-feature |delta| clears the gate."""
+        cfg = ScoringConfig()
+        site = _site()
+        site.isoform_annotations["sae"] = {
+            "status": "ok",
+            "n_isoform_only": 2,
+            "n_canonical_only": 0,
+            "top_gained_delta_max": cfg.s3_top_delta_min + 2.5,
+            "top_lost_delta_max": -1.0,
+        }
+        res = _s3_sae(site, cfg)
+        assert res.value is True
+        assert res.name == "S3_sae"
+
+    def test_small_shift_false(self):
+        """Hundreds of differential features do NOT make it True without magnitude.
+
+        The old presence check (n_isoform_only + n_canonical_only > 0) was True for
+        100% of the genome-wide run; this is the case that regression-guards it.
+        """
+        site = _site()
+        site.isoform_annotations["sae"] = {
+            "status": "ok",
+            "n_isoform_only": 300,
+            "n_canonical_only": 250,
+            "top_gained_delta_max": 1.2,
+            "top_lost_delta_max": -0.8,
+        }
+        res = _s3_sae(site, ScoringConfig())
+        assert res.value is False
+
+    def test_negative_shift_counts_by_magnitude(self):
+        """A strongly *lost* feature is as scoreable as a gained one (abs value)."""
+        cfg = ScoringConfig()
+        site = _site()
+        site.isoform_annotations["sae"] = {
+            "status": "ok",
+            "n_isoform_only": 1,
+            "n_canonical_only": 1,
+            "top_gained_delta_max": 0.5,
+            "top_lost_delta_max": -(cfg.s3_top_delta_min + 5.0),
+        }
+        res = _s3_sae(site, cfg)
+        assert res.value is True
 
 
 class TestF2LocalizationChange:
@@ -309,7 +407,7 @@ class TestF2LocalizationChange:
             "predicted_location_canonical": "Cytoplasm",
             "predicted_location_isoform": "Nucleus",
         }
-        res = _f2_localization_change(site, ScoringConfig())
+        res = _l1_localization_change(site, ScoringConfig())
         assert res.value is True
 
     def test_unchanged(self):
@@ -317,18 +415,18 @@ class TestF2LocalizationChange:
         site.comparison["localization"] = {
             "predicted_location_changed": False,
         }
-        res = _f2_localization_change(site, ScoringConfig())
+        res = _l1_localization_change(site, ScoringConfig())
         assert res.value is False
 
     def test_missing(self):
-        res = _f2_localization_change(_site(), ScoringConfig())
+        res = _l1_localization_change(_site(), ScoringConfig())
         assert res.value is None
 
 
 class TestF3DomainChange:
     def test_no_ips_data(self):
         """No IPS comparison → None."""
-        assert _f3_domain_change(_site(), ScoringConfig()).value is None
+        assert _s1_domain_change(_site(), ScoringConfig()).value is None
 
     def test_real_domain_changed_fires(self):
         """≥1 real InterPro domain gained/lost in the diff region → True."""
@@ -337,7 +435,7 @@ class TestF3DomainChange:
             "n_real_domains_changed_in_diff_region": 1,
             "hits_canonical_status": "ok",
         }
-        res = _f3_domain_change(site, ScoringConfig())
+        res = _s1_domain_change(site, ScoringConfig())
         assert res.value is True
 
     def test_no_real_domain_changed_false(self):
@@ -347,7 +445,7 @@ class TestF3DomainChange:
             "n_real_domains_changed_in_diff_region": 0,
             "hits_canonical_status": "ok",
         }
-        res = _f3_domain_change(site, ScoringConfig())
+        res = _s1_domain_change(site, ScoringConfig())
         assert res.value is False
 
     def test_count_unavailable_none(self):
@@ -356,7 +454,7 @@ class TestF3DomainChange:
         site.comparison["interproscan"] = {
             "hits_canonical_status": "ok",
         }
-        res = _f3_domain_change(site, ScoringConfig())
+        res = _s1_domain_change(site, ScoringConfig())
         assert res.value is None
         assert "n_real_domains_changed_in_diff_region" in res.reason
 
@@ -366,39 +464,39 @@ class TestF3DomainChange:
         site.comparison["interproscan"] = {
             "n_real_domains_changed_in_diff_region": 1,
         }
-        res = _f3_domain_change(site, ScoringConfig())
+        res = _s1_domain_change(site, ScoringConfig())
         assert res.value is None
 
 
 class TestF4TargetingChange:
     def test_no_comparator_data(self):
         """No SignalP/TargetP comparison → None."""
-        assert _f4_targeting_change(_site(), ScoringConfig()).value is None
+        assert _l2_targeting_change(_site(), ScoringConfig()).value is None
 
     def test_signalp_change(self):
         site = _site()
         site.comparison["signalp"] = {"signalp_prediction_changed": True}
-        res = _f4_targeting_change(site, ScoringConfig())
+        res = _l2_targeting_change(site, ScoringConfig())
         assert res.value is True
 
     def test_targetp_change(self):
         site = _site()
         site.comparison["targetp"] = {"targetp_prediction_changed": True}
-        res = _f4_targeting_change(site, ScoringConfig())
+        res = _l2_targeting_change(site, ScoringConfig())
         assert res.value is True
 
     def test_no_change(self):
         site = _site()
         site.comparison["signalp"] = {"signalp_prediction_changed": False}
         site.comparison["targetp"] = {"targetp_prediction_changed": False}
-        res = _f4_targeting_change(site, ScoringConfig())
+        res = _l2_targeting_change(site, ScoringConfig())
         assert res.value is False
 
 
 class TestF5GermlineToleranceConstraint:
     def test_no_data(self):
         """Empty site → None (neither plm_vep nor variant_intersection)."""
-        res = _f5_pathogenic_variant_enrichment(_site(), ScoringConfig())
+        res = _m1_pathogenic_variant_enrichment(_site(), ScoringConfig())
         assert res.value is None
         assert "constraint_enrichment" in res.reason
 
@@ -409,7 +507,7 @@ class TestF5GermlineToleranceConstraint:
             "constraint_enrichment": 2.5,
             "status": "ok",
         }
-        res = _f5_pathogenic_variant_enrichment(site, ScoringConfig())
+        res = _m1_pathogenic_variant_enrichment(site, ScoringConfig())
         assert res.value is True
 
     def test_gnomad_depletion_true(self):
@@ -419,7 +517,7 @@ class TestF5GermlineToleranceConstraint:
             "gnomad_depletion_ratio": 0.5,
             "summary": {"status": "ok"},
         }
-        res = _f5_pathogenic_variant_enrichment(site, ScoringConfig())
+        res = _m1_pathogenic_variant_enrichment(site, ScoringConfig())
         assert res.value is True
 
     def test_neither_branch_fires_false(self):
@@ -433,7 +531,7 @@ class TestF5GermlineToleranceConstraint:
             "gnomad_depletion_ratio": 1.2,
             "summary": {"status": "ok"},
         }
-        res = _f5_pathogenic_variant_enrichment(site, ScoringConfig())
+        res = _m1_pathogenic_variant_enrichment(site, ScoringConfig())
         assert res.value is False
 
     def test_plm_not_ok_ignored(self):
@@ -447,7 +545,7 @@ class TestF5GermlineToleranceConstraint:
             "gnomad_depletion_ratio": 0.5,
             "summary": {"status": "ok"},
         }
-        res = _f5_pathogenic_variant_enrichment(site, ScoringConfig())
+        res = _m1_pathogenic_variant_enrichment(site, ScoringConfig())
         # plm ignored (not ok); depletion 0.5 < 0.80 → True
         assert res.value is True
 
@@ -458,9 +556,9 @@ class TestF5GermlineToleranceConstraint:
             "constraint_enrichment": 2.5,
             "status": "ok",
         }
-        assert _f5_pathogenic_variant_enrichment(site, ScoringConfig()).value is True
+        assert _m1_pathogenic_variant_enrichment(site, ScoringConfig()).value is True
         strict = ScoringConfig(f5_constraint_enrichment_min=3.0)
-        assert _f5_pathogenic_variant_enrichment(site, strict).value is False
+        assert _m1_pathogenic_variant_enrichment(site, strict).value is False
 
 
 class TestF6ClinicalVariantOverlap:
@@ -472,7 +570,7 @@ class TestF6ClinicalVariantOverlap:
             "n_disease_in_shared_region": 1,
             "summary": {"status": "ok"},
         }
-        res = _f6_clinical_variant_overlap(site, ScoringConfig())
+        res = _m2_clinical_variant_overlap(site, ScoringConfig())
         assert res.value is True
         assert "disease_enrichment_ratio=" in res.reason
 
@@ -484,7 +582,7 @@ class TestF6ClinicalVariantOverlap:
             "n_disease_in_shared_region": 4,
             "summary": {"status": "ok"},
         }
-        res = _f6_clinical_variant_overlap(site, ScoringConfig())
+        res = _m2_clinical_variant_overlap(site, ScoringConfig())
         assert res.value is False
 
     def test_ratio_missing_none(self):
@@ -493,7 +591,7 @@ class TestF6ClinicalVariantOverlap:
             "n_disease_in_unique_region": 1,
             "summary": {"status": "ok"},
         }
-        res = _f6_clinical_variant_overlap(site, ScoringConfig())
+        res = _m2_clinical_variant_overlap(site, ScoringConfig())
         assert res.value is None
         assert "disease_enrichment_ratio" in res.reason
 
@@ -551,8 +649,8 @@ class TestModuleIntegration:
         # so F5 → None; F6 True → functional_score = 1.
         assert out["functional_score"] == 1
         assert out["functional_high_confidence"] is True
-        assert out["criteria"]["E1_primate_conservation"] is True
-        assert out["criteria"]["F6_clinical_variant_overlap"] is True
+        assert out["criteria"]["C1_primate_conservation"] is True
+        assert out["criteria"]["M2_clinical_variant_overlap"] is True
 
     def test_run_populates_annotations(self):
         mod = EvidenceScoringModule(PipelineConfig(scoring=ScoringConfig()))
@@ -565,7 +663,8 @@ class TestModuleIntegration:
 class TestMetadata:
     def test_counts(self):
         assert len(EXISTENCE_CRITERIA) == 6
-        assert len(FUNCTIONAL_CRITERIA) == 7
+        assert len(FUNCTIONAL_CRITERIA) == 9
+        assert len(EXISTENCE_CRITERIA) + len(FUNCTIONAL_CRITERIA) == 15
 
     def test_output_columns(self):
         cols = EvidenceScoringModule.OUTPUT_COLUMNS

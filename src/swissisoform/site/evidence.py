@@ -131,7 +131,7 @@ def _diff_space_from_orf_type(orf_type: Any) -> str | None:
 
 
 def _build_scoring(row: pd.Series) -> dict[str, Any]:
-    """Pack E1–E6 / F1–F6 criteria + reasons into the spec's nested shape."""
+    """Pack the CDLMPS criteria (C+D existence, L+M+P+S functional) + reasons."""
     criteria_raw = _get(row, "isoform_scoring_criteria") or {}
     reasons_raw = _get(row, "isoform_scoring_reasons") or {}
 
@@ -455,7 +455,7 @@ def summarise(out_dir: Path) -> None:
 # ──────────────────────────────────────────────────────────────────────────
 
 CRITERIA: dict[str, dict[str, Any]] = {
-    "E1_primate_conservation": {
+    "C1_primate_conservation": {
         "axis": "E",
         "label": "Primate conservation",
         "short_label": "Primates",
@@ -468,18 +468,23 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_conservation_frame_primate_deepest_species",
             "isoform_conservation_frame_primate_max_depth",
             "isoform_conservation_frame_primate_canonical_mean_pident",
-            "isoform_conservation_frame_primate_canonical_frac_intact",
             "isoform_conservation_frame_primate_canonical_n_species_aligned",
         ],
         "headline_col": _PRIMATE_SIMILARITY,
         "interpretation_hint": (
             "Is the alternative reading frame conserved across primates? Score on "
             "mean_pident (mean amino-acid % identity to primate orthologs); "
-            "frac_intact and start_codon_conserved are context. Compare to the "
-            "_canonical_ twins for a within-gene baseline."
+            "frac_intact and start_codon_conserved are context. For a within-gene "
+            "baseline compare mean_pident to canonical_mean_pident ONLY — like for "
+            "like. frac_intact is the fraction of species whose reading frame "
+            "survives intact across the WHOLE queried span, so it is confounded by "
+            "span length (a short unique region reads high, a long canonical ORF "
+            "reads low for that reason alone). Never compare frac_intact between "
+            "regions of different length, and never read such a gap as a "
+            "conservation difference."
         ),
     },
-    "E2_mammalian_conservation": {
+    "C2_mammalian_conservation": {
         "axis": "E",
         "label": "Mammalian conservation",
         "short_label": "Mammals",
@@ -492,18 +497,22 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_conservation_frame_mammalian_deepest_species",
             "isoform_conservation_frame_mammalian_max_depth",
             "isoform_conservation_frame_mammalian_canonical_mean_pident",
-            "isoform_conservation_frame_mammalian_canonical_frac_intact",
             "isoform_conservation_frame_mammalian_canonical_n_species_aligned",
         ],
         "headline_col": _MAMMALIAN_SIMILARITY,
         "interpretation_hint": (
             "Is the alternative reading frame conserved deeper in mammals? Score on "
             "mean_pident (mean amino-acid % identity to mammalian orthologs); "
-            "frac_intact is context. Compare to the _canonical_ twins for a "
-            "within-gene baseline."
+            "frac_intact is context. For a within-gene baseline compare mean_pident "
+            "to canonical_mean_pident ONLY — like for like. frac_intact is the "
+            "fraction of species whose reading frame survives intact across the "
+            "WHOLE queried span, so it is confounded by span length (a short unique "
+            "region reads high, a long canonical ORF reads low for that reason "
+            "alone). Never compare frac_intact between regions of different length, "
+            "and never read such a gap as a conservation difference."
         ),
     },
-    "E3_phylop_coding_selection": {
+    "C3_phylop_coding_selection": {
         "axis": "E",
         "label": "Coding Selection",
         "short_label": "PhyloP",
@@ -525,7 +534,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "and enrichment ratio are context only, not the basis for the call."
         ),
     },
-    "E4_multi_cell_line": {
+    "D1_multi_cell_line": {
         "axis": "E",
         "label": "Expression Breadth",
         "short_label": "Cell lines",
@@ -555,7 +564,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "samples with significant p-values."
         ),
     },
-    "E5_initiation_efficiency": {
+    "D2_initiation_efficiency": {
         "axis": "E",
         "label": "Start-Site Usage",
         "short_label": "Init. eff.",
@@ -587,7 +596,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "baseline."
         ),
     },
-    "E6_mass_spec": {
+    "D3_mass_spec": {
         "axis": "E",
         "label": "Peptide Evidence",
         "short_label": "MS",
@@ -601,7 +610,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "Are there PepQuery2 validated peptides in the isoform's unique region?"
         ),
     },
-    "F1_structured_extension": {
+    "P1_structured_extension": {
         "axis": "F",
         "label": "Fold Confidence",
         "short_label": "Folding",
@@ -612,34 +621,29 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_structure_plddt_diffregion_mean",
             "isoform_structure_plddt_diffregion_std",
             "isoform_structure_plddt_delta_shared",
-            "cmp_biophysics_pI_unique",
-            "cmp_biophysics_pI_shared",
-            "cmp_biophysics_pI_ratio",
-            "cmp_biophysics_gravy_unique",
-            "cmp_biophysics_gravy_shared",
-            "cmp_biophysics_gravy_ratio",
-            "cmp_biophysics_disorder_unique",
-            "cmp_biophysics_disorder_shared",
-            "cmp_biophysics_disorder_ratio",
-            "cmp_biophysics_fraction_charged_unique",
-            "cmp_biophysics_fraction_charged_shared",
-            "cmp_biophysics_fraction_charged_ratio",
-            "cmp_biophysics_fraction_disorder_promoting_unique",
-            "cmp_biophysics_fraction_disorder_promoting_shared",
-            "cmp_biophysics_fraction_disorder_promoting_ratio",
-            "cmp_biophysics_gravy_delta",
-            "cmp_biophysics_fraction_charged_delta",
-            "cmp_biophysics_disorder_delta",
+            "isoform_structure_ptm_isoform",
+            "isoform_structure_ptm_canonical",
+            "isoform_structure_pae_diff_vs_diff",
+            "isoform_structure_pae_body_vs_body",
+            "isoform_structure_pae_diff_vs_body",
+            "isoform_structure_pae_status",
+            "isoform_structure_extension_contacts",
         ],
         "headline_col": "isoform_structure_plddt_diffregion_mean",
         "interpretation_hint": (
-            "Does the unique region fold confidently (ESMFold2 pLDDT) AND look "
-            "biophysically distinct from the canonical core? Higher diffregion_mean "
-            "means more structured; the cmp_biophysics unique-vs-shared deltas and "
-            "ratios (GRAVY, fraction_charged, disorder) report distinctness."
+            "Does the unique region fold confidently (ESMFold2 pLDDT)? Higher "
+            "diffregion_mean means more structured. Folding only — the biophysical "
+            "distinctness signal (GRAVY / fraction_charged / disorder) is scored "
+            "separately under S2, so do not weigh it here. "
+            "This member also carries the model-confidence metrics for the whole "
+            "prediction — global pTM (ptm_isoform / ptm_canonical) and the PAE blocks "
+            "(pae_diff_vs_diff, pae_body_vs_body, pae_diff_vs_body, pae_status). Low "
+            "pTM / high PAE means the predicted fold and the relative placement of "
+            "regions are unreliable, which is the qualifier the Core Fold Perturbation "
+            "(shared-region RMSD) member in this same category must be read against."
         ),
     },
-    "F2_localization_change": {
+    "L1_localization_change": {
         "axis": "F",
         "label": "Compartment",
         "short_label": "Localization",
@@ -659,6 +663,29 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_localization_deeploc_signals",
             "canonical_localization_deeploc_membrane",
             "isoform_localization_deeploc_membrane",
+            # Top-class confidence + per-compartment probability vector — lets a
+            # confident call be told from a borderline one, and confidence
+            # SHIFTS register even when the argmax label doesn't flip.
+            "isoform_localization_deeploc_top_prob",
+            "canonical_localization_deeploc_top_prob",
+            "isoform_localization_deeploc_prob_cytoplasm",
+            "isoform_localization_deeploc_prob_nucleus",
+            "isoform_localization_deeploc_prob_extracellular",
+            "isoform_localization_deeploc_prob_cell_membrane",
+            "isoform_localization_deeploc_prob_mitochondrion",
+            "isoform_localization_deeploc_prob_endoplasmic_reticulum",
+            "isoform_localization_deeploc_prob_golgi_apparatus",
+            "isoform_localization_deeploc_prob_lysosome_vacuole",
+            "isoform_localization_deeploc_prob_peroxisome",
+            "canonical_localization_deeploc_prob_cytoplasm",
+            "canonical_localization_deeploc_prob_nucleus",
+            "canonical_localization_deeploc_prob_extracellular",
+            "canonical_localization_deeploc_prob_cell_membrane",
+            "canonical_localization_deeploc_prob_mitochondrion",
+            "canonical_localization_deeploc_prob_endoplasmic_reticulum",
+            "canonical_localization_deeploc_prob_golgi_apparatus",
+            "canonical_localization_deeploc_prob_lysosome_vacuole",
+            "canonical_localization_deeploc_prob_peroxisome",
         ],
         "headline_col": "__localization_iso_canon__",
         "interpretation_hint": (
@@ -666,7 +693,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "(DeepLoc prediction / sorting signals / membrane association)?"
         ),
     },
-    "F3_domain_change": {
+    "S1_domain_change": {
         "axis": "F",
         "label": "Domain change",
         "short_label": "Domains",
@@ -678,7 +705,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
         "headline_col": _DIVERGING_DOMAINS,
         "interpretation_hint": ("Does the differential region overlap with InterProScan domains?"),
     },
-    "F4_targeting_change": {
+    "L2_targeting_change": {
         "axis": "F",
         "label": "Sorting Signals",
         "short_label": "Targeting",
@@ -709,7 +736,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "transit peptide (TargetP)?"
         ),
     },
-    "F5_pathogenic_variant_enrichment": {
+    "M1_pathogenic_variant_enrichment": {
         "axis": "F",
         "label": "Germline Variants",
         "short_label": "Germline",
@@ -734,10 +761,22 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "AVOIDS the unique region (density-normalized vs shared core); "
             "(2) ESM-C constraint_enrichment high means residues there are "
             "predicted intolerant to substitution. This measures tolerance/"
-            "constraint, not damaging-variant burden."
+            "constraint, not damaging-variant burden. "
+            "The two are either-or evidence with OPPOSITE directionality (gnomAD "
+            "low = constrained, ESM-C high = constrained); either alone suffices, "
+            "so they need not agree. "
+            "VALID ONLY ON TRUNCATIONS, where the region is canonical coding "
+            "sequence. On an EXTENSION the unique region was 5'UTR/intron and was "
+            "never coding: the gnomAD ratio then measures never-coding variation "
+            "(confounded by UTR/splicing selection and coverage) and the ESM-C "
+            "score is out-of-distribution, reflecting composition rather than "
+            "intolerance — n_constrained_positions_unique is routinely 0 there. "
+            "Do not interpret either value, or their disagreement, as evidence "
+            "about protein constraint on an extension. On separate-ORF isoforms "
+            "there is no shared region, so the ratio is undefined by construction."
         ),
     },
-    "F6_clinical_variant_overlap": {
+    "M2_clinical_variant_overlap": {
         "axis": "F",
         "label": "Clinical Variants",
         "short_label": "Disease",
@@ -761,7 +800,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "the raw unique/shared disease and pathogenic counts are context."
         ),
     },
-    "F7_shared_structural_change": {
+    "P2_shared_structural_change": {
         "axis": "F",
         "label": "Core Fold Perturbation",
         "short_label": "Shared RMSD",
@@ -774,26 +813,158 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_structure_plddt_shared_mean_canonical",
             "isoform_structure_rmsd_global",
             "isoform_structure_tm_score",
+            "isoform_structure_ptm_isoform",
+            "isoform_structure_ptm_canonical",
+            "isoform_structure_pae_body_vs_body",
+            "isoform_structure_pae_diff_vs_body",
+            "isoform_structure_pae_status",
         ],
         "headline_col": "isoform_structure_rmsd_shared",
         "interpretation_hint": (
             "Does the retained (shared) region fold differently in the isoform vs "
             "the canonical protein? The shared region is identical in sequence, so a "
-            "high Cα RMSD (Kabsch-superposed on the shared residues only) means the "
-            "extension/truncation reorganizes how that region folds — most isoforms "
-            "read ≈ 0. TM-score is a length-normalized companion. Only scored when "
-            "both structures are confidently folded (min shared-region pLDDT ≥ 0.70); "
-            "uORF/altORF isoforms have no shared region and are not evaluable."
+            "high Cα RMSD (Kabsch-superposed on the shared residues only) is "
+            "CONSISTENT WITH the extension/truncation reorganizing how that region "
+            "folds — most isoforms read ≈ 0. TM-score is a length-normalized "
+            "companion. "
+            "CONFIDENCE GATE — a high RMSD is NOT on its own evidence of refolding. "
+            "The common cause is ESMFold placing a poorly-determined region "
+            "differently between two low-confidence models, which is placement/"
+            "orientation uncertainty, not a conformational change. Before calling it "
+            "a real refold, check the fold-confidence metrics carried here and in the "
+            "Fold Confidence member of this same category: global pTM (ptm_isoform / "
+            "ptm_canonical), shared-region pLDDT (plddt_shared_mean_isoform / "
+            "plddt_shared_mean_canonical), and the PAE blocks (pae_body_vs_body, "
+            "pae_diff_vs_body, pae_status). If pTM ≲ 0.50, OR either shared pLDDT < "
+            "0.70, OR PAE is high, treat the RMSD as an artifact of low confidence: "
+            "state it as an unresolved hypothesis at most, and never make it the "
+            "headline or say the isoform 'remodels'/'reorganizes'/'destabilizes' the "
+            "core. Always cite the pTM alongside any RMSD claim, and read rmsd_shared "
+            "against rmsd_global rather than in isolation. "
+            "Only scored when both structures are confidently folded (min "
+            "shared-region pLDDT ≥ 0.70); uORF/altORF isoforms have no shared region "
+            "and are not evaluable."
+        ),
+    },
+    # S2/S3 are first-class scored criteria whose evidence is nested (a biophysics
+    # property table / SAE feature records) rather than flat columns, so they carry
+    # no ``evidence_cols``/``headline_col`` and instead delegate to an
+    # ``evidence_builder`` hook (attached after the builders are defined, below).
+    # ``omit_if_empty`` reproduces the old descriptive behaviour: when the builder
+    # has no data the member is dropped from the category display.
+    "S2_biophysics": {
+        "axis": "F",
+        "label": "Biophysics",
+        "short_label": "Biophysics",
+        "evidence_cols": [],
+        "headline_col": None,
+        "omit_if_empty": True,
+        "interpretation_hint": (
+            "S2 — whole-protein biophysical shift, isoform vs canonical. The scored "
+            "value keys off the gravy/fraction_charged/disorder whole-protein deltas "
+            "(|isoform − canonical| ≥ cutoff, any one firing → shifted). The "
+            "unique/shared/ratio columns are extra region-vs-core context; the scored "
+            "call itself is the whole-protein delta."
+        ),
+    },
+    "S3_sae": {
+        "axis": "F",
+        "label": "SAE features",
+        "short_label": "SAE",
+        "evidence_cols": [],
+        "headline_col": None,
+        "omit_if_empty": True,
+        "interpretation_hint": (
+            "S3 — sparse-autoencoder (ESM-C) interpretability features that differ "
+            "between the isoform and canonical protein. The scored value is a "
+            "MAGNITUDE check: True when the strongest shared-feature activation "
+            "shift, max(|top_gained_delta_max|, |top_lost_delta_max|), meets the "
+            "threshold; False when a differential exists but nothing shifted that "
+            "strongly. The gained/lost counts are context only — two proteins of "
+            "different length always differ in hundreds of features, so their "
+            "presence says nothing about magnitude. "
+            "Treat this as a PRESENCE/ABSENCE signal only. Feature labels are "
+            "auto-generated and provisional, not curated annotation: many carry no "
+            "content (hollow labels are withheld, leaving the feature identified by "
+            "index alone), and many others merely describe the feature's own "
+            "activation pattern or restate sequence composition already scored by "
+            "the whole-protein biophysical shift in this same category. Do NOT name, "
+            "quote or interpret a feature label in the reasoning, and do not let a "
+            "label move the verdict — cite only that features differ, and how many."
         ),
     },
 }
 
 
-# Criteria excluded from the LLM interpretation passes (per-criterion reads +
-# synthesis). They stay fully scored and rendered on the site — the LLM simply
-# does not editorialize on them. F7 (shared-region structural change) is a
-# provisional structural metric we surface descriptively, without an AI blurb.
-LLM_EXCLUDED_CRITERIA: set[str] = {"F7_shared_structural_change"}
+# ──────────────────────────────────────────────────────────────────────────
+# CDLMPS evidence categories — the single source of truth for how the scored
+# criteria group into the six category boxes shown on the site. The LLM
+# interpretation runs one read per category (see ``slice_category`` + the
+# ``category`` pass in ``llm.py``); the website derives its ``CARD_GROUPS`` from
+# this list so UI and LLM never drift.
+#
+# ``members`` are all keys in ``CRITERIA`` — every member (including S2 biophysics
+# and S3 SAE) is a first-class scored criterion sliced through ``slice_criterion``.
+# All 15 criteria — including P2 — are covered exactly once; there is no
+# LLM-excluded criterion.
+CATEGORIES: list[dict[str, Any]] = [
+    {
+        "letter": "C",
+        "name": "Conservation",
+        "members": [
+            "C1_primate_conservation",
+            "C2_mammalian_conservation",
+            "C3_phylop_coding_selection",
+        ],
+    },
+    {
+        "letter": "D",
+        "name": "Detection",
+        "members": [
+            "D1_multi_cell_line",
+            "D2_initiation_efficiency",
+            "D3_mass_spec",
+        ],
+    },
+    {
+        "letter": "L",
+        "name": "Localization",
+        "members": ["L1_localization_change", "L2_targeting_change"],
+    },
+    {
+        "letter": "M",
+        "name": "Mutation Landscape",
+        "members": ["M1_pathogenic_variant_enrichment", "M2_clinical_variant_overlap"],
+    },
+    {
+        "letter": "P",
+        "name": "Predicted Structure",
+        "members": ["P1_structured_extension", "P2_shared_structural_change"],
+    },
+    {
+        "letter": "S",
+        "name": "Structural Characteristics",
+        "members": ["S1_domain_change", "S2_biophysics", "S3_sae"],
+    },
+]
+
+# Biophysical properties fed into the biophysics evidence builder — (label, key)
+# over the ``cmp_biophysics_<key>_{unique,shared,ratio}`` differential columns.
+_BIOPHYSICS_FEATURES: list[tuple[str, str]] = [
+    ("Isoelectric point (pI)", "pI"),
+    ("Hydropathy (GRAVY)", "gravy"),
+    ("Fraction charged", "fraction_charged"),
+    ("Disorder fraction", "disorder"),
+    ("Disorder-promoting", "fraction_disorder_promoting"),
+    ("Low-complexity fraction", "fraction_lcr"),
+    ("Prion-like fraction", "prionlike_fraction"),
+    ("LLPS score", "llps_score"),
+    ("π–π propensity", "pipi_propensity"),
+    ("Aromaticity", "aromaticity"),
+    ("Instability index", "instability_index"),
+    ("Shannon entropy", "shannon_entropy"),
+    ("Normalized complexity", "normalized_complexity"),
+]
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -952,6 +1123,26 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
     "isoform_structure_plddt_delta_shared": {
         "label": "Δ pLDDT (isoform vs canonical, shared region)",
         "format": "float3",
+    },
+    # P — global fold trust (pTM) + PAE region blocks
+    "isoform_structure_ptm_isoform": {"label": "pTM (isoform fold)", "format": "float3"},
+    "isoform_structure_ptm_canonical": {"label": "pTM (canonical fold)", "format": "float3"},
+    "isoform_structure_pae_diff_vs_diff": {
+        "label": "Mean PAE within differential region (Å)",
+        "format": "float2",
+    },
+    "isoform_structure_pae_body_vs_body": {
+        "label": "Mean PAE within fold body (Å)",
+        "format": "float2",
+    },
+    "isoform_structure_pae_diff_vs_body": {
+        "label": "Mean PAE differential↔body (Å; high = dangling)",
+        "format": "float2",
+    },
+    "isoform_structure_pae_status": {"label": "PAE availability", "format": "str"},
+    "isoform_structure_extension_contacts": {
+        "label": "Extension↔body Cα contacts (<8 Å)",
+        "format": "int",
     },
     # F1 — biophysical distinctness (unique vs shared region)
     "cmp_biophysics_gravy_delta": {"label": "Δ GRAVY (isoform − canonical)", "format": "float3"},
@@ -1298,6 +1489,28 @@ for _sample in ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"):
         "format": "float3",
     }
 
+# L1 — DeepLoc per-compartment probabilities + top-class confidence (both sides)
+for _side in ("isoform", "canonical"):
+    CRITERIA_METRIC_LABELS[f"{_side}_localization_deeploc_top_prob"] = {
+        "label": f"DeepLoc top-class probability ({_side})",
+        "format": "float3",
+    }
+    for _compartment, _suffix in (
+        ("Cytoplasm", "cytoplasm"),
+        ("Nucleus", "nucleus"),
+        ("Extracellular", "extracellular"),
+        ("Cell membrane", "cell_membrane"),
+        ("Mitochondrion", "mitochondrion"),
+        ("Endoplasmic reticulum", "endoplasmic_reticulum"),
+        ("Golgi apparatus", "golgi_apparatus"),
+        ("Lysosome/Vacuole", "lysosome_vacuole"),
+        ("Peroxisome", "peroxisome"),
+    ):
+        CRITERIA_METRIC_LABELS[f"{_side}_localization_deeploc_prob_{_suffix}"] = {
+            "label": f"DeepLoc P({_compartment}) ({_side})",
+            "format": "float3",
+        }
+
 
 def format_metric(value: Any, fmt: str) -> str:
     """Format a metric value for display per a small spec of format codes.
@@ -1362,7 +1575,7 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         isoform_record: A full per-isoform record (one entry from
             ``build_gene_record(...)["isoforms"]``) with the ``"_raw"`` mirror
             of the parquet row.
-        criterion_id: One of the 12 keys in ``CRITERIA``.
+        criterion_id: One of the keys in ``CRITERIA``.
 
     Returns:
         Dict with:
@@ -1392,6 +1605,33 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         "isoform_length_aa": isoform_record.get("isoform_length_aa"),
         "canonical_length_aa": isoform_record.get("canonical_length_aa"),
     }
+
+    # Criteria whose evidence is nested (S2 biophysics table / S3 SAE features)
+    # delegate evidence construction to their ``evidence_builder`` hook and skip
+    # the flat evidence_cols + headline_col machinery. The return shape is
+    # identical to a normal criterion so every downstream consumer is uniform;
+    # ``evidence`` is empty (→ omitted by ``slice_category`` when ``omit_if_empty``)
+    # when the builder has no data.
+    builder = cfg.get("evidence_builder")
+    if builder is not None:
+        built = builder(isoform_record) or {}
+        return {
+            "criterion_id": criterion_id,
+            "axis": cfg["axis"],
+            "label": cfg["label"],
+            "short_label": cfg["short_label"],
+            "interpretation_hint": cfg["interpretation_hint"],
+            "isoform": iso_block,
+            "value": criterion_entry.get("value"),
+            "reason": criterion_entry.get("reason"),
+            "headline": built.get("headline"),
+            "headline_fmt": "str",
+            "headline_segments": built.get("headline_segments"),
+            "evidence": built.get("evidence", {}),
+            "hits": [],
+            "n_hits_total": 0,
+            "n_hits_shown": 0,
+        }
 
     evidence = {col: raw.get(col) for col in cfg["evidence_cols"]}
     headline_col = cfg.get("headline_col")
@@ -1596,8 +1836,8 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
                 MAX_HITS = 30
                 # Criteria whose claim is about the isoform-unique region.
                 unique_region_criteria = {
-                    "F5_pathogenic_variant_enrichment",
-                    "F6_clinical_variant_overlap",
+                    "M1_pathogenic_variant_enrichment",
+                    "M2_clinical_variant_overlap",
                 }
                 prioritize_unique = criterion_id in unique_region_criteria
                 if n_hits_total > MAX_HITS:
@@ -1645,4 +1885,191 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         "hits": hits,
         "n_hits_total": n_hits_total,
         "n_hits_shown": len(hits),
+    }
+
+
+def _diff_region_location(orf_type: Any) -> str | None:
+    """Explicit N-terminal directionality fact for the identity block.
+
+    Alt-TIS isoforms differ ONLY at the N-terminus (the start codon moves; the
+    C-terminus and stop are invariant). Stated as a hard input fact so the LLM
+    cannot mislabel the differential region as C-terminal from a training prior
+    (e.g. CDC34's well-known C-terminal tail). Returns None when there is no
+    differential region (annotated) or the orf_type is unknown.
+    """
+    if orf_type is None:
+        return None
+    s = str(orf_type).strip().lower()
+    if s == "truncated":
+        return (
+            "N-terminal: the differential region is the N-terminal segment of the "
+            "CANONICAL protein that this isoform REMOVES (the alt start codon is "
+            "downstream); the shared C-terminal portion is retained unchanged. The "
+            "removed region is NOT C-terminal."
+        )
+    if s == "extended":
+        return (
+            "N-terminal: the differential region is the N-terminal segment this "
+            "isoform ADDS ahead of the canonical start; the canonical protein is "
+            "retained unchanged downstream. The added region is NOT C-terminal."
+        )
+    if s in {"uorf", "uoorf", "internal_oof", "3utr_orf", "alt_orf"}:
+        return (
+            "Separate ORF: the entire isoform sequence is the differential region "
+            "and does not share reading frame with the canonical CDS; there is no "
+            "shared region."
+        )
+    return None
+
+
+def _iso_identity_block(isoform_record: dict[str, Any]) -> dict[str, Any]:
+    """Shared isoform-identity block used by criterion + category slices."""
+    return {
+        "tis_id": isoform_record.get("tis_id"),
+        "gene_name": (isoform_record.get("gene") or {}).get("name"),
+        "orf_type": isoform_record.get("orf_type"),
+        "differential_region_location": _diff_region_location(isoform_record.get("orf_type")),
+        "differential_sequence": isoform_record.get("differential_sequence"),
+        "diff_space": isoform_record.get("diff_space"),
+        "isoform_length_aa": isoform_record.get("isoform_length_aa"),
+        "canonical_length_aa": isoform_record.get("canonical_length_aa"),
+    }
+
+
+def _biophysics_evidence(isoform_record: dict[str, Any]) -> dict[str, Any] | None:
+    """S2 biophysics evidence builder — the ``evidence_builder`` hook for CRITERIA.
+
+    Reads the ``cmp_biophysics_<feat>_{unique,shared,ratio}`` differential columns
+    (plus the three GRAVY/charge/disorder whole-protein deltas) into a compact
+    numeric ``evidence`` dict. Numbers only — no HTML, no UI formatting. The
+    surrounding ``slice_criterion`` supplies the criterion identity + scored
+    value/reason; this builds only the nested evidence the flat ``evidence_cols``
+    model cannot express. Returns ``None`` when no biophysics comparison columns
+    are present (→ S2 slice carries empty evidence and is omitted from the
+    category display via ``omit_if_empty``).
+    """
+    raw = isoform_record.get("_raw") or {}
+    evidence: dict[str, Any] = {}
+    for label, feat in _BIOPHYSICS_FEATURES:
+        vals = {
+            "unique": _to_native(raw.get(f"cmp_biophysics_{feat}_unique")),
+            "shared": _to_native(raw.get(f"cmp_biophysics_{feat}_shared")),
+            "ratio": _to_native(raw.get(f"cmp_biophysics_{feat}_ratio")),
+            "enriched": _to_native(raw.get(f"cmp_biophysics_{feat}_enriched")),
+        }
+        if all(v is None for v in (vals["unique"], vals["shared"], vals["ratio"])):
+            continue
+        evidence[label] = vals
+    # The three whole-protein deltas (context alongside the region-vs-core levers).
+    for feat in ("gravy_delta", "fraction_charged_delta", "disorder_delta"):
+        v = _to_native(raw.get(f"cmp_biophysics_{feat}"))
+        if v is not None:
+            evidence[feat] = v
+    if not evidence:
+        return None
+    return {"evidence": evidence}
+
+
+def _strip_hollow_label(rec: dict[str, Any]) -> dict[str, Any]:
+    """Drop an SAE feature label (and its description) when it carries no content.
+
+    Roughly half of top SAE features are labelled "Unknown generic feature" by the
+    ESM-Atlas dictionary. Handing the model a hollow noun invites it to reason from
+    a label that means "we don't know what this is", so the label and its
+    auto-generated description are removed and the feature is left identified by
+    index + magnitude only. Labels with content are passed through unchanged.
+    """
+    label = rec.get("label")
+    if isinstance(label, str) and "unknown" in label.lower():
+        rec = {k: v for k, v in rec.items() if k not in ("label", "description")}
+    return rec
+
+
+def _sae_evidence(isoform_record: dict[str, Any]) -> dict[str, Any] | None:
+    """S3 SAE-feature evidence builder — the ``evidence_builder`` hook for CRITERIA.
+
+    Reads the ``isoform_sae_*`` columns: interpretable-feature counts, the top
+    gained/lost features, and the isoform-unique-region features (capped). The
+    surrounding ``slice_criterion`` supplies the criterion identity + scored
+    value/reason; this builds only the nested evidence. Returns ``None`` when the
+    SAE step did not run (status != "ok") (→ S3 slice carries empty evidence and
+    is omitted from the category display via ``omit_if_empty``).
+    """
+    raw = isoform_record.get("_raw") or {}
+    if raw.get("isoform_sae_status") != "ok":
+        return None
+
+    def _records(value: Any, cap: int = 15) -> list[dict[str, Any]]:
+        native = _to_native(value)
+        if not isinstance(native, list):
+            return []
+        recs = [_strip_hollow_label(r) for r in native if isinstance(r, dict)]
+        return recs[:cap]
+
+    def _top(prefix: str) -> dict[str, Any] | None:
+        idx = _to_native(raw.get(f"isoform_sae_top_{prefix}_feature_index"))
+        if idx is None:
+            return None
+        rec = {
+            "feature_index": idx,
+            "label": _to_native(raw.get(f"isoform_sae_top_{prefix}_feature_label")),
+            "delta_max": _to_native(raw.get(f"isoform_sae_top_{prefix}_delta_max")),
+        }
+        return _strip_hollow_label(rec)
+
+    evidence = {
+        "counts": {
+            "isoform_only": _to_native(raw.get("isoform_sae_n_isoform_only")),
+            "canonical_only": _to_native(raw.get("isoform_sae_n_canonical_only")),
+            "shared": _to_native(raw.get("isoform_sae_n_shared")),
+        },
+        "mean_abs_delta_shared": _to_native(raw.get("isoform_sae_mean_abs_delta_shared")),
+        "unique_region_space": _to_native(raw.get("isoform_sae_unique_region_space")),
+        "n_unique_region_features": _to_native(raw.get("isoform_sae_n_unique_region_features")),
+        "top_gained": _top("gained"),
+        "top_lost": _top("lost"),
+        "unique_region_features": _records(raw.get("isoform_sae_unique_region_top_features")),
+    }
+    return {"evidence": evidence}
+
+
+# Attach the evidence-builder hooks now that the builders are defined. S2/S3 carry
+# nested evidence (biophysics property table / SAE feature records) that the flat
+# ``evidence_cols`` model cannot express, so ``slice_criterion`` delegates their
+# evidence construction to these. Set here (not in the CRITERIA literal) because
+# the builders are defined after the dict.
+CRITERIA["S2_biophysics"]["evidence_builder"] = _biophysics_evidence
+CRITERIA["S3_sae"]["evidence_builder"] = _sae_evidence
+
+
+def slice_category(isoform_record: dict[str, Any], category: dict[str, Any]) -> dict[str, Any]:
+    """Bundle every member of one CDLMPS category into a single LLM-input slice.
+
+    Args:
+        isoform_record: A full per-isoform record (as passed to ``slice_criterion``).
+        category: One entry from ``CATEGORIES`` (``{letter, name, members}``).
+
+    Returns:
+        Dict with the category identity (``letter``, ``name``), the shared isoform
+        identity block, and ``members`` — a list of per-member slices. Every member
+        is a first-class criterion sliced through ``slice_criterion`` (all tagged
+        ``kind="criterion"``); a member whose ``CRITERIA`` entry sets
+        ``omit_if_empty`` and produced no evidence (e.g. S2/S3 when biophysics/SAE
+        did not run) is dropped from the display.
+    """
+    members: list[dict[str, Any]] = []
+    for member in category["members"]:
+        if member not in CRITERIA:  # pragma: no cover - guards a stale CATEGORIES entry
+            raise KeyError(f"Unknown category member: {member!r}")
+        entry = slice_criterion(isoform_record, member)
+        if CRITERIA[member].get("omit_if_empty") and not entry["evidence"]:
+            continue
+        entry["kind"] = "criterion"
+        members.append(entry)
+
+    return {
+        "category": category["letter"],
+        "name": category["name"],
+        "isoform": _iso_identity_block(isoform_record),
+        "members": members,
     }

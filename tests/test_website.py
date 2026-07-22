@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -88,23 +89,16 @@ def test_api_data_json(client):
     r = client.get("/api/data.json")
     assert r.status_code == 200
     payload = json.loads(r.data)
-    # The cheeseman_13gene parquet ships with 13 genes.
-    assert len(payload) >= 12
-    for gene in [
-        "CBX1",
-        "CDC34",
-        "CDKN1A",
-        "CSNK2A2",
-        "EIF2B1",
-        "FZR1",
-        "MAD2L1",
-        "SRSF2",
-        "TRIP13",
-        "TRNT1",
-        "UBE2D2",
-        "UBE2M",
-    ]:
-        assert gene in payload, f"missing gene in /api/data.json: {gene}"
+    # Dataset-agnostic: whichever run is staged in website/data, every gene in the
+    # parquet must surface in the API with a well-formed isoform list. (Pinning an
+    # explicit gene list broke whenever the staged run changed.)
+    import pandas as pd
+
+    df = pd.read_parquet(WEBSITE_DATA / "all_paired.parquet", columns=["gene_name"])
+    expected = {g for g in df["gene_name"].dropna().unique()}
+    assert expected, "staged parquet has no genes"
+    assert set(payload) >= expected, f"missing from /api/data.json: {expected - set(payload)}"
+    for gene in sorted(expected):
         rec = payload[gene]
         assert "isoforms" in rec
         assert isinstance(rec["isoforms"], list)
@@ -142,18 +136,17 @@ def test_transcript_skeleton_loaded_for_known_transcript():
     assert len(sample.exons) >= 1
 
 
-def test_llm_criterion_for_isoform_returns_none_when_missing(tmp_path):
-    """llm_criterion_for_isoform tolerates a missing JSON file."""
+def test_category_verdicts_for_isoform_returns_empty_when_missing(tmp_path):
+    """category_verdicts_for_isoform tolerates a missing JSON file."""
     if str(WEBSITE_SRC) not in sys.path:
         sys.path.insert(0, str(WEBSITE_SRC))
-    from swissisoform_site.data import llm_criterion_for_isoform
+    from swissisoform_site.data import category_verdicts_for_isoform
 
-    out = llm_criterion_for_isoform(
+    out = category_verdicts_for_isoform(
         llm_dir=tmp_path,
         tis_slug="chr1-100-ATG-ENST_A",
-        criterion_id="E1_primate_conservation",
     )
-    assert out is None
+    assert out == {}
 
 
 def test_synthesis_narrative_html_converts_markdown():
@@ -212,8 +205,8 @@ def test_isoform_page_contains_graphs_and_synthesis_block(client):
 
 
 def test_isoform_page_has_evidence_tiles(client):
-    """The V2 isoform page renders 13 scored evidence tiles (E1-E6, F1-F7) plus the
-    descriptive Biophysics and SAE (F8) cards, in one flat grid (no E/F group headers)."""
+    """The V2 isoform page renders the scored evidence tiles plus the bespoke
+    Biophysics (S2) and SAE (S3) cards, in one flat grid (no group headers)."""
     import pandas as pd
     from swissisoform_site.data import tis_slug as make_slug
 
@@ -226,7 +219,9 @@ def test_isoform_page_has_evidence_tiles(client):
     assert body.count(b"evidence-tile") >= 15
     # Grouping headers are gone; the flat grid remains.
     assert b"tile-row-h" not in body
-    assert b'data-criterion="biophysics"' in body
+    # Biophysics is its own card, keyed by the CDLMPS criterion id (was the
+    # pre-rename lowercase "biophysics" when it lived inside the F1 modal).
+    assert b'data-criterion="S2_biophysics"' in body
     # Both axis classes still present (E + F border colors).
     assert b"axis-E" in body
     assert b"axis-F" in body
@@ -288,10 +283,18 @@ def test_isoform_page_has_evidence_modal_element(client):
 
 def test_isoform_page_truncation_marks_differential_region(client):
     """For a truncation, the folding legend names the differential region."""
+    from swissisoform_site.data import load_all
     from swissisoform_site.data import tis_slug as make_slug
 
-    # TRNT1 first isoform is a truncation in the cheeseman_13gene parquet.
-    r = client.get("/genes/TRNT1/isoforms/" + make_slug("chr3:3129127:+:ATG:ENST00000434583.5"))
+    # Pick any truncation from the staged run rather than pinning one tis_id.
+    target = next(
+        ((gn, iso.tis_id) for gn, g in load_all().items() for iso in g.isoforms
+         if str(getattr(iso, "orf_type", "")).lower() == "truncated"),
+        None,
+    )
+    assert target, "staged parquet has no truncation isoform"
+    gene, tis_id = target
+    r = client.get(f"/genes/{gene}/isoforms/" + make_slug(tis_id))
     assert r.status_code == 200
     body = r.data
     # The single viewer's legend flags the lost (differential) region by residue range.
@@ -301,39 +304,64 @@ def test_isoform_page_truncation_marks_differential_region(client):
 
 def test_criterion_evidence_folds_into_score_popups(client):
     """Differential evidence is keyed by criterion id and embedded per modal."""
-    from swissisoform_site.data import criterion_evidence_for, load_all
+    from swissisoform_site.data import (
+        biophysics_card_for_isoform,
+        criterion_evidence_for,
+        load_all,
+    )
     from swissisoform_site.data import tis_slug as make_slug
 
-    iso = load_all()["MSRA"].isoforms[0]
+    # Pick an isoform from the staged run that actually exercises this path: a
+    # flagged localization change plus a biophysics card. (Pinning MSRA broke
+    # whenever the staged run changed.)
+    picked = next(
+        (
+            (gn, iso)
+            for gn, g in load_all().items()
+            for iso in g.isoforms
+            if (criterion_evidence_for(iso).get("L1_localization_change", {}).get("sections"))
+            and criterion_evidence_for(iso)["L1_localization_change"]["sections"][0].get(
+                "highlight"
+            )
+            and biophysics_card_for_isoform(iso)
+        ),
+        None,
+    )
+    assert picked, "no isoform with a flagged localization change + biophysics card"
+    gene_name, iso = picked
     ce = criterion_evidence_for(iso)
     # Every criterion has an entry with a plain-English "about" descriptor.
     assert set(ce) >= {
-        "E1_primate_conservation",
-        "E3_phylop_coding_selection",
-        "F1_structured_extension",
-        "F2_localization_change",
+        "C1_primate_conservation",
+        "C3_phylop_coding_selection",
+        "P1_structured_extension",
+        "L1_localization_change",
     }
-    assert ce["F2_localization_change"]["about"]
-    # F1 hosts comparative biophysics (differential vs shared, not whole-protein).
-    bio = next(
-        s for s in ce["F1_structured_extension"]["sections"]
-        if s["title"].startswith("Biophysics")
-    )
-    pi = next(r for r in bio["compare_rows"] if "pI" in r["label"])
+    assert ce["L1_localization_change"]["about"]
+    # Biophysics is no longer a sub-section of the P1 (folding) modal — it moved to
+    # its own descriptive card, so P1 must be folding-only.
+    assert not any(
+        s["title"].startswith("Biophysics")
+        for s in ce["P1_structured_extension"]["sections"]
+    ), "P1 should be folding-only; biophysics belongs to the standalone S2 card"
+    bio = biophysics_card_for_isoform(iso)
+    assert bio is not None, "standalone biophysics card missing"
+    sec = bio["evidence"]["sections"][0]
+    assert sec["cmp_headers"] == ["Property", "Differential", "Shared", "Enrichment"]
+    pi = next(r for r in sec["compare_rows"] if "pI" in r["label"])
     assert pi["cols"][0] != pi["cols"][1]  # differential vs shared core
-    # F2 renders a canonical-vs-isoform table (not flat rows), and MSRA's
-    # mito->peroxisome retargeting flags it.
-    loc = ce["F2_localization_change"]["sections"][0]
+    # Localization renders a canonical-vs-isoform table (not flat rows), flagged
+    # because this isoform's predicted compartment/signals changed.
+    loc = ce["L1_localization_change"]["sections"][0]
     assert loc["highlight"] is True
     assert loc["cmp_headers"] == ["Property", "Canonical", "Isoform"]
     assert loc["compare_rows"] and len(loc["compare_rows"][0]["cols"]) == 2
 
-    r = client.get("/genes/MSRA/isoforms/" + make_slug("chr8:10054582:+:ATG:ENST00000317173.9"))
+    r = client.get(f"/genes/{gene_name}/isoforms/" + make_slug(iso.tis_id))
     assert r.status_code == 200
     body = r.data
     assert b"crit-about" in body  # the per-criterion descriptor block
     assert b"click any tile" in body  # standalone panel dissolved into the tiles
-    assert b"Peroxisomal targeting signal" in body  # evidence still present (in modal template)
 
 
 def test_domains_massspec_are_canonical_vs_isoform(client):
@@ -343,14 +371,14 @@ def test_domains_massspec_are_canonical_vs_isoform(client):
     iso = load_all()["CBX1"].isoforms[0]
     ce = criterion_evidence_for(iso)
 
-    f3 = ce["F3_domain_change"]["sections"][0]
+    f3 = ce["S1_domain_change"]["sections"][0]
     assert f3["cmp_headers"] == ["Feature", "Canonical", "Isoform"]
     dom = next(r for r in f3["compare_rows"] if r["label"] == "InterPro domains")
     assert len(dom["cols"]) == 2  # canonical | isoform counts
     # gained/lost features surface in the Details box
     assert any(h["kind"] in ("gained", "lost") for h in f3.get("hits", []))
 
-    e6 = ce["E6_mass_spec"]["sections"][0]
+    e6 = ce["D3_mass_spec"]["sections"][0]
     assert e6["cmp_headers"] == ["Feature", "Canonical", "Isoform"]
     uniq = next(r for r in e6["compare_rows"] if r["label"] == "Isoform-unique peptides")
     assert uniq["cols"][0] == "—"  # uniqueness is an isoform-only property
@@ -375,8 +403,8 @@ def test_comparison_tables_use_two_standard_flavors(client):
                     pair = hdr[1:3]
                     ok = pair in (["Canonical", "Isoform"], ["Differential", "Shared"])
                     frame_exception = cid in (
-                        "E1_primate_conservation",
-                        "E2_mammalian_conservation",
+                        "C1_primate_conservation",
+                        "C2_mammalian_conservation",
                     )
                     if not ok and not frame_exception:
                         offenders.append((cid, tuple(hdr)))
@@ -406,7 +434,7 @@ def test_f6_clinical_burden_is_length_normalized(client):
     from swissisoform_site.data import criterion_evidence_for, load_all
 
     iso = load_all()["CBX1"].isoforms[0]
-    sec = criterion_evidence_for(iso)["F6_clinical_variant_overlap"]["sections"][0]
+    sec = criterion_evidence_for(iso)["M2_clinical_variant_overlap"]["sections"][0]
     # Standardized Flavor-2 columns: Differential | Shared | Enrichment (the
     # enrichment is the length-normalized per-residue ratio).
     assert sec["cmp_headers"][1:] == ["Differential", "Shared", "Enrichment"]
@@ -415,16 +443,41 @@ def test_f6_clinical_burden_is_length_normalized(client):
 
 
 def test_about_page_renders_glossary(client):
-    """The /about route explains the axes, criteria, and the diff_space frame rule."""
+    """The /about route explains the categories, criteria, and diff_space frame rule."""
     r = client.get("/about")
     assert r.status_code == 200
     body = r.data
     assert b"About SwissIsoform" in body
     assert b"diff_space" in body  # the frame rule is spelled out
     assert b"AlphaMissense" in body and b"canonical frame only" in body
-    assert b"Existence (E)" in body and b"Functional (F)" in body
+    assert b"CDLMPS" in body  # the six-category scheme (replaced the old E/F axes)
     # nav link is wired on every page
     assert b'href="/about"' in client.get("/").data
+
+
+def test_about_page_is_navigable(client):
+    """Onboarding, sticky TOC, and a CDLMPS-ordered collapsible glossary.
+
+    The page opens with a plain-language lede plus a "how to read a card" section,
+    carries an in-page TOC, and presents the ~400-line metrics reference as
+    collapsible groups ordered C-D-L-M-P-S (scoring framework last).
+    """
+    body = client.get("/about").data.decode()
+
+    # Onboarding + sticky TOC
+    assert 'id="how-to-read"' in body
+    assert 'class="about-toc"' in body
+
+    # Frame rule sits after the CDLMPS intro, not before it
+    assert body.index('id="cdlmps"') < body.index('id="diff-region"')
+
+    # Glossary groups are collapsible and in CDLMPS order, scoring framework last
+    order = re.findall(r'<details class="about-gloss" id="gloss-([a-z-]+)"', body)
+    assert order == ["c", "d-init", "d-ms", "l", "m", "p", "s", "scoring"], order
+
+    # No dangling in-page anchors
+    ids = set(re.findall(r'id="([^"]+)"', body))
+    assert not {h for h in re.findall(r'href="#([^"]+)"', body)} - ids
 
 
 def test_every_isoform_page_renders_200(client):

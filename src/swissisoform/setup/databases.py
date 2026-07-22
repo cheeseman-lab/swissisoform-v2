@@ -877,7 +877,7 @@ def setup_pepquery(refresh: bool = False) -> None:
     PepQuery2 is a plain Java 11+ CLI.  System Java is already on PATH
     on this cluster, so we skip the conda-env indirection used for
     DeepLoc and just stage the jar.
-    :func:`swissisoform.evidence.e6_mass_spec.precompute_pepquery`
+    :func:`swissisoform.evidence.d3_mass_spec.precompute_pepquery`
     invokes it via ``java -jar <PEPQUERY_JAR>``.
 
     ``-b <dataset>`` at query time pulls MS/MS spectra from PepQueryDB
@@ -1375,10 +1375,10 @@ INTERPROSCAN_DIR = REF / "interproscan"
 INTERPROSCAN_DATADIR = INTERPROSCAN_DIR / "datadir"
 INTERPROSCAN_NF_REPO = "ebi-pf-team/interproscan6"
 # 6.0.1 fixes the COMBINE_MATCHES groovy classpath crash present in 6.0.0.
-# Keep this in sync with evidence/f3_domains/interproscan.py.
+# Keep this in sync with evidence/s1_domains/interproscan.py.
 INTERPROSCAN_VERSION = "6.0.1"
 # InterPro 109.0 (2026_01 member releases). Keep in sync with
-# evidence/f3_domains/interproscan.py.
+# evidence/s1_domains/interproscan.py.
 INTERPROSCAN_DATA_VERSION = "109.0"
 
 

@@ -2,8 +2,8 @@
 
 Queries UniProtKB (reviewed, human) for each gene symbol and writes
 ``data/reference/generef/generef.json`` = ``{gene: {uniprot_id,
-uniprot_function, subcellular_location}}``. ``run.py`` loads this and passes it
-to ``GeneRefModule`` as a gene-level module.
+uniprot_function, subcellular_location, keywords}}``. ``run.py`` loads this and
+passes it to ``GeneRefModule`` as a gene-level module.
 
 Driven by the thin CLI at ``scripts/setup/fetch_generef.py``.
 """
@@ -23,10 +23,10 @@ API = "https://rest.uniprot.org/uniprotkb/search"
 
 
 def fetch_one(gene: str) -> dict | None:
-    """Return {uniprot_id, uniprot_function, subcellular_location} or None."""
+    """Return {uniprot_id, uniprot_function, subcellular_location, keywords} or None."""
     params = {
         "query": f"gene:{gene} AND organism_id:9606 AND reviewed:true",
-        "fields": "accession,cc_function,cc_subcellular_location",
+        "fields": "accession,cc_function,cc_subcellular_location,keyword",
         "format": "json",
         "size": "1",
     }
@@ -50,10 +50,14 @@ def fetch_one(gene: str) -> dict | None:
                 val = (sl.get("location") or {}).get("value")
                 if val:
                     locations.append(val)
+    # Keywords are a top-level list of {id, category, name} — a curated
+    # controlled vocabulary (kinase, cell cycle, ...) used for functional query.
+    keywords = [k.get("name") for k in res.get("keywords", []) if k.get("name")]
     return {
         "uniprot_id": res.get("primaryAccession"),
         "uniprot_function": function,
         "subcellular_location": "; ".join(dict.fromkeys(locations)) or None,
+        "keywords": "; ".join(dict.fromkeys(keywords)) or None,
     }
 
 

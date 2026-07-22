@@ -11,7 +11,7 @@ layout under ``SWISSISOFORM_DATA_DIR`` (default ``./data``):
     <DATA_DIR>/structures/*.cif              # baked ESMFold2/Boltz isoform structures
     <DATA_DIR>/structures/colors/*.colors.json  # per-residue 3Dmol colouring
     <DATA_DIR>/llm/<slug>/                   # optional — per-isoform interpretation
-                                             #   (synthesis.json + criteria.json)
+                                             #   (synthesis.json + categories.json)
 
 LLM JSONs are produced by a separate pipeline and may not be present yet.
 Missing files degrade gracefully (the page renders with a placeholder).
@@ -32,26 +32,31 @@ from typing import Any
 import pandas as pd
 from markupsafe import escape
 
+# Single source of truth for the CDLMPS category → member mapping. Lives in the
+# backend evidence module (which the LLM per-category pass also consumes) and is
+# copied into the site package by prepare_deploy.sh, so UI and LLM never drift.
+from swissisoform.site.evidence import CATEGORIES as _CATEGORIES
+
 logger = logging.getLogger(__name__)
 
 
 # Evidence axis labels. Order is load-bearing — the templates iterate these.
 EXISTENCE_CRITERIA = [
-    ("E1_primate_conservation", "E1", "Primate frame conservation"),
-    ("E2_mammalian_conservation", "E2", "Mammalian frame conservation"),
-    ("E3_phylop_coding_selection", "E3", "Coding Selection"),
-    ("E4_multi_cell_line", "E4", "Expression Breadth"),
-    ("E5_initiation_efficiency", "E5", "Start-Site Usage"),
-    ("E6_mass_spec", "E6", "Peptide Evidence"),
+    ("C1_primate_conservation", "C1", "Primate frame conservation"),
+    ("C2_mammalian_conservation", "C2", "Mammalian frame conservation"),
+    ("C3_phylop_coding_selection", "C3", "Coding Selection"),
+    ("D1_multi_cell_line", "D1", "Expression Breadth"),
+    ("D2_initiation_efficiency", "D2", "Start-Site Usage"),
+    ("D3_mass_spec", "D3", "Peptide Evidence"),
 ]
 
 FUNCTIONAL_CRITERIA = [
-    ("F1_structured_extension", "F1", "Fold Confidence"),
-    ("F2_localization_change", "F2", "Compartment"),
-    ("F3_domain_change", "F3", "Domain (InterProScan) change"),
-    ("F4_targeting_change", "F4", "Sorting Signals"),
-    ("F5_pathogenic_variant_enrichment", "F5", "Germline Variants"),
-    ("F6_clinical_variant_overlap", "F6", "Clinical Variants"),
+    ("L1_localization_change", "L1", "Compartment"),
+    ("L2_targeting_change", "L2", "Sorting Signals"),
+    ("M1_pathogenic_variant_enrichment", "M1", "Germline Variants"),
+    ("M2_clinical_variant_overlap", "M2", "Clinical Variants"),
+    ("P1_structured_extension", "P1", "Fold Confidence"),
+    ("S1_domain_change", "S1", "Domain (InterProScan) change"),
 ]
 
 
@@ -81,6 +86,9 @@ class Isoform:
     functional_evaluable: int | None
     criteria: dict[str, bool | None]
     reasons: dict[str, str]
+    # Per-category LLM verdicts (raw ``categories.json`` blob): category name ->
+    # {"verdict": "interesting"|"neutral"|"not_interesting", "reasoning": str}.
+    category_verdicts: dict[str, dict[str, Any]]
     # Key metrics
     localization_canonical: str | None
     localization_isoform: str | None
@@ -113,6 +121,47 @@ class Isoform:
     # Raw row (kept for /api/data.json)
     raw: dict[str, Any] = field(default_factory=dict)
 
+    def _verdict_counts(self) -> tuple[int, int, int]:
+        """(# interesting, # not_interesting, # fired) over the six CDLMPS categories.
+
+        A category "fires" when its LLM verdict is ``interesting`` or
+        ``not_interesting`` (``neutral`` and missing do not).
+        """
+        n_interesting = 0
+        n_not = 0
+        for group in CARD_GROUPS:
+            cat = self.category_verdicts.get(group["name"]) or {}
+            v = cat.get("verdict")
+            if v == "interesting":
+                n_interesting += 1
+            elif v == "not_interesting":
+                n_not += 1
+        return n_interesting, n_not, n_interesting + n_not
+
+    @property
+    def n_interesting(self) -> int:
+        return self._verdict_counts()[0]
+
+    @property
+    def n_fired(self) -> int:
+        return self._verdict_counts()[2]
+
+    @property
+    def net_score(self) -> int:
+        """Net CDLMPS score: +1 per green (interesting), −1 per red (not_interesting)."""
+        n_int, n_not, _ = self._verdict_counts()
+        return n_int - n_not
+
+    @property
+    def fired_categories(self) -> list[str]:
+        """Category letters (CARD_GROUPS order) whose verdict fires (green or red)."""
+        out = []
+        for group in CARD_GROUPS:
+            cat = self.category_verdicts.get(group["name"]) or {}
+            if cat.get("verdict") in ("interesting", "not_interesting"):
+                out.append(group["letter"])
+        return out
+
 
 @dataclass
 class GeneRecord:
@@ -123,10 +172,28 @@ class GeneRecord:
     uniprot_url: str | None
     function: str | None
     location: str | None
+    # UniProt keywords (controlled vocabulary) — powers the functional query facet.
+    keywords: list[str]
     canonical_len: int | None
     isoforms: list[Isoform]
     llm: dict[str, Any] | None
     canonical_cif: str | None
+
+    @property
+    def best_isoform(self) -> "Isoform | None":
+        """The highest net-CDLMPS-score isoform — headline for the gene card.
+
+        Ranks by net_score (green +1, red −1) descending; ties fall back to
+        more green, then the existing evidence scores, then ``aa_len`` so genes
+        with no LLM verdicts still surface a deterministic representative.
+        """
+        if not self.isoforms:
+            return None
+
+        def _key(iso: Isoform) -> tuple[int, int, int, int]:
+            return (iso.net_score, iso.n_interesting, iso.existence_score or 0, iso.aa_len or 0)
+
+        return max(self.isoforms, key=_key)
 
 
 # --------------------------------------------------------------------------- #
@@ -185,6 +252,14 @@ def _maybe_str(v: Any) -> str | None:
         return None
     s = str(v)
     return s if s and s.lower() != "nan" else None
+
+
+def _split_terms(v: Any) -> list[str]:
+    """Split a ``"; "``-joined term string (e.g. generef keywords) into a list."""
+    s = _maybe_str(v)
+    if not s:
+        return []
+    return [t.strip() for t in s.split(";") if t.strip()]
 
 
 def _maybe_bool(v: Any) -> bool | None:
@@ -359,9 +434,16 @@ def _build_isoform(
     struct_index: dict[tuple[str, str], str],
     colors: frozenset[str] = frozenset(),
     pae: frozenset[str] = frozenset(),
+    llm_dir: Path | None = None,
 ) -> Isoform:
     gene = row["gene_name"]
     tis_id = str(row["tis_id"])
+
+    category_verdicts = (
+        category_verdicts_for_isoform(llm_dir=llm_dir, tis_slug=tis_slug(tis_id))
+        if llm_dir is not None
+        else {}
+    )
 
     # Pathogenic variants in the unique region — pull from the clinical hits
     # rather than the variant-intersection module so we get hgvsp + source.
@@ -398,6 +480,7 @@ def _build_isoform(
         functional_evaluable=_maybe_int(row.get("isoform_scoring_functional_evaluable")),
         criteria=_criteria_dict(row.get("isoform_scoring_criteria")),
         reasons=_reasons_dict(row.get("isoform_scoring_reasons")),
+        category_verdicts=category_verdicts,
         localization_canonical=_maybe_str(row.get("cmp_localization_deeploc_prediction_canonical")),
         localization_isoform=_maybe_str(row.get("cmp_localization_deeploc_prediction_isoform")),
         localization_changed=_maybe_bool(row.get("cmp_localization_deeploc_prediction_changed")),
@@ -474,13 +557,16 @@ def load_all() -> dict[str, GeneRecord]:
                 logger.warning("failed to parse %s: %s", llm_path, e)
                 llm = None
 
-        isoforms = [_build_isoform(r, struct_index, colors, pae) for _, r in sub.iterrows()]
+        isoforms = [
+            _build_isoform(r, struct_index, colors, pae, llm_dir) for _, r in sub.iterrows()
+        ]
         out[gene_name] = GeneRecord(
             name=gene_name,
             uniprot_id=uniprot_id,
             uniprot_url=uniprot_url,
             function=_maybe_str(head.get("generef_uniprot_function")),
             location=_maybe_str(head.get("generef_subcellular_location")),
+            keywords=_split_terms(head.get("generef_keywords")),
             canonical_len=_maybe_int(head.get("canonical_len")),
             isoforms=isoforms,
             llm=llm,
@@ -628,10 +714,9 @@ def _sae_records(raw_val: Any) -> list[dict[str, Any]]:
     return [dict(d) for d in items if hasattr(d, "keys")]
 
 
-# Display filters requested by collaborators: drop uninterpretable features and
-# features that fire on only a single residue (noise). Applied at shaping time so
-# the card tables show only interpretable, robustly-present features.
-_SAE_MIN_PREVALENCE = 2
+# The SAE module already filters prevalence >= 2 and keeps the top 30 per category
+# before writing the parquet, so the card only needs to distinguish generic /
+# uninterpretable features (hidden until the table is expanded).
 _SAE_GENERIC_LABELS = {"unknown generic feature", "unknown", ""}
 
 
@@ -640,53 +725,46 @@ def _sae_is_generic(label: Any) -> bool:
     return (str(label).strip().lower() if label is not None else "") in _SAE_GENERIC_LABELS
 
 
-def _sae_prevalent(v: Any) -> bool:
-    """True when a prevalence value clears the min-prevalence display threshold."""
-    n = _sae_num(v)
-    return n is not None and n >= _SAE_MIN_PREVALENCE
-
-
 def _sae_simple_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Shape a simple SAE feature list ({max,mean,prevalence}) into display rows.
 
     Used for the isoform-only, canonical-only, and differential-coordinate
-    (unique-region) feature lists, which share the same per-feature schema. Drops
-    generic-labelled features and any firing on < 2 residues.
+    (unique-region) feature lists, which share the same per-feature schema. The
+    backend already saved the top 30 at prevalence >= 2, so no filtering happens
+    here — each row is tagged ``generic`` and non-generic rows are returned first
+    (activation order preserved) so the card can hide generic ones until expanded.
     """
-    out: list[dict[str, Any]] = []
+    non_generic: list[dict[str, Any]] = []
+    generic: list[dict[str, Any]] = []
     for rec in records:
-        if _sae_is_generic(rec.get("label")) or not _sae_prevalent(rec.get("prevalence")):
-            continue
         idx = rec.get("feature_index")
-        out.append(
+        is_generic = _sae_is_generic(rec.get("label"))
+        (generic if is_generic else non_generic).append(
             {
                 "feature_index": int(idx) if idx is not None else None,
                 "label": rec.get("label") or None,
                 "description": rec.get("description") or None,
                 "activation": _sae_num(rec.get("max")),
                 "prevalence": _sae_num(rec.get("prevalence")),
+                "generic": is_generic,
             }
         )
-    return out
+    return non_generic + generic
 
 
 def _sae_shared_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Shape the shared-feature deltas list into display rows (already |Δ|-sorted).
 
-    Drops generic-labelled features and features firing on < 2 residues in both
-    forms (a feature prevalent in either the isoform or canonical is kept).
+    The backend already saved the top 30 at prevalence >= 2; each row is tagged
+    ``generic`` and non-generic rows are returned first (|Δ| order preserved) so
+    the card can hide generic ones until expanded.
     """
-    out: list[dict[str, Any]] = []
+    non_generic: list[dict[str, Any]] = []
+    generic: list[dict[str, Any]] = []
     for rec in records:
-        if _sae_is_generic(rec.get("label")):
-            continue
-        if not (
-            _sae_prevalent(rec.get("isoform_prevalence"))
-            or _sae_prevalent(rec.get("canonical_prevalence"))
-        ):
-            continue
         idx = rec.get("feature_index")
-        out.append(
+        is_generic = _sae_is_generic(rec.get("label"))
+        (generic if is_generic else non_generic).append(
             {
                 "feature_index": int(idx) if idx is not None else None,
                 "label": rec.get("label") or None,
@@ -696,9 +774,10 @@ def _sae_shared_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "canonical_max": _sae_num(rec.get("canonical_max")),
                 "isoform_prevalence": _sae_num(rec.get("isoform_prevalence")),
                 "canonical_prevalence": _sae_num(rec.get("canonical_prevalence")),
+                "generic": is_generic,
             }
         )
-    return out
+    return non_generic + generic
 
 
 def sae_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
@@ -708,13 +787,16 @@ def sae_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
     by the SAE SiteModule and flattened into all_paired.parquet). Returns None
     when the SAE step did not run for this protein pair (status != "ok").
 
-    Two parts of the card:
+    The SAE module already saved the top 30 features per category (prevalence >= 2,
+    ranked by activation / |Δ|) into the parquet, so this function only shapes them
+    for display: each row is tagged ``generic`` and non-generic rows come first, so
+    the card shows interpretable features by default and reveals generic ones on
+    expand. Two parts:
       - Global (whole-protein feature-set comparison): ``isoform_only`` /
         ``canonical_only`` (features present in only one form) and ``shared``
-        (present in both, ranked by |Δ| activation) — each capped at top 30, with
-        the saved total count for the full category.
+        (present in both, ranked by |Δ| activation), with the saved total count.
       - Differential coordinates: ``unique_region`` — features firing on just the
-        isoform-unique residues (top 30).
+        isoform-unique residues.
 
     Scoring and LLM surfacing are intentionally out of scope for this card — it
     is descriptive over data already in the parquet. (The scored F7 criterion is
@@ -896,77 +978,77 @@ def _fmt_num(v, pct=False):
 # Plain-English "what this means" for each criterion — shown at the top of the
 # criterion modal so a reader knows how to interpret the evidence below it.
 CRITERION_ABOUT = {
-    "E1_primate_conservation": (
+    "C1_primate_conservation": (
         "How well is the isoform-unique region conserved at the amino-acid level "
         "across primates (mean percent identity)? High AA identity in close "
         "relatives argues the alternative protein is real and translated, not a "
         "sequencing or annotation artifact. (Reading-frame intactness is shown "
         "as context.)"
     ),
-    "E2_mammalian_conservation": (
+    "C2_mammalian_conservation": (
         "The same amino-acid identity test across mammals. Conservation over "
         "deeper evolutionary distance is stronger evidence the ORF is under "
         "selection to be translated. (Reading-frame intactness is shown as "
         "context.)"
     ),
-    "E3_phylop_coding_selection": (
+    "C3_phylop_coding_selection": (
         "phyloP / phastCons measure per-base evolutionary constraint. A high "
         "absolute phyloP over the differential region means the sequence itself "
         "is under strong purifying selection — evidence it is coding and does "
         "something. (Enrichment over the shared core is shown as context only.)"
     ),
-    "E4_multi_cell_line": (
+    "D1_multi_cell_line": (
         "Is the alternative start used in more than one cell line? Reproducible "
         "initiation across independent samples argues against a one-off ribosome "
         "artifact."
     ),
-    "E5_initiation_efficiency": (
+    "D2_initiation_efficiency": (
         "How efficiently ribosomes initiate at this start (TIS) relative to "
         "background, per cell line. Strong, reproducible initiation supports a "
         "genuine translation event."
     ),
-    "E6_mass_spec": (
+    "D3_mass_spec": (
         "Were tryptic peptides unique to the differential region detected by "
         "mass spec? Direct peptide evidence is the strongest proof the isoform "
         "protein exists."
     ),
-    "F1_structured_extension": (
+    "P1_structured_extension": (
         "Does the gained/lost region fold into ordered structure (pLDDT) and "
         "shift the protein's biophysical character (charge, hydropathy, "
         "disorder)? Structured, biophysically distinct regions are more likely "
         "to be functional."
     ),
-    "F2_localization_change": (
+    "L1_localization_change": (
         "Do the predicted localization features (DeepLoc prediction, sorting "
         "signals, or membrane association) differ between the canonical and the "
         "isoform? A protein with changed localization features acts in a "
         "different cellular context."
     ),
-    "F3_domain_change": (
+    "S1_domain_change": (
         "Does the isoform gain or lose a real InterPro functional domain in the "
         "differential region (disorder/structural-only signatures excluded)? "
         "Gaining or losing a domain changes function directly."
     ),
-    "F4_targeting_change": (
+    "L2_targeting_change": (
         "Do N-terminal targeting signals (SignalP secretion, TargetP "
         "mitochondrial/chloroplast) differ between canonical and isoform? "
         "N-terminal changes most directly add or remove targeting peptides."
     ),
-    "F5_pathogenic_variant_enrichment": (
+    "M1_pathogenic_variant_enrichment": (
         "Does healthy human germline variation (gnomAD) avoid this region "
         "(depletion ratio < 1×), and is it intrinsically constrained (ESM-C "
         "constraint enrichment)? Depletion of population variation plus high "
         "sequence constraint mean the region resists change — it is functionally "
         "important. gnomAD is a tolerance catalogue, not a disease one; "
-        "disease/cancer variants (ClinVar / COSMIC) live in F6."
+        "disease/cancer variants (ClinVar / COSMIC) live in M2."
     ),
-    "F6_clinical_variant_overlap": (
+    "M2_clinical_variant_overlap": (
         "Are disease (ClinVar / COSMIC) variants enriched per nucleotide in the "
         "differential region versus the shared core (disease enrichment ratio ≥ "
         "1×)? Disease variants concentrating in the unique region tie it to "
         "phenotype."
     ),
-    "F7_shared_structural_change": (
+    "P2_shared_structural_change": (
         "The shared region is the stretch of protein identical in both the isoform "
         "and the canonical (the canonical body for an extension; the post-truncation "
         "body for a truncation). Folded in both contexts it normally comes out nearly "
@@ -976,6 +1058,20 @@ CRITERION_ABOUT = {
         "high-interest functional signal. TM-score is a length-normalized companion; "
         "the check only fires when both structures are confidently folded, and "
         "uORF/altORF isoforms (no shared region) are not evaluable."
+    ),
+    "S2_biophysics": (
+        "Does the whole-protein biophysical character shift between the canonical "
+        "and the isoform — hydropathy (GRAVY), charged fraction, or intrinsic "
+        "disorder? A meaningful shift on any of these means the alternative region "
+        "changes the protein's physicochemical behaviour (solubility, membrane "
+        "affinity, condensate propensity), independent of whether it folds."
+    ),
+    "S3_sae": (
+        "Do sparse-autoencoder (SAE) interpretability features of the ESM-C protein "
+        "language model differ between the isoform and the canonical — features "
+        "gained or lost in the model's learned feature space? A presence check: it "
+        "fires when any interpretable feature is active in one protein but not the "
+        "other. The score is a binary gained-or-lost check."
     ),
 }
 
@@ -1444,31 +1540,32 @@ def criterion_evidence_for(iso) -> dict:
         except (TypeError, ValueError):
             pmin = None
 
-        detail_rows = []
+        # Only the per-side shared-region pLDDT is genuinely two-sided, so it is the
+        # comparison table. RMSD / TM-score / region length describe the comparison
+        # itself (single-valued), so per the Details-box contract they ride in the
+        # caption rather than as key/value rows.
+        compare_rows = compare(
+            [
+                (
+                    "Shared-region pLDDT",
+                    [
+                        "isoform_structure_plddt_shared_mean_canonical",
+                        "isoform_structure_plddt_shared_mean_isoform",
+                    ],
+                ),
+            ]
+        )
+
+        bits = []
         if rmsd is not None:
-            detail_rows.append(
-                {"label": "Shared-region Cα RMSD", "value": f"{rmsd} Å",
-                 **_term("Shared-region Cα RMSD")}
-            )
+            bits.append(f"shared-region Cα RMSD {rmsd} Å")
         if tm is not None:
-            detail_rows.append(
-                {"label": "Shared-region TM-score", "value": tm,
-                 **_term("Shared-region TM-score")}
-            )
+            bits.append(f"shared TM-score {tm}")
         if n is not None:
-            detail_rows.append(
-                {"label": "Shared region length", "value": f"{int(n)} aa",
-                 **_term("Shared region length")}
-            )
+            bits.append(f"shared region {int(n)} aa")
         pmin_fmt = _fmt_num(pmin)
         if pmin_fmt is not None:
-            detail_rows.append(
-                {"label": "Min shared-region pLDDT", "value": pmin_fmt,
-                 **_term("Min shared-region pLDDT")}
-            )
-
-        # Global fold-similarity singletons ride in the caption for context.
-        bits = []
+            bits.append(f"min shared pLDDT {pmin_fmt}")
         gtm = _fmt_num(g("isoform_structure_tm_score"))
         grmsd = _fmt_num(g("isoform_structure_rmsd_global"))
         if gtm is not None:
@@ -1476,7 +1573,7 @@ def criterion_evidence_for(iso) -> dict:
         if grmsd is not None:
             bits.append(f"global RMSD {grmsd} Å")
 
-        if not detail_rows:
+        if not bits and not compare_rows:
             if status and status != "ok":
                 _why = {
                     "no_shared_region": "no shared region (uORF/altORF, or region too short)",
@@ -1486,17 +1583,17 @@ def criterion_evidence_for(iso) -> dict:
                 return {
                     "title": "Shared-region structural change",
                     "subtitle": f"not evaluable — {_why}",
-                    "rows": [],
                 }
             return None
         sub = "Cα RMSD superposed on the shared residues only; TM-score is length-normalized"
         if bits:
             sub += " · " + " · ".join(bits)
-        return {
-            "title": "Shared-region structural change",
-            "subtitle": sub,
-            "rows": detail_rows,
-        }
+        sec = {"title": "Shared-region structural change", "subtitle": sub}
+        if compare_rows:
+            sec["cmp_headers"] = ["Property", "Canonical", "Isoform"]
+            sec["col_classes"] = CANON_ISO
+            sec["compare_rows"] = compare_rows
+        return sec
 
     def sec_deeploc():
         compare_rows = compare(
@@ -1931,28 +2028,28 @@ def criterion_evidence_for(iso) -> dict:
 
     # ---- assign sections to criteria --------------------------------------
     assignments = {
-        "E1_primate_conservation": [sec_frame("primate")],
-        "E2_mammalian_conservation": [sec_frame("mammalian")],
-        "E3_phylop_coding_selection": [sec_phylop(), sec_start_site()],
-        "E4_multi_cell_line": [sec_cell_lines()],
-        "E5_initiation_efficiency": [sec_efficiency()],
-        "E6_mass_spec": [sec_massspec()],
-        "F1_structured_extension": [sec_structure(), sec_structure_region()],
-        "F2_localization_change": [sec_deeploc()],
-        "F3_domain_change": [sec_domains_motifs()],
-        "F4_targeting_change": [sec_targeting()],
-        "F5_pathogenic_variant_enrichment": [
+        "C1_primate_conservation": [sec_frame("primate")],
+        "C2_mammalian_conservation": [sec_frame("mammalian")],
+        "C3_phylop_coding_selection": [sec_phylop(), sec_start_site()],
+        "D1_multi_cell_line": [sec_cell_lines()],
+        "D2_initiation_efficiency": [sec_efficiency()],
+        "D3_mass_spec": [sec_massspec()],
+        "P1_structured_extension": [sec_structure(), sec_structure_region()],
+        "L1_localization_change": [sec_deeploc()],
+        "S1_domain_change": [sec_domains_motifs()],
+        "L2_targeting_change": [sec_targeting()],
+        "M1_pathogenic_variant_enrichment": [
             sec_germline_tolerance(),
             sec_constraint(),
             sec_variant_burden("gnomad", "germline (gnomAD)"),
             sec_variant_scores("gnomad", "germline (gnomAD)"),
         ],
-        "F6_clinical_variant_overlap": [
+        "M2_clinical_variant_overlap": [
             sec_clinical_burden(),
             sec_variant_burden("disease", "disease (ClinVar/COSMIC)"),
             sec_variant_scores("disease", "disease (ClinVar/COSMIC)"),
         ],
-        "F7_shared_structural_change": [sec_shared_rmsd()],
+        "P2_shared_structural_change": [sec_shared_rmsd()],
     }
 
     out = {}
@@ -2012,84 +2109,99 @@ def llm_for_isoform(gene: GeneRecord, tis_id: str) -> dict[str, Any] | None:
 # Drives the evidence-tile UI grid on the isoform page (E1..E6, F1..F7).
 CRITERIA_FOR_PAGE = [
     {
-        "id": "E1_primate_conservation",
+        "id": "C1_primate_conservation",
         "axis": "E",
         "label": "Primate conservation",
         "short_label": "Primates",
     },
     {
-        "id": "E2_mammalian_conservation",
+        "id": "C2_mammalian_conservation",
         "axis": "E",
         "label": "Mammalian conservation",
         "short_label": "Mammals",
     },
     {
-        "id": "E3_phylop_coding_selection",
+        "id": "C3_phylop_coding_selection",
         "axis": "E",
         "label": "Coding Selection",
         "short_label": "PhyloP",
     },
     {
-        "id": "E4_multi_cell_line",
+        "id": "D1_multi_cell_line",
         "axis": "E",
         "label": "Expression Breadth",
         "short_label": "Cell lines",
     },
     {
-        "id": "E5_initiation_efficiency",
+        "id": "D2_initiation_efficiency",
         "axis": "E",
         "label": "Start-Site Usage",
         "short_label": "Init. eff.",
     },
     {
-        "id": "E6_mass_spec",
+        "id": "D3_mass_spec",
         "axis": "E",
         "label": "Peptide Evidence",
         "short_label": "MS",
     },
     {
-        "id": "F1_structured_extension",
+        "id": "P1_structured_extension",
         "headline_label": "pLDDT Differential Region",
         "axis": "F",
         "label": "Fold Confidence",
         "short_label": "Folding",
     },
     {
-        "id": "F2_localization_change",
+        "id": "L1_localization_change",
         "axis": "F",
         "label": "Compartment",
         "short_label": "Localization",
     },
     {
-        "id": "F3_domain_change",
+        "id": "S1_domain_change",
         "axis": "F",
         "label": "Domain change",
         "short_label": "Domains",
     },
     {
-        "id": "F4_targeting_change",
+        "id": "L2_targeting_change",
         "axis": "F",
         "label": "Sorting Signals",
         "short_label": "Targeting",
     },
     {
-        "id": "F5_pathogenic_variant_enrichment",
+        "id": "M1_pathogenic_variant_enrichment",
         "axis": "F",
         "label": "Germline Variants",
         "short_label": "Germline",
     },
     {
-        "id": "F6_clinical_variant_overlap",
+        "id": "M2_clinical_variant_overlap",
         "axis": "F",
         "label": "Clinical Variants",
         "short_label": "Variants",
     },
     {
-        "id": "F7_shared_structural_change",
+        "id": "P2_shared_structural_change",
         "headline_label": "Shared-Region RMSD",
         "axis": "F",
         "label": "Core Fold Perturbation",
         "short_label": "Shared RMSD",
+    },
+    # S2/S3 are first-class scored criteria (biophysics + SAE); the page renders
+    # them via their bespoke cards (_biophysics_card.html / _sae_card.html), but
+    # they must appear here to stay in sync with the backend CRITERIA registry.
+    {
+        "id": "S2_biophysics",
+        "axis": "F",
+        "label": "Biophysics",
+        "short_label": "Biophysics",
+    },
+    {
+        "id": "S3_sae",
+        "axis": "F",
+        "label": "SAE features",
+        "short_label": "SAE",
     },
 ]
 
@@ -2099,45 +2211,11 @@ CRITERIA_FOR_PAGE = [
 # ``CRITERIA_FOR_PAGE`` ids, plus the literals "biophysics" / "sae" for the two
 # descriptive (non-scored) tiles. Each group's members are internally uniform in
 # the old axis, so existing per-tile axis colouring stays coherent.
+# Derived from the backend CATEGORIES (same {name, letter, members} shape) so the
+# grouped tile layout and the per-category LLM pass share one definition.
 CARD_GROUPS = [
-    {
-        "name": "Conservation",
-        "letter": "C",
-        "members": [
-            "E1_primate_conservation",
-            "E2_mammalian_conservation",
-            "E3_phylop_coding_selection",
-        ],
-    },
-    {
-        "name": "Detection",
-        "letter": "D",
-        "members": [
-            "E4_multi_cell_line",
-            "E5_initiation_efficiency",
-            "E6_mass_spec",
-        ],
-    },
-    {
-        "name": "Localization",
-        "letter": "L",
-        "members": ["F2_localization_change", "F4_targeting_change"],
-    },
-    {
-        "name": "Mutation Landscape",
-        "letter": "M",
-        "members": ["F5_pathogenic_variant_enrichment", "F6_clinical_variant_overlap"],
-    },
-    {
-        "name": "Predicted Structure",
-        "letter": "P",
-        "members": ["F1_structured_extension", "F7_shared_structural_change"],
-    },
-    {
-        "name": "Structural Characteristics",
-        "letter": "S",
-        "members": ["F3_domain_change", "biophysics", "sae"],
-    },
+    {"name": c["name"], "letter": c["letter"], "members": list(c["members"])}
+    for c in _CATEGORIES
 ]
 
 # member id -> displayed badge (group letter + 1-based index within its group).
@@ -2152,31 +2230,15 @@ CARD_BADGES = {
 CRITERIA_BY_ID = {c["id"]: c for c in CRITERIA_FOR_PAGE}
 
 
-def llm_criterion_for_isoform(*, llm_dir: Path, tis_slug: str, criterion_id: str) -> dict | None:
-    """Return one criterion LLM read from disk, or None if missing.
-
-    Reads ``<llm_dir>/<tis_slug>/criteria.json`` and indexes by criterion_id.
-    """
-    p = Path(llm_dir) / tis_slug / "criteria.json"
-    if not p.exists():
-        return None
-    try:
-        blob = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    return blob.get(criterion_id)
-
-
 def category_verdicts_for_isoform(*, llm_dir: Path, tis_slug: str) -> dict:
     """Per-category LLM verdict + reasoning, keyed by CARD_GROUPS category name.
 
-    Reads an optional ``<llm_dir>/<tis_slug>/categories.json`` — an object keyed
-    by category ``name`` (e.g. "Conservation") →
-    ``{"verdict": "interesting" | "neutral" | "not_interesting", "reasoning": str}``.
-    Returns ``{}`` when the file is absent or unreadable, so the front end falls
-    back to a neutral "pending" flag + a placeholder reasoning line. There is no
-    producer for this yet — the LLM reasons per-criterion (criteria.json) and per
-    whole-isoform (synthesis.json) today; this is the category-level hook.
+    Reads ``<llm_dir>/<tis_slug>/categories.json`` — an object keyed by category
+    ``name`` (e.g. "Conservation") →
+    ``{"verdict": "interesting" | "neutral" | "not_interesting", "reasoning": str}``,
+    produced by the ``category`` LLM pass (``llm.py``). Returns ``{}`` when the
+    file is absent or unreadable, so the front end falls back to a neutral
+    "pending" flag + a placeholder reasoning line.
     """
     p = Path(llm_dir) / tis_slug / "categories.json"
     if not p.exists():

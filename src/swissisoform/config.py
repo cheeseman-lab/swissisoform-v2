@@ -147,8 +147,9 @@ class ScoringConfig:
     """Configuration for evidence scoring (Module 10).
 
     Evidence scoring produces two independent scores per TIS:
-    ``existence_score`` (E1–E6 — does this isoform really exist?) and
-    ``functional_score`` (F1–F6 — does it change function?). Each
+    ``existence_score`` (Conservation + Detection — does this isoform really
+    exist?) and ``functional_score`` (Localization + Mutation + Predicted
+    structure + Structural characteristics — does it change function?). Each
     criterion returns ``True`` / ``False`` / ``None``; the score is the
     count of ``True``. Thresholds below are the cutoffs for turning
     continuous signals into the boolean criterion outputs.
@@ -186,9 +187,14 @@ class ScoringConfig:
             which germline variation is judged to avoid the unique region.
         f6_disease_enrichment_min: F6 threshold — disease-variant density
             enrichment (unique vs shared) zero-point.
-        f1_gravy_delta_min: F1 distinctness — |Δ GRAVY| cutoff.
-        f1_fraction_charged_delta_min: F1 distinctness — |Δ fraction charged|.
-        f1_disorder_delta_min: F1 distinctness — |Δ disorder| cutoff.
+        s2_gravy_delta_min: S2 shift — |gravy_delta| cutoff (whole-protein
+            isoform − canonical mean hydropathy).
+        s2_fraction_charged_delta_min: S2 shift — |fraction_charged_delta| cutoff
+            (whole-protein isoform − canonical).
+        s2_disorder_delta_min: S2 shift — |disorder_delta| cutoff (whole-protein
+            isoform − canonical).
+        s3_top_delta_min: S3 threshold — minimum strongest shared-feature SAE
+            activation shift, max(|top_gained_delta_max|, |top_lost_delta_max|).
         f7_rmsd_shared_min: F7 threshold — minimum shared-region Cα RMSD (Å) to
             call a significant structural change in the retained region.
         f7_min_shared_len: F7 guard — minimum shared-region length (aa) below
@@ -231,14 +237,25 @@ class ScoringConfig:
     # F5 germline tolerance/constraint thresholds.
     f5_constraint_enrichment_min: float = 2.0  # CALIBRATE ON GENOME-WIDE RUN — provisional
     f5_depletion_ratio_max: float = 0.80  # CALIBRATE ON GENOME-WIDE RUN — provisional
-    # F1 threshold for mean pLDDT over the differential region. Scale
+    # P1 threshold for mean pLDDT over the differential region. Scale
     # matches whatever the structure backend emits: Boltz-2 emits 0–1
     # (so use 0.70); AlphaFold-style backends emit 0–100 (use 70.0).
+    # (Field name kept ``f1_*`` for back-compat; P1 is the renamed F1.)
     f1_plddt_threshold: float = 0.70
-    # F1 biophysical-distinctness cutoffs (any one satisfied → distinct).
-    f1_gravy_delta_min: float = 0.3  # CALIBRATE ON GENOME-WIDE RUN — provisional
-    f1_fraction_charged_delta_min: float = 0.05  # CALIBRATE ON GENOME-WIDE RUN — provisional
-    f1_disorder_delta_min: float = 0.05  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    # S2 whole-protein biophysical-shift cutoffs (isoform − canonical |delta|;
+    # any one satisfied → shifted). This is the frame the old F1 distinctness
+    # half used (folding, F1's other half, is now P1).
+    s2_gravy_delta_min: float = 0.3  # PROVISIONAL — set in threshold discussion
+    s2_fraction_charged_delta_min: float = 0.05  # PROVISIONAL — set in threshold discussion
+    s2_disorder_delta_min: float = 0.05  # PROVISIONAL — set in threshold discussion
+    # S3 magnitude gate on the strongest shared-feature activation shift,
+    # max(|top_gained_delta_max|, |top_lost_delta_max|). Calibrated on the
+    # full_catalog genome-wide run (6,462 isoforms): the old categorical presence
+    # check (n_isoform_only + n_canonical_only > 0) was True for 100.0% of rows —
+    # two proteins always differ in hundreds of features (median 197), so it
+    # carried no information. |top delta| spans 0.36–30.85 (median 9.36); 10.0
+    # sits just above the median and fires on ~46% of isoforms.
+    s3_top_delta_min: float = 10.0
     # F7 shared-region structural change. RMSD scale is Å; pLDDT gate is on the
     # 0–1 ESMFold2 scale (mirror of f1_plddt_threshold). The real RMSD cutoff is
     # to be picked from the genome-wide distribution (near-zero spike + tail).

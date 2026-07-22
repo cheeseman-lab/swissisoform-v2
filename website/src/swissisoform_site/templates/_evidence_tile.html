@@ -18,15 +18,8 @@
   {# Body content stored as a <template> fragment — never rendered inline.
      JS clones the contents into the evidence modal on tile click. #}
   <template class="tile-body-template">
-    {# AI summary on top #}
-    {% if llm %}
-      <div class="tile-llm">
-        <p class="rp-headline"><strong>{{ llm.headline }}</strong></p>
-        <p class="rp-summary">{{ llm.summary }}</p>
-      </div>
-    {% else %}
-      <p class="empty tile-llm-empty">AI summary not yet generated for this criterion.</p>
-    {% endif %}
+    {# Per-criterion detail only — the AI interpretation is now per-category
+       (rendered on the category box), not per-tile. #}
     {# Two boxes: Comparison + Details (each metric links to the About glossary) #}
     {% set ce = criterion_evidence.get(c.id) if criterion_evidence else none %}
     {% include "_criterion_evidence.html" %}

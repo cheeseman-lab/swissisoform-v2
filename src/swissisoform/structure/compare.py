@@ -146,6 +146,95 @@ def compare_confidence(
     return out
 
 
+def load_pae(path: Path | str | None) -> Any | None:
+    """Load an ``L×L`` PAE matrix from ``pae.npy``; ``None`` if absent/unreadable.
+
+    The fold cache stores PAE as float16 for the (few) entries folded with PAE
+    capture; older entries have no ``pae.npy`` and this returns ``None``.
+    """
+    if not path:
+        return None
+    try:
+        import numpy as np
+
+        return np.load(str(path))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("failed to load PAE %s: %s", path, exc)
+        return None
+
+
+def pae_region_blocks(
+    pae: Any,
+    diff_start: int | None,
+    diff_end: int | None,
+) -> dict[str, Any]:
+    """Mean PAE within/between the differential region and the rest of the fold.
+
+    Partitions residues ``[0, L)`` into the differential region
+    ``[diff_start, diff_end)`` and the body (everything else) and reports the
+    mean PAE per block pair. PAE is asymmetric (``PAE[i, j]`` is the expected
+    error at residue ``j`` when the structure is aligned on residue ``i``), so
+    the inter-block value averages BOTH off-diagonal rectangles
+    (diff→body and body→diff).
+
+    Args:
+        pae: ``L×L`` PAE matrix (ndarray/list) for the structure that CONTAINS
+            the diff region — isoform fold for extensions/uORFs, canonical fold
+            for truncations. ``None`` → ``pae_status='no_pae'``.
+        diff_start: 0-based half-open diff-region start in that structure's coords.
+        diff_end: 0-based half-open diff-region end.
+
+    Returns:
+        ``pae_diff_vs_diff`` (is the added/lost segment internally rigid?),
+        ``pae_body_vs_body`` (baseline fold confidence), ``pae_diff_vs_body``
+        (the headline — how confidently the diff region is placed relative to
+        the fold; high = dangling, low = docked), and ``pae_status`` ∈
+        ``ok | no_body | no_diff_region | no_pae``. A uORF/altORF whose diff
+        region is the whole isoform has no body → ``no_body`` with only
+        ``pae_diff_vs_diff`` filled.
+    """
+    out: dict[str, Any] = {
+        "pae_diff_vs_diff": None,
+        "pae_body_vs_body": None,
+        "pae_diff_vs_body": None,
+        "pae_status": "no_pae",
+    }
+    if pae is None:
+        return out
+    try:
+        import numpy as np
+
+        m = np.asarray(pae, dtype=float)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("PAE not array-like: %s", exc)
+        return out
+    if m.ndim != 2 or m.shape[0] != m.shape[1] or m.shape[0] == 0:
+        return out
+
+    import numpy as np
+
+    length = m.shape[0]
+    diff = _slice_indices(length, diff_start, diff_end)
+    if not diff:
+        out["pae_status"] = "no_diff_region"
+        return out
+    diff_set = set(diff)
+    body = [i for i in range(length) if i not in diff_set]
+
+    d = np.asarray(diff, dtype=int)
+    out["pae_diff_vs_diff"] = float(m[np.ix_(d, d)].mean())
+    if not body:
+        out["pae_status"] = "no_body"
+        return out
+    b = np.asarray(body, dtype=int)
+    out["pae_body_vs_body"] = float(m[np.ix_(b, b)].mean())
+    db = m[np.ix_(d, b)]
+    bd = m[np.ix_(b, d)]
+    out["pae_diff_vs_body"] = float((db.sum() + bd.sum()) / (db.size + bd.size))
+    out["pae_status"] = "ok"
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Structural metrics (lazy: tmtools, biotite)
 # ---------------------------------------------------------------------------

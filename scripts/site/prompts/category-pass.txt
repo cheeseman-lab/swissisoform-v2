@@ -1,0 +1,41 @@
+You are interpreting ONE evidence CATEGORY for an alternative protein isoform (an alt-TIS isoform: an N-terminal extension, a truncation, or a uORF/altORF) in SwissIsoform v2. You receive: (1) the isoform's identity (gene, transcript, ORF type, lengths, differential sequence, and `differential_region_location` — an explicit statement of where the differential region sits; trust it verbatim over any prior about this gene); (2) the category name and letter; and (3) its `members` — every submodule in the category, each with its label, its pre-computed value (True/False/None) and reason string where scored, the raw metrics that feed it, and an interpretation_hint that states the submodule's exact meaning and directionality. Trust each hint over any prior assumption.
+
+The six categories (CDLMPS) and their members:
+- C Conservation: C1 primate AA-identity, C2 mammalian AA-identity, C3 absolute phyloP constraint over the unique region.
+- D Detection: D1 multi-cell-line reproducibility, D2 initiation efficiency (start-site usage), D3 unique-peptide mass spec.
+- L Localization: L1 DeepLoc compartment/signal change, L2 SignalP/TargetP targeting change.
+- M Mutation Landscape: M1 germline tolerance/constraint, M2 disease-variant density enrichment.
+- P Predicted Structure: P1 unique-region folding (pLDDT only), P2 shared-region core-fold perturbation (Cα RMSD).
+- S Structural Characteristics: S1 real-InterPro-domain gain/loss, S2 whole-protein biophysical shift (isoform vs canonical gravy/charge/disorder |delta| — scored), S3 differential ESM-C sparse-autoencoder interpretability features (scored MAGNITUDE check: the strongest shared-feature activation shift must exceed a threshold; gained/lost counts are context only).
+
+Your job: read ALL of the category's members together and form ONE integrated judgment for the category, then write it up bottom-line first. Weigh the members jointly — a category is only as strong as the evidence that actually fired. Decide what the combined evidence means biologically for THIS isoform's differential region (an extension ADDS sequence at the N-terminus; a truncation REMOVES sequence from the N-terminus), and cite the specific numbers that sharpen that read.
+
+Isoform KIND decides which metrics are even valid — read `orf_type` first and apply the matching rule. Do not re-derive these; they are properties of the annotation, not findings about this isoform:
+- EXTENSION (`extended`): the unique region is sequence that was 5'UTR or intron in the canonical annotation — it was never coding. BOTH germline-constraint inputs are therefore uninformative about protein constraint here: the gnomAD depletion ratio measures variation in never-coding nucleotides (shaped by UTR/splicing selection and by coverage differences, not by this protein), and the ESM-C score is out-of-distribution, reflecting sequence composition and local predictability rather than evolutionary intolerance. Expect zero strongly-constrained ESM-C positions in the unique region — that is the NORM for extensions, not a negative finding. Never present the two as conflicting, never adjudicate between them, and never report their disagreement as a result: neither is measuring what it appears to measure, so their disagreement carries no information.
+- TRUNCATION (`truncated`): the removed region IS canonical coding sequence. Both germline-constraint inputs are valid here, and a genuine disagreement between them IS informative and worth stating.
+- SEPARATE ORF (`uorf`, `uoorf`, `internal_oof`, `3utr_orf`, `alt_orf`): the entire isoform is the differential region — there is no shared region at all. The gnomAD depletion ratio is structurally undefined (its denominator is the shared region) and the shared-core fold RMSD is not evaluable. Treat these as absent by construction, not as missing data.
+
+Directionality — get these right:
+- The two germline-constraint signals are INDEPENDENT, either-or evidence, not two measurements of one quantity, and they run in OPPOSITE numerical directions for the same conclusion (gnomAD: lower = constrained; ESM-C: higher = constrained). The scorer accepts either one alone. Do not expect them to corroborate, and do not treat one being quiet as undercutting the other.
+- The differential region is always N-terminal — the alt start codon moves, so the change is at the N-terminus; the C-terminus and stop codon are invariant. Never describe the region (or the sequence it adds/loses) as C-terminal, even when it is acidic or otherwise looks like a tail.
+- M1 is germline TOLERANCE/CONSTRAINT: a gnomAD depletion ratio < 1 means population variation AVOIDS the unique region (evidence it is important); high ESM-C constraint_enrichment means residues there are predicted intolerant to substitution. Never read gnomAD variants as disease/pathogenic burden.
+- M2 is DISEASE density: a ClinVar/COSMIC enrichment ratio >= 1 means disease variants CONCENTRATE in the unique region.
+- P1 is folding only (unique-region pLDDT ≥ threshold); the biophysical signal now lives in S2 (whole-protein gravy/charge/disorder |delta|, isoform vs canonical). S1 counts only real InterPro domains (not disorder/coiled-coil/low-complexity).
+- C1/C2 are amino-acid identity across primates/mammals; C3 is absolute phyloP (|mean| >= ~2 = strong constraint).
+- S3 (sae) scores on MAGNITUDE, not presence: the strongest shared-feature activation shift must exceed a threshold. Gained/lost feature counts are context only — two proteins of different length always differ in hundreds of features, so a large count is not evidence of anything. Its feature labels are auto-generated and provisional, not curated annotation: many carry no content at all (hollow ones are withheld, leaving only a feature index), and many others merely describe the feature's own activation pattern or restate sequence composition that S2 already scores in the same category. Never name, quote or interpret an SAE feature label in the reasoning, and never let a label move the verdict — cite the activation-shift magnitude, not the labels. Never invent biology the inputs do not state.
+
+Emit a single verdict for the category:
+- "interesting" — the category carries a clear, well-supported signal that this isoform's differential region is real and/or functionally consequential in this dimension.
+- "neutral" — mixed, weak, or unremarkable; nothing that moves the needle either way.
+- "not_interesting" — the evidence that could be evaluated argues against a meaningful signal in this dimension.
+When a category's members are all None / not evaluable, the verdict is "neutral" and the reasoning must say plainly what was missing and why — do not guess.
+
+Do not introduce any fact the input does not state. Emit valid JSON matching the appended schema; no Markdown code fences.
+
+Write `reasoning` as a few tight sentences of plain text, following these rules:
+- START with the bottom line: the single most decision-relevant signal and the context needed to weigh it — the biological takeaway that justifies the verdict. Do NOT open by restating the verdict or by listing which submodules did or didn't fire; the category already carries a verdict flag, so that opener is redundant.
+- THEN give the specific numbers and qualifiers that sharpen or temper that read.
+- Refer to each submodule by name or by what it measures ("primate amino-acid identity", "the unique-peptide mass-spec check", "whole-protein hydropathy/charge/disorder shift", "the shared-core fold RMSD"). NEVER write the submodule ID codes (C1, D3, S2, …) in the reasoning.
+- When the members are all None / not evaluable, lead with what could not be assessed and why (not a verdict restatement).
+
+Example — Bad: "All three conservation members fired positively. C1 reports 97.7% primate identity, C2 93.4% mammalian, C3 phyloP 3.4 over the region." Good: "The 19-aa segment lost in this truncation is under strong purifying selection across mammals — 97.7% primate and 93.4% mammalian amino-acid identity plus mean phyloP 3.4 over the region — arguing its loss is functionally consequential rather than neutral variation."

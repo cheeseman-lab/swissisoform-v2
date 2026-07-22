@@ -44,7 +44,6 @@ from swissisoform_site.data import (
     criterion_evidence_for,
     data_dir,
     category_verdicts_for_isoform,
-    llm_criterion_for_isoform,
     llm_synthesis_for_isoform,
     load_all,
     load_transcript_skeletons,
@@ -67,29 +66,29 @@ def _log_llm_coverage(genes: dict, llm_dir: Path) -> None:
     log = logging.getLogger("swissisoform_site.coverage")
     n_iso = sum(len(g.isoforms) for g in genes.values())
     n_syn = 0
-    n_criteria_files = 0
-    n_criteria_cells = 0
+    n_category_files = 0
+    n_category_cells = 0
     for gene in genes.values():
         for iso in gene.isoforms:
             slug = tis_slug(iso.tis_id)
             if (llm_dir / slug / "synthesis.json").exists():
                 n_syn += 1
-            crit_path = llm_dir / slug / "criteria.json"
-            if crit_path.exists():
-                n_criteria_files += 1
+            cat_path = llm_dir / slug / "categories.json"
+            if cat_path.exists():
+                n_category_files += 1
                 try:
-                    payload = json.loads(crit_path.read_text())
+                    payload = json.loads(cat_path.read_text())
                     if isinstance(payload, dict):
-                        n_criteria_cells += len(payload)
+                        n_category_cells += len(payload)
                 except Exception:
                     pass
     log.warning(
-        "%d isoforms loaded; LLM coverage: criteria %d/%d (%d/%d cells), synthesis %d/%d",
+        "%d isoforms loaded; LLM coverage: categories %d/%d (%d/%d cells), synthesis %d/%d",
         n_iso,
-        n_criteria_files,
+        n_category_files,
         n_iso,
-        n_criteria_cells,
-        n_iso * 12,
+        n_category_cells,
+        n_iso * 6,
         n_syn,
         n_iso,
     )
@@ -117,6 +116,7 @@ def create_app() -> Flask:
         CRITERIA_METRIC_LABELS=CRITERIA_METRIC_LABELS,
         format_metric=format_metric,
         variant_url=variant_url,
+        CARD_GROUPS=CARD_GROUPS,
     )
 
     # JSON-friendly NaN cleaner for the API endpoint
@@ -148,11 +148,10 @@ def create_app() -> Flask:
 
     @app.get("/about")
     def about() -> Any:
-        """Static glossary — the 12 evidence criteria + the metrics behind them."""
+        """Static glossary — the 15 CDLMPS evidence criteria + the metrics behind them."""
         return render_template(
             "about.html",
-            existence_criteria=EXISTENCE_CRITERIA,
-            functional_criteria=FUNCTIONAL_CRITERIA,
+            criteria_by_id=CRITERIA_BY_ID,
             criterion_about=CRITERION_ABOUT,
         )
 
@@ -218,14 +217,12 @@ def create_app() -> Flask:
             "_raw": iso.raw or {},
         }
 
+        # Per-criterion slices still drive the always-visible tile headlines; the
+        # LLM interpretation is now per-category (category_llms), not per-tile.
         criterion_slices: dict[str, dict] = {}
-        criterion_llms: dict[str, dict | None] = {}
         for c in CRITERIA_FOR_PAGE:
             cid = c["id"]
             criterion_slices[cid] = slice_criterion(iso_record, cid)
-            criterion_llms[cid] = llm_criterion_for_isoform(
-                llm_dir=llm_dir, tis_slug=tis_slug_str, criterion_id=cid
-            )
 
         protein_adapter = _make_protein_adapter(iso, gene, skeleton)
         protein_fig = build_protein_figure(protein_adapter, overlays={})
@@ -268,7 +265,6 @@ def create_app() -> Flask:
             criteria_by_id=CRITERIA_BY_ID,
             category_llms=category_llms,
             criterion_slices=criterion_slices,
-            criterion_llms=criterion_llms,
             synthesis=synthesis,
             variant_rows=variant_rows,
             variant_rows_unique=variant_rows_unique,
@@ -304,6 +300,7 @@ def create_app() -> Flask:
                 "uniprot_url": g.uniprot_url,
                 "function": g.function,
                 "location": g.location,
+                "keywords": g.keywords,
                 "canonical_len": g.canonical_len,
                 "canonical_cif": g.canonical_cif,
                 "llm": g.llm,

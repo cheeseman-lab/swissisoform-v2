@@ -34,9 +34,35 @@ PROMPTS_DIR = ROOT / "scripts" / "site" / "prompts"
 SYSTEM_PROMPT_PATH = PROMPTS_DIR / "system.txt"
 OUTPUT_SCHEMA_PATH = PROMPTS_DIR / "output_schema.json"
 
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = "claude-sonnet-5"
 DEFAULT_TEMPERATURE = 0.0
 DEFAULT_MAX_TOKENS = 4000
+
+# Standard (non-batch) token pricing, USD per token, by model id. The Message
+# Batches API bills the SAME token counts at HALF these rates — batch mode saves
+# no tokens (identical prompts), only cost (the 50% discount).
+# NOTE: claude-sonnet-5 uses a new tokenizer (~30% more tokens for the same text
+# than sonnet-4-6), so per-isoform token counts and the usage-report cost rise
+# ~30% at these same sticker rates; introductory pricing ($2/$10 per MTok through
+# 2026-08-31) means these figures currently over-estimate the real Sonnet-5 cost.
+_PRICING: dict[str, tuple[float, float]] = {  # model -> (input $/tok, output $/tok)
+    "claude-sonnet-4-6": (3.0e-6, 15.0e-6),
+    "claude-sonnet-5": (3.0e-6, 15.0e-6),
+    "claude-opus-4-8": (5.0e-6, 25.0e-6),
+    "claude-haiku-4-5": (1.0e-6, 5.0e-6),
+}
+_BATCH_DISCOUNT = 0.5
+
+# Models that reject non-default sampling params (temperature/top_p/top_k) with an
+# HTTP 400, and run adaptive thinking by default when `thinking` is omitted. For
+# these we omit temperature (sending 0.0 — a non-default value — would 400) and
+# explicitly disable thinking: this pipeline wants one deterministic JSON verdict,
+# and a leading `thinking` block would also break text extraction. Older models
+# (sonnet-4-6 and earlier) keep the temperature knob and are thinking-off by
+# default, so their behavior is unchanged.
+_NO_SAMPLING_MODELS = frozenset(
+    {"claude-sonnet-5", "claude-opus-4-8", "claude-opus-4-7", "claude-fable-5"}
+)
 
 # Synthetic evidence record used by --dry-run when no llm_evidence dir exists.
 _SYNTHETIC_RECORD: dict[str, Any] = {
@@ -214,8 +240,8 @@ class PassSpec:
     name: str
     system_prompt_filename: str
     output_schema_filename: str
-    output_filename_template: str  # e.g. "{gene}.json", "{tis_slug}/criteria.json"
-    iterates_criteria: bool = False  # True for the per-criterion pass
+    output_filename_template: str  # e.g. "{gene}.json", "{tis_slug}/categories.json"
+    iterates_categories: bool = False  # True for the per-category pass
     requires_prereq: tuple[str, ...] = ()  # other pass names that must have produced output
 
 
@@ -226,24 +252,146 @@ PASS_REGISTRY: dict[str, PassSpec] = {
         output_schema_filename="output_schema.json",
         output_filename_template="{gene}.json",
     ),
-    "criteria": PassSpec(
-        name="criteria",
-        system_prompt_filename="criterion-pass.txt",
-        output_schema_filename="output_schemas/criterion_read.json",
-        output_filename_template="{tis_slug}/criteria.json",
-        iterates_criteria=True,
+    "category": PassSpec(
+        name="category",
+        system_prompt_filename="category-pass.txt",
+        output_schema_filename="output_schemas/category_read.json",
+        output_filename_template="{tis_slug}/categories.json",
+        iterates_categories=True,
     ),
     "synthesis": PassSpec(
         name="synthesis",
         system_prompt_filename="synthesis-pass.txt",
         output_schema_filename="output_schemas/synthesis.json",
         output_filename_template="{tis_slug}/synthesis.json",
-        requires_prereq=("criteria",),
+        requires_prereq=("category",),
     ),
 }
 
 
 # ── LLM call dispatch ─────────────────────────────────────────────────────
+
+
+# Per-call token usage, appended by call_llm and drained by the pass runners so
+# they can attribute cost per isoform. Single-threaded, so a module list is safe.
+_USAGE_EVENTS: list[dict[str, int]] = []
+_USAGE_KEYS = ("input", "output", "cache_read", "cache_creation")
+
+
+def _record_usage(usage: Any) -> None:
+    """Append one call's token counts (zeros when the backend gives no usage)."""
+    if usage is None:
+        _USAGE_EVENTS.append(dict.fromkeys(_USAGE_KEYS, 0))
+        return
+    _USAGE_EVENTS.append(
+        {
+            "input": getattr(usage, "input_tokens", 0) or 0,
+            "output": getattr(usage, "output_tokens", 0) or 0,
+            "cache_read": getattr(usage, "cache_read_input_tokens", 0) or 0,
+            "cache_creation": getattr(usage, "cache_creation_input_tokens", 0) or 0,
+        }
+    )
+
+
+def _drain_usage() -> dict[str, int]:
+    """Pop the most recent recorded call usage (zeros if none)."""
+    return _USAGE_EVENTS.pop() if _USAGE_EVENTS else dict.fromkeys(_USAGE_KEYS, 0)
+
+
+def _add_usage(acc: dict[str, dict[str, int]], key: str, ev: dict[str, int]) -> None:
+    slot = acc.setdefault(key, {**dict.fromkeys(_USAGE_KEYS, 0), "calls": 0})
+    for k in _USAGE_KEYS:
+        slot[k] += ev.get(k, 0)
+    slot["calls"] += 1
+
+
+def _write_usage_report(
+    out_dir: Path, pass_name: str, model: str, per_isoform: dict, *, batch: bool = False
+) -> None:
+    """Write a per-isoform + total token/cost report JSON and print a summary.
+
+    Cost is computed from ``_PRICING[model]``. When ``batch`` is True the reported
+    cost applies the 50% Message-Batches discount — token counts are unchanged
+    (batch saves no tokens), so ``batch_savings_usd`` is purely the price delta.
+    """
+    pin, pout = _PRICING.get(model, (0.0, 0.0))
+    mult = _BATCH_DISCOUNT if batch else 1.0
+
+    total = {**dict.fromkeys(_USAGE_KEYS, 0), "calls": 0}
+    for slug, slot in per_isoform.items():
+        for k in _USAGE_KEYS + ("calls",):
+            total[k] += slot.get(k, 0)
+        slot["cost_usd"] = round((slot["input"] * pin + slot["output"] * pout) * mult, 4)
+
+    direct = total["input"] * pin + total["output"] * pout
+    cost = direct * mult
+    total["cost_usd"] = round(cost, 4)
+    total["direct_cost_usd"] = round(direct, 4)
+    total["batch_savings_usd"] = round(direct - cost, 4)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    report = {
+        "pass": pass_name,
+        "model": model,
+        "batch": batch,
+        "pricing_usd_per_mtok": {"input": pin * 1e6, "output": pout * 1e6},
+        "note": "batch bills identical tokens at 50% price; no token savings, only cost",
+        "total": total,
+        "per_isoform": per_isoform,
+    }
+    (out_dir / f"_usage_{pass_name}.json").write_text(json.dumps(report, indent=2))
+
+    tag = "batch" if batch else "direct"
+    line = (
+        f"[usage] {pass_name} ({tag}): {total['calls']} calls, "
+        f"{total['input']:,} in + {total['output']:,} out tokens, ${cost:.3f}"
+    )
+    if batch:
+        line += f"  (direct = ${direct:.3f}; batch saves ${direct - cost:.3f} = 50%, same tokens)"
+    print(line + f"  -> {out_dir / f'_usage_{pass_name}.json'}")
+
+
+def _extract_text(content: Any) -> str | None:
+    """Return the first ``text`` block's text from an SDK content list, or None.
+
+    Robust to a leading non-text block (e.g. a ``thinking`` block emitted by newer
+    models) — unlike ``content[0].text``. Shared by the direct and batch paths.
+    """
+    return next((b.text for b in content if getattr(b, "type", None) == "text"), None)
+
+
+def _build_request_params(
+    *,
+    model: str,
+    max_tokens: int,
+    temperature: float,
+    system: str,
+    user: str,
+) -> dict[str, Any]:
+    """Assemble Messages-API request params, gating sampling/thinking by model.
+
+    One place decides temperature/thinking so the direct (:func:`call_llm`) and
+    batch (:func:`call_llm_batch`) paths stay in sync. For models in
+    :data:`_NO_SAMPLING_MODELS`, ``temperature`` is omitted and thinking is
+    disabled (see that constant's rationale); other models are unchanged.
+    """
+    params: dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": [{"role": "user", "content": [{"type": "text", "text": user}]}],
+    }
+    if model in _NO_SAMPLING_MODELS:
+        params["thinking"] = {"type": "disabled"}
+        if temperature != DEFAULT_TEMPERATURE:
+            print(
+                f"[warn] {model} rejects non-default sampling params; "
+                f"ignoring temperature={temperature}",
+                file=sys.stderr,
+            )
+    else:
+        params["temperature"] = temperature
+    return params
 
 
 def call_llm(
@@ -259,9 +407,14 @@ def call_llm(
     Prefers mozzarellm's ``AnthropicClient`` if importable (gets retry logic for
     free); falls back to the official ``anthropic`` SDK otherwise. Raises
     :class:`RuntimeError` if neither is available, or if the call fails.
+
+    mozzarellm passes ``temperature`` unconditionally in its constructor, which a
+    :data:`_NO_SAMPLING_MODELS` model rejects with a 400, so for those models we
+    skip mozzarellm and use the raw SDK (where :func:`_build_request_params` omits
+    temperature).
     """
     mozz = _try_import_mozzarellm()
-    if mozz is not None:
+    if mozz is not None and model not in _NO_SAMPLING_MODELS:
         client = mozz(
             model=model,
             temperature=temperature,
@@ -276,10 +429,16 @@ def call_llm(
             raise RuntimeError(f"mozzarellm AnthropicClient.query failed: {error}")
         if not response_text:
             raise RuntimeError("mozzarellm AnthropicClient.query returned empty response")
+        _record_usage(None)  # mozzarellm.query does not surface token usage
         return response_text
 
     anthropic = _try_import_anthropic()
     if anthropic is None:
+        if mozz is not None:
+            raise RuntimeError(
+                f"{model} requires the official `anthropic` SDK (it rejects "
+                "mozzarellm's unconditional temperature); install `anthropic`."
+            )
         raise RuntimeError(
             "Neither mozzarellm nor anthropic SDK is importable. "
             "Install one of them in the swissisoform-v2 env (e.g. `pip install anthropic`)."
@@ -287,15 +446,97 @@ def call_llm(
 
     client = anthropic.Anthropic(api_key=api_key)
     response = client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        system=prompt.system,
-        messages=[{"role": "user", "content": [{"type": "text", "text": prompt.user}]}],
+        **_build_request_params(
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            system=prompt.system,
+            user=prompt.user,
+        )
     )
     if not response.content:
         raise RuntimeError("anthropic SDK returned empty content list")
-    return response.content[0].text
+    _record_usage(getattr(response, "usage", None))
+    text = _extract_text(response.content)
+    if text is None:
+        raise RuntimeError("anthropic SDK response had no text block")
+    return text
+
+
+def _empty_usage() -> dict[str, int]:
+    return dict.fromkeys(_USAGE_KEYS, 0)
+
+
+def call_llm_batch(
+    items: list[tuple[str, Prompt]],
+    *,
+    model: str,
+    temperature: float,
+    max_tokens: int,
+    api_key: str,
+    poll_interval: int = 15,
+) -> dict[str, dict[str, Any]]:
+    """Run ``items`` through the Anthropic Message Batches API (50% token price).
+
+    ``items`` is a list of ``(custom_id, Prompt)``. Submits one batch, polls until
+    it ends (usually minutes, up to 24h), and returns
+    ``{custom_id: {"text": str|None, "usage": {...}, "error": str|None}}``.
+    Results arrive in any order — keyed by ``custom_id`` (must be ``[A-Za-z0-9_-]``,
+    ≤64 chars; callers pass index-based ids like ``c0``/``s3``). Same tokens as
+    direct calls; the saving is the batch price discount, applied at report time.
+    """
+    anthropic = _try_import_anthropic()
+    if anthropic is None:
+        raise RuntimeError("anthropic SDK required for --batch mode (pip install anthropic).")
+    from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
+    from anthropic.types.messages.batch_create_params import Request
+
+    client = anthropic.Anthropic(api_key=api_key)
+    requests = [
+        Request(
+            custom_id=cid,
+            params=MessageCreateParamsNonStreaming(
+                **_build_request_params(
+                    model=model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    system=p.system,
+                    user=p.user,
+                )
+            ),
+        )
+        for cid, p in items
+    ]
+    batch = client.messages.batches.create(requests=requests)
+    print(f"[batch] submitted {len(requests)} requests -> {batch.id} ({batch.processing_status})")
+    while True:
+        b = client.messages.batches.retrieve(batch.id)
+        if b.processing_status == "ended":
+            break
+        time.sleep(poll_interval)
+
+    out: dict[str, dict[str, Any]] = {}
+    for r in client.messages.batches.results(batch.id):
+        cid = r.custom_id
+        if r.result.type == "succeeded":
+            msg = r.result.message
+            text = _extract_text(msg.content)
+            u = getattr(msg, "usage", None)
+            usage = (
+                {
+                    "input": getattr(u, "input_tokens", 0) or 0,
+                    "output": getattr(u, "output_tokens", 0) or 0,
+                    "cache_read": getattr(u, "cache_read_input_tokens", 0) or 0,
+                    "cache_creation": getattr(u, "cache_creation_input_tokens", 0) or 0,
+                }
+                if u is not None
+                else _empty_usage()
+            )
+            out[cid] = {"text": text, "usage": usage, "error": None if text else "empty response"}
+        else:
+            err = getattr(r.result, "error", None)
+            out[cid] = {"text": None, "usage": _empty_usage(), "error": f"{r.result.type}: {err}"}
+    return out
 
 
 # ── Output validation ────────────────────────────────────────────────────
@@ -333,6 +574,19 @@ def validate_against_schema(payload: dict[str, Any], schema: dict[str, Any]) -> 
         ]
     except Exception as e:
         return [f"validator init failed: {e}"]
+
+
+def _emit_schema_warnings(
+    payload: dict[str, Any], schema: dict[str, Any], label: str, *, verbose: bool
+) -> None:
+    """Validate ``payload`` and print any warnings to stderr.
+
+    Parity with the default per-gene pass. No-op unless ``verbose``; never raises.
+    """
+    if not verbose:
+        return
+    for w in validate_against_schema(payload, schema):
+        print(f"    schema warning [{label}]: {w}", file=sys.stderr)
 
 
 # ── Per-gene runner ───────────────────────────────────────────────────────
@@ -458,6 +712,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument(
+        "--batch",
+        action="store_true",
+        help="Submit the category/synthesis pass via the Message Batches API "
+        "(50%% token price, same tokens, results usually minutes / <24h). For the "
+        "full offline runs; leave off for the interactive single-gene spot-checks.",
+    )
+    parser.add_argument(
         "--pass",
         dest="pass_name",
         default="default",
@@ -530,8 +791,8 @@ def main(argv: list[str] | None = None, *, prompts_dir: Path | None = None) -> i
             )
             return 2
 
-    if spec.iterates_criteria:
-        return _run_criterion_pass(records, spec, args, system_prompt, output_schema)
+    if spec.iterates_categories:
+        return _run_category_pass(records, spec, args, system_prompt, output_schema)
 
     if spec.name == "synthesis":
         return _run_synthesis_pass(records, spec, args, system_prompt, output_schema)
@@ -600,20 +861,29 @@ def _check_prereqs(records, out_dir: Path, prereqs: tuple[str, ...]) -> list[str
         for iso in gene_record.get("isoforms", []) or []:
             tis_slug = _tis_slug(iso.get("tis_id"))
             for prereq in prereqs:
-                pp = out_dir / tis_slug / f"{prereq}.json"
-                if not pp.exists():
+                # Resolve the prereq's ACTUAL output path from its PassSpec — the
+                # pass name ("category") differs from its filename ("categories.json"),
+                # so f"{prereq}.json" would look for the wrong file.
+                rel = PASS_REGISTRY[prereq].output_filename_template.format(tis_slug=tis_slug)
+                if not (out_dir / rel).exists():
                     missing.append(tis_slug)
                     break
     return missing
 
 
-def _run_criterion_pass(records, spec, args, system_prompt, output_schema) -> int:
-    """Per-(isoform, criterion) dispatch — one call per LLM-eligible criterion."""
-    from swissisoform.site.evidence import (
-        CRITERIA,
-        LLM_EXCLUDED_CRITERIA,
-        slice_criterion,
-    )
+def _run_category_pass(records, spec, args, system_prompt, output_schema) -> int:
+    """Per-(isoform, category) dispatch — one call per CDLMPS category.
+
+    Each call bundles all of the category's members (all first-class scored
+    criteria, including S2 biophysics + S3 SAE) into one slice and asks the model
+    for a single ``{verdict, reasoning}``. Writes ``{tis_slug}/categories.json`` as
+    a dict keyed by category name (the shape ``category_verdicts_for_isoform``
+    consumes).
+    """
+    if getattr(args, "batch", False) and not args.dry_run:
+        return _run_category_pass_batch(records, spec, args, system_prompt, output_schema)
+
+    from swissisoform.site.evidence import CATEGORIES, slice_category
 
     api_key = os.environ.get("ANTHROPIC_API_KEY") if not args.dry_run else "dry"
     if not api_key:
@@ -622,11 +892,9 @@ def _run_criterion_pass(records, spec, args, system_prompt, output_schema) -> in
         )
 
     args.out.mkdir(parents=True, exist_ok=True)
-    # Ordered E1..E6, F1..F6 — F7 (shared-region RMSD) is intentionally excluded
-    # from LLM interpretation (see LLM_EXCLUDED_CRITERIA).
-    criterion_ids = [c for c in CRITERIA if c not in LLM_EXCLUDED_CRITERIA]
     n_calls = 0
     n_ok = 0
+    usage_by_slug: dict[str, dict[str, int]] = {}
 
     for gene_name, gene_record in records.items():
         for iso in gene_record.get("isoforms", []) or []:
@@ -645,13 +913,17 @@ def _run_criterion_pass(records, spec, args, system_prompt, output_schema) -> in
             if not args.dry_run:
                 out_dir.mkdir(parents=True, exist_ok=True)
 
+            iso_with_gene = {**iso, "gene": {"name": gene_name}}
             results: dict[str, Any] = {}
-            for cid in criterion_ids:
-                criterion_record = slice_criterion({**iso, "gene": {"name": gene_name}}, cid)
-                prompt = build_prompt(criterion_record, system_prompt, output_schema)
+            for category in CATEGORIES:
+                category_record = slice_category(iso_with_gene, category)
+                prompt = build_prompt(category_record, system_prompt, output_schema)
                 n_calls += 1
                 if args.dry_run:
-                    print(f"[{n_calls}] {gene_name} {tis_slug_val} criterion: {cid}")
+                    print(
+                        f"[{n_calls}] {gene_name} {tis_slug_val} category: "
+                        f"{category['letter']} ({category['name']}) input chars: {len(prompt.user)}"
+                    )
                     continue
                 try:
                     response_text = call_llm(
@@ -661,12 +933,18 @@ def _run_criterion_pass(records, spec, args, system_prompt, output_schema) -> in
                         max_tokens=args.max_tokens,
                         api_key=api_key,
                     )
+                    _add_usage(usage_by_slug, tis_slug_val, _drain_usage())
                     payload = parse_response(response_text)
-                    results[cid] = payload
+                    _emit_schema_warnings(
+                        payload, output_schema,
+                        f"{tis_slug_val}/{category['name']}",
+                        verbose=getattr(args, "verbose", False),
+                    )
+                    results[category["name"]] = payload
                     n_ok += 1
                 except Exception as e:
-                    print(f"[{n_calls}] {cid} FAIL: {e}", file=sys.stderr)
-                    results[cid] = {"error": str(e)}
+                    print(f"[{n_calls}] {category['letter']} FAIL: {e}", file=sys.stderr)
+                    results[category["name"]] = {"error": str(e)}
 
             if args.dry_run:
                 continue
@@ -675,36 +953,101 @@ def _run_criterion_pass(records, spec, args, system_prompt, output_schema) -> in
 
     if args.dry_run:
         return 0
+    _write_usage_report(args.out, "category", args.model, usage_by_slug)
     print(f"{spec.name}: {n_ok}/{n_calls} successful")
     return 0 if n_ok == n_calls else 1
 
 
-def _build_synthesis_record(isoform: dict, gene_name: str, isoform_out_dir: Path) -> dict:
-    """Build the synthesis-pass input from the disk-cached criteria.json output.
+def _run_category_pass_batch(records, spec, args, system_prompt, output_schema) -> int:
+    """Category pass via the Message Batches API.
 
-    Carries both the digested per-criterion reads (``criteria_reads``) and the
-    raw underlying evidence (``criteria_evidence``, one ``slice_criterion``
-    payload per criterion) so the model can weigh actual numbers, not just
-    headlines.
+    One batch of all (isoform, category) calls at 50% token price; identical
+    prompts/outputs to the sequential path.
     """
-    from swissisoform.site.evidence import (
-        CRITERIA,
-        LLM_EXCLUDED_CRITERIA,
-        slice_criterion,
+    from swissisoform.site.evidence import CATEGORIES, slice_category
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY is not set.")
+    args.out.mkdir(parents=True, exist_ok=True)
+
+    items: list[tuple[str, Prompt]] = []  # (custom_id, prompt)
+    meta: dict[str, tuple[str, str]] = {}  # custom_id -> (tis_slug, category_name)
+    iso_results: dict[str, dict[str, Any]] = {}  # tis_slug -> {category_name: payload}
+    iso_out: dict[str, Path] = {}  # tis_slug -> categories.json path
+    for gene_name, gene_record in records.items():
+        for iso in gene_record.get("isoforms", []) or []:
+            tis_slug_val = _tis_slug(iso.get("tis_id"))
+            out_path = args.out / spec.output_filename_template.format(tis_slug=tis_slug_val)
+            if out_path.exists() and not args.force:
+                continue
+            iso_with_gene = {**iso, "gene": {"name": gene_name}}
+            iso_results.setdefault(tis_slug_val, {})
+            iso_out[tis_slug_val] = out_path
+            for category in CATEGORIES:
+                record = slice_category(iso_with_gene, category)
+                cid = f"c{len(items)}"
+                items.append((cid, build_prompt(record, system_prompt, output_schema)))
+                meta[cid] = (tis_slug_val, category["name"])
+
+    if not items:
+        print("category: nothing to do (all outputs exist; use --force to rebuild).")
+        return 0
+
+    responses = call_llm_batch(
+        items, model=args.model, temperature=args.temperature,
+        max_tokens=args.max_tokens, api_key=api_key,
     )
 
-    criteria_reads: dict[str, Any] = {}
-    pp = isoform_out_dir / "criteria.json"
+    usage_by_slug: dict[str, dict[str, int]] = {}
+    n_ok = 0
+    for cid, (tis_slug_val, cat_name) in meta.items():
+        r = responses.get(cid) or {"text": None, "usage": _empty_usage(), "error": "missing result"}
+        _add_usage(usage_by_slug, tis_slug_val, r["usage"])
+        if r["error"] or not r["text"]:
+            print(f"[{cid}] {cat_name} FAIL: {r['error']}", file=sys.stderr)
+            iso_results[tis_slug_val][cat_name] = {"error": r["error"] or "empty"}
+            continue
+        try:
+            payload = parse_response(r["text"])
+            _emit_schema_warnings(
+                payload, output_schema, f"{tis_slug_val}/{cat_name}",
+                verbose=getattr(args, "verbose", False),
+            )
+            iso_results[tis_slug_val][cat_name] = payload
+            n_ok += 1
+        except Exception as e:
+            print(f"[{cid}] {cat_name} parse FAIL: {e}", file=sys.stderr)
+            iso_results[tis_slug_val][cat_name] = {"error": str(e)}
+
+    for tis_slug_val, results in iso_results.items():
+        out_path = iso_out[tis_slug_val]
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(results, indent=2, ensure_ascii=False))
+
+    _write_usage_report(args.out, "category", args.model, usage_by_slug, batch=True)
+    print(f"category: {n_ok}/{len(items)} successful (batch)")
+    return 0 if n_ok == len(items) else 1
+
+
+def _build_synthesis_record(isoform: dict, gene_name: str, isoform_out_dir: Path) -> dict:
+    """Build the synthesis-pass input from the disk-cached categories.json output.
+
+    Carries both the digested per-category reads (``category_reads`` — the
+    ``{verdict, reasoning}`` per CDLMPS category) and the raw underlying evidence
+    (``criteria_evidence``, one ``slice_criterion`` payload per criterion, all 15
+    incl. S2/S3) so the model can weigh actual numbers, not just the category verdicts.
+    """
+    from swissisoform.site.evidence import CRITERIA, _diff_region_location, slice_criterion
+
+    category_reads: dict[str, Any] = {}
+    pp = isoform_out_dir / "categories.json"
     if pp.exists():
-        criteria_reads = json.loads(pp.read_text(encoding="utf-8"))
+        category_reads = json.loads(pp.read_text(encoding="utf-8"))
 
     iso_with_gene = {**isoform, "gene": {"name": gene_name}}
-    # LLM-excluded criteria (e.g. F7) are kept out of the synthesis evidence too,
-    # so the AI summary never editorializes on them.
     criteria_evidence: dict[str, Any] = {
-        cid: slice_criterion(iso_with_gene, cid)
-        for cid in CRITERIA
-        if cid not in LLM_EXCLUDED_CRITERIA
+        cid: slice_criterion(iso_with_gene, cid) for cid in CRITERIA
     }
 
     return {
@@ -712,6 +1055,7 @@ def _build_synthesis_record(isoform: dict, gene_name: str, isoform_out_dir: Path
             "tis_id": isoform.get("tis_id"),
             "gene_name": gene_name,
             "orf_type": isoform.get("orf_type"),
+            "differential_region_location": _diff_region_location(isoform.get("orf_type")),
             "differential_sequence": isoform.get("differential_sequence"),
             "diff_space": isoform.get("diff_space"),
             "isoform_length_aa": isoform.get("isoform_length_aa"),
@@ -719,12 +1063,15 @@ def _build_synthesis_record(isoform: dict, gene_name: str, isoform_out_dir: Path
         },
         "scoring": isoform.get("scoring") or {},
         "key_metrics": isoform.get("key_metrics") or {},
-        "criteria_reads": criteria_reads,
+        "category_reads": category_reads,
         "criteria_evidence": criteria_evidence,
     }
 
 
 def _run_synthesis_pass(records, spec, args, system_prompt, output_schema) -> int:
+    if getattr(args, "batch", False) and not args.dry_run:
+        return _run_synthesis_pass_batch(records, spec, args, system_prompt, output_schema)
+
     api_key = os.environ.get("ANTHROPIC_API_KEY") if not args.dry_run else "dry"
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY is not set. Export it or pass --dry-run.")
@@ -732,6 +1079,7 @@ def _run_synthesis_pass(records, spec, args, system_prompt, output_schema) -> in
     args.out.mkdir(parents=True, exist_ok=True)
     n_ok = 0
     n_calls = 0
+    usage_by_slug: dict[str, dict[str, int]] = {}
     for gene_name, gene_record in records.items():
         for iso in gene_record.get("isoforms", []) or []:
             tis_slug = _tis_slug(iso.get("tis_id"))
@@ -759,7 +1107,12 @@ def _run_synthesis_pass(records, spec, args, system_prompt, output_schema) -> in
                     max_tokens=args.max_tokens,
                     api_key=api_key,
                 )
+                _add_usage(usage_by_slug, tis_slug, _drain_usage())
                 payload = parse_response(response_text)
+                _emit_schema_warnings(
+                    payload, output_schema, f"{tis_slug}/synthesis",
+                    verbose=getattr(args, "verbose", False),
+                )
                 iso_dir.mkdir(parents=True, exist_ok=True)
                 out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
                 n_ok += 1
@@ -769,5 +1122,69 @@ def _run_synthesis_pass(records, spec, args, system_prompt, output_schema) -> in
 
     if args.dry_run:
         return 0
+    _write_usage_report(args.out, "synthesis", args.model, usage_by_slug)
     print(f"synthesis: {n_ok}/{n_calls} successful")
     return 0 if n_ok == n_calls else 1
+
+
+def _run_synthesis_pass_batch(records, spec, args, system_prompt, output_schema) -> int:
+    """Synthesis pass via the Message Batches API.
+
+    One batch, one request per isoform, at 50% token price. Runs after the
+    category batch (it reads each isoform's categories.json).
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY is not set.")
+    args.out.mkdir(parents=True, exist_ok=True)
+
+    items: list[tuple[str, Prompt]] = []  # (custom_id, prompt)
+    meta: dict[str, str] = {}  # custom_id -> tis_slug
+    out_by_slug: dict[str, Path] = {}  # tis_slug -> synthesis.json path
+    for gene_name, gene_record in records.items():
+        for iso in gene_record.get("isoforms", []) or []:
+            tis_slug = _tis_slug(iso.get("tis_id"))
+            iso_dir = args.out / tis_slug
+            out_path = iso_dir / "synthesis.json"
+            if out_path.exists() and not args.force:
+                continue
+            record = _build_synthesis_record(iso, gene_name, iso_dir)
+            cid = f"s{len(items)}"
+            items.append((cid, build_prompt(record, system_prompt, output_schema)))
+            meta[cid] = tis_slug
+            out_by_slug[tis_slug] = out_path
+
+    if not items:
+        print("synthesis: nothing to do (all outputs exist; use --force to rebuild).")
+        return 0
+
+    responses = call_llm_batch(
+        items, model=args.model, temperature=args.temperature,
+        max_tokens=args.max_tokens, api_key=api_key,
+    )
+
+    usage_by_slug: dict[str, dict[str, int]] = {}
+    n_ok = 0
+    for cid, tis_slug in meta.items():
+        r = responses.get(cid) or {"text": None, "usage": _empty_usage(), "error": "missing result"}
+        _add_usage(usage_by_slug, tis_slug, r["usage"])
+        if r["error"] or not r["text"]:
+            print(f"[{cid}] {tis_slug} FAIL: {r['error']}", file=sys.stderr)
+            continue
+        try:
+            payload = parse_response(r["text"])
+        except Exception as e:
+            print(f"[{cid}] {tis_slug} parse FAIL: {e}", file=sys.stderr)
+            continue
+        _emit_schema_warnings(
+            payload, output_schema, f"{tis_slug}/synthesis",
+            verbose=getattr(args, "verbose", False),
+        )
+        out_path = out_by_slug[tis_slug]
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
+        n_ok += 1
+
+    _write_usage_report(args.out, "synthesis", args.model, usage_by_slug, batch=True)
+    print(f"synthesis: {n_ok}/{len(items)} successful (batch)")
+    return 0 if n_ok == len(items) else 1

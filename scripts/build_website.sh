@@ -6,7 +6,7 @@
 # Stages (each timed):
 #   skeletons   transcript exon skeletons for the IGV-style transcript view
 #   evidence    per-gene LLM evidence JSON + flat variants_long parquet
-#   llm         Anthropic per-criterion interpretation (SKIP with --skip-llm)
+#   llm         Anthropic per-category interpretation + synthesis (SKIP with --skip-llm)
 #   structures  re-assemble folded CIFs from the structure cache
 #   stage       website/prepare_deploy.sh — copy artifacts into website/data/
 #
@@ -15,6 +15,7 @@
 # Usage (from repo root):
 #   bash scripts/build_website.sh                 # full rebuild incl. LLM
 #   bash scripts/build_website.sh --skip-llm      # reuse existing llm/, no API calls
+#   bash scripts/build_website.sh --batch         # LLM via Batches API (50% token price)
 #   RUN=cheeseman_13gene bash scripts/build_website.sh
 #   RUN=cheeseman_test PRESET=cheeseman_test bash scripts/build_website.sh
 #     RUN   = output dir under data/output/ (drives every stage's paths + staging)
@@ -30,8 +31,10 @@ conda activate swissisoform-v2
 [[ -f .env ]] && set -a && . ./.env && set +a   # ANTHROPIC_API_KEY for the LLM stage
 
 skip_llm=0
+llm_batch=""   # --batch → Message Batches API (50% token price) for the LLM stage
 for arg in "$@"; do
     [[ "$arg" == "--skip-llm" ]] && skip_llm=1
+    [[ "$arg" == "--batch" ]] && llm_batch="--batch"
 done
 
 RUN="${RUN:-cheeseman_13gene}"
@@ -64,15 +67,16 @@ run_stage evidence python scripts/site/build_evidence_records.py \
 if (( skip_llm )); then
     _stamp "STAGE SKIP:  llm (--skip-llm — reusing existing ${OUT}/llm/)"
 else
-    # Two-pass flow the site consumes: per-(isoform,criterion) reads, then a
-    # per-isoform synthesis over those reads. Each call uses a COMPACT
-    # slice_criterion payload (~7k tokens worst case) — never the full _raw
-    # record (which is megabytes of raw variant hits and blows past the API
-    # context limit). Writes {tis_slug}/criteria.json and {tis_slug}/synthesis.json.
-    run_stage llm_criteria python scripts/site/run_llm_interpretation.py \
-        --records "${OUT}/llm_evidence/" --out "${OUT}/llm/" --pass criteria
+    # Two-pass flow the site consumes: per-(isoform,category) reads (one call per
+    # CDLMPS category, bundling that category's submodules), then a per-isoform
+    # synthesis over those category verdicts. Each call uses a COMPACT
+    # slice_category payload — never the full _raw record (which is megabytes of
+    # raw variant hits and blows past the API context limit). Writes
+    # {tis_slug}/categories.json and {tis_slug}/synthesis.json.
+    run_stage llm_category python scripts/site/run_llm_interpretation.py \
+        --records "${OUT}/llm_evidence/" --out "${OUT}/llm/" --pass category $llm_batch
     run_stage llm_synthesis python scripts/site/run_llm_interpretation.py \
-        --records "${OUT}/llm_evidence/" --out "${OUT}/llm/" --pass synthesis
+        --records "${OUT}/llm_evidence/" --out "${OUT}/llm/" --pass synthesis $llm_batch
 fi
 
 run_stage structures python scripts/export/export_structures.py --preset "$PRESET"
@@ -82,7 +86,7 @@ run_stage stage bash -c "cd website && RUN='$RUN' bash prepare_deploy.sh"
 echo
 _stamp "TIMING SUMMARY (wall-clock per stage):"
 total=0
-for name in skeletons evidence llm_criteria llm_synthesis structures stage; do
+for name in skeletons evidence llm_category llm_synthesis structures stage; do
     secs=${STAGE_SECS[$name]:-}
     [[ -z "$secs" ]] && continue
     printf '  %-12s %6ds  (%dm%02ds)\n' "$name" "$secs" $((secs/60)) $((secs%60))
