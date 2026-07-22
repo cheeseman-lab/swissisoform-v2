@@ -34,13 +34,17 @@ PROMPTS_DIR = ROOT / "scripts" / "site" / "prompts"
 SYSTEM_PROMPT_PATH = PROMPTS_DIR / "system.txt"
 OUTPUT_SCHEMA_PATH = PROMPTS_DIR / "output_schema.json"
 
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = "claude-sonnet-5"
 DEFAULT_TEMPERATURE = 0.0
 DEFAULT_MAX_TOKENS = 4000
 
 # Standard (non-batch) token pricing, USD per token, by model id. The Message
 # Batches API bills the SAME token counts at HALF these rates — batch mode saves
 # no tokens (identical prompts), only cost (the 50% discount).
+# NOTE: claude-sonnet-5 uses a new tokenizer (~30% more tokens for the same text
+# than sonnet-4-6), so per-isoform token counts and the usage-report cost rise
+# ~30% at these same sticker rates; introductory pricing ($2/$10 per MTok through
+# 2026-08-31) means these figures currently over-estimate the real Sonnet-5 cost.
 _PRICING: dict[str, tuple[float, float]] = {  # model -> (input $/tok, output $/tok)
     "claude-sonnet-4-6": (3.0e-6, 15.0e-6),
     "claude-sonnet-5": (3.0e-6, 15.0e-6),
@@ -48,6 +52,17 @@ _PRICING: dict[str, tuple[float, float]] = {  # model -> (input $/tok, output $/
     "claude-haiku-4-5": (1.0e-6, 5.0e-6),
 }
 _BATCH_DISCOUNT = 0.5
+
+# Models that reject non-default sampling params (temperature/top_p/top_k) with an
+# HTTP 400, and run adaptive thinking by default when `thinking` is omitted. For
+# these we omit temperature (sending 0.0 — a non-default value — would 400) and
+# explicitly disable thinking: this pipeline wants one deterministic JSON verdict,
+# and a leading `thinking` block would also break text extraction. Older models
+# (sonnet-4-6 and earlier) keep the temperature knob and are thinking-off by
+# default, so their behavior is unchanged.
+_NO_SAMPLING_MODELS = frozenset(
+    {"claude-sonnet-5", "claude-opus-4-8", "claude-opus-4-7", "claude-fable-5"}
+)
 
 # Synthetic evidence record used by --dry-run when no llm_evidence dir exists.
 _SYNTHETIC_RECORD: dict[str, Any] = {
@@ -336,6 +351,49 @@ def _write_usage_report(
     print(line + f"  -> {out_dir / f'_usage_{pass_name}.json'}")
 
 
+def _extract_text(content: Any) -> str | None:
+    """Return the first ``text`` block's text from an SDK content list, or None.
+
+    Robust to a leading non-text block (e.g. a ``thinking`` block emitted by newer
+    models) — unlike ``content[0].text``. Shared by the direct and batch paths.
+    """
+    return next((b.text for b in content if getattr(b, "type", None) == "text"), None)
+
+
+def _build_request_params(
+    *,
+    model: str,
+    max_tokens: int,
+    temperature: float,
+    system: str,
+    user: str,
+) -> dict[str, Any]:
+    """Assemble Messages-API request params, gating sampling/thinking by model.
+
+    One place decides temperature/thinking so the direct (:func:`call_llm`) and
+    batch (:func:`call_llm_batch`) paths stay in sync. For models in
+    :data:`_NO_SAMPLING_MODELS`, ``temperature`` is omitted and thinking is
+    disabled (see that constant's rationale); other models are unchanged.
+    """
+    params: dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": [{"role": "user", "content": [{"type": "text", "text": user}]}],
+    }
+    if model in _NO_SAMPLING_MODELS:
+        params["thinking"] = {"type": "disabled"}
+        if temperature != DEFAULT_TEMPERATURE:
+            print(
+                f"[warn] {model} rejects non-default sampling params; "
+                f"ignoring temperature={temperature}",
+                file=sys.stderr,
+            )
+    else:
+        params["temperature"] = temperature
+    return params
+
+
 def call_llm(
     prompt: Prompt,
     *,
@@ -349,9 +407,14 @@ def call_llm(
     Prefers mozzarellm's ``AnthropicClient`` if importable (gets retry logic for
     free); falls back to the official ``anthropic`` SDK otherwise. Raises
     :class:`RuntimeError` if neither is available, or if the call fails.
+
+    mozzarellm passes ``temperature`` unconditionally in its constructor, which a
+    :data:`_NO_SAMPLING_MODELS` model rejects with a 400, so for those models we
+    skip mozzarellm and use the raw SDK (where :func:`_build_request_params` omits
+    temperature).
     """
     mozz = _try_import_mozzarellm()
-    if mozz is not None:
+    if mozz is not None and model not in _NO_SAMPLING_MODELS:
         client = mozz(
             model=model,
             temperature=temperature,
@@ -371,6 +434,11 @@ def call_llm(
 
     anthropic = _try_import_anthropic()
     if anthropic is None:
+        if mozz is not None:
+            raise RuntimeError(
+                f"{model} requires the official `anthropic` SDK (it rejects "
+                "mozzarellm's unconditional temperature); install `anthropic`."
+            )
         raise RuntimeError(
             "Neither mozzarellm nor anthropic SDK is importable. "
             "Install one of them in the swissisoform-v2 env (e.g. `pip install anthropic`)."
@@ -378,16 +446,21 @@ def call_llm(
 
     client = anthropic.Anthropic(api_key=api_key)
     response = client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        system=prompt.system,
-        messages=[{"role": "user", "content": [{"type": "text", "text": prompt.user}]}],
+        **_build_request_params(
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            system=prompt.system,
+            user=prompt.user,
+        )
     )
     if not response.content:
         raise RuntimeError("anthropic SDK returned empty content list")
     _record_usage(getattr(response, "usage", None))
-    return response.content[0].text
+    text = _extract_text(response.content)
+    if text is None:
+        raise RuntimeError("anthropic SDK response had no text block")
+    return text
 
 
 def _empty_usage() -> dict[str, int]:
@@ -423,11 +496,13 @@ def call_llm_batch(
         Request(
             custom_id=cid,
             params=MessageCreateParamsNonStreaming(
-                model=model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                system=p.system,
-                messages=[{"role": "user", "content": [{"type": "text", "text": p.user}]}],
+                **_build_request_params(
+                    model=model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    system=p.system,
+                    user=p.user,
+                )
             ),
         )
         for cid, p in items
@@ -445,7 +520,7 @@ def call_llm_batch(
         cid = r.custom_id
         if r.result.type == "succeeded":
             msg = r.result.message
-            text = next((blk.text for blk in msg.content if blk.type == "text"), None)
+            text = _extract_text(msg.content)
             u = getattr(msg, "usage", None)
             usage = (
                 {
@@ -499,6 +574,19 @@ def validate_against_schema(payload: dict[str, Any], schema: dict[str, Any]) -> 
         ]
     except Exception as e:
         return [f"validator init failed: {e}"]
+
+
+def _emit_schema_warnings(
+    payload: dict[str, Any], schema: dict[str, Any], label: str, *, verbose: bool
+) -> None:
+    """Validate ``payload`` and print any warnings to stderr.
+
+    Parity with the default per-gene pass. No-op unless ``verbose``; never raises.
+    """
+    if not verbose:
+        return
+    for w in validate_against_schema(payload, schema):
+        print(f"    schema warning [{label}]: {w}", file=sys.stderr)
 
 
 # ── Per-gene runner ───────────────────────────────────────────────────────
@@ -847,6 +935,11 @@ def _run_category_pass(records, spec, args, system_prompt, output_schema) -> int
                     )
                     _add_usage(usage_by_slug, tis_slug_val, _drain_usage())
                     payload = parse_response(response_text)
+                    _emit_schema_warnings(
+                        payload, output_schema,
+                        f"{tis_slug_val}/{category['name']}",
+                        verbose=getattr(args, "verbose", False),
+                    )
                     results[category["name"]] = payload
                     n_ok += 1
                 except Exception as e:
@@ -916,7 +1009,12 @@ def _run_category_pass_batch(records, spec, args, system_prompt, output_schema) 
             iso_results[tis_slug_val][cat_name] = {"error": r["error"] or "empty"}
             continue
         try:
-            iso_results[tis_slug_val][cat_name] = parse_response(r["text"])
+            payload = parse_response(r["text"])
+            _emit_schema_warnings(
+                payload, output_schema, f"{tis_slug_val}/{cat_name}",
+                verbose=getattr(args, "verbose", False),
+            )
+            iso_results[tis_slug_val][cat_name] = payload
             n_ok += 1
         except Exception as e:
             print(f"[{cid}] {cat_name} parse FAIL: {e}", file=sys.stderr)
@@ -1011,6 +1109,10 @@ def _run_synthesis_pass(records, spec, args, system_prompt, output_schema) -> in
                 )
                 _add_usage(usage_by_slug, tis_slug, _drain_usage())
                 payload = parse_response(response_text)
+                _emit_schema_warnings(
+                    payload, output_schema, f"{tis_slug}/synthesis",
+                    verbose=getattr(args, "verbose", False),
+                )
                 iso_dir.mkdir(parents=True, exist_ok=True)
                 out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
                 n_ok += 1
@@ -1074,6 +1176,10 @@ def _run_synthesis_pass_batch(records, spec, args, system_prompt, output_schema)
         except Exception as e:
             print(f"[{cid}] {tis_slug} parse FAIL: {e}", file=sys.stderr)
             continue
+        _emit_schema_warnings(
+            payload, output_schema, f"{tis_slug}/synthesis",
+            verbose=getattr(args, "verbose", False),
+        )
         out_path = out_by_slug[tis_slug]
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
