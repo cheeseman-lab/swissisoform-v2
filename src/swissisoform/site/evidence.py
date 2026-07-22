@@ -625,7 +625,13 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "Does the unique region fold confidently (ESMFold2 pLDDT)? Higher "
             "diffregion_mean means more structured. Folding only — the biophysical "
             "distinctness signal (GRAVY / fraction_charged / disorder) is scored "
-            "separately under S2, so do not weigh it here."
+            "separately under S2, so do not weigh it here. "
+            "This member also carries the model-confidence metrics for the whole "
+            "prediction — global pTM (ptm_isoform / ptm_canonical) and the PAE blocks "
+            "(pae_diff_vs_diff, pae_body_vs_body, pae_diff_vs_body, pae_status). Low "
+            "pTM / high PAE means the predicted fold and the relative placement of "
+            "regions are unreliable, which is the qualifier the Core Fold Perturbation "
+            "(shared-region RMSD) member in this same category must be read against."
         ),
     },
     "L1_localization_change": {
@@ -796,11 +802,27 @@ CRITERIA: dict[str, dict[str, Any]] = {
         "interpretation_hint": (
             "Does the retained (shared) region fold differently in the isoform vs "
             "the canonical protein? The shared region is identical in sequence, so a "
-            "high Cα RMSD (Kabsch-superposed on the shared residues only) means the "
-            "extension/truncation reorganizes how that region folds — most isoforms "
-            "read ≈ 0. TM-score is a length-normalized companion. Only scored when "
-            "both structures are confidently folded (min shared-region pLDDT ≥ 0.70); "
-            "uORF/altORF isoforms have no shared region and are not evaluable."
+            "high Cα RMSD (Kabsch-superposed on the shared residues only) is "
+            "CONSISTENT WITH the extension/truncation reorganizing how that region "
+            "folds — most isoforms read ≈ 0. TM-score is a length-normalized "
+            "companion. "
+            "CONFIDENCE GATE — a high RMSD is NOT on its own evidence of refolding. "
+            "The common cause is ESMFold placing a poorly-determined region "
+            "differently between two low-confidence models, which is placement/"
+            "orientation uncertainty, not a conformational change. Before calling it "
+            "a real refold, check the fold-confidence metrics carried here and in the "
+            "Fold Confidence member of this same category: global pTM (ptm_isoform / "
+            "ptm_canonical), shared-region pLDDT (plddt_shared_mean_isoform / "
+            "plddt_shared_mean_canonical), and the PAE blocks (pae_body_vs_body, "
+            "pae_diff_vs_body, pae_status). If pTM ≲ 0.50, OR either shared pLDDT < "
+            "0.70, OR PAE is high, treat the RMSD as an artifact of low confidence: "
+            "state it as an unresolved hypothesis at most, and never make it the "
+            "headline or say the isoform 'remodels'/'reorganizes'/'destabilizes' the "
+            "core. Always cite the pTM alongside any RMSD claim, and read rmsd_shared "
+            "against rmsd_global rather than in isolation. "
+            "Only scored when both structures are confidently folded (min "
+            "shared-region pLDDT ≥ 0.70); uORF/altORF isoforms have no shared region "
+            "and are not evaluable."
         ),
     },
     # S2/S3 are first-class scored criteria whose evidence is nested (a biophysics
