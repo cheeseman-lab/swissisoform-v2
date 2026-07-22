@@ -166,8 +166,16 @@ def test_motifs_drawn_as_spans():
     fig = pplot.build_protein_figure(_iso(), overlays={"motifs": True})
     motif_traces = [t for t in fig["data"] if t.get("name") == "Motif"]
     assert len(motif_traces) == 1
+    xs = motif_traces[0]["x"]
     # Span covers start..end (+29 offset onto the canonical axis for truncations).
-    assert motif_traces[0]["x"] == [64, 70]
+    # The bar is densified into collinear points by ``_bar_samples`` so Plotly fires
+    # hover across its interior (it only fires at vertices), so assert the extent
+    # rather than a literal 2-point segment.
+    assert (min(xs), max(xs)) == (64, 70)
+    assert xs == sorted(xs)
+    # Densified points stay inside the span, and hover text covers every vertex.
+    assert len(motif_traces[0]["hovertext"]) == len(xs)
+    assert len(motif_traces[0]["y"]) == len(xs)
 
 
 def test_motifs_off_when_overlay_disabled():
