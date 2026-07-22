@@ -33,7 +33,7 @@ bucket folder; genuinely shared plumbing stays as infrastructure packages::
     P1 structure                structure (diff-region pLDDT)
     P2 shared structural change structure (shared-region Cα RMSD)
     S1 domains                  evidence/s1_domains            (owns it)
-    S2 biophysics               modules.biophysics (region-vs-core)
+    S2 biophysics               modules.biophysics (whole-protein deltas)
     S3 sae                      plm.sae_module
 """
 

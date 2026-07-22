@@ -62,8 +62,8 @@ Predicted Structure (P):
 Structural Characteristics (S):
     S1 Real InterPro domain gained / lost in the diff region
        (``comparison['interproscan']``)
-    S2 Biophysically distinct differential region — region-vs-core gravy /
-       fraction-charged / disorder (``comparison['biophysics']``)
+    S2 Whole-protein biophysical shift — isoform-vs-canonical whole-protein
+       gravy / fraction-charged / disorder deltas (``comparison['biophysics']``)
     S3 Interpretable SAE features firing in the unique region
        (``isoform_annotations['sae']``)
 """
