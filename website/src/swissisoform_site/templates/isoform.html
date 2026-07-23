@@ -39,7 +39,33 @@
       {% endif %}
     </summary>
     <div class="synthesis-body">
-      {% if synthesis %}
+      {% if synthesis and (synthesis.divergence_hypothesis or synthesis.divergence_hypothesis_html) %}
+        {# Keyed-dict shape: hypothesis → relevance → confidence → caveats. #}
+        <div class="syn-block">
+          <span class="syn-label">How it diverges</span>
+          <div class="syn-prose">{{ (synthesis.divergence_hypothesis_html or synthesis.divergence_hypothesis) | safe }}</div>
+        </div>
+        {% if synthesis.function_relevance or synthesis.function_relevance_html %}
+        <div class="syn-block">
+          <span class="syn-label">Why it matters</span>
+          <div class="syn-prose">{{ (synthesis.function_relevance_html or synthesis.function_relevance) | safe }}</div>
+        </div>
+        {% endif %}
+        {% if synthesis.tags %}
+        <div class="syn-tags">
+          {% for t in synthesis.tags %}<span class="iso-tag-chip">{{ t }}</span>{% endfor %}
+        </div>
+        {% endif %}
+        {% if synthesis.confidence %}
+        <div class="syn-confidence conf-{{ synthesis.confidence }}">
+          <span class="syn-label">Confidence</span> {{ synthesis.confidence }}
+        </div>
+        {% endif %}
+        {% if synthesis.caveats %}
+          <p class="syn-caveats"><em>{{ synthesis.caveats }}</em></p>
+        {% endif %}
+      {% elif synthesis %}
+        {# Legacy shape (pre-reframe synthesis.json). #}
         <div class="syn-narrative">{{ (synthesis.narrative_html or synthesis.narrative or '') | safe }}</div>
         {% if synthesis.caveats %}
           <p class="syn-caveats"><em>{{ synthesis.caveats }}</em></p>

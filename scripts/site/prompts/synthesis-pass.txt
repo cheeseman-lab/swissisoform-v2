@@ -1,29 +1,49 @@
 You are writing the whole-isoform biological judgment for one alt-TIS isoform (extension, truncation, or uORF/altORF) in SwissIsoform v2.
 
-Input: (1) the isoform's identity (gene, transcript, ORF type, lengths, differential sequence, and `differential_region_location` — an explicit statement of where the differential region sits; trust it verbatim over any prior about this gene); (2) `category_reads` — one `{verdict, reasoning}` per CDLMPS category (Conservation, Detection, Localization, Mutation Landscape, Predicted Structure, Structural Characteristics), your primary material; (3) `criteria_evidence` — the raw per-criterion numbers that back those verdicts (all 15 criteria); (4) coarse existence/functional headline scores (a two-axis roll-up — a consistency check, not the framing).
+Your job is ADDITIVE, not a summary. Given what this GENE/protein is already known to do, say how THIS isoform changes or diverges from that established function or character. Do NOT restate the category verdicts or walk the six categories one by one — that is a laundry list and is explicitly not wanted. Start from the known function; end at "so this isoform does X to it."
 
-The 15 criteria, grouped by CDLMPS category (the six `category_reads` verdicts are your primary material; the criteria are what backs each):
+Input:
+- `gene` — the protein's ESTABLISHED identity: `function` (a literature-grounded description of what it does), `keywords` (its functional/pathway terms), `subcellular_location`. This is your BASELINE — the thing the isoform diverges from. Trust it; it is what the reader already knows about the gene.
+- The isoform's identity (gene, transcript, ORF type, lengths, differential sequence, and `differential_region_location` — where the differential region sits; trust it verbatim).
+- `category_reads` — one `{verdict, reasoning}` per CDLMPS category (Conservation, Detection, Localization, Mutation Landscape, Predicted Structure, Structural Characteristics). Evidence you draw on, NOT the framing to reproduce.
+- `criteria_evidence` — the raw per-criterion numbers behind those verdicts (all 15 criteria).
+- coarse existence/functional headline scores — a consistency check, not the framing.
+
+The 15 criteria behind the category reads:
 - C Conservation: C1 primate AA-identity, C2 mammalian AA-identity, C3 absolute phyloP constraint over the unique region.
 - D Detection: D1 multi-cell-line reproducibility, D2 initiation efficiency, D3 unique-peptide mass spec.
 - L Localization: L1 DeepLoc compartment/signal change, L2 SignalP/TargetP targeting change.
-- M Mutation Landscape: M1 germline tolerance/constraint (gnomAD depletion + ESM-2 — NOT disease burden), M2 disease-variant density enrichment (ClinVar/COSMIC).
-- P Predicted Structure: P1 unique-region folding (pLDDT only), P2 shared-region core-fold perturbation (Cα RMSD).
-- S Structural Characteristics: S1 real-InterPro-domain gain/loss, S2 whole-protein biophysical shift (isoform vs canonical), S3 differential ESM-C SAE features (magnitude check on the strongest shared-feature activation shift; provisional labels).
-
-Write a SHORT, hypothesis-led judgment. This is NOT a summary of the category reads and criteria shown below — do NOT walk the categories or criteria one by one, do NOT audit "what has signal and what is flat," and do NOT pad. Lead with the hypothesis; then marshal the evidence that backs it. Exactly two moves, in this order:
-1. HYPOTHESIS (lead). Open with the single most likely biological reading of what this isoform does — or fails to do — to its differential region, stated plainly as a claim. This is the takeaway and it comes first. The reader is already ON the isoform page: gene, ORF type, both lengths, and the differential sequence are displayed above your text. Do NOT open by restating that identity ("This 30-aa extension of CBX1 <seq> is predicted to…") — lead straight with the finding ("This N-terminal extension is predicted to relocalize the protein…").
-2. SUPPORT (follow). Then give the one to three signals that most directly back that hypothesis, anchored by the specific numbers that carry them ("100% primate/mammalian identity", "mean phyloP 4.95", "10% initiation efficiency"). Frame them as support for the claim above, not as a standalone tally.
-Mention a contradicting signal ONLY when it would change the hypothesis or its confidence; otherwise omit it. Refer to evidence by name or by what it measures ("cross-mammalian conservation", "ribosome-profiling breadth", "the localization change"), NEVER by ID code (C1, D3, S2, …). No preamble, no restating the scores, no laundry list. Hard stop at 6 sentences for the narrative — fewer is fine, never more.
+- M Mutation Landscape: M1 germline tolerance/constraint (gnomAD depletion + ESM-C — NOT disease burden), M2 disease-variant density enrichment (ClinVar/COSMIC).
+- P Predicted Structure: P1 unique-region folding (pLDDT only), P2 shared-region core-fold perturbation (Cα RMSD, only trusted when pTM/pLDDT are high).
+- S Structural Characteristics: S1 real-InterPro-domain gain/loss, S2 whole-protein biophysical shift, S3 differential ESM-C SAE features (magnitude check on the strongest shared-feature activation shift; provisional labels).
 
 Guardrails:
-  - Differential-region directionality: alt-TIS isoforms differ ONLY at the N-terminus — an extension ADDS N-terminal sequence, a truncation REMOVES N-terminal sequence; the C-terminus and stop codon are invariant. Never describe the differential region (or the sequence it adds/loses) as C-terminal, even when it is acidic or otherwise looks like a tail.
-  - Do not contradict the category verdicts or the headline scores.
-  - Keep directionality right: germline tolerance/constraint (gnomAD depletion ratio < 1× = important) is NOT pathogenic burden; disease-variant density is a separate signal.
-  - Introduce no fact the input does not state — never extrapolate biology (e.g. organelle retargeting) the localization/targeting reads do not report.
-  - The gene, ORF type, lengths, and differential sequence are already on screen — do not spend a clause restating them. The "headline" and "narrative" both start with the finding, not the identity.
+  - The reader is already ON the isoform page: gene, ORF type, both lengths, and the differential sequence are displayed above your text. Do NOT restate that identity — lead straight with the finding.
+  - Differential-region directionality: alt-TIS isoforms differ ONLY at the N-terminus — an extension ADDS N-terminal sequence, a truncation REMOVES N-terminal sequence; the C-terminus and stop codon are invariant. Never describe the differential region as C-terminal.
+  - germline tolerance/constraint (gnomAD depletion ratio < 1× = important) is NOT pathogenic burden; disease-variant density is a separate signal.
+  - Introduce no fact the input does not state — never extrapolate biology (e.g. organelle retargeting) the reads do not report. If the evidence does not support a functional change, say so plainly and set low confidence.
 
 Output JSON only (no code fences), fields:
   - "tis_id": verbatim from the input.
-  - "headline": one sentence (≤160 chars) — the hypothesized function, stated as the single dominant call for this isoform.
-  - "narrative": the two-move judgment above (hypothesis first, then supporting evidence), one paragraph, ≤6 sentences (fewer is fine, never more). HTML-safe Markdown (**bold**, *italic*, `code`); no links/images.
+  - "headline": one sentence (≤160 chars) — the single dominant call: how this isoform changes the gene's function. States the finding, not the identity.
+  - "divergence_hypothesis": 1–3 sentences — the claim: how this isoform modifies or diverges from the gene's established function or character. Lead with it. HTML-safe Markdown (**bold**, *italic*, `code`); no links/images.
+  - "function_relevance": 1–3 sentences — why that matters given what the gene does. Tie it explicitly to the `gene.function`/`keywords` baseline ("CBX1's chromodomain reads H3K9me — losing it would…"). If the change has no clear bearing on known function, say so. Same Markdown rules.
+  - "tags": an array (may be empty) of isoform functional-change tags, drawn ONLY from the controlled vocabulary below. Assign a tag only when the evidence supports it. These drive a filter, so precision matters — do not over-tag.
+  - "confidence": "low" | "medium" | "high" — your confidence in the divergence hypothesis, given how much of the evidence actually supports it. Low when the signals are weak, absent, or not evaluable.
   - "caveats": (optional) one short line ONLY if a material gap changes confidence; omit otherwise.
+
+Controlled tag vocabulary (assign only the ones the evidence supports; each is one axis of functional change):
+  - "Relocalization" — DeepLoc predicts a different subcellular compartment for the isoform vs canonical.
+  - "Targeting-signal change" — a SignalP/TargetP signal or targeting peptide is gained or lost.
+  - "Domain loss" — a real InterPro domain is lost in the differential region (typically a truncation).
+  - "Domain gain" — a real InterPro domain is gained in the differential region (typically an extension).
+  - "Truncated functional region" — a truncation removes an N-terminal region that is structured, conserved, or domain-bearing (functionally important, not just sequence).
+  - "Structured N-terminal extension" — an extension adds a confidently-folded N-terminal region (high differential-region pLDDT).
+  - "Disorder shift" — a whole-protein biophysical shift in disorder/charge/hydropathy (S2 fired).
+  - "Core refold" — the retained (shared) region is predicted to fold differently, AND the structure confidence supports it (pTM and shared-region pLDDT high). Do NOT assign on RMSD alone when confidence is low.
+  - "Conservation-backed" — the unique region is conserved across primates/mammals (high AA-identity or strong phyloP).
+  - "Disease-enriched" — ClinVar/COSMIC disease variants concentrate in the unique region.
+  - "Germline-constrained" — the unique region is under germline constraint (gnomAD depletion and/or ESM-C constraint). Valid on truncations; on extensions the unique region was non-coding, so this is usually NOT supported.
+  - "Mass-spec supported" — a validated isoform-unique peptide confirms the isoform is translated.
+  - "Multi-cell-line reproducible" — the isoform is detected across multiple cell lines.
+  - "Interpretable-feature shift" — differential ESM-C SAE features fire (S3 scored true).

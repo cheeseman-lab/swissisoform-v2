@@ -118,6 +118,9 @@ class Isoform:
     variants_in_unique: list[dict[str, Any]] = field(default_factory=list)
     # Every clinical variant over the isoform's coding region (unique + shared)
     variants_all: list[dict[str, Any]] = field(default_factory=list)
+    # Controlled isoform-change tags from the synthesis pass (vocab-whitelisted);
+    # displayed on the isoform dropdown row and unioned for the landing-page filter.
+    tags: list[str] = field(default_factory=list)
     # Raw row (kept for /api/data.json)
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -194,6 +197,17 @@ class GeneRecord:
             return (iso.net_score, iso.n_interesting, iso.existence_score or 0, iso.aa_len or 0)
 
         return max(self.isoforms, key=_key)
+
+    @property
+    def iso_tags(self) -> list[str]:
+        """Vocab-ordered union of the gene's isoforms' change tags.
+
+        Drives the landing-page "Isoform change" filter facet (a gene matches when
+        ANY of its isoforms carries the selected tag). Displayed per-isoform in the
+        dropdown, not on the gene card itself.
+        """
+        present = {t for iso in self.isoforms for t in iso.tags}
+        return [t for t in ISOFORM_TAG_VOCAB if t in present]
 
 
 # --------------------------------------------------------------------------- #
@@ -481,6 +495,7 @@ def _build_isoform(
         criteria=_criteria_dict(row.get("isoform_scoring_criteria")),
         reasons=_reasons_dict(row.get("isoform_scoring_reasons")),
         category_verdicts=category_verdicts,
+        tags=synthesis_tags_for_isoform(llm_dir=llm_dir, tis_slug=tis_slug(tis_id)),
         localization_canonical=_maybe_str(row.get("cmp_localization_deeploc_prediction_canonical")),
         localization_isoform=_maybe_str(row.get("cmp_localization_deeploc_prediction_isoform")),
         localization_changed=_maybe_bool(row.get("cmp_localization_deeploc_prediction_changed")),
@@ -637,8 +652,37 @@ def _markdown_to_html(text: str) -> str:
     return "".join(f"<p>{p}</p>" for p in paras)
 
 
+# Controlled isoform-change tag vocabulary. MUST stay in sync with the enum in
+# scripts/site/prompts/output_schemas/synthesis.json — the website is a separate
+# deployable that can't read the schema at runtime, so it's mirrored here. Tags
+# are whitelisted against this set on read, so an off-vocab value (e.g. an older
+# free-form synthesis.json, or model drift) can never leak into the filter facet.
+ISOFORM_TAG_VOCAB: tuple[str, ...] = (
+    "Relocalization",
+    "Targeting-signal change",
+    "Domain loss",
+    "Domain gain",
+    "Truncated functional region",
+    "Structured N-terminal extension",
+    "Disorder shift",
+    "Core refold",
+    "Conservation-backed",
+    "Disease-enriched",
+    "Germline-constrained",
+    "Mass-spec supported",
+    "Multi-cell-line reproducible",
+    "Interpretable-feature shift",
+)
+_TAG_VOCAB_SET = frozenset(ISOFORM_TAG_VOCAB)
+
+
 def llm_synthesis_for_isoform(*, llm_dir: Path, tis_slug: str) -> dict | None:
-    """Return the per-isoform synthesis JSON, or None if missing."""
+    """Return the per-isoform synthesis JSON, or None if missing.
+
+    Renders the keyed-dict prose fields (``divergence_hypothesis`` /
+    ``function_relevance``) to ``*_html``; falls back to the legacy ``narrative``
+    field so pre-reframe synthesis.json files still display.
+    """
     p = Path(llm_dir) / tis_slug / "synthesis.json"
     if not p.exists():
         return None
@@ -646,9 +690,33 @@ def llm_synthesis_for_isoform(*, llm_dir: Path, tis_slug: str) -> dict | None:
         data = json.loads(p.read_text(encoding="utf-8"))
     except Exception:
         return None
-    if data.get("narrative"):
+    for field_name in ("divergence_hypothesis", "function_relevance"):
+        if data.get(field_name):
+            data[f"{field_name}_html"] = _markdown_to_html(data[field_name])
+    if data.get("narrative"):  # legacy shape
         data["narrative_html"] = _markdown_to_html(data["narrative"])
+    if isinstance(data.get("tags"), list):
+        data["tags"] = [t for t in data["tags"] if t in _TAG_VOCAB_SET]
     return data
+
+
+def synthesis_tags_for_isoform(*, llm_dir: Path | None, tis_slug: str) -> list[str]:
+    """Vocab-whitelisted isoform-change tags for one isoform (empty if none/absent)."""
+    if llm_dir is None:
+        return []
+    p = Path(llm_dir) / tis_slug / "synthesis.json"
+    if not p.exists():
+        return []
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    tags = data.get("tags")
+    if not isinstance(tags, list):
+        return []
+    # Preserve vocab order for stable display/union across isoforms.
+    present = {t for t in tags if t in _TAG_VOCAB_SET}
+    return [t for t in ISOFORM_TAG_VOCAB if t in present]
 
 
 def tis_slug(tis_id: str) -> str:

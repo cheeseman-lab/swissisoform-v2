@@ -1030,13 +1030,19 @@ def _run_category_pass_batch(records, spec, args, system_prompt, output_schema) 
     return 0 if n_ok == len(items) else 1
 
 
-def _build_synthesis_record(isoform: dict, gene_name: str, isoform_out_dir: Path) -> dict:
+def _build_synthesis_record(
+    isoform: dict, gene_name: str, isoform_out_dir: Path, gene: dict | None = None
+) -> dict:
     """Build the synthesis-pass input from the disk-cached categories.json output.
 
-    Carries both the digested per-category reads (``category_reads`` — the
-    ``{verdict, reasoning}`` per CDLMPS category) and the raw underlying evidence
-    (``criteria_evidence``, one ``slice_criterion`` payload per criterion, all 15
-    incl. S2/S3) so the model can weigh actual numbers, not just the category verdicts.
+    Carries the gene's ESTABLISHED function (``gene`` — Affinage function / keywords
+    / localization, the baseline the isoform diverges from), the digested per-category
+    reads (``category_reads`` — the ``{verdict, reasoning}`` per CDLMPS category), and
+    the raw underlying evidence (``criteria_evidence``, one ``slice_criterion`` payload
+    per criterion, all 15 incl. S2/S3) so the model can weigh actual numbers.
+
+    ``gene`` is the gene block from the evidence record (``build_gene_record``); when
+    absent, only ``{name}`` is carried (older records / dry-run stubs).
     """
     from swissisoform.site.evidence import CRITERIA, _diff_region_location, slice_criterion
 
@@ -1050,7 +1056,15 @@ def _build_synthesis_record(isoform: dict, gene_name: str, isoform_out_dir: Path
         cid: slice_criterion(iso_with_gene, cid) for cid in CRITERIA
     }
 
+    gene_block = {
+        "name": gene_name,
+        "function": (gene or {}).get("function"),
+        "keywords": (gene or {}).get("keywords"),
+        "subcellular_location": (gene or {}).get("subcellular_location"),
+    }
+
     return {
+        "gene": gene_block,
         "isoform": {
             "tis_id": isoform.get("tis_id"),
             "gene_name": gene_name,
@@ -1091,7 +1105,9 @@ def _run_synthesis_pass(records, spec, args, system_prompt, output_schema) -> in
                 if args.dry_run:
                     print(f"[skip] {gene_name} {tis_slug}: synthesis.json exists")
                 continue
-            synthesis_record = _build_synthesis_record(iso, gene_name, iso_dir)
+            synthesis_record = _build_synthesis_record(
+                iso, gene_name, iso_dir, gene_record.get("gene")
+            )
             prompt = build_prompt(synthesis_record, system_prompt, output_schema)
             n_calls += 1
             if args.dry_run:
@@ -1148,7 +1164,9 @@ def _run_synthesis_pass_batch(records, spec, args, system_prompt, output_schema)
             out_path = iso_dir / "synthesis.json"
             if out_path.exists() and not args.force:
                 continue
-            record = _build_synthesis_record(iso, gene_name, iso_dir)
+            record = _build_synthesis_record(
+                iso, gene_name, iso_dir, gene_record.get("gene")
+            )
             cid = f"s{len(items)}"
             items.append((cid, build_prompt(record, system_prompt, output_schema)))
             meta[cid] = tis_slug

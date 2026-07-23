@@ -437,11 +437,25 @@ def test_synthesis_input_record_pulls_category_reads(monkeypatch, tmp_path):
         "tis_id": "chr1:100:+:ATG:ENST_A",
         "scoring": {"existence_score": 5, "functional_score": 5},
     }
-    rec = rli._build_synthesis_record(iso, "GENE_A", base)
+    gene_block = {
+        "name": "GENE_A",
+        "function": "GENE_A is a chromatin reader.",
+        "keywords": "histone binding; chromatin",
+        "subcellular_location": "nucleus",
+    }
+    rec = rli._build_synthesis_record(iso, "GENE_A", base, gene_block)
     assert rec["isoform"]["tis_id"] == "chr1:100:+:ATG:ENST_A"
     assert "Conservation" in rec["category_reads"]
     assert "Mutation Landscape" in rec["category_reads"]
     assert rec["category_reads"]["Conservation"]["verdict"] == "interesting"
+    # The gene's established function is threaded in as the divergence baseline.
+    assert rec["gene"]["function"] == "GENE_A is a chromatin reader."
+    assert rec["gene"]["keywords"] == "histone binding; chromatin"
+    # Backward-compat: no gene arg → name-only block, no crash.
+    rec_bare = rli._build_synthesis_record(iso, "GENE_A", base)
+    assert rec_bare["gene"] == {
+        "name": "GENE_A", "function": None, "keywords": None, "subcellular_location": None,
+    }
     # All 15 criteria (incl. S2/S3) are carried in the raw evidence for synthesis —
     # S2/S3 tolerate the _raw-less fixture (empty evidence, never raise).
     assert "P2_shared_structural_change" in rec["criteria_evidence"]

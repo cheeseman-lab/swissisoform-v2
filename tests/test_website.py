@@ -163,6 +163,55 @@ def test_synthesis_narrative_html_converts_markdown():
     assert "**" not in out
 
 
+def test_synthesis_tags_whitelisted_against_vocab(tmp_path):
+    """synthesis_tags_for_isoform keeps only controlled-vocab tags, in vocab order."""
+    if str(WEBSITE_SRC) not in sys.path:
+        sys.path.insert(0, str(WEBSITE_SRC))
+    import json as _json
+
+    from swissisoform_site.data import ISOFORM_TAG_VOCAB, synthesis_tags_for_isoform
+
+    slug = "chr1-1-ATG-ENST"
+    (tmp_path / slug).mkdir()
+    (tmp_path / slug / "synthesis.json").write_text(
+        _json.dumps({"tags": ["Domain gain", "made up tag", "Relocalization"]})
+    )
+    tags = synthesis_tags_for_isoform(llm_dir=tmp_path, tis_slug=slug)
+    # off-vocab dropped; survivors in vocab order (Relocalization precedes Domain gain)
+    assert tags == ["Relocalization", "Domain gain"]
+    assert all(t in ISOFORM_TAG_VOCAB for t in tags)
+    # missing dir / no tags → empty
+    assert synthesis_tags_for_isoform(llm_dir=tmp_path, tis_slug="absent") == []
+
+
+def test_synthesis_keyed_dict_renders_hypothesis_and_confidence():
+    """llm_synthesis_for_isoform html-renders the keyed prose fields; legacy still works."""
+    if str(WEBSITE_SRC) not in sys.path:
+        sys.path.insert(0, str(WEBSITE_SRC))
+    import json as _json
+    import tempfile
+    from pathlib import Path
+
+    from swissisoform_site.data import llm_synthesis_for_isoform
+
+    d = Path(tempfile.mkdtemp())
+    slug = "chr1-1-ATG-ENST"
+    (d / slug).mkdir()
+    (d / slug / "synthesis.json").write_text(
+        _json.dumps({
+            "tis_id": "x", "headline": "h",
+            "divergence_hypothesis": "adds a **targeting** arm",
+            "function_relevance": "matters", "tags": ["Relocalization", "bogus"],
+            "confidence": "medium",
+        })
+    )
+    syn = llm_synthesis_for_isoform(llm_dir=d, tis_slug=slug)
+    assert "<strong>targeting</strong>" in syn["divergence_hypothesis_html"]
+    assert "function_relevance_html" in syn
+    assert syn["tags"] == ["Relocalization"]  # bogus dropped
+    assert syn["confidence"] == "medium"
+
+
 # --------------------------------------------------------------------------- #
 # V2 isoform route (/genes/<gene>/isoforms/<tis_slug>)
 # --------------------------------------------------------------------------- #

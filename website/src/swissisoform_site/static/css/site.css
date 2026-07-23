@@ -168,6 +168,24 @@
   border-color: #4f46e5;
   color: #fff;
 }
+
+/* Isoform-change tag facet — text pills (mirrors the category toggles). */
+.tag-filter { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tag-toggles { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.tag-toggle {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #fff;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 10px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.tag-toggle:hover { border-color: #a5b4fc; color: #6366f1; }
+.tag-toggle.active { background: #4f46e5; border-color: #4f46e5; color: #fff; }
+
 #sort-mode {
   font-size: 13px;
   padding: 5px 8px;
@@ -368,6 +386,25 @@
 .syn-narrative { line-height: 1.55; }
 .syn-findings { margin: 8px 0; padding-left: 22px; }
 .syn-caveats { margin-top: 10px; color: #666; font-size: 13px; }
+
+/* Keyed-dict synthesis layout (hypothesis → relevance → tags → confidence). */
+.syn-block { margin: 0 0 12px; }
+.syn-label {
+  display: block; font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .04em; color: #94a3b8; margin-bottom: 2px;
+}
+.syn-prose { line-height: 1.55; }
+.syn-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.iso-tag-chip {
+  font-size: 12px; font-weight: 600; color: #3730a3;
+  background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 999px;
+  padding: 2px 10px;
+}
+.syn-confidence { font-size: 13px; margin-top: 8px; }
+.syn-confidence .syn-label { display: inline; }
+.conf-high   { color: #15803d; }
+.conf-medium { color: #b45309; }
+.conf-low    { color: #64748b; }
 
 /* AI-summary dropdown (pinned to the top of the isoform page) */
 .synthesis-dd { padding: 0; overflow: hidden; border-radius: 4px; }
@@ -848,6 +885,14 @@
 .crumb-current { color: #000; font-weight: 600; }
 
 /* ── Landing page isoform dropdown ── */
+/* Per-isoform change tags shown inside the dropdown rows. */
+.iso-tags-row { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: 6px; }
+.iso-tag-chip.sm {
+  font-size: 11px; font-weight: 600; color: #3730a3;
+  background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 999px;
+  padding: 0 7px; white-space: nowrap;
+}
+
 .iso-dropdown { margin-top: 8px; }
 .iso-dropdown summary { cursor: pointer; list-style: none; padding: 4px 0; }
 .iso-dropdown summary::-webkit-details-marker { display: none; }
