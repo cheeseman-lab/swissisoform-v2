@@ -2,20 +2,18 @@
 
 Queries the Affinage API (``https://affinage.wi.mit.edu/api``) for each gene
 symbol and writes ``data/reference/generef/generef.json`` =
-``{gene: {uniprot_id, uniprot_function, subcellular_location, keywords}}``.
+``{gene: {uniprot_id, function, subcellular_location, keywords}}``.
 ``run.py`` loads this and passes it to ``GeneRefModule`` as a gene-level module.
 
 Affinage provides literature-grounded, mechanism-focused annotation (it is itself
 LLM-generated). One ``GET /api/gene/{symbol}`` supplies everything we keep:
 
-* ``uniprot_function``      ← ``narrative.mechanistic_narrative`` (PMID-cited prose)
+* ``function``              ← ``narrative.mechanistic_narrative`` (PMID-cited prose)
 * ``subcellular_location``  ← ``mechanism_profile.localization`` term labels
 * ``keywords``              ← ``mechanism_profile.molecular_activity + pathway`` labels
 
-The field *keys* are kept (legacy ``uniprot_`` prefix) so ``GeneRefModule`` and
-every downstream consumer are unchanged. ``uniprot_id`` is still sourced from a
-minimal UniProtKB accession lookup — Affinage exposes no accession, and the site
-links out to the UniProt entry.
+``uniprot_id`` is still sourced from a minimal UniProtKB accession lookup —
+Affinage exposes no accession, and the site links out to the UniProt entry.
 
 Driven by the thin CLI at ``scripts/setup/fetch_generef.py``.
 """
@@ -92,7 +90,7 @@ def _uniprot_accession(gene: str) -> str | None:
 
 
 def fetch_one(gene: str) -> dict | None:
-    """Return {uniprot_id, uniprot_function, subcellular_location, keywords} or None.
+    """Return {uniprot_id, function, subcellular_location, keywords} or None.
 
     Function + localization + keywords come from Affinage; ``uniprot_id`` is a
     minimal UniProt accession lookup (Affinage exposes no accession). Returns None
@@ -111,7 +109,7 @@ def fetch_one(gene: str) -> dict | None:
 
     return {
         "uniprot_id": _uniprot_accession(gene),
-        "uniprot_function": function or None,
+        "function": function or None,
         "subcellular_location": "; ".join(locations) or None,
         "keywords": "; ".join(keywords) or None,
     }
@@ -151,10 +149,13 @@ def main(argv: list[str] | None = None) -> int:
         if gene in data:
             continue
         rec = fetch_one(gene)
-        if rec and rec.get("uniprot_id"):
+        # Keep any record Affinage returned data for — do NOT gate on uniprot_id,
+        # since a gene can have Affinage annotation while the UniProt accession
+        # lookup finds nothing.
+        if rec and any(rec.values()):
             data[gene] = rec
             n_ok += 1
-        time.sleep(0.2)  # be polite to the UniProt endpoint
+        time.sleep(0.2)  # be polite to the APIs (Affinage + UniProt)
         if (i + 1) % 100 == 0:
             print(f"  {i + 1}/{len(genes)} …")
 

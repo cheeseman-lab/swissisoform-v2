@@ -22,7 +22,7 @@ from swissisoform.models import Gene, TranslationInitiationSite
 # infra — adding them here without data would emit blank columns.
 _ANNOTATION_KEYS: list[str] = [
     "uniprot_id",
-    "uniprot_function",
+    "function",
     "subcellular_location",
     "keywords",
 ]

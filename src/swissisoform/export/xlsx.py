@@ -214,8 +214,9 @@ def describe(col: str) -> tuple[str, str]:
         field = col[len("generef_") :]
         gdesc = {
             "uniprot_id": "UniProt accession (reviewed, human)",
-            "uniprot_function": "UniProt function summary",
-            "subcellular_location": "UniProt subcellular location(s)",
+            "function": "Affinage mechanistic narrative (PMID-cited)",
+            "subcellular_location": "Affinage subcellular location(s)",
+            "keywords": "Affinage functional terms (molecular activity + pathway)",
         }.get(field, _humanize(field))
         return "gene reference", f"Gene-level reference — {gdesc}"
     if col in EXACT:

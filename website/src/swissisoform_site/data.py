@@ -564,7 +564,7 @@ def load_all() -> dict[str, GeneRecord]:
             name=gene_name,
             uniprot_id=uniprot_id,
             uniprot_url=uniprot_url,
-            function=_maybe_str(head.get("generef_uniprot_function")),
+            function=_maybe_str(head.get("generef_function")),
             location=_maybe_str(head.get("generef_subcellular_location")),
             keywords=_split_terms(head.get("generef_keywords")),
             canonical_len=_maybe_int(head.get("canonical_len")),

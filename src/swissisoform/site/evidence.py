@@ -269,7 +269,7 @@ def build_gene_record(gene_name: str, sub: pd.DataFrame) -> dict[str, Any]:
         "gene": {
             "name": gene_name,
             "uniprot_id": _scalar_or_none(head, "generef_uniprot_id"),
-            "function": _scalar_or_none(head, "generef_uniprot_function"),
+            "function": _scalar_or_none(head, "generef_function"),
             "subcellular_location": _scalar_or_none(head, "generef_subcellular_location"),
         },
         "isoforms": isoforms,

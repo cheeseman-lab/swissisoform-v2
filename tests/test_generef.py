@@ -39,7 +39,7 @@ class TestGeneRefModule:
         gene_data = {
             "TESTGENE_POS": {
                 "uniprot_id": "P12345",
-                "uniprot_function": "Transcription factor",
+                "function": "Transcription factor",
                 "subcellular_location": "Nucleus",
                 "hpa_protein_class": "Transcription factors",
                 "hpa_subcellular_location": "Nucleoplasm",
@@ -53,7 +53,7 @@ class TestGeneRefModule:
             ann = site.isoform_annotations["generef"]
             if site.gene_name == "TESTGENE_POS":
                 assert ann["uniprot_id"] == "P12345"
-                assert ann["uniprot_function"] == "Transcription factor"
+                assert ann["function"] == "Transcription factor"
                 assert ann["subcellular_location"] == "Nucleus"
 
     def test_unmatched_gene_gets_none(self, synthetic_tis, config):
@@ -61,7 +61,7 @@ class TestGeneRefModule:
         gene_data = {
             "TESTGENE_POS": {
                 "uniprot_id": "P12345",
-                "uniprot_function": "Transcription factor",
+                "function": "Transcription factor",
             },
         }
         module = GeneRefModule(config, gene_annotations=gene_data)
@@ -107,7 +107,7 @@ class TestGeneRefModule:
             if site.gene_name == "TESTGENE_POS":
                 ann = site.isoform_annotations["generef"]
                 assert ann["uniprot_id"] == "P99999"
-                assert ann["uniprot_function"] is None
+                assert ann["function"] is None
                 assert ann["subcellular_location"] is None
 
 
@@ -154,7 +154,7 @@ class TestAffinageFetch:
         self._patch(monkeypatch, gene_json=self._GENE_PAYLOAD)
         rec = fetch_one("GENEX")
         assert rec["uniprot_id"] == "P00001"
-        assert rec["uniprot_function"] == "GENEX encodes a kinase that phosphorylates Y [PMID:1]."
+        assert rec["function"] == "GENEX encodes a kinase that phosphorylates Y [PMID:1]."
         # localization axis only, unique-preserving order
         assert rec["subcellular_location"] == "cytosol; nucleus"
         # molecular_activity + pathway, deduped, partners excluded
@@ -172,6 +172,6 @@ class TestAffinageFetch:
         self._patch(monkeypatch, gene_json={"narrative": {"mechanism_profile": {}}})
         rec = fetch_one("BARE")
         assert rec["uniprot_id"] == "P00001"  # accession still resolves
-        assert rec["uniprot_function"] is None
+        assert rec["function"] is None
         assert rec["subcellular_location"] is None
         assert rec["keywords"] is None
