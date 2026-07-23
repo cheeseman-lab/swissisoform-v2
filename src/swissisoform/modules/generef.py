@@ -1,8 +1,10 @@
 """Gene Reference module — external database annotations per gene.
 
-Annotates each gene with UniProt reference fields (accession, function,
-subcellular location) looked up by gene name. The caller loads the reference
-data (see scripts/setup/fetch_generef.py); this module maps gene names to the
+Annotates each gene with reference fields (function, subcellular location,
+functional keywords) looked up by gene name. Function/localization/keywords come
+from the Affinage API and the UniProt accession from a minimal UniProtKB lookup
+(see scripts/setup/fetch_generef.py). Field keys keep the legacy ``uniprot_``
+prefix so downstream consumers are unchanged; this module maps gene names to the
 pre-loaded annotation dicts. HPA / DepMap / OMIM are a future extension pending
 their data sources.
 """
