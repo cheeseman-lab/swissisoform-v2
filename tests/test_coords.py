@@ -7,6 +7,7 @@ from swissisoform.coords import (
     interval_intersection,
     interval_length,
     orf_exons_from_skeleton,
+    residues_to_genomic,
 )
 from swissisoform.models import TranscriptCoordinates
 
@@ -66,6 +67,44 @@ class TestWalkerMinusStrand:
         # Take 10 nt from [1100, 1110), then 20 nt from [980, 1000)
         assert out == [(980, 1000), (1100, 1110)]
         assert interval_length(out) == 30
+
+
+class TestResiduesToGenomic:
+    def test_plus_full_single_exon(self):
+        # 10-residue ORF in one exon (30 nt).
+        assert residues_to_genomic([(1000, 1030)], "+", 0, 10) == [(1000, 1030)]
+
+    def test_plus_interior_slice(self):
+        # Residues 2..4 → nt [6, 15) → genomic [1006, 1015).
+        assert residues_to_genomic([(1000, 1030)], "+", 2, 5) == [(1006, 1015)]
+
+    def test_plus_spans_intron(self):
+        # orf_exons from walking 30 nt across an intron.
+        orf = [(990, 1000), (1100, 1120)]
+        assert residues_to_genomic(orf, "+", 0, 10) == [(990, 1000), (1100, 1120)]
+        # Residues 1..3 (nt [3, 12)): 7 nt tail of exon1 + 2 nt of exon2.
+        out = residues_to_genomic(orf, "+", 1, 4)
+        assert out == [(993, 1000), (1100, 1102)]
+        assert interval_length(out) == 9
+
+    def test_minus_first_residue_is_highest_genomic(self):
+        # Minus-strand ORF: residue 0 (start codon) sits at the top 3 nt.
+        assert residues_to_genomic([(1870, 1900)], "-", 0, 1) == [(1897, 1900)]
+        assert residues_to_genomic([(1870, 1900)], "-", 1, 2) == [(1894, 1897)]
+
+    def test_minus_spans_intron(self):
+        # mRNA order: [1100, 1110) then [980, 1000); residue 0 at genomic top.
+        orf = [(980, 1000), (1100, 1110)]
+        assert residues_to_genomic(orf, "-", 0, 10) == [(980, 1000), (1100, 1110)]
+        out = residues_to_genomic(orf, "-", 0, 4)  # nt [0, 12): 10 nt + 2 nt
+        assert out == [(998, 1000), (1100, 1110)]
+        assert interval_length(out) == 12
+
+    def test_empty_range(self):
+        assert residues_to_genomic([(1000, 1030)], "+", 5, 5) == []
+
+    def test_no_exons(self):
+        assert residues_to_genomic([], "+", 0, 10) == []
 
 
 class TestIntervalAlgebra:

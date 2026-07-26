@@ -61,12 +61,37 @@ def test_index_lists_a_known_gene(client):
     assert "TRNT1" in body
 
 
-def test_gene_page_redirects_to_first_isoform(client):
-    """V1 /genes/<gene> is deprecated and 302s to a V2 isoform page."""
+def test_gene_page_renders_combined_igv_and_isoform_cards(client):
+    """/genes/<gene> is the gene overview: combined genomic IGV + isoform cards."""
     r = client.get("/genes/TRNT1")
-    assert r.status_code == 302
-    assert "/isoforms/" in r.headers["Location"]
-    assert "/genes/TRNT1/isoforms/" in r.headers["Location"]
+    assert r.status_code == 200
+    body = r.data.decode()
+    # The combined per-isoform genomic IGV.
+    assert "graph-gene" in body
+    assert "GENE_IGV_FIG" in body
+    # Clicking a transcript bar navigates to the isoform page.
+    assert "plotly_click" in body
+    # Isoform cards link through to the per-isoform deep-dive page.
+    assert "/genes/TRNT1/isoforms/" in body
+
+
+def test_gene_page_linkifies_pmids_in_narrative(client):
+    """The gene mechanistic narrative renders [PMID:N] citations as PubMed links."""
+    r = client.get("/genes/CBX1")
+    assert r.status_code == 200
+    body = r.data.decode()
+    assert "gene-head-fn" in body
+    assert "pubmed.ncbi.nlm.nih.gov" in body
+
+
+def test_pmid_links_filter_escapes_and_links():
+    """The pmid_links Jinja filter escapes text and wraps PMIDs in PubMed anchors."""
+    from swissisoform_site.app import app
+
+    with app.test_request_context():
+        out = str(app.jinja_env.filters["pmid_links"]("reads H3K9me3 [PMID:21047797] <script>"))
+    assert '<a href="https://pubmed.ncbi.nlm.nih.gov/21047797/"' in out
+    assert "&lt;script&gt;" in out  # surrounding text is escaped
 
 
 def test_gene_page_404(client):
@@ -174,11 +199,11 @@ def test_synthesis_tags_whitelisted_against_vocab(tmp_path):
     slug = "chr1-1-ATG-ENST"
     (tmp_path / slug).mkdir()
     (tmp_path / slug / "synthesis.json").write_text(
-        _json.dumps({"tags": ["Domain gain", "made up tag", "Relocalization"]})
+        _json.dumps({"tags": ["Domain gain", "made up tag", "Localization conflict"]})
     )
     tags = synthesis_tags_for_isoform(llm_dir=tmp_path, tis_slug=slug)
-    # off-vocab dropped; survivors in vocab order (Relocalization precedes Domain gain)
-    assert tags == ["Relocalization", "Domain gain"]
+    # off-vocab dropped; survivors in vocab order (Localization conflict precedes Domain gain)
+    assert tags == ["Localization conflict", "Domain gain"]
     assert all(t in ISOFORM_TAG_VOCAB for t in tags)
     # missing dir / no tags → empty
     assert synthesis_tags_for_isoform(llm_dir=tmp_path, tis_slug="absent") == []
@@ -201,14 +226,14 @@ def test_synthesis_keyed_dict_renders_hypothesis_and_confidence():
         _json.dumps({
             "tis_id": "x", "headline": "h",
             "divergence_hypothesis": "adds a **targeting** arm",
-            "function_relevance": "matters", "tags": ["Relocalization", "bogus"],
+            "function_relevance": "matters", "tags": ["Localization conflict", "bogus"],
             "confidence": "medium",
         })
     )
     syn = llm_synthesis_for_isoform(llm_dir=d, tis_slug=slug)
     assert "<strong>targeting</strong>" in syn["divergence_hypothesis_html"]
     assert "function_relevance_html" in syn
-    assert syn["tags"] == ["Relocalization"]  # bogus dropped
+    assert syn["tags"] == ["Localization conflict"]  # bogus dropped
     assert syn["confidence"] == "medium"
 
 
@@ -235,7 +260,11 @@ def test_isoform_route_returns_404_for_unknown_tis(client):
 
 
 def test_isoform_page_contains_graphs_and_synthesis_block(client):
-    """The rendered V2 page exposes the Plotly graph divs and the Synthesis block."""
+    """The rendered V2 page exposes the folding panel and the Synthesis block.
+
+    The combined genomic IGV moved to the gene page; the per-isoform page keeps
+    the folding + evidence + variants deep dive (no ``graph-protein`` panel).
+    """
     import pandas as pd
     from swissisoform_site.data import tis_slug as make_slug
 
@@ -244,7 +273,10 @@ def test_isoform_page_contains_graphs_and_synthesis_block(client):
     r = client.get(f"/genes/{row['gene_name']}/isoforms/{make_slug(row['tis_id'])}")
     assert r.status_code == 200
     body = r.data
-    assert b"graph-protein" in body
+    # The residue-axis protein IGV is gone from the isoform page.
+    assert b"graph-protein" not in body
+    # The folding panel stays on the isoform deep-dive page.
+    assert b"iso-panel-folding" in body
     # AI summary is pinned to the top as a collapsible dropdown.
     assert b"AI summary" in body
     assert b"synthesis-dd" in body
@@ -255,7 +287,8 @@ def test_isoform_page_contains_graphs_and_synthesis_block(client):
 
 def test_isoform_page_has_evidence_tiles(client):
     """The V2 isoform page renders the scored evidence tiles plus the bespoke
-    Biophysics (S2) and SAE (S3) cards, in one flat grid (no group headers)."""
+    Biophysics (S2) and SAE (S3) cards, in one flat grid (no group headers).
+    """
     import pandas as pd
     from swissisoform_site.data import tis_slug as make_slug
 

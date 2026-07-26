@@ -14,19 +14,13 @@
       "uniqueItems": true,
       "items": {
         "enum": [
-          "Relocalization",
-          "Targeting-signal change",
+          "Localization conflict",
           "Domain loss",
           "Domain gain",
           "Truncated functional region",
           "Structured N-terminal extension",
-          "Disorder shift",
+          "Biophysical shift",
           "Core refold",
-          "Conservation-backed",
-          "Disease-enriched",
-          "Germline-constrained",
-          "Mass-spec supported",
-          "Multi-cell-line reproducible",
           "Interpretable-feature shift"
         ]
       }

@@ -81,6 +81,65 @@ def orf_exons_from_skeleton(
     return result
 
 
+def residues_to_genomic(
+    orf_exons: list[tuple[int, int]],
+    strand: str,
+    r0: int,
+    r1: int,
+) -> list[tuple[int, int]]:
+    r"""Map an isoform protein residue range to genomic intervals.
+
+    Given an ORF's genomic exon intervals (``orf_exons`` as produced by
+    :func:`orf_exons_from_skeleton` — 0-based half-open plus-strand, ascending
+    genomic order, covering the ORF's coding nucleotides in transcript order),
+    return the genomic intervals covering protein residues ``[r0, r1)`` — i.e.
+    coding nucleotides ``[3*r0, 3*r1)`` in ORF (mRNA) order.
+
+    Used to place a protein-space feature (e.g. an InterProScan domain hit) onto
+    a genomic axis. The walk follows transcript order: ascending genomic for
+    ``+`` strand, descending for ``-`` strand (residue 0 sits at the highest
+    genomic coordinate on the minus strand). Output intervals are 0-based
+    half-open plus-strand, ascending genomic order, merged.
+
+    Args:
+        orf_exons: ORF genomic exon intervals (ascending genomic order).
+        strand: ``'+'`` or ``'-'``.
+        r0: Start residue (0-based, inclusive).
+        r1: End residue (0-based, exclusive).
+
+    Returns:
+        Merged genomic intervals covering the residue range, or ``[]`` when the
+        range is empty or falls entirely outside the ORF.
+    """
+    nt_start = 3 * r0
+    nt_end = 3 * r1
+    if nt_end <= nt_start or not orf_exons:
+        return []
+
+    # Walk exons in transcript (mRNA) order, tracking the cumulative coding-nt
+    # offset, and slice out the part overlapping [nt_start, nt_end).
+    ordered = sorted(orf_exons) if strand == "+" else sorted(orf_exons, reverse=True)
+    result: list[tuple[int, int]] = []
+    offset = 0  # coding-nt offset at the mRNA-order start of the current exon
+    for ex_start, ex_end in ordered:
+        ex_lo = offset  # offset of this exon's first nt (mRNA order)
+        ex_hi = offset + (ex_end - ex_start)  # offset just past its last nt
+        offset = ex_hi
+        lo = max(nt_start, ex_lo)
+        hi = min(nt_end, ex_hi)
+        if hi <= lo:
+            continue
+        if strand == "+":
+            result.append((ex_start + (lo - ex_lo), ex_start + (hi - ex_lo)))
+        else:
+            # mRNA order runs high→low genomic: offset ex_lo maps to ex_end.
+            result.append((ex_end - (hi - ex_lo), ex_end - (lo - ex_lo)))
+        if offset >= nt_end:
+            break
+
+    return _normalize(result)
+
+
 def _normalize(intervals: list[tuple[int, int]]) -> list[tuple[int, int]]:
     """Merge overlapping/adjacent intervals; drop empties."""
     cleaned = [(s, e) for s, e in intervals if e > s]

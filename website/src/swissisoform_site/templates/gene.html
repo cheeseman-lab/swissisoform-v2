@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% import "_cdlmps.html" as sc %}
+{% block title %}{{ gene.name }} · SwissIsoform V2{% endblock %}
+
+{% block content %}
+<div class="iso-shell">
+  <nav class="crumbs">
+    <a href="/">Index</a> /
+    <span class="crumb-current">{{ gene.name }}</span>
+  </nav>
+
+  <header class="iso-head">
+    <h1>{{ gene.name }}
+      {% if gene.uniprot_id %}
+      <a class="iso-head-meta" href="{{ gene.uniprot_url }}" target="_blank" rel="noopener">UniProt {{ gene.uniprot_id }}</a>
+      {% endif %}
+    </h1>
+    <p class="iso-head-line">
+      {{ gene.isoforms|length }} alternative isoform{{ '' if gene.isoforms|length == 1 else 's' }}
+      {% if gene.canonical_len %} · canonical {{ gene.canonical_len }} aa{% endif %}
+      {% if gene.location %} · {{ gene.location }}{% endif %}
+    </p>
+    {% if gene.function %}<p class="gene-head-fn">{{ gene.function | pmid_links }}</p>{% endif %}
+  </header>
+
+  <!-- Combined protein-residue view: one canonical bar + one bar per isoform,
+       aligned on the shared region, with mutations above and domains below. -->
+  <section class="iso-panel gene-igv-panel">
+    <h2 class="iso-panel-h">Isoform tracks</h2>
+    <p class="protein-caption">
+      Protein-residue axis (canonical frame). Top bar = canonical; each bar below is an
+      isoform aligned on its shared region — extensions reach left of residue 1 (green), the
+      lost region of a truncation is shaded on the canonical bar (red). Variant rows sit
+      above (ClinVar/gnomAD/COSMIC, red = pathogenic, one row per consequence); below the
+      bars are InterPro domains, disorder / coiled-coil / motifs, and per-cell-line
+      initiation efficiency (dot size). Features are deduplicated across isoforms; hover any
+      glyph for detail.
+    </p>
+    <div class="protein-toolbar">
+      <button type="button" id="toggle-domains" class="domain-toggle" aria-expanded="false">
+        Expand domains
+      </button>
+    </div>
+    <div id="graph-gene-wrap">
+      <div id="graph-gene" class="plotly-graph"></div>
+    </div>
+  </section>
+
+  <!-- Isoform cards — click through to the per-isoform deep dive. -->
+  <section class="gene-isoforms">
+    <h2 class="iso-panel-h">Isoforms</h2>
+    <div class="iso-dropdown gene-iso-list">
+      {% if extensions %}
+      <h3 class="iso-group-h">Extensions</h3>
+      <ul>{% for iso in extensions %}{% include "_isoform_card.html" %}{% endfor %}</ul>
+      {% endif %}
+      {% if truncations %}
+      <h3 class="iso-group-h">Truncations</h3>
+      <ul>{% for iso in truncations %}{% include "_isoform_card.html" %}{% endfor %}</ul>
+      {% endif %}
+      {% if others %}
+      <h3 class="iso-group-h">Other</h3>
+      <ul>{% for iso in others %}{% include "_isoform_card.html" %}{% endfor %}</ul>
+      {% endif %}
+    </div>
+  </section>
+</div>
+
+<script>
+  const GENE_IGV_FIG = {{ igv_figure_json|safe }};
+  const GENE_IGV_FIG_COLLAPSED = {{ igv_figure_collapsed_json|safe }};
+  // Start with domains collapsed (compact); the button expands to the full stack.
+  let swissGeneDomainsCollapsed = true;
+  function swissGeneFig() {
+    return swissGeneDomainsCollapsed ? GENE_IGV_FIG_COLLAPSED : GENE_IGV_FIG;
+  }
+  function swissRenderGeneIgv() {
+    // Width fills the container responsively; the figure carries its own height
+    // (it scales with the isoform + feature-track count).
+    const fig = swissGeneFig();
+    Plotly.react("graph-gene", fig.data, fig.layout, {responsive: true});
+  }
+  function swissWireGeneDomainToggle() {
+    const btn = document.getElementById("toggle-domains");
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      swissGeneDomainsCollapsed = !swissGeneDomainsCollapsed;
+      btn.textContent = swissGeneDomainsCollapsed ? "Expand domains" : "Collapse domains";
+      btn.setAttribute("aria-expanded", String(!swissGeneDomainsCollapsed));
+      swissRenderGeneIgv();
+    });
+  }
+  // Click an isoform's bar → open that isoform's page (customdata carries the slug).
+  const GENE_BASE = "{{ url_for('gene_page', gene_name=gene.name) }}";
+  function swissWireGeneClick() {
+    const gd = document.getElementById("graph-gene");
+    if (!gd || !gd.on) return;
+    gd.on("plotly_click", function (e) {
+      const pt = e && e.points && e.points[0];
+      const slug = pt && pt.customdata;
+      if (slug) window.location = GENE_BASE + "/isoforms/" + slug;
+    });
+  }
+  function swissInitGeneIgv() {
+    swissRenderGeneIgv(); swissWireGeneDomainToggle(); swissWireGeneClick();
+  }
+  if (window.Plotly) { swissInitGeneIgv(); }
+  else {
+    document.addEventListener('DOMContentLoaded', function () {
+      if (window.Plotly) { swissInitGeneIgv(); }
+      else {
+        var t = setInterval(function () {
+          if (window.Plotly) { clearInterval(t); swissInitGeneIgv(); }
+        }, 30);
+      }
+    });
+  }
+</script>
+{% endblock %}

@@ -658,19 +658,13 @@ def _markdown_to_html(text: str) -> str:
 # are whitelisted against this set on read, so an off-vocab value (e.g. an older
 # free-form synthesis.json, or model drift) can never leak into the filter facet.
 ISOFORM_TAG_VOCAB: tuple[str, ...] = (
-    "Relocalization",
-    "Targeting-signal change",
+    "Localization conflict",
     "Domain loss",
     "Domain gain",
     "Truncated functional region",
     "Structured N-terminal extension",
-    "Disorder shift",
+    "Biophysical shift",
     "Core refold",
-    "Conservation-backed",
-    "Disease-enriched",
-    "Germline-constrained",
-    "Mass-spec supported",
-    "Multi-cell-line reproducible",
     "Interpretable-feature shift",
 )
 _TAG_VOCAB_SET = frozenset(ISOFORM_TAG_VOCAB)

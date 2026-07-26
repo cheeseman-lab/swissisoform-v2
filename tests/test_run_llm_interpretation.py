@@ -436,6 +436,13 @@ def test_synthesis_input_record_pulls_category_reads(monkeypatch, tmp_path):
     iso = {
         "tis_id": "chr1:100:+:ATG:ENST_A",
         "scoring": {"existence_score": 5, "functional_score": 5},
+        # _raw feeds slice_criterion; the L1 columns drive the localization triad.
+        "_raw": {
+            "canonical_localization_deeploc_prediction": "Nucleus",
+            "canonical_localization_deeploc_top_prob": 0.91,
+            "isoform_localization_deeploc_prediction": "Cytoplasm",
+            "isoform_localization_deeploc_top_prob": 0.83,
+        },
     }
     gene_block = {
         "name": "GENE_A",
@@ -451,6 +458,12 @@ def test_synthesis_input_record_pulls_category_reads(monkeypatch, tmp_path):
     # The gene's established function is threaded in as the divergence baseline.
     assert rec["gene"]["function"] == "GENE_A is a chromatin reader."
     assert rec["gene"]["keywords"] == "histone binding; chromatin"
+    # Localization calibration triad: literature vs DeepLoc-on-canonical (+conf) vs
+    # DeepLoc-on-isoform (+conf), assembled from the L1 criterion evidence.
+    loc = rec["localization"]
+    assert loc["known_from_literature"] == "nucleus"
+    assert loc["predicted_canonical"] == {"compartment": "Nucleus", "top_prob": 0.91}
+    assert loc["predicted_isoform"] == {"compartment": "Cytoplasm", "top_prob": 0.83}
     # Backward-compat: no gene arg → name-only block, no crash.
     rec_bare = rli._build_synthesis_record(iso, "GENE_A", base)
     assert rec_bare["gene"] == {

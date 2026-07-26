@@ -1063,8 +1063,29 @@ def _build_synthesis_record(
         "subcellular_location": (gene or {}).get("subcellular_location"),
     }
 
+    # Localization is the one category with a machine-readable KNOWN value
+    # (Affinage subcellular_location) to compare a structured prediction against,
+    # so surface the calibration triad explicitly: literature vs DeepLoc-on-
+    # canonical (+confidence) vs DeepLoc-on-isoform (+confidence). The model uses
+    # the canonical-vs-literature agreement to decide whether DeepLoc is calibrated
+    # for THIS protein before trusting its isoform call. All values already live in
+    # the L1 criterion evidence — no new data source.
+    l1_ev = (criteria_evidence.get("L1_localization_change") or {}).get("evidence") or {}
+    localization_block = {
+        "known_from_literature": gene_block["subcellular_location"],
+        "predicted_canonical": {
+            "compartment": l1_ev.get("canonical_localization_deeploc_prediction"),
+            "top_prob": l1_ev.get("canonical_localization_deeploc_top_prob"),
+        },
+        "predicted_isoform": {
+            "compartment": l1_ev.get("isoform_localization_deeploc_prediction"),
+            "top_prob": l1_ev.get("isoform_localization_deeploc_top_prob"),
+        },
+    }
+
     return {
         "gene": gene_block,
+        "localization": localization_block,
         "isoform": {
             "tis_id": isoform.get("tis_id"),
             "gene_name": gene_name,

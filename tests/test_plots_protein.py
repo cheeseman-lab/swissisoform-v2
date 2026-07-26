@@ -195,3 +195,84 @@ def test_protein_figure_uses_system_font_stack():
     fig = pplot.build_protein_figure(_iso(), overlays={})
     font_family = fig["layout"]["font"]["family"]
     assert "sans-serif" in font_family or "Helvetica" in font_family or "Segoe" in font_family
+
+
+# --------------------------------------------------------------------------- #
+# Combined gene view — build_gene_protein_figure
+# --------------------------------------------------------------------------- #
+
+
+def _gene_view():
+    """One canonical + one extension + one truncation on the canonical frame."""
+    return SimpleNamespace(
+        canonical_len=185,
+        bars=[
+            {"label": "extended · CTG", "x0": -40, "x1": 185, "orf_type": "extended",
+             "is_trunc": False, "diff_x0": -40, "diff_x1": 0, "diff_on_canonical": False,
+             "slug": "chr1-100-+-CTG-ENST1"},
+            {"label": "truncated · AAG", "x0": 44, "x1": 186, "orf_type": "truncated",
+             "is_trunc": True, "diff_x0": 1, "diff_x1": 43, "diff_on_canonical": True,
+             "slug": "chr1-200-+-AAG-ENST1"},
+        ],
+        variants=[
+            {"variant_id": "ClinVar:1", "pos": 60, "consequence": "missense_variant",
+             "significance": "Pathogenic", "hgvsp": "p.X", "source": "ClinVar", "in_unique": False},
+        ],
+        domains=[{"name": "Chromo", "interpro_id": "IPR000953", "x0": 20, "x1": 80,
+                  "isoforms": ["extended · CTG", "truncated · AAG"]}],
+        domain_segments=[{"x0": 20, "x1": 80, "depth": 1}],
+        disorder=[{"x0": 90, "x1": 110}],
+        coiled_coil=[{"x0": 120, "x1": 140}],
+        motifs=[{"name": "NLS", "x0": 5, "x1": 12}],
+        cell_lines=[{"sample": "HeLa",
+                     "marks": [{"residue": -40, "log2_ie": 0.5, "label": "extended · CTG"}]}],
+        x_left=-44.0,
+    )
+
+
+def test_gene_protein_figure_one_canonical_plus_isoform_bars():
+    fig = pplot.build_gene_protein_figure(_gene_view())
+    assert isinstance(fig, dict) and fig["data"]
+    names = [t.get("name") for t in fig["data"]]
+    # Exactly one canonical bar + one bar per isoform.
+    assert names.count("Canonical") == 1
+    assert "extended · CTG" in names
+    assert "truncated · AAG" in names
+    # Deduped domain band + a variant trace present.
+    assert "Domain (InterPro)" in names
+    # Residue-frame axis, not genomic.
+    assert fig["layout"]["xaxis"]["title"]["text"] == "Protein residue (canonical frame)"
+
+
+def test_gene_protein_figure_empty_without_bars():
+    fig = pplot.build_gene_protein_figure(SimpleNamespace(canonical_len=0, bars=[]))
+    assert fig["data"] == []
+
+
+def test_gene_protein_figure_collapse_domains_depth_lane():
+    """Collapsed mode renders one lane of depth-shaded segments with overlap counts."""
+    view = _gene_view()
+    view.domains = view.domains + [
+        {"name": "Chromo-shadow", "interpro_id": "IPR008251", "x0": 30, "x1": 120,
+         "isoforms": ["extended · CTG"]},
+    ]
+    # Two segments: residues 20–120 covered by 2 domains, plus a 1-deep tail.
+    view.domain_segments = [{"x0": 20, "x1": 79, "depth": 1},
+                            {"x0": 80, "x1": 80, "depth": 2},
+                            {"x0": 81, "x1": 120, "depth": 1}]
+    collapsed = pplot.build_gene_protein_figure(view, collapse_domains=True)
+    dboxes = [t for t in collapsed["data"] if t.get("name") == "Domain (InterPro)"]
+    # One box per depth segment, hover shows the overlap count.
+    assert len(dboxes) == 3
+    assert any("2 overlapping domains" in (t.get("text") or "") for t in dboxes)
+    # Left padding: axis starts left of the most-negative bar x0.
+    assert collapsed["layout"]["xaxis"]["range"][0] < min(b["x0"] for b in view.bars)
+
+
+def test_gene_protein_figure_isoform_bars_carry_click_slug():
+    """Isoform bars carry the isoform slug as customdata; the canonical bar doesn't."""
+    fig = pplot.build_gene_protein_figure(_gene_view())
+    by_name = {t.get("name"): t for t in fig["data"]}
+    assert "customdata" not in by_name["Canonical"]
+    assert by_name["extended · CTG"]["customdata"][0] == "chr1-100-+-CTG-ENST1"
+    assert by_name["truncated · AAG"]["customdata"][0] == "chr1-200-+-AAG-ENST1"

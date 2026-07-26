@@ -58,7 +58,7 @@
         {% endif %}
         {% if synthesis.confidence %}
         <div class="syn-confidence conf-{{ synthesis.confidence }}">
-          <span class="syn-label">Confidence</span> {{ synthesis.confidence }}
+          <span class="syn-label">LLM confidence</span> {{ synthesis.confidence }}
         </div>
         {% endif %}
         {% if synthesis.caveats %}
@@ -76,27 +76,9 @@
     </div>
   </details>
 
-  <!-- Pinned graph panels — vertically stacked. -->
+  <!-- Pinned graph panels. The combined genomic IGV lives on the gene page;
+       this page keeps the per-isoform folding + evidence + variants deep dive. -->
   <section class="iso-panels">
-    <div class="iso-panel iso-panel-protein">
-      <h2 class="iso-panel-h">Protein &amp; initiation</h2>
-      <p class="protein-caption">
-        {% if isoform.orf_type == 'extended' %}Isoform is the canonical protein plus a {{ diff_end }}-aa N-terminal extension (green).
-        {% elif isoform.orf_type == 'truncated' %}Isoform loses the first {{ diff_end }} aa of the canonical N-terminus (red).
-        {% else %}Differential region highlighted.{% endif %}
-        Lollipops = ClinVar/gnomAD/COSMIC variants (red = pathogenic): solid in the differential region, faded over the shared canonical core; green boxes = InterPro domains; purple = motifs.
-        Lower lanes = per-cell-line initiation efficiency at each start codon (dot size). The solid red dot is this isoform's start (red dotted guide); hollow grey dots are other alternative starts on the same transcript; black dotted line = canonical start.
-      </p>
-      <div class="protein-toolbar">
-        <span class="igv-hint">drag the bottom edge to resize ↕</span>
-        <button type="button" id="toggle-domains" class="domain-toggle" aria-expanded="false">
-          Expand domains
-        </button>
-      </div>
-      <div id="graph-protein-wrap" class="igv-resize">
-        <div id="graph-protein" class="plotly-graph"></div>
-      </div>
-    </div>
     <div class="iso-panel iso-panel-folding iso-folding-row">
       <h2 class="iso-panel-h">Folding</h2>
       {% include "_folding_panel.html" %}
@@ -163,47 +145,6 @@
   </dialog>
 </div>
 
-<script>
-  const PROTEIN_FIG = {{ protein_figure_json|safe }};
-  const PROTEIN_FIG_COLLAPSED = {{ protein_figure_collapsed_json|safe }};
-  // Start compact: domains collapsed, and the viewer autosizes to its (short)
-  // resizable container rather than its full computed height.
-  let swissDomainsCollapsed = true;
-  function swissCurrentFig() {
-    return swissDomainsCollapsed ? PROTEIN_FIG_COLLAPSED : PROTEIN_FIG;
-  }
-  function swissRenderPlots() {
-    const fig = swissCurrentFig();
-    const layout = Object.assign({}, fig.layout, {autosize: true});
-    delete layout.height;  // container height drives the plot
-    Plotly.react("graph-protein", fig.data, layout, {responsive: true});
-  }
-  function swissWireDomainToggle() {
-    const btn = document.getElementById("toggle-domains");
-    if (!btn) return;
-    btn.addEventListener("click", function () {
-      swissDomainsCollapsed = !swissDomainsCollapsed;
-      btn.textContent = swissDomainsCollapsed ? "Expand domains" : "Collapse domains";
-      btn.setAttribute("aria-expanded", String(!swissDomainsCollapsed));
-      swissRenderPlots();
-    });
-  }
-  function swissWireResize() {
-    const wrap = document.getElementById("graph-protein-wrap");
-    const gd = document.getElementById("graph-protein");
-    if (!wrap || !gd || !window.ResizeObserver) return;
-    const ro = new ResizeObserver(function () {
-      if (window.Plotly) Plotly.Plots.resize(gd);
-    });
-    ro.observe(wrap);
-  }
-  function swissInitProtein() { swissRenderPlots(); swissWireDomainToggle(); swissWireResize(); }
-  if (window.Plotly) { swissInitProtein(); }
-  else { document.addEventListener('DOMContentLoaded', function () {
-    if (window.Plotly) swissInitProtein();
-    else { var t = setInterval(function () { if (window.Plotly) { clearInterval(t); swissInitProtein(); } }, 30); }
-  }); }
-</script>
 <script src="{{ url_for('static', filename='js/folding3d.js') }}"></script>
 <script src="{{ url_for('static', filename='js/pae.js') }}"></script>
 <script src="{{ url_for('static', filename='js/isoform_page.js') }}"></script>
