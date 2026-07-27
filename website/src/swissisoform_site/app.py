@@ -759,16 +759,38 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
         {"x0": s["start"], "x1": s["end"], "depth": s["depth"]}
         for s in _depth_segments([{"start": d["x0"], "end": d["x1"]} for d in domains])
     ]
+    variants = list(var_by_id.values())
+    motif_list = list(motifs.values())
+
+    # Anchor the canonical start at x=0 (residue 1 → 0) so extensions read as
+    # negative positions: shift every computed coordinate by -1 (a global
+    # translation — relative positions and dedup are unchanged).
+    for b in bars:
+        b["x0"] -= 1
+        b["x1"] -= 1
+        for k in ("diff_x0", "diff_x1"):
+            if b[k] is not None:
+                b[k] -= 1
+    for rec in variants:
+        rec["pos"] -= 1
+    for coll in (domains, domain_segments, disorder, coils, motif_list):
+        for it in coll:
+            it["x0"] -= 1
+            it["x1"] -= 1
+    for t in cell_lines:
+        for m in t["marks"]:
+            m["residue"] -= 1
+    x_left -= 1
 
     return types.SimpleNamespace(
         canonical_len=can_len,
         bars=bars,
-        variants=list(var_by_id.values()),
+        variants=variants,
         domains=domains,
         domain_segments=domain_segments,
         disorder=disorder,
         coiled_coil=coils,
-        motifs=list(motifs.values()),
+        motifs=motif_list,
         cell_lines=cell_lines,
         x_left=x_left,
     )

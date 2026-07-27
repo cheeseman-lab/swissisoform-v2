@@ -583,7 +583,9 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
     annotations: list[dict[str, Any]] = []
 
     x_left = float(getattr(view, "x_left", 0.0) or 0.0)
-    axis_len = max([can_len] + [int(b["x1"]) for b in bars])
+    # Canonical is drawn at [0, can_len-1] (residue 1 → x=0), so the axis tops out
+    # at can_len-1 (or a longer uORF/altORF bar).
+    axis_len = max([can_len - 1] + [int(b["x1"]) for b in bars])
     # Pad the left edge so the leftmost initiation dots / extension starts (drawn
     # at x_left) aren't clipped, and anchor the row labels at the padded edge.
     x_left -= max(6, int(0.03 * (axis_len - x_left + 1)))
@@ -600,7 +602,7 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
     # ── Bars: canonical on top (y=0), isoforms stacked below ──
     bar_gap = 0.34
     canon_y = 0.0
-    traces.append(_length_bar(1, can_len, canon_y, _CANON_COLOR, "Canonical"))
+    traces.append(_length_bar(0, can_len - 1, canon_y, _CANON_COLOR, "Canonical"))
     _left_label("canonical", canon_y)
     for i, b in enumerate(bars):
         by = -bar_gap * (i + 1)
@@ -828,13 +830,20 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
             _left_label(t["sample"].replace("_", " "), ly)
         y_bottom = lane_base - (len(cell_lines) - 1) * lane_gap - 0.3
 
-    # Canonical-start guide.
-    shapes.append(
-        {
-            "type": "line", "x0": 1, "x1": 1, "y0": y_bottom, "y1": max(mut_top, canon_y + 0.2),
-            "line": {"color": "#111827", "width": 1, "dash": "dot"},
-        }
-    )
+    # End-of-differential guides for truncations: a red dotted line where the lost
+    # N-terminus ends and the retained body begins (the boundary of the red-shaded
+    # region). The canonical start (x=0) needs no guide — the canonical bar starts
+    # there. Extensions' differential ends at x=0, so they're left unmarked.
+    guide_top = max(mut_top, canon_y + 0.2)
+    for b in bars:
+        if b.get("diff_on_canonical") and b.get("diff_x1") is not None:
+            shapes.append(
+                {
+                    "type": "line", "x0": b["diff_x1"], "x1": b["diff_x1"],
+                    "y0": y_bottom, "y1": guide_top,
+                    "line": {"color": _TRUNC_FILL, "width": 1, "dash": "dot"},
+                }
+            )
 
     y_hi = max(mut_top, canon_y + 0.2) + 0.3
     y_lo = y_bottom - 0.2
@@ -849,10 +858,11 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
             "shapes": shapes,
             "annotations": annotations,
             "xaxis": {
-                "title": {"text": "Protein residue (canonical frame)",
+                "title": {"text": "Protein residue (0 = canonical start)",
                           "font": {"size": 12, "color": "#4b5563"}},
                 "tickfont": {"size": 11, "color": "#6b7280"},
                 "range": [x_left, axis_len + 5],
+                "zeroline": False,
             },
             "yaxis": {"range": [y_lo, y_hi], "showticklabels": False, "zeroline": False},
             "height": int(90 + 118 * (y_hi - y_lo)),

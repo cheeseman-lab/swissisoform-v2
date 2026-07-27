@@ -174,11 +174,11 @@ def test_gene_view_truncation_lost_region_variants_appear():
 
     view = _make_gene_protein_view(gene)
     by_id = {v["variant_id"]: v for v in view.variants}
-    # offset = canonical_len - iso_len = 30 → retained bar starts at frame x0 = 31.
-    assert "LOST:1" in by_id                                  # previously dropped
+    x0 = view.bars[0]["x0"]  # retained bar's left edge = end of the lost region
+    assert "LOST:1" in by_id                        # previously dropped
     assert by_id["LOST:1"]["in_unique"] is True
-    assert 1 <= by_id["LOST:1"]["pos"] <= trunc.diff_end      # in the lost region (left of x0)
-    assert by_id["KEPT:1"]["pos"] >= 31                       # retained region
+    assert by_id["LOST:1"]["pos"] < x0              # in the lost region (left of the retained bar)
+    assert by_id["KEPT:1"]["pos"] >= x0             # retained region
 
 
 def test_gene_page_404(client):

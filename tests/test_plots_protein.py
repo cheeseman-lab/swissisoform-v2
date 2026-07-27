@@ -241,7 +241,7 @@ def test_gene_protein_figure_one_canonical_plus_isoform_bars():
     # Deduped domain band + a variant trace present.
     assert "Domain (InterPro)" in names
     # Residue-frame axis, not genomic.
-    assert fig["layout"]["xaxis"]["title"]["text"] == "Protein residue (canonical frame)"
+    assert fig["layout"]["xaxis"]["title"]["text"] == "Protein residue (0 = canonical start)"
 
 
 def test_gene_protein_figure_empty_without_bars():
