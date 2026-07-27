@@ -616,8 +616,7 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
     shared region (``offset = 0``, whole isoform shaded).
 
     Variants / domains / disorder / coil / motifs / cell-line starts are mapped
-    into that frame and deduplicated across isoforms. Reuses the per-isoform
-    ``_make_protein_adapter`` for the classified InterProScan features.
+    into that frame and deduplicated across isoforms.
     """
     can_len = int(getattr(gene, "canonical_len", 0) or 0)
     bars: list[dict[str, Any]] = []
@@ -666,10 +665,12 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
         )
         x_left = min(x_left, float(x0))
 
-        # Classified InterProScan features in isoform-residue space (reuse), then
-        # offset into the canonical frame.
-        pa = _make_protein_adapter(iso, gene, None)
-        for d in pa.domains:
+        # Classified InterProScan features in isoform-residue space, offset into
+        # the canonical frame. (Classify directly rather than via the full
+        # per-isoform protein adapter, which would also recompute variants and
+        # per-sibling cell-line tracks we don't use here.)
+        features = _classify_interproscan_hits(raw.get("isoform_interproscan_hits"))
+        for d in features["domains"]:
             iid = d.get("interpro_id")
             domain_occ.append(
                 {
@@ -681,12 +682,23 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
                     "label": label,
                 }
             )
-        for seg in pa.disorder:
+        for seg in features["disorder"]:
             disorder_iv.append((int(seg["start"]) + offset, int(seg["end"]) + offset))
-        for seg in pa.coiled_coil:
+        for seg in features["coiled_coil"]:
             coil_iv.append((int(seg["start"]) + offset, int(seg["end"]) + offset))
-        for m in pa.motifs:
-            mx0, mx1 = int(m["start"]) + offset, int(m.get("end", m["start"])) + offset
+        # Motifs come straight off the raw hit column (0-based pos/end → 1-based).
+        motif_hits = raw.get("isoform_motifs_hits")
+        for m in (list(motif_hits)[:30] if motif_hits is not None else []):
+            if not isinstance(m, dict):
+                continue
+            ms = m.get("start", m.get("pos"))
+            if ms is None:
+                continue
+            try:
+                mx0 = int(ms) + 1 + offset
+                mx1 = int(m.get("end", ms)) + 1 + offset
+            except (TypeError, ValueError):
+                continue
             motifs[(m.get("name"), mx0, mx1)] = {
                 "name": m.get("name", "motif"), "x0": mx0, "x1": mx1,
             }
@@ -794,172 +806,6 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
         cell_lines=cell_lines,
         x_left=x_left,
     )
-
-
-def _make_protein_adapter(iso: Isoform, gene: Any, skeleton: Any | None) -> types.SimpleNamespace:
-    """Convert a V1 ``Isoform`` into the duck-typed input ``build_protein_figure`` expects.
-
-    Variants come from ``iso.variants_in_unique`` (all clinical hits in the
-    unique region, any significance — the figure colours them). Domains and
-    motifs come from raw parquet columns and degrade to empty lists if the
-    shape is unfamiliar.
-    """
-    raw = getattr(iso, "raw", None) or {}
-
-    # Split InterProScan hits by feature type (domain / disorder / coiled-coil),
-    # merging redundant same-region domain hits. ``raw`` values may be numpy
-    # arrays, so check ``is None`` rather than truthiness.
-    ips_hits = raw.get("isoform_interproscan_hits")
-    if ips_hits is None:
-        ips_hits = []
-    features = _classify_interproscan_hits(ips_hits)
-    domains = features["domains"]
-    domains_merged = features["domains_merged"]
-    domain_segments = features["domain_segments"]
-    disorder = features["disorder"]
-    coiled_coil = features["coiled_coil"]
-
-    motifs: list[dict[str, Any]] = []
-    motif_hits = raw.get("isoform_motifs_hits")
-    if motif_hits is None:
-        motif_hits = []
-    try:
-        for m in list(motif_hits)[:30]:
-            if not isinstance(m, dict):
-                continue
-            start = m.get("start", m.get("pos"))
-            if start is None:
-                continue
-            end = m.get("end", start)
-            motifs.append(
-                {
-                    "name": m.get("name", "motif"),
-                    "start": int(start) + 1,
-                    "end": int(end) + 1,
-                }
-            )
-    except (TypeError, ValueError):
-        motifs = []
-
-    # Lollipops span the WHOLE coding region (unique + shared). The displayed
-    # axis aligns the shared region: extensions use isoform coordinates,
-    # truncations use canonical coordinates — so the position a variant plots at
-    # depends on the orf type, not on which region it falls in.
-    is_trunc = (getattr(iso, "diff_space", "") or "") == "canonical" or iso.orf_type == "truncated"
-    all_variants = getattr(iso, "variants_all", None) or getattr(iso, "variants_in_unique", []) or []
-    variants: list[dict[str, Any]] = []
-    for v in all_variants:
-        if not isinstance(v, dict):
-            continue
-        if is_trunc:
-            pos = v.get("protein_pos")
-            if pos is None:
-                pos = v.get("isoform_protein_pos")
-            consequence = v.get("consequence") or v.get("isoform_consequence") or "other"
-        else:
-            pos = v.get("isoform_protein_pos")
-            if pos is None:
-                pos = v.get("protein_pos")
-            consequence = v.get("isoform_consequence") or v.get("consequence") or "other"
-        if pos is None:
-            continue
-        try:
-            pos_int = int(float(pos))
-        except (TypeError, ValueError):
-            continue
-        # Pipeline ``pos`` is 0-based (0..len-1); the displayed bar axis is
-        # 1-based, so shift right by one to align lollipops with the bar.
-        variants.append(
-            {
-                "variant_id": v.get("variant_id") or v.get("id") or "?",
-                "isoform_protein_pos": pos_int + 1,
-                "in_unique": bool(v.get("in_isoform_unique")),
-                "hgvsp": v.get("hgvsp"),
-                "clinical_significance": v.get("clinical_significance"),
-                "source": v.get("source"),
-                "consequence": consequence,
-            }
-        )
-
-    tracks, canon_residue = _cell_line_tracks(iso, gene, skeleton)
-
-    return types.SimpleNamespace(
-        tis_id=iso.tis_id,
-        orf_type=iso.orf_type,
-        diff_space=getattr(iso, "diff_space", None),
-        differential_sequence=getattr(iso, "differential_sequence", "") or "",
-        isoform_len=getattr(iso, "isoform_len", 0) or 0,
-        canonical_len=getattr(iso, "canonical_len", 0) or 0,
-        diff_start=getattr(iso, "diff_start", 0) or 0,
-        diff_end=getattr(iso, "diff_end", 0) or 0,
-        variants=variants,
-        domains=domains,
-        domains_merged=domains_merged,
-        domain_segments=domain_segments,
-        disorder=disorder,
-        coiled_coil=coiled_coil,
-        motifs=motifs,
-        cell_line_tracks=tracks,
-        canon_residue=canon_residue,
-    )
-
-
-# Display order for the per-cell-line initiation lanes.
-_CELL_LINES = ["HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"]
-
-
-def _start_residue(iso_like: Any, r_canon: float) -> float:
-    """Residue (on the displayed axis) where ``iso_like``'s start codon sits.
-
-    Anchored to the canonical start (``r_canon``) via each isoform's own
-    ``diff_end`` — extensions start ``diff_end`` residues *before* the canonical
-    start, truncations ``diff_end`` residues *after*. This is intron-proof
-    (genomic distance ÷ 3 is not — introns between the alt TIS and the canonical
-    start inflate it wildly).
-    """
-    de = getattr(iso_like, "diff_end", 0) or 0
-    is_trunc = (getattr(iso_like, "diff_space", "") or "") == "canonical" or (
-        getattr(iso_like, "orf_type", "") == "truncated"
-    )
-    return r_canon + (de if is_trunc else -de)
-
-
-def _cell_line_tracks(iso: Isoform, gene: Any, skeleton: Any | None) -> tuple[list, float]:
-    """Per-cell-line TIS initiation, mapped onto the displayed protein residue axis.
-
-    Returns (tracks, canonical_start_residue) where tracks is a list of
-    ``{sample, marks: [{residue, log2_ie, focal}]}`` in display order.
-    """
-    diff_end_focal = getattr(iso, "diff_end", 0) or 0
-    focal_trunc = (
-        getattr(iso, "diff_space", "") or ""
-    ) == "canonical" or iso.orf_type == "truncated"
-    r_canon = 1.0 if focal_trunc else (diff_end_focal + 1.0)
-
-    siblings = [s for s in gene.isoforms if s.transcript_id == iso.transcript_id]
-    per_sample: dict[str, list] = {}
-    for s in siblings:
-        sraw = getattr(s, "raw", None) or {}
-        r = _start_residue(s, r_canon)
-        is_focal = s.tis_id == iso.tis_id
-        for sample in _CELL_LINES:
-            v = sraw.get(f"expr_{sample}_initiation_efficiency")
-            try:
-                v = float(v)
-            except (TypeError, ValueError):
-                continue
-            if not math.isfinite(v) or v <= 0:
-                continue
-            per_sample.setdefault(sample, []).append(
-                {
-                    "residue": r,
-                    "log2_ie": math.log2(v),
-                    "focal": is_focal,
-                    "label": f"{s.orf_type} · {s.start_codon}",
-                }
-            )
-    tracks = [{"sample": s, "marks": per_sample[s]} for s in _CELL_LINES if s in per_sample]
-    return tracks, r_canon
 
 
 def _isoform_to_dict(iso: Isoform) -> dict[str, Any]:

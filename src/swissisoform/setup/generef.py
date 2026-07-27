@@ -48,6 +48,7 @@ def _get_json(url: str, *, timeout: int = 30, retries: int = 3) -> Any | None:
     tens of seconds) even though warm requests return in <1s. A 404 is a definitive
     "not found" and is not retried.
     """
+    last: Exception | None = None
     for attempt in range(retries):
         try:
             with urllib.request.urlopen(url, timeout=timeout) as resp:
