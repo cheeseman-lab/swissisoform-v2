@@ -607,11 +607,20 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
     for i, b in enumerate(bars):
         by = -bar_gap * (i + 1)
         b["_y"] = by
-        bar_trace = _length_bar(int(b["x0"]), int(b["x1"]), by, _ISO_COLOR, b["label"])
-        # Carry the isoform slug so a click on the bar navigates to its page.
-        if b.get("slug"):
-            bar_trace["customdata"] = [b["slug"]] * len(bar_trace["x"])
-        traces.append(bar_trace)
+        # Blue spans only the SHARED region so it aligns with the canonical start.
+        # Extensions/uORFs carry their differential in green on this same bar, so
+        # blue begins just after it (at the canonical start, x=0); truncations have
+        # no differential on their own bar, so blue spans the whole retained body.
+        if b.get("diff_on_canonical") or b.get("diff_x1") is None:
+            shared_x0 = int(b["x0"])
+        else:
+            shared_x0 = int(b["diff_x1"]) + 1
+        if shared_x0 <= int(b["x1"]):
+            bar_trace = _length_bar(shared_x0, int(b["x1"]), by, _ISO_COLOR, b["label"])
+            # Carry the isoform slug so a click on the bar navigates to its page.
+            if b.get("slug"):
+                bar_trace["customdata"] = [b["slug"]] * len(bar_trace["x"])
+            traces.append(bar_trace)
         _left_label(b["label"], by, size=9)
     lowest_bar = -bar_gap * len(bars)
 
@@ -628,7 +637,12 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
             ov["name"] = "Lost region (truncation)"
             legend_trunc = True
         else:
-            ov = _diff_overlay(int(d0), int(d1), b["_y"], _EXT_FILL)
+            # Extend the green up to where the blue shared region begins so the
+            # extension sits flush against the canonical start (no white gap
+            # between the last extension residue and x=0). Capped at the bar end
+            # so a whole-isoform uORF/altORF doesn't overshoot its C-terminus.
+            ext_end = min(int(d1) + 1, int(b["x1"]))
+            ov = _diff_overlay(int(d0), ext_end, b["_y"], _EXT_FILL)
             ov["showlegend"] = not legend_ext
             ov["name"] = "Differential region"
             legend_ext = True
