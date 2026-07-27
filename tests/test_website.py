@@ -141,6 +141,46 @@ def test_gene_view_variant_unique_in_any_isoform():
     assert "pathogenic" in (v1[0]["significance"] or "").lower()  # most-severe kept
 
 
+def test_gene_view_truncation_lost_region_variants_appear():
+    """A truncation's lost-region (unique) variants must render in the lost region.
+
+    They aren't in the truncated isoform protein, so they carry a canonical-frame
+    ``protein_pos`` (not ``isoform_protein_pos``). Regression: the variant loop used
+    to skip anything without ``isoform_protein_pos``, dropping them entirely.
+    """
+    if str(WEBSITE_SRC) not in sys.path:
+        sys.path.insert(0, str(WEBSITE_SRC))
+    from types import SimpleNamespace
+
+    from swissisoform_site.app import _make_gene_protein_view
+
+    trunc = SimpleNamespace(
+        tis_id="T", transcript_id="ENST1", orf_type="truncated",
+        diff_space="canonical", diff_end=30, isoform_len=170, canonical_len=200,
+        start_codon="ATG", diff_start=0, differential_sequence="", raw={},
+        variants_in_unique=[],
+        variants_all=[
+            # lost-region (unique): canonical protein_pos only, no isoform_protein_pos.
+            {"variant_id": "LOST:1", "isoform_protein_pos": None, "protein_pos": 5,
+             "in_isoform_unique": True, "clinical_significance": "Pathogenic",
+             "consequence": "missense_variant"},
+            # retained (shared): isoform_protein_pos set.
+            {"variant_id": "KEPT:1", "isoform_protein_pos": 10, "protein_pos": None,
+             "in_isoform_unique": False, "clinical_significance": "Benign",
+             "consequence": "missense_variant"},
+        ],
+    )
+    gene = SimpleNamespace(canonical_len=200, isoforms=[trunc])
+
+    view = _make_gene_protein_view(gene)
+    by_id = {v["variant_id"]: v for v in view.variants}
+    # offset = canonical_len - iso_len = 30 → retained bar starts at frame x0 = 31.
+    assert "LOST:1" in by_id                                  # previously dropped
+    assert by_id["LOST:1"]["in_unique"] is True
+    assert 1 <= by_id["LOST:1"]["pos"] <= trunc.diff_end      # in the lost region (left of x0)
+    assert by_id["KEPT:1"]["pos"] >= 31                       # retained region
+
+
 def test_gene_page_404(client):
     r = client.get("/genes/nonexistent_gene_zzz")
     assert r.status_code == 404

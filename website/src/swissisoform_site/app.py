@@ -695,11 +695,19 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
         for v in getattr(iso, "variants_all", None) or []:
             if not isinstance(v, dict):
                 continue
-            pos = v.get("isoform_protein_pos")
-            if pos is None:
-                continue
+            # Retained/extension variants carry an isoform-protein position (mapped
+            # to the canonical frame via ``offset``). A truncation's lost-region
+            # (unique) variants aren't in the isoform protein, so they carry only a
+            # canonical-frame ``protein_pos`` — that IS the display frame, no offset.
+            pos_iso = v.get("isoform_protein_pos")
+            pos_canon = v.get("protein_pos")
             try:
-                fr = int(float(pos)) + 1 + offset
+                if pos_iso is not None:
+                    fr = int(float(pos_iso)) + 1 + offset
+                elif pos_canon is not None:
+                    fr = int(float(pos_canon)) + 1
+                else:
+                    continue
             except (TypeError, ValueError):
                 continue
             vid = v.get("variant_id") or (
