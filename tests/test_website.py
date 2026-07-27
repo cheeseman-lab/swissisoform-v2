@@ -89,9 +89,16 @@ def test_pmid_links_filter_escapes_and_links():
     from swissisoform_site.app import app
 
     with app.test_request_context():
-        out = str(app.jinja_env.filters["pmid_links"]("reads H3K9me3 [PMID:21047797] <script>"))
+        f = app.jinja_env.filters["pmid_links"]
+        out = str(f("reads H3K9me3 [PMID:21047797] <script>"))
+        multi = str(f("established [PMID:36310139, PMID:30031230, PMID:38769286]"))
     assert '<a href="https://pubmed.ncbi.nlm.nih.gov/21047797/"' in out
     assert "&lt;script&gt;" in out  # surrounding text is escaped
+    # Every PMID in a multi-PMID bracket is linked (regression: only the first used to be).
+    for pmid in ("36310139", "30031230", "38769286"):
+        assert f'https://pubmed.ncbi.nlm.nih.gov/{pmid}/' in multi
+    assert multi.count("<a ") == 3
+    assert multi.startswith("established [") and multi.rstrip().endswith("]")
 
 
 def test_gene_page_404(client):

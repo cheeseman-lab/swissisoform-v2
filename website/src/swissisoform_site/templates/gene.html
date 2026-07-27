@@ -98,7 +98,7 @@
     gd.on("plotly_click", function (e) {
       const pt = e && e.points && e.points[0];
       const slug = pt && pt.customdata;
-      if (slug) window.location = GENE_BASE + "/isoforms/" + slug;
+      if (slug) window.location = GENE_BASE + "/isoforms/" + encodeURIComponent(slug);
     });
   }
   function swissInitGeneIgv() {

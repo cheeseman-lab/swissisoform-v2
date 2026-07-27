@@ -109,16 +109,18 @@ def create_app() -> Flask:
     def slugify(value: Any) -> str:
         return _slug_re.sub("-", str(value or "unknown"))
 
-    # Linkify ``[PMID:NNN]`` citations in the gene mechanistic narrative. Escape
-    # first (XSS-safe), then wrap each PMID in a PubMed link.
-    _pmid_re = re.compile(r"\[PMID:\s*(\d+)\]")
+    # Linkify ``PMID:NNN`` citations in the gene mechanistic narrative. Match each
+    # PMID token (not the enclosing bracket) so multi-PMID brackets like
+    # ``[PMID:1, PMID:2, PMID:3]`` link every entry, leaving the brackets/commas
+    # as literal text. Escape first (XSS-safe), then wrap each in a PubMed link.
+    _pmid_re = re.compile(r"PMID:\s*(\d+)")
 
     @app.template_filter("pmid_links")
     def pmid_links(value: Any) -> Markup:
         safe = str(escape(value or ""))
         linked = _pmid_re.sub(
             r'<a href="https://pubmed.ncbi.nlm.nih.gov/\1/" target="_blank" '
-            r'rel="noopener">[PMID:\1]</a>',
+            r'rel="noopener">PMID:\1</a>',
             safe,
         )
         return Markup(linked)
@@ -170,12 +172,13 @@ def create_app() -> Flask:
 
     @app.get("/genes/<gene_name>")
     def gene_page(gene_name: str) -> Any:
-        """Render the gene overview: combined genomic IGV + isoform cards.
+        """Render the gene overview: combined protein-residue figure + isoform cards.
 
-        The IGV shows one track per isoform (transcript body + start codon +
-        per-cell-line initiation) on a shared genomic axis, with deduped
-        gene-level domain and mutation layers. Isoform cards below link to the
-        per-isoform deep-dive page.
+        The figure is a single canonical bar plus one bar per isoform aligned on
+        the shared region (``build_gene_protein_figure``), with variant rows
+        above and domains / disorder / coil / motifs / per-cell-line initiation
+        below — all deduplicated across the gene's isoforms. Isoform cards below
+        link to the per-isoform deep-dive page.
         """
         genes = load_all()
         gene = genes.get(gene_name) or genes.get(gene_name.upper())
@@ -371,42 +374,6 @@ def create_app() -> Flask:
     return app
 
 
-def _make_transcript_adapter(iso: Isoform, gene: Any) -> types.SimpleNamespace:
-    """Convert a V1 ``Isoform`` into the duck-typed input ``build_transcript_figure`` expects.
-
-    Pulls all sibling TIS on the same transcript and their per-cell-line
-    initiation-efficiency bars (log2-transformed, finite-only).
-    """
-    siblings = [s for s in gene.isoforms if s.transcript_id == iso.transcript_id]
-    all_tis = [
-        {"tis_id": s.tis_id, "genomic_pos": s.position, "orf_type": s.orf_type} for s in siblings
-    ]
-    cell_line_bars: dict[str, dict[str, float]] = {}
-    for s in siblings:
-        s_raw = getattr(s, "raw", None) or {}
-        bars: dict[str, float] = {}
-        for sample in _CELL_LINE_SAMPLES:
-            v = s_raw.get(f"expr_{sample}_initiation_efficiency")
-            if v is None:
-                continue
-            try:
-                v = float(v)
-            except (TypeError, ValueError):
-                continue
-            if not math.isfinite(v) or v <= 0:
-                continue
-            bars[sample] = math.log2(v)
-        if bars:
-            cell_line_bars[s.tis_id] = bars
-    return types.SimpleNamespace(
-        focal_tis_id=iso.tis_id,
-        tis_id=iso.tis_id,
-        transcript_id=iso.transcript_id,
-        all_tis_on_transcript=all_tis,
-        cell_line_bars=cell_line_bars,
-    )
-
-
 # InterProScan member DBs grouped by the kind of feature they call, so the
 # figure can render each kind in its own track instead of stacking them all into
 # one green smear. Anything unlisted is treated as a folded domain.
@@ -559,8 +526,9 @@ def _classify_interproscan_hits(ips_hits: Any) -> dict[str, list[dict[str, Any]]
 
 
 # --------------------------------------------------------------------------- #
-# Gene-page combined IGV adapter — one track per isoform + gene-level domain /
-# mutation layers deduplicated on the genomic axis.
+# Gene-page combined protein-residue view — one canonical bar + one bar per
+# isoform, with variants / domains / features deduplicated across isoforms in
+# the canonical residue frame.
 # --------------------------------------------------------------------------- #
 
 
@@ -569,7 +537,7 @@ def _pathogenic(sig: Any) -> bool:
 
 
 def _union_intervals(interval_lists: list[list[tuple[int, int]]]) -> list[tuple[int, int]]:
-    """Merge several genomic interval lists into one sorted, merged list."""
+    """Merge several interval lists into one sorted, merged list."""
     merged: list[tuple[int, int]] = []
     for lst in interval_lists:
         merged.extend((int(s), int(e)) for s, e in lst if e > s)
