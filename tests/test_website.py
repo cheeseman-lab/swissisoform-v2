@@ -101,6 +101,46 @@ def test_pmid_links_filter_escapes_and_links():
     assert multi.startswith("established [") and multi.rstrip().endswith("]")
 
 
+def test_gene_view_variant_unique_in_any_isoform():
+    """A variant in the unique region of ANY isoform stays flagged unique.
+
+    Regression: the pathogenic-upgrade path in the cross-isoform variant dedup
+    used to clobber the OR-merged ``in_unique`` with the current isoform's flag.
+    Here V:1 is unique+benign in isoform A but shared+pathogenic in B; the deduped
+    lollipop must keep ``in_unique=True`` (unique in A) AND the pathogenic call.
+    """
+    if str(WEBSITE_SRC) not in sys.path:
+        sys.path.insert(0, str(WEBSITE_SRC))
+    from types import SimpleNamespace
+
+    from swissisoform_site.app import _make_gene_protein_view
+
+    def _iso(tis_id, diff_end, iso_len, start_codon, variants):
+        return SimpleNamespace(
+            tis_id=tis_id, transcript_id="ENST1", orf_type="extended",
+            diff_space="isoform", diff_end=diff_end, isoform_len=iso_len,
+            canonical_len=200, start_codon=start_codon, diff_start=0,
+            differential_sequence="", raw={}, variants_all=variants,
+            variants_in_unique=[],
+        )
+
+    var_in_a = {"variant_id": "V:1", "isoform_protein_pos": 5, "in_isoform_unique": True,
+                "clinical_significance": "Benign", "consequence": "missense_variant"}
+    var_in_b = {"variant_id": "V:1", "isoform_protein_pos": 60, "in_isoform_unique": False,
+                "clinical_significance": "Pathogenic", "consequence": "missense_variant"}
+    gene = SimpleNamespace(
+        canonical_len=200,
+        isoforms=[_iso("A", 10, 210, "CTG", [var_in_a]),
+                  _iso("B", 5, 205, "GTG", [var_in_b])],
+    )
+
+    view = _make_gene_protein_view(gene)
+    v1 = [v for v in view.variants if v["variant_id"] == "V:1"]
+    assert len(v1) == 1                     # deduped across the two isoforms
+    assert v1[0]["in_unique"] is True       # unique in isoform A → stays unique
+    assert "pathogenic" in (v1[0]["significance"] or "").lower()  # most-severe kept
+
+
 def test_gene_page_404(client):
     r = client.get("/genes/nonexistent_gene_zzz")
     assert r.status_code == 404

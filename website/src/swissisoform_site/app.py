@@ -715,9 +715,14 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
             if prev is None:
                 var_by_id[vid] = rec
             else:
-                prev["in_unique"] = prev["in_unique"] or rec["in_unique"]
+                # A variant shows up as "unique" if it lies in ANY isoform's
+                # differential region. Preserve that across the pathogenic
+                # upgrade below — ``prev.update(rec)`` would otherwise clobber it
+                # with the current isoform's (possibly shared) flag.
+                merged_unique = prev["in_unique"] or rec["in_unique"]
                 if _pathogenic(rec["significance"]) and not _pathogenic(prev["significance"]):
                     prev.update(rec)
+                prev["in_unique"] = merged_unique
 
         # Cell-line initiation: each isoform's start sits at its bar's left edge.
         for sample in _CELL_LINE_SAMPLES:
