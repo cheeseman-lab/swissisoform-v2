@@ -830,20 +830,21 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
             _left_label(t["sample"].replace("_", " "), ly)
         y_bottom = lane_base - (len(cell_lines) - 1) * lane_gap - 0.3
 
-    # End-of-differential guides for truncations: a red dotted line where the lost
-    # N-terminus ends and the retained body begins (the boundary of the red-shaded
-    # region). The canonical start (x=0) needs no guide — the canonical bar starts
-    # there. Extensions' differential ends at x=0, so they're left unmarked.
+    # A single black dotted guide at the SHORTEST truncation's differential-region
+    # end — the deepest N-terminal cut, where its lost region meets the retained
+    # body. (Extensions' differential ends at x=0, marked by the axis zeroline.)
     guide_top = max(mut_top, canon_y + 0.2)
-    for b in bars:
-        if b.get("diff_on_canonical") and b.get("diff_x1") is not None:
-            shapes.append(
-                {
-                    "type": "line", "x0": b["diff_x1"], "x1": b["diff_x1"],
-                    "y0": y_bottom, "y1": guide_top,
-                    "line": {"color": _TRUNC_FILL, "width": 1, "dash": "dot"},
-                }
-            )
+    trunc_ends = [
+        b["diff_x1"] for b in bars if b.get("diff_on_canonical") and b.get("diff_x1") is not None
+    ]
+    if trunc_ends:
+        x_guide = max(trunc_ends)  # largest x0 = fewest residues retained = shortest protein
+        shapes.append(
+            {
+                "type": "line", "x0": x_guide, "x1": x_guide, "y0": y_bottom, "y1": guide_top,
+                "line": {"color": "#111827", "width": 1, "dash": "dot"},
+            }
+        )
 
     y_hi = max(mut_top, canon_y + 0.2) + 0.3
     y_lo = y_bottom - 0.2
@@ -862,7 +863,7 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                           "font": {"size": 12, "color": "#4b5563"}},
                 "tickfont": {"size": 11, "color": "#6b7280"},
                 "range": [x_left, axis_len + 5],
-                "zeroline": False,
+                "zeroline": True,  # solid line at x=0 marks the canonical start
             },
             "yaxis": {"range": [y_lo, y_hi], "showticklabels": False, "zeroline": False},
             "height": int(90 + 118 * (y_hi - y_lo)),
