@@ -1,9 +1,19 @@
-"""Fetch UniProt gene-reference data for the generef module (no auth).
+"""Fetch gene-reference data for the generef module from Affinage (no auth).
 
-Queries UniProtKB (reviewed, human) for each gene symbol and writes
-``data/reference/generef/generef.json`` = ``{gene: {uniprot_id,
-uniprot_function, subcellular_location, keywords}}``. ``run.py`` loads this and
-passes it to ``GeneRefModule`` as a gene-level module.
+Queries the Affinage API (``https://affinage.wi.mit.edu/api``) for each gene
+symbol and writes ``data/reference/generef/generef.json`` =
+``{gene: {uniprot_id, function, subcellular_location, keywords}}``.
+``run.py`` loads this and passes it to ``GeneRefModule`` as a gene-level module.
+
+Affinage provides literature-grounded, mechanism-focused annotation (it is itself
+LLM-generated). One ``GET /api/gene/{symbol}`` supplies everything we keep:
+
+* ``function``              ← ``narrative.mechanistic_narrative`` (PMID-cited prose)
+* ``subcellular_location``  ← ``mechanism_profile.localization`` term labels
+* ``keywords``              ← ``mechanism_profile.molecular_activity + pathway`` labels
+
+``uniprot_id`` is still sourced from a minimal UniProtKB accession lookup —
+Affinage exposes no accession, and the site links out to the UniProt entry.
 
 Driven by the thin CLI at ``scripts/setup/fetch_generef.py``.
 """
@@ -13,51 +23,96 @@ from __future__ import annotations
 import argparse
 import json
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[3]
 OUT = ROOT / "data" / "reference" / "generef" / "generef.json"
-API = "https://rest.uniprot.org/uniprotkb/search"
+AFFINAGE_API = "https://affinage.wi.mit.edu/api"
+UNIPROT_API = "https://rest.uniprot.org/uniprotkb/search"
+
+# Which mechanism_profile axes become the functional "keywords" facet.
+# molecular_activity (GO MF) + pathway (Reactome) are the functional analog of the
+# old UniProt keyword strip; localization is its own field, and complexes/partners
+# are interaction gene-names rather than functional terms.
+_KEYWORD_AXES = ("molecular_activity", "pathway")
 
 
-def fetch_one(gene: str) -> dict | None:
-    """Return {uniprot_id, uniprot_function, subcellular_location, keywords} or None."""
+def _get_json(url: str, *, timeout: int = 30, retries: int = 3) -> Any | None:
+    """GET + parse JSON, with retry/backoff. Returns None on 404 or repeated error.
+
+    The retry covers Affinage's Railway host, which can idle-sleep (a cold start of
+    tens of seconds) even though warm requests return in <1s. A 404 is a definitive
+    "not found" and is not retried.
+    """
+    last: Exception | None = None
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:
+                return json.load(resp)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None  # gene not in the source — definitive
+            last = e
+        except Exception as e:  # noqa: BLE001 — network hiccup / cold start
+            last = e
+        if attempt < retries - 1:
+            time.sleep(2 * (attempt + 1))  # 2s, 4s backoff
+    print(f"  [warn] giving up on {url}: {last}")
+    return None
+
+
+def _term_labels(profile: dict[str, Any], axes: tuple[str, ...]) -> list[str]:
+    """Collect unique ``term_label`` values across the given mechanism_profile axes."""
+    labels: list[str] = []
+    for axis in axes:
+        for entry in profile.get(axis) or []:
+            if isinstance(entry, dict):
+                lab = entry.get("term_label")
+                if lab:
+                    labels.append(lab)
+    return list(dict.fromkeys(labels))
+
+
+def _uniprot_accession(gene: str) -> str | None:
+    """Minimal reviewed-human UniProt accession lookup (for the ID + entry link only)."""
     params = {
         "query": f"gene:{gene} AND organism_id:9606 AND reviewed:true",
-        "fields": "accession,cc_function,cc_subcellular_location,keyword",
+        "fields": "accession",
         "format": "json",
         "size": "1",
     }
-    url = f"{API}?{urllib.parse.urlencode(params)}"
-    try:
-        with urllib.request.urlopen(url, timeout=30) as resp:
-            data = json.load(resp)
-    except Exception:  # noqa: BLE001 — network hiccup → treat as not found
+    data = _get_json(f"{UNIPROT_API}?{urllib.parse.urlencode(params)}", retries=2)
+    results = (data or {}).get("results") or []
+    return results[0].get("primaryAccession") if results else None
+
+
+def fetch_one(gene: str) -> dict | None:
+    """Return {uniprot_id, function, subcellular_location, keywords} or None.
+
+    Function + localization + keywords come from Affinage; ``uniprot_id`` is a
+    minimal UniProt accession lookup (Affinage exposes no accession). Returns None
+    when Affinage has no record for the gene (so downstream columns stay null,
+    exactly as an unmatched gene did under the old UniProt-only fetch).
+    """
+    data = _get_json(f"{AFFINAGE_API}/gene/{urllib.parse.quote(gene)}")
+    if not isinstance(data, dict):
         return None
-    results = data.get("results") or []
-    if not results:
-        return None
-    res = results[0]
-    function = None
-    locations: list[str] = []
-    for c in res.get("comments", []):
-        if c.get("commentType") == "FUNCTION" and c.get("texts"):
-            function = c["texts"][0].get("value")
-        elif c.get("commentType") == "SUBCELLULAR LOCATION":
-            for sl in c.get("subcellularLocations", []):
-                val = (sl.get("location") or {}).get("value")
-                if val:
-                    locations.append(val)
-    # Keywords are a top-level list of {id, category, name} — a curated
-    # controlled vocabulary (kinase, cell cycle, ...) used for functional query.
-    keywords = [k.get("name") for k in res.get("keywords", []) if k.get("name")]
+    narrative = data.get("narrative") or {}
+    function = narrative.get("mechanistic_narrative")
+    profile = narrative.get("mechanism_profile") or {}
+
+    locations = _term_labels(profile, ("localization",))
+    keywords = _term_labels(profile, _KEYWORD_AXES)
+
     return {
-        "uniprot_id": res.get("primaryAccession"),
-        "uniprot_function": function,
-        "subcellular_location": "; ".join(dict.fromkeys(locations)) or None,
-        "keywords": "; ".join(dict.fromkeys(keywords)) or None,
+        "uniprot_id": _uniprot_accession(gene),
+        "function": function or None,
+        "subcellular_location": "; ".join(locations) or None,
+        "keywords": "; ".join(keywords) or None,
     }
 
 
@@ -95,10 +150,13 @@ def main(argv: list[str] | None = None) -> int:
         if gene in data:
             continue
         rec = fetch_one(gene)
-        if rec and rec.get("uniprot_id"):
+        # Keep any record Affinage returned data for — do NOT gate on uniprot_id,
+        # since a gene can have Affinage annotation while the UniProt accession
+        # lookup finds nothing.
+        if rec and any(rec.values()):
             data[gene] = rec
             n_ok += 1
-        time.sleep(0.2)  # be polite to the UniProt endpoint
+        time.sleep(0.2)  # be polite to the APIs (Affinage + UniProt)
         if (i + 1) % 100 == 0:
             print(f"  {i + 1}/{len(genes)} …")
 

@@ -1,28 +1,58 @@
 You are writing the whole-isoform biological judgment for one alt-TIS isoform (extension, truncation, or uORF/altORF) in SwissIsoform v2.
 
-Input: (1) the isoform's identity (gene, transcript, ORF type, lengths, differential sequence, and `differential_region_location` — an explicit statement of where the differential region sits; trust it verbatim over any prior about this gene); (2) `category_reads` — one `{verdict, reasoning}` per CDLMPS category (Conservation, Detection, Localization, Mutation Landscape, Predicted Structure, Structural Characteristics), your primary material; (3) `criteria_evidence` — the raw per-criterion numbers that back those verdicts (all 15 criteria); (4) coarse existence/functional headline scores (a two-axis roll-up — a consistency check, not the framing).
+Your job is an INTERACTION ANALYSIS, not a summary. The pipeline has PREDICTED or QUERIED a set of findings for this isoform (localization, domains, conservation, variants, structure, etc.). Separately, the GENE has an ESTABLISHED biology from the literature. Your task: cross-examine the predicted/queried findings against that known biology and say how they INTERACT — which finding CONFIRMS, CONFLICTS WITH, EXTENDS, or has NO BEARING on what the protein is already known to do — then lead with the one or two interactions that genuinely reshape or contradict the established function. Do NOT walk the six categories one by one or restate their verdicts — that laundry list is explicitly not wanted. Start from the known biology; end at "so this finding changes / contradicts / sharpens X about it."
 
-The 15 criteria, grouped by CDLMPS category (the six `category_reads` verdicts are your primary material; the criteria are what backs each):
-- C Conservation: C1 primate AA-identity, C2 mammalian AA-identity, C3 absolute phyloP constraint over the unique region.
-- D Detection: D1 multi-cell-line reproducibility, D2 initiation efficiency, D3 unique-peptide mass spec.
-- L Localization: L1 DeepLoc compartment/signal change, L2 SignalP/TargetP targeting change.
-- M Mutation Landscape: M1 germline tolerance/constraint (gnomAD depletion + ESM-2 — NOT disease burden), M2 disease-variant density enrichment (ClinVar/COSMIC).
-- P Predicted Structure: P1 unique-region folding (pLDDT only), P2 shared-region core-fold perturbation (Cα RMSD).
-- S Structural Characteristics: S1 real-InterPro-domain gain/loss, S2 whole-protein biophysical shift (isoform vs canonical), S3 differential ESM-C SAE features (magnitude check on the strongest shared-feature activation shift; provisional labels).
+Read the 15 findings as THREE TIERS, and treat them very differently in your output:
+  1. IS IT REAL? — Conservation (C1/C2/C3) and Detection (D1/D2/D3). These say the isoform is a genuine, translated ORF. They are EXISTENCE evidence, not a functional change. REASON over them to set `confidence`, but NEVER read them out and NEVER tag them.
+  2. WHAT MECHANISM CHANGES? — Localization (L1/L2), Domains (S1), Structure/fold (P1 structured extension, P2 core refold), Biophysics (S2), interpretable features (S3). These are the ONLY findings computed DIFFERENTIALLY (isoform vs canonical), so they are the ONLY things that can state how the isoform is functionally UNIQUE from the canonical. This tier — contrasted against the known biology — is the SOLE source of your readout (headline / divergence_hypothesis / function_relevance) and of the tags.
+  3. DOES IT MATTER? — Mutation Landscape (M1 germline constraint, M2 disease-variant overlap), and Conservation again. These say the differential region COINCIDES with an important site. REASON over them to raise/lower `confidence` (a mechanism that hits a conserved, disease-dense, or constrained region is more likely consequential), but NEVER read them out and NEVER tag them.
 
-Write a SHORT, hypothesis-led judgment. This is NOT a summary of the category reads and criteria shown below — do NOT walk the categories or criteria one by one, do NOT audit "what has signal and what is flat," and do NOT pad. Lead with the hypothesis; then marshal the evidence that backs it. Exactly two moves, in this order:
-1. HYPOTHESIS (lead). Open with the single most likely biological reading of what this isoform does — or fails to do — to its differential region, stated plainly as a claim. This is the takeaway and it comes first.
-2. SUPPORT (follow). Then give the one to three signals that most directly back that hypothesis, anchored by the specific numbers that carry them ("100% primate/mammalian identity", "mean phyloP 4.95", "10% initiation efficiency"). Frame them as support for the claim above, not as a standalone tally.
-Mention a contradicting signal ONLY when it would change the hypothesis or its confidence; otherwise omit it. Refer to evidence by name or by what it measures ("cross-mammalian conservation", "ribosome-profiling breadth", "the localization change"), NEVER by ID code (C1, D3, S2, …). No preamble, no restating the scores, no laundry list. Hard stop at 6 sentences for the narrative — fewer is fine, never more.
+REASONED OVER, NOT READ OUT: tiers 1 and 3 (conservation, detection, variant density, germline constraint) must NOT appear in `headline` / `divergence_hypothesis` / `function_relevance`. Restating them just duplicates the CDLMPS category filters the reader already has, and they cannot express canonical-vs-isoform uniqueness anyway. They live silently in `confidence`. Your visible output is ONLY the tier-2 differential mechanism contrasted against the known biology.
+
+Input:
+- `gene` — the protein's ESTABLISHED identity from the literature: `function` (a mechanistic, PMID-grounded description of what it does), `keywords` (functional/pathway terms), `subcellular_location` (known compartment(s)). This is your BASELINE — the known biology every prediction is weighed against. Trust it.
+- `localization` — the one machine-comparable calibration case, given explicitly: `known_from_literature` (from `gene.subcellular_location`), `predicted_canonical` (DeepLoc's compartment + top_prob confidence for the CANONICAL protein), `predicted_isoform` (DeepLoc's compartment + confidence for THIS isoform). See the calibration rule below.
+- The isoform's identity (gene, transcript, ORF type, lengths, differential sequence, and `differential_region_location` — where the differential region sits; trust it verbatim).
+- `category_reads` — one `{verdict, reasoning}` per CDLMPS category (Conservation, Detection, Localization, Mutation Landscape, Predicted Structure, Structural Characteristics). The predicted/queried findings you cross-examine, NOT a framing to reproduce.
+- `criteria_evidence` — the raw per-criterion numbers behind those verdicts (all 15 criteria), including prediction confidences.
+- coarse existence/functional headline scores — a consistency check, not the framing.
+
+The 15 findings you cross-examine against known biology:
+- C Conservation: C1 primate AA-identity, C2 mammalian AA-identity, C3 absolute phyloP constraint over the unique region. (A conserved unique region implies it hits a functionally important element of the known biology.)
+- D Detection: D1 multi-cell-line reproducibility, D2 initiation efficiency, D3 unique-peptide mass spec. (Existence evidence — that the isoform is real/translated — NOT a functional interaction. Use it to gate confidence, do not tag it.)
+- L Localization: L1 DeepLoc compartment/signal change, L2 SignalP/TargetP targeting change. (Weigh against the KNOWN compartment via the calibration rule.)
+- M Mutation Landscape: M1 germline tolerance/constraint (gnomAD depletion + ESM-C — NOT disease burden), M2 disease-variant density enrichment (ClinVar/COSMIC). (Disease enrichment / germline constraint over the unique region implies it overlaps a functionally or clinically important site.)
+- P Predicted Structure: P1 unique-region folding (pLDDT only), P2 shared-region core-fold perturbation (Cα RMSD, only trusted when pTM/pLDDT are high).
+- S Structural Characteristics: S1 real-InterPro-domain gain/loss, S2 whole-protein biophysical shift, S3 differential ESM-C SAE features (magnitude check; provisional labels).
+
+Calibration rule (weigh a prediction's baseline read before trusting its isoform read):
+  - A prediction is only trustworthy for THIS protein if it reads the CANONICAL/baseline in line with the known biology. If the baseline prediction already disagrees with the literature, the tool is miscalibrated here — treat its isoform call as unreliable: set low confidence and DO NOT tag the "conflict."
+  - Worked example (localization): if `predicted_canonical.compartment` matches `known_from_literature` and `predicted_isoform.compartment` differs (both at decent `top_prob`), that is a real Localization conflict — tag it. But if `predicted_canonical` ALREADY disagrees with `known_from_literature` (e.g. literature says nucleus, DeepLoc calls the canonical ER), DeepLoc is off for this protein — a differing isoform call is NOT evidence of relocalization; down-weight it, do not tag.
+  - Apply the same discipline to every category: a finding whose own confidence is borderline (low DeepLoc top_prob, low pTM/pLDDT, weak magnitude) is not a conflict — a borderline call never overturns established biology.
 
 Guardrails:
-  - Differential-region directionality: alt-TIS isoforms differ ONLY at the N-terminus — an extension ADDS N-terminal sequence, a truncation REMOVES N-terminal sequence; the C-terminus and stop codon are invariant. Never describe the differential region (or the sequence it adds/loses) as C-terminal, even when it is acidic or otherwise looks like a tail.
-  - Do not contradict the category verdicts or the headline scores.
-  - Keep directionality right: germline tolerance/constraint (gnomAD depletion ratio < 1× = important) is NOT pathogenic burden; disease-variant density is a separate signal.
-  - Introduce no fact the input does not state — never extrapolate biology (e.g. organelle retargeting) the localization/targeting reads do not report.
+  - The reader is already ON the isoform page: gene, ORF type, both lengths, and the differential sequence are displayed above your text. Do NOT restate that identity — lead straight with the finding.
+  - Differential-region directionality: alt-TIS isoforms differ ONLY at the N-terminus — an extension ADDS N-terminal sequence, a truncation REMOVES N-terminal sequence; the C-terminus and stop codon are invariant. Never describe the differential region as C-terminal.
+  - germline tolerance/constraint (gnomAD depletion ratio < 1× = important) is NOT pathogenic burden; disease-variant density is a separate signal.
+  - Introduce no fact the input does not state — never extrapolate biology (e.g. organelle retargeting) the findings do not support. If no finding meaningfully interacts with the known biology, say so plainly and set low confidence.
 
 Output JSON only (no code fences), fields:
   - "tis_id": verbatim from the input.
-  - "headline": one sentence (≤160 chars) — the hypothesized function, stated as the single dominant call for this isoform.
-  - "narrative": the two-move judgment above (hypothesis first, then supporting evidence), one paragraph, ≤6 sentences (fewer is fine, never more). HTML-safe Markdown (**bold**, *italic*, `code`); no links/images.
+  - "headline": one sentence (≤160 chars) — the single dominant interaction: how a predicted finding reshapes or contradicts the gene's known biology. States the finding, not the identity.
+  - "divergence_hypothesis": 1–3 sentences — the claim: which tier-2 MECHANISM finding (localization, domain, fold, biophysics, feature) reshapes or contradicts the gene's established function/character, and how. Name the mechanism and the known fact it bears on. Lead with it. Do NOT read out conservation, detection, variant density, or germline constraint here — they belong in `confidence`, not the prose. HTML-safe Markdown (**bold**, *italic*, `code`); no links/images.
+  - "function_relevance": 1–3 sentences — why that mechanism change matters given what the gene is known to do. Tie it explicitly to the `gene.function`/`keywords`/`subcellular_location` baseline ("CBX1 is a known nuclear H3K9me reader — a predicted cytoplasmic switch would remove it from chromatin"). If the mechanism has no clear bearing on known function, say so. Do NOT read out tier-1/tier-3 signals here either. Same Markdown rules.
+  - "tags": an array (may be empty) of interaction tags, drawn ONLY from the controlled vocabulary below. Assign a tag only when a confident, calibration-passing tier-2 mechanism interacts with the known biology. These drive a filter, so precision matters — do not over-tag, and never tag existence/importance evidence.
+  - "confidence": "low" | "medium" | "high" — your confidence in the interaction hypothesis. This is the ONLY place tier-1 (is-it-real: conservation, detection) and tier-3 (does-it-matter: variant density, germline constraint) land: reason over them here to raise or lower it. Low when the mechanism signal is weak, borderline, miscalibrated, or absent.
   - "caveats": (optional) one short line ONLY if a material gap changes confidence; omit otherwise.
+
+Controlled tag vocabulary (assign only when a confident, calibration-passing finding interacts with the KNOWN biology — each is one axis of functional interaction):
+  - "Localization conflict" — DeepLoc/SignalP/TargetP predicts the isoform localizes or targets to a compartment that DIFFERS from the gene's KNOWN localization, and the prediction is calibrated (canonical read matches the literature) and confident. Not for a bare canonical-vs-isoform flip when the tool mis-reads the canonical.
+  - "Domain loss" — a real InterPro domain the known function depends on is lost in the differential region (typically a truncation).
+  - "Domain gain" — a real InterPro domain is gained in the differential region (typically an extension).
+  - "Truncated functional region" — a truncation removes an N-terminal region that is structured, conserved, or domain-bearing (functionally important to the known biology, not just sequence).
+  - "Structured N-terminal extension" — an extension adds a confidently-folded N-terminal region (high differential-region pLDDT).
+  - "Biophysical shift" — a whole-protein biophysical shift in disorder/charge/hydropathy (S2 fired) that plausibly alters the known behavior.
+  - "Core refold" — the retained (shared) region is predicted to fold differently, AND the structure confidence supports it (pTM and shared-region pLDDT high). Do NOT assign on RMSD alone when confidence is low.
+  - "Interpretable-feature shift" — differential ESM-C SAE features fire (S3 scored true).
+
+Reminder (tiers 1 & 3): conservation, detection, disease-variant density and germline constraint are NEVER tags and NEVER read out in the prose. They are reasoned over ONLY to set `confidence` (a truncation that removes a conserved, disease-dense, germline-constrained region is far more likely to be functionally consequential). They are already filterable via the CDLMPS Conservation / Detection / Mutation-Landscape category facet, so restating them adds nothing.

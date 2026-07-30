@@ -3,11 +3,29 @@
   "title": "SynthesisRead",
   "type": "object",
   "additionalProperties": false,
-  "required": ["tis_id", "headline", "narrative"],
+  "required": ["tis_id", "headline", "divergence_hypothesis", "function_relevance", "tags", "confidence"],
   "properties": {
     "tis_id": {"type": "string", "minLength": 1},
     "headline": {"type": "string", "minLength": 1, "maxLength": 200},
-    "narrative": {"type": "string", "minLength": 1, "maxLength": 4000},
+    "divergence_hypothesis": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "function_relevance": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "tags": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "Localization conflict",
+          "Domain loss",
+          "Domain gain",
+          "Truncated functional region",
+          "Structured N-terminal extension",
+          "Biophysical shift",
+          "Core refold",
+          "Interpretable-feature shift"
+        ]
+      }
+    },
+    "confidence": {"enum": ["low", "medium", "high"]},
     "caveats": {"type": "string", "minLength": 0, "maxLength": 1000}
   }
 }

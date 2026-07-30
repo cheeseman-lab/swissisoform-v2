@@ -39,7 +39,7 @@ class TestGeneRefModule:
         gene_data = {
             "TESTGENE_POS": {
                 "uniprot_id": "P12345",
-                "uniprot_function": "Transcription factor",
+                "function": "Transcription factor",
                 "subcellular_location": "Nucleus",
                 "hpa_protein_class": "Transcription factors",
                 "hpa_subcellular_location": "Nucleoplasm",
@@ -53,7 +53,7 @@ class TestGeneRefModule:
             ann = site.isoform_annotations["generef"]
             if site.gene_name == "TESTGENE_POS":
                 assert ann["uniprot_id"] == "P12345"
-                assert ann["uniprot_function"] == "Transcription factor"
+                assert ann["function"] == "Transcription factor"
                 assert ann["subcellular_location"] == "Nucleus"
 
     def test_unmatched_gene_gets_none(self, synthetic_tis, config):
@@ -61,7 +61,7 @@ class TestGeneRefModule:
         gene_data = {
             "TESTGENE_POS": {
                 "uniprot_id": "P12345",
-                "uniprot_function": "Transcription factor",
+                "function": "Transcription factor",
             },
         }
         module = GeneRefModule(config, gene_annotations=gene_data)
@@ -107,5 +107,71 @@ class TestGeneRefModule:
             if site.gene_name == "TESTGENE_POS":
                 ann = site.isoform_annotations["generef"]
                 assert ann["uniprot_id"] == "P99999"
-                assert ann["uniprot_function"] is None
+                assert ann["function"] is None
                 assert ann["subcellular_location"] is None
+
+
+class TestAffinageFetch:
+    """Tests for the Affinage-backed setup fetch (setup.generef.fetch_one)."""
+
+    _GENE_PAYLOAD = {
+        "narrative": {
+            "mechanistic_narrative": "GENEX encodes a kinase that phosphorylates Y [PMID:1].",
+            "mechanism_profile": {
+                "molecular_activity": [
+                    {"term_id": "GO:1", "term_label": "protein kinase activity"},
+                    {"term_id": "GO:2", "term_label": "ATP binding"},
+                ],
+                "pathway": [
+                    {"term_id": "R-1", "term_label": "Cell Cycle"},
+                    {"term_id": "R-1", "term_label": "Cell Cycle"},  # dup → collapsed
+                ],
+                "localization": [
+                    {"term_id": "GO:C1", "term_label": "cytosol"},
+                    {"term_id": "GO:C2", "term_label": "nucleus"},
+                ],
+                "partners": ["SOMEGENE"],  # must NOT leak into keywords
+            },
+        }
+    }
+
+    def _patch(self, monkeypatch, *, gene_json, accession="P00001"):
+        from swissisoform.setup import generef as g
+
+        def fake_get_json(url, **kw):
+            if url.startswith(g.AFFINAGE_API):
+                return gene_json
+            if url.startswith(g.UNIPROT_API):
+                hits = [{"primaryAccession": accession}] if accession else []
+                return {"results": hits}
+            raise AssertionError(f"unexpected url {url}")
+
+        monkeypatch.setattr(g, "_get_json", fake_get_json)
+
+    def test_maps_all_fields(self, monkeypatch):
+        from swissisoform.setup.generef import fetch_one
+
+        self._patch(monkeypatch, gene_json=self._GENE_PAYLOAD)
+        rec = fetch_one("GENEX")
+        assert rec["uniprot_id"] == "P00001"
+        assert rec["function"] == "GENEX encodes a kinase that phosphorylates Y [PMID:1]."
+        # localization axis only, unique-preserving order
+        assert rec["subcellular_location"] == "cytosol; nucleus"
+        # molecular_activity + pathway, deduped, partners excluded
+        assert rec["keywords"] == "protein kinase activity; ATP binding; Cell Cycle"
+
+    def test_missing_gene_returns_none(self, monkeypatch):
+        from swissisoform.setup.generef import fetch_one
+
+        self._patch(monkeypatch, gene_json=None)  # Affinage 404 → _get_json None
+        assert fetch_one("NOPE") is None
+
+    def test_empty_profile_yields_none_fields(self, monkeypatch):
+        from swissisoform.setup.generef import fetch_one
+
+        self._patch(monkeypatch, gene_json={"narrative": {"mechanism_profile": {}}})
+        rec = fetch_one("BARE")
+        assert rec["uniprot_id"] == "P00001"  # accession still resolves
+        assert rec["function"] is None
+        assert rec["subcellular_location"] is None
+        assert rec["keywords"] is None

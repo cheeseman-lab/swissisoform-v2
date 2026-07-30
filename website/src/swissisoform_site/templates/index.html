@@ -45,6 +45,26 @@
         <button type="button" id="kw-clear" class="kw-clear">clear</button>
       </div>
 
+      {# Isoform-change facet — same typeahead pattern as "Filter by function",
+         but over the controlled synthesis tags. A gene matches when ANY of its
+         isoforms carries the selected tag (vocab derived from data-iso-tags). #}
+      <div class="kw-facet">
+        <input type="text" id="tag-input" placeholder="Filter by isoform change… (e.g. Localization conflict, Domain loss)"
+               autocomplete="off" spellcheck="false" aria-label="Filter by isoform change"
+               title="Filter genes by an isoform-specific functional change from the AI synthesis (Localization conflict, Domain loss, Core refold…). Type to pick from the tags present in the catalogue.">
+        <div id="tag-dropdown" class="kw-dropdown" hidden></div>
+      </div>
+
+      <div id="tag-controls" class="kw-controls" hidden>
+        <div id="tag-selected" class="kw-selected"></div>
+        <div class="kw-mode" title="all = gene must have isoform(s) covering every selected tag; any = at least one">
+          match
+          <label><input type="radio" name="tagmode" value="and" checked> all</label>
+          <label><input type="radio" name="tagmode" value="or"> any</label>
+        </div>
+        <button type="button" id="tag-clear" class="kw-clear">clear</button>
+      </div>
+
       <p id="result-count" class="result-count" hidden></p>
     </div>
 
@@ -103,13 +123,15 @@
   <div class="gene-card block bg-white border border-slate-200 rounded-lg p-4 hover:border-slate-400 hover:shadow-sm transition"
        data-gene="{{ gene.name|lower }}" data-uniprot="{{ (gene.uniprot_id or '')|lower }}"
        data-keywords="{{ gene.keywords|join(';') }}"
+       data-iso-tags="{{ gene.iso_tags|join(';') }}"
        data-fires="{{ best.fired_categories|join('') if best else '' }}"
        data-net-score="{{ best.net_score if best else 0 }}"
        data-fire-interesting="{{ best.n_interesting if best else 0 }}">
 
     <div class="flex items-baseline justify-between mb-2">
       <div class="flex items-baseline gap-2">
-        <span class="text-lg font-semibold tracking-tight">{{ gene.name }}</span>
+        <a href="{{ url_for('gene_page', gene_name=gene.name) }}"
+           class="text-lg font-semibold tracking-tight hover:text-blue-700">{{ gene.name }}</a>
         {% if gene.uniprot_id %}
           <a href="{{ gene.uniprot_url }}" target="_blank" rel="noopener"
              class="text-xs text-slate-500 font-mono hover:text-blue-700">{{ gene.uniprot_id }}</a>
@@ -152,24 +174,9 @@
         {% endif %}
       </summary>
       <ul>
-        {% for iso in extensions %}
-        <li><a href="{{ url_for('isoform_page', gene_name=gene.name, tis_slug_str=iso.tis_id|slugify) }}">
-          <span class="iso-chip ext">EXT</span>
-          {{ iso.tis_id }} · {{ iso.aa_len }} aa · {{ sc.cdlmps(iso.category_verdicts) }}
-        </a></li>
-        {% endfor %}
-        {% for iso in truncations %}
-        <li><a href="{{ url_for('isoform_page', gene_name=gene.name, tis_slug_str=iso.tis_id|slugify) }}">
-          <span class="iso-chip trunc">TRUNC</span>
-          {{ iso.tis_id }} · {{ iso.aa_len }} aa · {{ sc.cdlmps(iso.category_verdicts) }}
-        </a></li>
-        {% endfor %}
-        {% for iso in others %}
-        <li><a href="{{ url_for('isoform_page', gene_name=gene.name, tis_slug_str=iso.tis_id|slugify) }}">
-          <span class="iso-chip other">{{ iso.orf_type|upper }}</span>
-          {{ iso.tis_id }} · {{ iso.aa_len }} aa · {{ sc.cdlmps(iso.category_verdicts) }}
-        </a></li>
-        {% endfor %}
+        {% for iso in extensions %}{% include "_isoform_card.html" %}{% endfor %}
+        {% for iso in truncations %}{% include "_isoform_card.html" %}{% endfor %}
+        {% for iso in others %}{% include "_isoform_card.html" %}{% endfor %}
       </ul>
     </details>
 
@@ -195,6 +202,11 @@
     var controls = document.getElementById("kw-controls");
     var selectedBox = document.getElementById("kw-selected");
     var clearBtn = document.getElementById("kw-clear");
+    var tagInput = document.getElementById("tag-input");
+    var tagDropdown = document.getElementById("tag-dropdown");
+    var tagControls = document.getElementById("tag-controls");
+    var tagSelectedBox = document.getElementById("tag-selected");
+    var tagClearBtn = document.getElementById("tag-clear");
     var countEl = document.getElementById("result-count");
 
     // --- Inverted index: keyword(lowercase) -> {name, cards[]}. One pass. ---
@@ -217,6 +229,25 @@
     });
     vocab.sort(function (a, b) { return b.count - a.count || a.name.localeCompare(b.name); });
 
+    // --- Inverted index for isoform-change tags: tag(lowercase) -> {name, cards[]}.
+    // Same typeahead machinery as keywords; membership via each card's _tags set. ---
+    var tagIndex = {};
+    cards.forEach(function (c) {
+      c._tags = {};
+      (c.dataset.isoTags || "").split(";").forEach(function (t) {
+        t = t.trim();
+        if (!t) return;
+        var key = t.toLowerCase();
+        c._tags[key] = true;
+        if (!tagIndex[key]) tagIndex[key] = { name: t, cards: [] };
+        tagIndex[key].cards.push(c);
+      });
+    });
+    var tagVocab = Object.keys(tagIndex).map(function (key) {
+      return { key: key, name: tagIndex[key].name, count: tagIndex[key].cards.length };
+    });
+    tagVocab.sort(function (a, b) { return b.count - a.count || a.name.localeCompare(b.name); });
+
     // --- CDLMPS firing: per-card fired-letter set + original DOM order. ---
     var grid = document.getElementById("gene-grid");
     cards.forEach(function (c, i) {
@@ -231,6 +262,8 @@
     var mode = "and";             // "and" | "or" — keyword match mode
     var selectedCats = [];        // array of category letters, e.g. ["C","D"]
     var catMode = "and";          // "and" | "or" — category match mode
+    var selectedTags = [];        // array of isoform-change tag names
+    var tagMode = "and";          // "and" | "or" — tag match mode
     var sortMode = "name";        // "name" | "firing"
 
     function currentMode() {
@@ -239,6 +272,10 @@
     }
     function currentCatMode() {
       var r = document.querySelector('input[name="catmode"]:checked');
+      return r ? r.value : "and";
+    }
+    function currentTagMode() {
+      var r = document.querySelector('input[name="tagmode"]:checked');
       return r ? r.value : "and";
     }
 
@@ -261,13 +298,19 @@
             ? selectedCats.every(function (L) { return c._fires[L]; })
             : selectedCats.some(function (L) { return c._fires[L]; });
         }
-        var match = nameMatch && kwMatch && catMatch;
+        var tagMatch = true;
+        if (selectedTags.length) {
+          tagMatch = (tagMode === "and")
+            ? selectedTags.every(function (t) { return c._tags[t]; })
+            : selectedTags.some(function (t) { return c._tags[t]; });
+        }
+        var match = nameMatch && kwMatch && catMatch && tagMatch;
         c.style.display = match ? "" : "none";
         if (match) shown++;
       });
       if (none) none.style.display = shown ? "none" : "block";
       if (countEl) {
-        var active = q || selected.length || selectedCats.length;
+        var active = q || selected.length || selectedCats.length || selectedTags.length;
         countEl.hidden = !active;
         countEl.textContent = active ? shown + " gene" + (shown === 1 ? "" : "s") : "";
       }
@@ -382,6 +425,86 @@
     });
     Array.prototype.forEach.call(document.querySelectorAll('input[name="catmode"]'), function (r) {
       r.addEventListener("change", function () { catMode = currentCatMode(); apply(); });
+    });
+
+    // --- Isoform-change tag facet: typeahead over the controlled vocab. ---
+    // Same shape as the keyword facet; selectedTags holds lowercase keys and a
+    // gene matches when ANY of its isoforms carries the tag (c._tags membership).
+    function renderTagSelected() {
+      if (!tagSelectedBox) return;
+      tagSelectedBox.innerHTML = "";
+      selectedTags.forEach(function (key) {
+        var chip = document.createElement("span");
+        chip.className = "kw-tag";
+        chip.textContent = tagIndex[key] ? tagIndex[key].name : key;
+        var x = document.createElement("button");
+        x.type = "button";
+        x.className = "kw-tag-x";
+        x.setAttribute("aria-label", "Remove");
+        x.textContent = "×";
+        x.addEventListener("click", function () { removeTag(key); });
+        chip.appendChild(x);
+        tagSelectedBox.appendChild(chip);
+      });
+      if (tagControls) tagControls.hidden = selectedTags.length === 0;
+    }
+    function addTag(key) {
+      key = (key || "").toLowerCase();
+      if (!tagIndex[key] || selectedTags.indexOf(key) !== -1) return;
+      selectedTags.push(key);
+      if (tagInput) tagInput.value = "";
+      hideTagDropdown();
+      renderTagSelected();
+      apply();
+    }
+    function removeTag(key) {
+      selectedTags = selectedTags.filter(function (k) { return k !== key; });
+      renderTagSelected();
+      apply();
+    }
+    function hideTagDropdown() {
+      if (!tagDropdown) return;
+      tagDropdown.hidden = true; tagDropdown.innerHTML = "";
+    }
+    function showTagDropdown() {
+      if (!tagDropdown || !tagInput) return;
+      var q = (tagInput.value || "").trim().toLowerCase();
+      var matches = tagVocab.filter(function (v) {
+        return selectedTags.indexOf(v.key) === -1 && (!q || v.key.indexOf(q) !== -1);
+      }).slice(0, 500);
+      if (!matches.length) { hideTagDropdown(); return; }
+      tagDropdown.innerHTML = "";
+      matches.forEach(function (v) {
+        var row = document.createElement("button");
+        row.type = "button";
+        row.className = "kw-option";
+        row.innerHTML = '<span class="kw-option-name"></span>' +
+                        '<span class="kw-option-count"></span>';
+        row.querySelector(".kw-option-name").textContent = v.name;
+        row.querySelector(".kw-option-count").textContent = v.count;
+        row.addEventListener("mousedown", function (e) { e.preventDefault(); addTag(v.key); });
+        tagDropdown.appendChild(row);
+      });
+      tagDropdown.hidden = false;
+    }
+    if (tagInput) {
+      tagInput.addEventListener("input", showTagDropdown);
+      tagInput.addEventListener("focus", showTagDropdown);
+      tagInput.addEventListener("blur", function () { setTimeout(hideTagDropdown, 120); });
+      tagInput.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") {
+          var first = tagDropdown && tagDropdown.querySelector(".kw-option");
+          if (first) { e.preventDefault(); first.dispatchEvent(new MouseEvent("mousedown")); }
+        } else if (e.key === "Escape") {
+          hideTagDropdown();
+        }
+      });
+    }
+    Array.prototype.forEach.call(document.querySelectorAll('input[name="tagmode"]'), function (r) {
+      r.addEventListener("change", function () { tagMode = currentTagMode(); apply(); });
+    });
+    if (tagClearBtn) tagClearBtn.addEventListener("click", function () {
+      selectedTags = []; renderTagSelected(); apply();
     });
     var sortSelect = document.getElementById("sort-mode");
     if (sortSelect) sortSelect.addEventListener("change", function () {

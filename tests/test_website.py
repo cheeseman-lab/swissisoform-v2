@@ -61,12 +61,124 @@ def test_index_lists_a_known_gene(client):
     assert "TRNT1" in body
 
 
-def test_gene_page_redirects_to_first_isoform(client):
-    """V1 /genes/<gene> is deprecated and 302s to a V2 isoform page."""
+def test_gene_page_renders_combined_protein_figure_and_isoform_cards(client):
+    """/genes/<gene> is the gene overview: combined protein-residue figure + isoform cards."""
     r = client.get("/genes/TRNT1")
-    assert r.status_code == 302
-    assert "/isoforms/" in r.headers["Location"]
-    assert "/genes/TRNT1/isoforms/" in r.headers["Location"]
+    assert r.status_code == 200
+    body = r.data.decode()
+    # The combined per-isoform protein-residue figure.
+    assert "graph-gene" in body
+    assert "GENE_PROTEIN_FIG" in body
+    # Clicking a transcript bar navigates to the isoform page.
+    assert "plotly_click" in body
+    # Isoform cards link through to the per-isoform deep-dive page.
+    assert "/genes/TRNT1/isoforms/" in body
+
+
+def test_gene_page_linkifies_pmids_in_narrative(client):
+    """The gene mechanistic narrative renders [PMID:N] citations as PubMed links."""
+    r = client.get("/genes/CBX1")
+    assert r.status_code == 200
+    body = r.data.decode()
+    assert "gene-head-fn" in body
+    assert "pubmed.ncbi.nlm.nih.gov" in body
+
+
+def test_pmid_links_filter_escapes_and_links():
+    """The pmid_links Jinja filter escapes text and wraps PMIDs in PubMed anchors."""
+    from swissisoform_site.app import app
+
+    with app.test_request_context():
+        f = app.jinja_env.filters["pmid_links"]
+        out = str(f("reads H3K9me3 [PMID:21047797] <script>"))
+        multi = str(f("established [PMID:36310139, PMID:30031230, PMID:38769286]"))
+    assert '<a href="https://pubmed.ncbi.nlm.nih.gov/21047797/"' in out
+    assert "&lt;script&gt;" in out  # surrounding text is escaped
+    # Every PMID in a multi-PMID bracket is linked (regression: only the first used to be).
+    for pmid in ("36310139", "30031230", "38769286"):
+        assert f'https://pubmed.ncbi.nlm.nih.gov/{pmid}/' in multi
+    assert multi.count("<a ") == 3
+    assert multi.startswith("established [") and multi.rstrip().endswith("]")
+
+
+def test_gene_view_variant_unique_in_any_isoform():
+    """A variant in the unique region of ANY isoform stays flagged unique.
+
+    Regression: the pathogenic-upgrade path in the cross-isoform variant dedup
+    used to clobber the OR-merged ``in_unique`` with the current isoform's flag.
+    Here V:1 is unique+benign in isoform A but shared+pathogenic in B; the deduped
+    lollipop must keep ``in_unique=True`` (unique in A) AND the pathogenic call.
+    """
+    if str(WEBSITE_SRC) not in sys.path:
+        sys.path.insert(0, str(WEBSITE_SRC))
+    from types import SimpleNamespace
+
+    from swissisoform_site.app import _make_gene_protein_view
+
+    def _iso(tis_id, diff_end, iso_len, start_codon, variants):
+        return SimpleNamespace(
+            tis_id=tis_id, transcript_id="ENST1", orf_type="extended",
+            diff_space="isoform", diff_end=diff_end, isoform_len=iso_len,
+            canonical_len=200, start_codon=start_codon, diff_start=0,
+            differential_sequence="", raw={}, variants_all=variants,
+            variants_in_unique=[],
+        )
+
+    var_in_a = {"variant_id": "V:1", "isoform_protein_pos": 5, "in_isoform_unique": True,
+                "clinical_significance": "Benign", "consequence": "missense_variant"}
+    var_in_b = {"variant_id": "V:1", "isoform_protein_pos": 60, "in_isoform_unique": False,
+                "clinical_significance": "Pathogenic", "consequence": "missense_variant"}
+    gene = SimpleNamespace(
+        canonical_len=200,
+        isoforms=[_iso("A", 10, 210, "CTG", [var_in_a]),
+                  _iso("B", 5, 205, "GTG", [var_in_b])],
+    )
+
+    view = _make_gene_protein_view(gene)
+    v1 = [v for v in view.variants if v["variant_id"] == "V:1"]
+    assert len(v1) == 1                     # deduped across the two isoforms
+    assert v1[0]["in_unique"] is True       # unique in isoform A → stays unique
+    assert "pathogenic" in (v1[0]["significance"] or "").lower()  # most-severe kept
+
+
+def test_gene_view_truncation_lost_region_variants_appear():
+    """A truncation's lost-region (unique) variants must render in the lost region.
+
+    They aren't in the truncated isoform protein, so they carry a canonical-frame
+    ``protein_pos`` (not ``isoform_protein_pos``). Regression: the variant loop used
+    to skip anything without ``isoform_protein_pos``, dropping them entirely.
+    """
+    if str(WEBSITE_SRC) not in sys.path:
+        sys.path.insert(0, str(WEBSITE_SRC))
+    from types import SimpleNamespace
+
+    from swissisoform_site.app import _make_gene_protein_view
+
+    trunc = SimpleNamespace(
+        tis_id="T", transcript_id="ENST1", orf_type="truncated",
+        diff_space="canonical", diff_end=30, isoform_len=170, canonical_len=200,
+        start_codon="ATG", diff_start=0, differential_sequence="", raw={},
+        variants_in_unique=[],
+        variants_all=[
+            # lost-region (unique): canonical protein_pos only, no isoform_protein_pos.
+            {"variant_id": "LOST:1", "isoform_protein_pos": None, "protein_pos": 5,
+             "in_isoform_unique": True, "clinical_significance": "Pathogenic",
+             "consequence": "missense_variant"},
+            # retained (shared): isoform_protein_pos set.
+            {"variant_id": "KEPT:1", "isoform_protein_pos": 10, "protein_pos": None,
+             "in_isoform_unique": False, "clinical_significance": "Benign",
+             "consequence": "missense_variant"},
+        ],
+    )
+    gene = SimpleNamespace(canonical_len=200, isoforms=[trunc])
+
+    view = _make_gene_protein_view(gene)
+    by_id = {v["variant_id"]: v for v in view.variants}
+    x0 = view.bars[0]["x0"]  # retained bar's left edge = end of the lost region
+    assert "LOST:1" in by_id                        # previously dropped
+    assert by_id["LOST:1"]["in_unique"] is True
+    assert by_id["LOST:1"]["pos"] < x0              # in the lost region (left of the retained bar)
+    assert by_id["KEPT:1"]["pos"] >= x0             # retained region
 
 
 def test_gene_page_404(client):
@@ -163,6 +275,55 @@ def test_synthesis_narrative_html_converts_markdown():
     assert "**" not in out
 
 
+def test_synthesis_tags_whitelisted_against_vocab(tmp_path):
+    """synthesis_tags_for_isoform keeps only controlled-vocab tags, in vocab order."""
+    if str(WEBSITE_SRC) not in sys.path:
+        sys.path.insert(0, str(WEBSITE_SRC))
+    import json as _json
+
+    from swissisoform_site.data import ISOFORM_TAG_VOCAB, synthesis_tags_for_isoform
+
+    slug = "chr1-1-ATG-ENST"
+    (tmp_path / slug).mkdir()
+    (tmp_path / slug / "synthesis.json").write_text(
+        _json.dumps({"tags": ["Domain gain", "made up tag", "Localization conflict"]})
+    )
+    tags = synthesis_tags_for_isoform(llm_dir=tmp_path, tis_slug=slug)
+    # off-vocab dropped; survivors in vocab order (Localization conflict precedes Domain gain)
+    assert tags == ["Localization conflict", "Domain gain"]
+    assert all(t in ISOFORM_TAG_VOCAB for t in tags)
+    # missing dir / no tags → empty
+    assert synthesis_tags_for_isoform(llm_dir=tmp_path, tis_slug="absent") == []
+
+
+def test_synthesis_keyed_dict_renders_hypothesis_and_confidence():
+    """llm_synthesis_for_isoform html-renders the keyed prose fields; legacy still works."""
+    if str(WEBSITE_SRC) not in sys.path:
+        sys.path.insert(0, str(WEBSITE_SRC))
+    import json as _json
+    import tempfile
+    from pathlib import Path
+
+    from swissisoform_site.data import llm_synthesis_for_isoform
+
+    d = Path(tempfile.mkdtemp())
+    slug = "chr1-1-ATG-ENST"
+    (d / slug).mkdir()
+    (d / slug / "synthesis.json").write_text(
+        _json.dumps({
+            "tis_id": "x", "headline": "h",
+            "divergence_hypothesis": "adds a **targeting** arm",
+            "function_relevance": "matters", "tags": ["Localization conflict", "bogus"],
+            "confidence": "medium",
+        })
+    )
+    syn = llm_synthesis_for_isoform(llm_dir=d, tis_slug=slug)
+    assert "<strong>targeting</strong>" in syn["divergence_hypothesis_html"]
+    assert "function_relevance_html" in syn
+    assert syn["tags"] == ["Localization conflict"]  # bogus dropped
+    assert syn["confidence"] == "medium"
+
+
 # --------------------------------------------------------------------------- #
 # V2 isoform route (/genes/<gene>/isoforms/<tis_slug>)
 # --------------------------------------------------------------------------- #
@@ -186,7 +347,12 @@ def test_isoform_route_returns_404_for_unknown_tis(client):
 
 
 def test_isoform_page_contains_graphs_and_synthesis_block(client):
-    """The rendered V2 page exposes the Plotly graph divs and the Synthesis block."""
+    """The rendered V2 page exposes the folding panel and the Synthesis block.
+
+    The combined protein-residue figure moved to the gene page; the per-isoform
+    page keeps the folding + evidence + variants deep dive (no ``graph-protein``
+    panel).
+    """
     import pandas as pd
     from swissisoform_site.data import tis_slug as make_slug
 
@@ -195,7 +361,10 @@ def test_isoform_page_contains_graphs_and_synthesis_block(client):
     r = client.get(f"/genes/{row['gene_name']}/isoforms/{make_slug(row['tis_id'])}")
     assert r.status_code == 200
     body = r.data
-    assert b"graph-protein" in body
+    # The residue-axis protein figure is gone from the isoform page.
+    assert b"graph-protein" not in body
+    # The folding panel stays on the isoform deep-dive page.
+    assert b"iso-panel-folding" in body
     # AI summary is pinned to the top as a collapsible dropdown.
     assert b"AI summary" in body
     assert b"synthesis-dd" in body
@@ -206,7 +375,8 @@ def test_isoform_page_contains_graphs_and_synthesis_block(client):
 
 def test_isoform_page_has_evidence_tiles(client):
     """The V2 isoform page renders the scored evidence tiles plus the bespoke
-    Biophysics (S2) and SAE (S3) cards, in one flat grid (no group headers)."""
+    Biophysics (S2) and SAE (S3) cards, in one flat grid (no group headers).
+    """
     import pandas as pd
     from swissisoform_site.data import tis_slug as make_slug
 

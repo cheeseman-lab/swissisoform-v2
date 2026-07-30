@@ -1,0 +1,10 @@
+{# One isoform row: orf chip + tis id + aa length + CDLMPS scoring string + tags.
+   Requires `iso` and `gene` in context, and the `sc` macro (_cdlmps.html)
+   imported by the including template. Shared by the landing-page dropdown and
+   the gene page's isoform-card list. #}
+{% set _chip = {'extended': ('EXT', 'ext'), 'truncated': ('TRUNC', 'trunc')}.get(iso.orf_type, (iso.orf_type|upper, 'other')) %}
+<li><a href="{{ url_for('isoform_page', gene_name=gene.name, tis_slug_str=iso.tis_id|slugify) }}">
+  <span class="iso-chip {{ _chip[1] }}">{{ _chip[0] }}</span>
+  {{ iso.tis_id }} · {{ iso.aa_len }} aa · {{ sc.cdlmps(iso.category_verdicts) }}
+  {% if iso.tags %}<span class="iso-tags-row">{% for t in iso.tags %}<span class="iso-tag-chip sm">{{ t }}</span>{% endfor %}</span>{% endif %}
+</a></li>

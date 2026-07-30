@@ -1,10 +1,12 @@
 """Gene Reference module — external database annotations per gene.
 
-Annotates each gene with UniProt reference fields (accession, function,
-subcellular location) looked up by gene name. The caller loads the reference
-data (see scripts/setup/fetch_generef.py); this module maps gene names to the
-pre-loaded annotation dicts. HPA / DepMap / OMIM are a future extension pending
-their data sources.
+Annotates each gene with reference fields (function, subcellular location,
+functional keywords) looked up by gene name. ``function`` / ``subcellular_location``
+/ ``keywords`` come from the Affinage API; ``uniprot_id`` comes from a minimal
+UniProtKB accession lookup (for the entry ID/link only). See
+scripts/setup/fetch_generef.py. This module holds no fetch logic — it maps gene
+names to the pre-loaded annotation dicts. HPA / DepMap / OMIM are a future
+extension pending their data sources.
 """
 
 from __future__ import annotations
@@ -15,12 +17,13 @@ from swissisoform.config import PipelineConfig
 from swissisoform.models import Gene, TranslationInitiationSite
 
 # Annotation keys produced by this module (without the MODULE_NAME prefix).
-# Scoped to the fields we can reliably populate from a no-auth source
-# (UniProt REST). HPA / DepMap / OMIM are future fields pending their data
-# infra — adding them here without data would emit blank columns.
+# Scoped to the fields we can reliably populate: function / subcellular_location
+# / keywords from the Affinage API, plus the UniProt accession id. HPA / DepMap /
+# OMIM are future fields pending their data infra — adding them here without data
+# would emit blank columns.
 _ANNOTATION_KEYS: list[str] = [
     "uniprot_id",
-    "uniprot_function",
+    "function",
     "subcellular_location",
     "keywords",
 ]

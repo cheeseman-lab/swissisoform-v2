@@ -230,7 +230,7 @@ _NAN_SCHEMA_COLUMNS = (
     "isoform_varianteffect_mean_delta_llr_unique",
     "isoform_varianteffect_mean_am_pathogenicity_unique",
     "generef_uniprot_id",
-    "generef_uniprot_function",
+    "generef_function",
     "generef_subcellular_location",
 )
 
