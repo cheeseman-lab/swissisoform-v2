@@ -25,7 +25,7 @@
 
   <!-- Combined protein-residue view: one canonical bar + one bar per isoform,
        aligned on the shared region, with mutations above and domains below. -->
-  <section class="iso-panel gene-igv-panel">
+  <section class="iso-panel gene-protein-panel">
     <h2 class="iso-panel-h">Isoform tracks</h2>
     <p class="protein-caption">
       Protein-residue axis (canonical frame). Top bar = canonical; each bar below is an
@@ -67,14 +67,14 @@
 </div>
 
 <script>
-  const GENE_IGV_FIG = {{ igv_figure_json|safe }};
-  const GENE_IGV_FIG_COLLAPSED = {{ igv_figure_collapsed_json|safe }};
+  const GENE_PROTEIN_FIG = {{ protein_figure_json|safe }};
+  const GENE_PROTEIN_FIG_COLLAPSED = {{ protein_figure_collapsed_json|safe }};
   // Start with domains collapsed (compact); the button expands to the full stack.
   let swissGeneDomainsCollapsed = true;
   function swissGeneFig() {
-    return swissGeneDomainsCollapsed ? GENE_IGV_FIG_COLLAPSED : GENE_IGV_FIG;
+    return swissGeneDomainsCollapsed ? GENE_PROTEIN_FIG_COLLAPSED : GENE_PROTEIN_FIG;
   }
-  function swissRenderGeneIgv() {
+  function swissRenderGeneProtein() {
     // Width fills the container responsively; the figure carries its own height
     // (it scales with the isoform + feature-track count).
     const fig = swissGeneFig();
@@ -87,7 +87,7 @@
       swissGeneDomainsCollapsed = !swissGeneDomainsCollapsed;
       btn.textContent = swissGeneDomainsCollapsed ? "Expand domains" : "Collapse domains";
       btn.setAttribute("aria-expanded", String(!swissGeneDomainsCollapsed));
-      swissRenderGeneIgv();
+      swissRenderGeneProtein();
     });
   }
   // Click an isoform's bar → open that isoform's page (customdata carries the slug).
@@ -101,16 +101,16 @@
       if (slug) window.location = GENE_BASE + "/isoforms/" + encodeURIComponent(slug);
     });
   }
-  function swissInitGeneIgv() {
-    swissRenderGeneIgv(); swissWireGeneDomainToggle(); swissWireGeneClick();
+  function swissInitGeneProtein() {
+    swissRenderGeneProtein(); swissWireGeneDomainToggle(); swissWireGeneClick();
   }
-  if (window.Plotly) { swissInitGeneIgv(); }
+  if (window.Plotly) { swissInitGeneProtein(); }
   else {
     document.addEventListener('DOMContentLoaded', function () {
-      if (window.Plotly) { swissInitGeneIgv(); }
+      if (window.Plotly) { swissInitGeneProtein(); }
       else {
         var t = setInterval(function () {
-          if (window.Plotly) { clearInterval(t); swissInitGeneIgv(); }
+          if (window.Plotly) { clearInterval(t); swissInitGeneProtein(); }
         }, 30);
       }
     });

@@ -61,14 +61,14 @@ def test_index_lists_a_known_gene(client):
     assert "TRNT1" in body
 
 
-def test_gene_page_renders_combined_igv_and_isoform_cards(client):
-    """/genes/<gene> is the gene overview: combined genomic IGV + isoform cards."""
+def test_gene_page_renders_combined_protein_figure_and_isoform_cards(client):
+    """/genes/<gene> is the gene overview: combined protein-residue figure + isoform cards."""
     r = client.get("/genes/TRNT1")
     assert r.status_code == 200
     body = r.data.decode()
-    # The combined per-isoform genomic IGV.
+    # The combined per-isoform protein-residue figure.
     assert "graph-gene" in body
-    assert "GENE_IGV_FIG" in body
+    assert "GENE_PROTEIN_FIG" in body
     # Clicking a transcript bar navigates to the isoform page.
     assert "plotly_click" in body
     # Isoform cards link through to the per-isoform deep-dive page.
@@ -349,8 +349,9 @@ def test_isoform_route_returns_404_for_unknown_tis(client):
 def test_isoform_page_contains_graphs_and_synthesis_block(client):
     """The rendered V2 page exposes the folding panel and the Synthesis block.
 
-    The combined genomic IGV moved to the gene page; the per-isoform page keeps
-    the folding + evidence + variants deep dive (no ``graph-protein`` panel).
+    The combined protein-residue figure moved to the gene page; the per-isoform
+    page keeps the folding + evidence + variants deep dive (no ``graph-protein``
+    panel).
     """
     import pandas as pd
     from swissisoform_site.data import tis_slug as make_slug
@@ -360,7 +361,7 @@ def test_isoform_page_contains_graphs_and_synthesis_block(client):
     r = client.get(f"/genes/{row['gene_name']}/isoforms/{make_slug(row['tis_id'])}")
     assert r.status_code == 200
     body = r.data
-    # The residue-axis protein IGV is gone from the isoform page.
+    # The residue-axis protein figure is gone from the isoform page.
     assert b"graph-protein" not in body
     # The folding panel stays on the isoform deep-dive page.
     assert b"iso-panel-folding" in body

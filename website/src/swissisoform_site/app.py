@@ -200,8 +200,8 @@ def create_app() -> Flask:
             extensions=extensions,
             truncations=truncations,
             others=others,
-            igv_figure_json=json.dumps(gene_fig),
-            igv_figure_collapsed_json=json.dumps(gene_fig_collapsed),
+            protein_figure_json=json.dumps(gene_fig),
+            protein_figure_collapsed_json=json.dumps(gene_fig_collapsed),
         )
 
     @app.get("/genes/<gene_name>/isoforms/<tis_slug_str>")
@@ -626,6 +626,10 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
     coil_iv: list[tuple[int, int]] = []
     motifs: dict[tuple, dict[str, Any]] = {}
     cell_by_sample: dict[str, list] = {}
+    # Representative canonical-start IE per sample (max non-null over the gene's
+    # isoform rows — rows sharing a canonical Tid carry identical values; max is
+    # a stable pick when isoforms map to different canonical Tids).
+    canon_ie_by_sample: dict[str, float] = {}
     x_left = 1.0
 
     for iso in gene.isoforms:
@@ -647,7 +651,11 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
             offset = can_len_i - iso_len
             x0, x1 = 1 + offset, iso_len + offset
             if is_trunc:
-                diff_x0, diff_x1, diff_on_canon = 1, x0, True  # lost N-term on canonical
+                # Lost N-terminus = canonical residues [1, x0-1]; residue x0 is the
+                # FIRST retained (shared-core) residue where the isoform body begins,
+                # so the lost-region overlay ends at x0-1 and does not bleed one
+                # residue into the shared core on the canonical bar.
+                diff_x0, diff_x1, diff_on_canon = 1, x0 - 1, True
             else:
                 diff_x0, diff_x1, diff_on_canon = x0, 0, False  # extension left of residue 1
         else:  # uORF / altORF / no shared region — whole isoform differential
@@ -750,12 +758,31 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
             try:
                 val = float(val)
             except (TypeError, ValueError):
-                continue
-            if not math.isfinite(val) or val <= 0:
-                continue
-            cell_by_sample.setdefault(sample, []).append(
-                {"residue": x0, "log2_ie": math.log2(val), "label": label}
-            )
+                val = None
+            if val is not None and math.isfinite(val) and val > 0:
+                cell_by_sample.setdefault(sample, []).append(
+                    {"residue": x0, "log2_ie": math.log2(val), "label": label}
+                )
+            # Canonical-start IE baseline for this sample — tracked independently
+            # of whether this isoform has an alt dot in the lane, so the canonical
+            # dot shows wherever the canonical start's IE is measured.
+            cval = raw.get(f"canonical_expr_{sample}_initiation_efficiency")
+            try:
+                cval = float(cval)
+            except (TypeError, ValueError):
+                cval = None
+            if cval is not None and math.isfinite(cval) and cval > 0:
+                prev = canon_ie_by_sample.get(sample)
+                if prev is None or cval > prev:
+                    canon_ie_by_sample[sample] = cval
+
+    # One gray canonical-start dot per sample at the canonical start (residue 1 →
+    # x=0 after the global shift below), sized by the canonical IE.
+    for sample, cval in canon_ie_by_sample.items():
+        cell_by_sample.setdefault(sample, []).append(
+            {"residue": 1, "log2_ie": math.log2(cval), "label": "canonical start",
+             "canonical": True}
+        )
 
     disorder = [{"x0": s, "x1": e} for s, e in _union_intervals([disorder_iv])]
     coils = [{"x0": s, "x1": e} for s, e in _union_intervals([coil_iv])]
