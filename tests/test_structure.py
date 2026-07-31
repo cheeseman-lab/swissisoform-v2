@@ -178,6 +178,44 @@ class TestStructureModule:
         assert ann["status"] == "no_cache"
         assert ann["plddt_diffregion_mean"] is None
 
+    def test_hashes_emitted_even_with_no_cache(self, synthetic_tis, config, tmp_path):
+        """A hash with no cache entry means 'never folded' — distinct from 'no sequence'.
+
+        The parquet carries only protein lengths, so these two columns are the
+        only route from a tis_id back to a fold-cache entry after the pipeline.
+        """
+        site = synthetic_tis[0]
+        module = StructureModule(config, cache_dir=tmp_path, backend="boltz")
+        ann = module.annotate_site(site)
+        assert ann["status"] == "no_cache"
+        assert ann["canonical_hash"] == protein_hash(site.canonical_protein)
+        assert ann["isoform_hash"] == protein_hash(site.isoform_protein)
+
+    def test_hashes_address_the_seeded_cache_entry(self, synthetic_tis, config, tmp_path):
+        """(backend, hash) must reconstruct the real cache path via cache_path."""
+        site = next(s for s in synthetic_tis if s.tis_id == "chr1:940:+:CTG")
+        _seed_cache(tmp_path, site.isoform_protein, plddt=[80.0] * 5, ptm=0.7)
+        _seed_cache(tmp_path, site.canonical_protein, plddt=[80.0] * 5, ptm=0.7)
+
+        module = StructureModule(config, cache_dir=tmp_path, backend="boltz")
+        ann = module.annotate_site(site)
+        for side in ("canonical", "isoform"):
+            entry = cache_path(tmp_path, ann["backend"], ann[f"{side}_hash"])
+            assert (entry / "confidence.json").exists()
+            assert load_cache(ann[f"{side}_hash"], tmp_path, ann["backend"]) is not None
+
+    def test_hashes_are_none_without_a_sequence(self, synthetic_tis, config, tmp_path):
+        site = synthetic_tis[0]
+        site.canonical_protein = ""
+        module = StructureModule(config, cache_dir=tmp_path, backend="boltz")
+        ann = module.annotate_site(site)
+        assert ann["canonical_hash"] is None
+        assert ann["isoform_hash"] == protein_hash(site.isoform_protein)
+
+    def test_hash_columns_declared_in_output_columns(self):
+        for col in ("structure_canonical_hash", "structure_isoform_hash"):
+            assert col in StructureModule.OUTPUT_COLUMNS
+
     def test_extension_metrics_from_cache(self, synthetic_tis, config, tmp_path):
         # site 3 — chr1:940:+:CTG, extension on +strand
         site = next(s for s in synthetic_tis if s.tis_id == "chr1:940:+:CTG")

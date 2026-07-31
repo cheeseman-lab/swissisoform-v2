@@ -317,7 +317,17 @@ def _ISO_FIXTURE_RECORD() -> dict:
                 "scoring": {"criteria": {}},
                 "key_metrics": {},
                 "pathogenic_variants_in_unique": [],
-                "_raw": {},
+                # A current-shape _raw: StructureModule's fold-cache hashes plus
+                # the differential-region coordinates. The P readers resolve
+                # through these, and _tool_setup refuses to run without them.
+                "_raw": {
+                    "isoform_structure_canonical_hash": "a" * 40,
+                    "isoform_structure_isoform_hash": "b" * 40,
+                    "isoform_structure_backend": "esmfold2",
+                    "diff_space": "canonical",
+                    "diff_start": 0,
+                    "diff_end": 10,
+                },
             }
         ],
     }
@@ -797,6 +807,25 @@ def _category_run_args(records_dir: Path, out_dir: Path, extra: list[str]) -> li
 
 
 @pytest.fixture
+def only_m(monkeypatch, mod):
+    """Restrict the tool-loop registry to M.
+
+    Each tool category has its own tool names, and a dispatch returns an error
+    for names it does not own — which correctly does not count toward
+    ``min_data_calls``. So a test scripting M's tools must not also drive P, or
+    P's loop spins until ``max_turns``. Isolating the registry keeps each test
+    about one category.
+    """
+    monkeypatch.setattr(mod, "TOOL_CATEGORY_PROMPTS", {"M": "category-pass-M.txt"})
+
+
+@pytest.fixture
+def only_p(monkeypatch, mod):
+    """Restrict the tool-loop registry to P. See :func:`only_m`."""
+    monkeypatch.setattr(mod, "TOOL_CATEGORY_PROMPTS", {"P": "category-pass-P.txt"})
+
+
+@pytest.fixture
 def category_records(tmp_path: Path) -> Path:
     records_dir = tmp_path / "records"
     records_dir.mkdir()
@@ -805,7 +834,7 @@ def category_records(tmp_path: Path) -> Path:
 
 
 def test_category_pass_runs_m_as_a_tool_loop(
-    mod, monkeypatch, tmp_path, category_records, variants_long
+    mod, monkeypatch, tmp_path, category_records, variants_long, only_m
 ):
     """M goes through the loop; the other five stay single-shot."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
@@ -838,7 +867,7 @@ def test_category_pass_runs_m_as_a_tool_loop(
 
 
 def test_category_pass_writes_the_m_trace(
-    mod, monkeypatch, tmp_path, category_records, variants_long
+    mod, monkeypatch, tmp_path, category_records, variants_long, only_m
 ):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
     monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: json.dumps({"verdict": "neutral",
@@ -917,7 +946,7 @@ def test_strip_hits_shrinks_a_real_m_slice(mod):
 
 
 def test_tool_loop_opening_context_carries_no_variant_rows(
-    mod, monkeypatch, tmp_path, category_records, variants_long
+    mod, monkeypatch, tmp_path, category_records, variants_long, only_m
 ):
     """End-to-end: what actually reaches the API has the rows removed."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
@@ -962,7 +991,7 @@ def test_no_tools_path_still_sends_the_hits(
 
 
 def test_category_pass_writes_a_separate_tool_usage_report(
-    mod, monkeypatch, tmp_path, category_records, variants_long
+    mod, monkeypatch, tmp_path, category_records, variants_long, only_m
 ):
     """Tool categories are full-price and multi-turn, so their cost is reported apart."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
@@ -988,7 +1017,7 @@ def test_category_pass_writes_a_separate_tool_usage_report(
 
 
 def test_category_pass_records_an_error_when_the_loop_fails(
-    mod, monkeypatch, tmp_path, category_records, variants_long
+    mod, monkeypatch, tmp_path, category_records, variants_long, only_m
 ):
     """A failed M loop must not sink the other five categories."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
@@ -1014,7 +1043,7 @@ def test_category_pass_records_an_error_when_the_loop_fails(
 
 
 def test_category_pass_fails_loudly_when_variants_long_is_missing(
-    mod, monkeypatch, tmp_path, category_records
+    mod, monkeypatch, tmp_path, category_records, only_m
 ):
     """No silent fallback: an M verdict with tools and one without aren't comparable."""
     from swissisoform.site import tools as site_tools
@@ -1058,7 +1087,7 @@ def test_dry_run_needs_no_variants_table_and_still_counts_six(
 
 
 def test_batch_path_excludes_tool_categories_from_the_batch(
-    mod, monkeypatch, tmp_path, category_records, variants_long
+    mod, monkeypatch, tmp_path, category_records, variants_long, only_m
 ):
     """Multi-turn is structurally unbatchable — M runs interactively after the batch."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
@@ -1109,3 +1138,74 @@ def test_variants_long_defaults_to_a_sibling_of_records(mod, tmp_path):
 
     args.variants_long = tmp_path / "explicit.parquet"
     assert mod._resolve_variants_long(args) == tmp_path / "explicit.parquet"
+
+
+# ── P category wiring ─────────────────────────────────────────────────────
+
+
+P_VERDICT = {"verdict": "interesting", "reasoning": "extension folds but is unplaced."}
+
+
+def test_p_category_runs_as_a_tool_loop(
+    mod, monkeypatch, tmp_path, category_records, only_p
+):
+    """P loops over its own readers; the other five stay single-shot."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    single_shot: list = []
+    monkeypatch.setattr(
+        mod, "call_llm",
+        lambda *a, **kw: single_shot.append(1) or json.dumps({"verdict": "neutral",
+                                                             "reasoning": "single shot."}),
+    )
+    calls: list = []
+    script = [
+        _Response([_tool_use("plddt_profile", {"side": "canonical"}, "t1")]),
+        _Response([_tool_use("pae_block", {"side": "canonical"}, "t2")]),
+        _Response([_tool_use("emit_verdict", P_VERDICT, "t3")]),
+    ]
+    monkeypatch.setattr(mod, "_try_import_anthropic", lambda: _fake_anthropic(script, calls))
+
+    out_dir = tmp_path / "out"
+    rc = mod.main(_category_run_args(category_records, out_dir, []))
+    assert rc == 0
+
+    tis_slug = mod._tis_slug(TIS_ID)
+    payload = json.loads((out_dir / tis_slug / "categories.json").read_text())
+    assert payload["Predicted Structure"]["verdict"] == "interesting"
+    assert len(single_shot) == 5
+    # And the trace lands under P, not M.
+    trace = json.loads((out_dir / tis_slug / "P_trace.json").read_text())
+    assert trace["outcome"] == "emit_verdict"
+    assert trace["n_data_calls"] == 2
+
+
+def test_p_category_fails_loudly_without_the_hash_columns(
+    mod, monkeypatch, tmp_path, only_p
+):
+    """A run predating StructureModule's hash columns cannot address the cache."""
+    from swissisoform.site import structure_tools as p_tools
+
+    records_dir = tmp_path / "records"
+    records_dir.mkdir()
+    stale = _ISO_FIXTURE_RECORD()
+    stale["isoforms"][0]["_raw"] = {}  # pre-hash-column record
+    (records_dir / "GENE_A.json").write_text(json.dumps(stale))
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    with pytest.raises(p_tools.StructureHashesMissing, match="StructureModule"):
+        mod.main(_category_run_args(records_dir, tmp_path / "out", []))
+
+
+def test_p_dispatch_is_bound_to_the_isoforms_own_raw_row(mod, tmp_path, category_records):
+    """Each isoform's readers must resolve through its own hashes, not a shared one."""
+    records = mod.load_records(category_records)
+    iso = mod._first_isoform(records)
+    assert iso["_raw"]["isoform_structure_isoform_hash"] == "b" * 40
+
+    from swissisoform.site import structure_tools as p_tools
+
+    dispatch = p_tools.make_p_dispatch(iso["_raw"], cache_dir=tmp_path)
+    # Empty cache dir → the readers report absence rather than raising.
+    out = dispatch("plddt_profile", {})
+    assert out["status"] == "no_cache"
+    assert out["scale"] == "0-1"
