@@ -63,6 +63,16 @@ class StructureModule:
         "structure_pae_body_vs_body",
         "structure_pae_diff_vs_body",
         "structure_pae_status",
+        # Cache addresses. The fold cache is keyed by sha1 of the protein
+        # sequence, but the sequences are not carried downstream (the parquet
+        # holds only lengths), so anything reading the cache after the pipeline
+        # — the P-category LLM readers, ad-hoc analysis — has no way back to a
+        # cache entry from a tis_id. Emitting the hashes here is that bridge;
+        # combined with ``structure_backend`` they reconstruct the full path via
+        # ``fold.cache_path``. Populated from the sequence alone, so they are
+        # present even when nothing has been folded yet.
+        "structure_canonical_hash",
+        "structure_isoform_hash",
     ]
     SCOPE: str = "C"
 
@@ -115,14 +125,35 @@ class StructureModule:
             "pae_body_vs_body": None,
             "pae_diff_vs_body": None,
             "pae_status": reason,
+            "canonical_hash": None,
+            "isoform_hash": None,
+        }
+
+    @staticmethod
+    def _hashes(site: TranslationInitiationSite) -> dict[str, Any]:
+        """Fold-cache addresses for this site's two proteins.
+
+        Derived from the sequences alone, so they are emitted whether or not a
+        fold exists — a hash with no cache entry is the honest way to say "this
+        protein was never folded", which a null hash could not distinguish from
+        "no sequence".
+        """
+        return {
+            "canonical_hash": (
+                protein_hash(site.canonical_protein) if site.canonical_protein else None
+            ),
+            "isoform_hash": (
+                protein_hash(site.isoform_protein) if site.isoform_protein else None
+            ),
         }
 
     def annotate_site(self, site: TranslationInitiationSite) -> dict[str, Any]:
         """Compute structure-derived comparison metrics for a single TIS."""
+        hashes = self._hashes(site)
         can = self._load(site.canonical_protein)
         iso = self._load(site.isoform_protein)
         if can is None and iso is None:
-            return self._empty("no_cache")
+            return {**self._empty("no_cache"), **hashes}
 
         can_metrics = (can or {}).get("metrics") or {}
         iso_metrics = (iso or {}).get("metrics") or {}
@@ -146,6 +177,7 @@ class StructureModule:
             status = "partial"
 
         out = self._empty(status)
+        out.update(hashes)
         out["backend"] = self.backend
 
         can_plddt = (can or {}).get("confidence", {}).get("plddt") if can else None

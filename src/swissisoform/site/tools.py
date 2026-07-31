@@ -1,28 +1,16 @@
 r"""Query-time readers over ``variants_long.parquet`` for the M-category LLM pass.
 
-The Mutation-Landscape (M) category read used to see only what
-``evidence.slice_category`` could pre-compress into one payload: ~20 scalars from
-M1/M2 plus ``isoform_variant_intersection_hits`` truncated to 30 rows. A typical
-isoform has several hundred variants (median ~440, max ~1,600 on the cheeseman
-set), so the model could report an enrichment ratio but could not ask whether a
-cluster is tight or diffuse, whether the pathogenic calls are also the
-high-AlphaMissense ones, or anything at all about the shared region the
-unique-region-only slice excludes.
-
-These readers move that compression from precompute time to query time. They are
-exposed to the model as Anthropic tools (:data:`M_TOOLS`) and executed locally by
-the dispatcher from :func:`make_m_dispatch`; the loop driving them lives in
+The Mutation-Landscape read gets ~20 scalars plus at most 30 of an isoform's
+several hundred variants, so it can quote an enrichment ratio but cannot ask
+whether a cluster is tight or diffuse. These readers move that compression from
+precompute time to query time: exposed as Anthropic tools (:data:`M_TOOLS`),
+executed locally by :func:`make_m_dispatch`, driven by
 ``swissisoform.site.llm.run_tool_loop``.
 
-``variants_long.parquet`` is an existing required build artifact, not a new
-dependency: ``evidence.write_variants_long`` produces it in the ``evidence``
-stage of ``scripts/build_website.sh`` and the website's clinical panel already
-reads every row of it (``variant_rows_for_isoform``). Nothing here computes
-anything the pipeline does not already persist — the M summary scalars come from
-``modules/variant_intersection.py`` upstream and are unaffected.
-
-Everything in this module is a pure read. No file is written, no state persists
-across calls beyond an in-process cache of the parquet itself.
+``variants_long.parquet`` is an existing required build artifact (written by
+``evidence.write_variants_long``, already read in full by the website's clinical
+panel), so this adds a consumer, not a dependency. Pure reads throughout; the
+only persisted state is an in-process cache of the parquet.
 """
 
 from __future__ import annotations
@@ -195,19 +183,14 @@ def _iso(
 ) -> pd.DataFrame:
     """Rows for one isoform, narrowed by region / clinical call / source.
 
-    The single place that knows this table's column semantics, so the three
-    readers cannot drift apart. Each filter has a data subtlety worth stating:
-
-    - ``region``: ``in_isoform_unique`` / ``in_isoform_shared`` are the two
-      membership flags; ``"any"`` (or None) reads the whole per-isoform table.
-      The unique region is a minority of rows (~14%), so ``"any"`` is the only
-      way to see shared-region and start-codon-adjacent variants at all.
-    - ``clinsig``: matched by family via :func:`evidence.clinsig_family`, never by
-      equality — ClinVar spells a pathogenic call three ways and equality against
-      "Pathogenic" undercounts by ~20%.
-    - ``clinsig`` is a ClinVar-only field, so ANY value other than None silently
-      excludes every gnomAD and COSMIC row. ``source`` is separate precisely so
-      COSMIC recurrence stays reachable.
+    The single place that knows this table's column semantics, so the readers
+    cannot drift apart. Three subtleties it exists to encapsulate: the unique
+    region is only ~14% of rows, so ``region="any"`` is the only way to see
+    shared-region and start-codon-adjacent variants; ``clinsig`` matches by family
+    via :func:`evidence.clinsig_family`, never equality (ClinVar spells a
+    pathogenic call three ways, and equality undercounts by ~20%); and ``clinsig``
+    is ClinVar-only, so setting it at all excludes every gnomAD and COSMIC row —
+    hence ``source`` being separate, to keep COSMIC recurrence reachable.
 
     Raises:
         ValueError: on an unrecognised region / clinsig / source value.

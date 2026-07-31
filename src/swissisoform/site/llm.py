@@ -271,12 +271,16 @@ PASS_REGISTRY: dict[str, PassSpec] = {
 
 # Categories that read their own data through a multi-turn tool loop instead of
 # a single-shot call, mapped to the system prompt that describes their tools.
-# Their aggregate slice is lossiest — M collapses several hundred variants into
-# ~20 scalars — so they gain the most from querying at verdict time. Multi-turn
-# means they cannot go through the Message Batches API; see
+# These two aggregate the most away: M collapses several hundred variants into
+# ~20 scalars, P collapses a per-residue array and an L×L matrix into 26. Each
+# has its own data precondition and dispatch factory — see _tool_setup.
+# Multi-turn means they cannot go through the Message Batches API; see
 # _run_category_pass_batch. Everything not listed here keeps the single-shot
 # path and stays batchable.
-TOOL_CATEGORY_PROMPTS: dict[str, str] = {"M": "category-pass-M.txt"}
+TOOL_CATEGORY_PROMPTS: dict[str, str] = {
+    "M": "category-pass-M.txt",
+    "P": "category-pass-P.txt",
+}
 
 
 # ── LLM call dispatch ─────────────────────────────────────────────────────
@@ -1173,20 +1177,58 @@ def _resolve_variants_long(args) -> Path:
     return Path(explicit) if explicit else Path(args.records).parent / "variants_long.parquet"
 
 
-def _tool_categories(args, prompts_root: Path) -> dict[str, dict[str, Any]]:
+def _first_isoform(records) -> dict[str, Any]:
+    """Any one isoform record, for validating run-wide preconditions up front."""
+    for gene_record in (records or {}).values():
+        for iso in gene_record.get("isoforms", []) or []:
+            return iso
+    return {}
+
+
+def _tool_setup(letter: str, args, records) -> tuple[list[dict[str, Any]], Any]:
+    """Validate one tool category's data precondition and build its factory.
+
+    Each category reads a different artifact, so each validates its own and
+    returns ``(tool_schemas, dispatch_for)`` where ``dispatch_for(iso)`` binds the
+    readers to a single isoform. Preconditions are checked HERE, once, so a
+    misconfigured run fails before the first API call rather than after it — and
+    loudly rather than degrading, since a verdict reached with the readers and one
+    reached without are not comparable.
+    """
+    if letter == "M":
+        from swissisoform.site import tools as m_tools
+
+        variants_long = m_tools.require_variants_long(_resolve_variants_long(args))
+        return m_tools.M_TOOLS, (
+            lambda iso: m_tools.make_m_dispatch(
+                variants_long, iso.get("tis_id"), iso.get("orf_type")
+            )
+        )
+
+    if letter == "P":
+        from swissisoform.site import structure_tools as p_tools
+
+        # The fold cache is keyed by protein-sequence hash, and those hashes only
+        # reach the LLM pass via StructureModule's columns. A record from before
+        # they existed cannot address the cache at all.
+        p_tools.require_structure_hashes(_first_isoform(records).get("_raw") or {})
+        return p_tools.P_TOOLS, (
+            lambda iso: p_tools.make_p_dispatch(iso.get("_raw") or {})
+        )
+
+    raise KeyError(f"no tool setup registered for category {letter!r}")
+
+
+def _tool_categories(args, prompts_root: Path, records=None) -> dict[str, dict[str, Any]]:
     """Per-letter tool config for categories that run as a loop, or ``{}``.
 
     Returns an empty mapping — meaning every category takes the single-shot path
-    — for ``--no-tools`` and for ``--dry-run`` (which makes no API calls, so
-    there is nothing to loop). Otherwise validates the variants table up front so
-    a misconfigured run fails before the first API call rather than after it.
+    — for ``--no-tools`` and for ``--dry-run`` (which makes no API calls, so there
+    is nothing to loop).
     """
     if getattr(args, "no_tools", False) or getattr(args, "dry_run", False):
         return {}
 
-    from swissisoform.site import tools as m_tools
-
-    variants_long = m_tools.require_variants_long(_resolve_variants_long(args))
     out: dict[str, dict[str, Any]] = {}
     for letter, prompt_filename in TOOL_CATEGORY_PROMPTS.items():
         prompt_path = prompts_root / prompt_filename
@@ -1195,11 +1237,11 @@ def _tool_categories(args, prompts_root: Path) -> dict[str, dict[str, Any]]:
                 f"Tool-loop system prompt for category {letter} not found at "
                 f"{prompt_path}. Restore it, or pass --no-tools."
             )
+        tools, dispatch_for = _tool_setup(letter, args, records)
         out[letter] = {
             "system": prompt_path.read_text(encoding="utf-8").strip(),
-            "tools": m_tools.M_TOOLS,
-            "make_dispatch": m_tools.make_m_dispatch,
-            "variants_long": variants_long,
+            "tools": tools,
+            "dispatch_for": dispatch_for,
         }
     return out
 
@@ -1207,24 +1249,16 @@ def _tool_categories(args, prompts_root: Path) -> dict[str, dict[str, Any]]:
 def _strip_hits_for_tools(category_record: dict[str, Any]) -> dict[str, Any]:
     """Drop the truncated hit rows from a tool-loop category's opening context.
 
-    ``slice_criterion`` attaches up to ``MAX_HITS`` raw records per member, picked
-    by a fixed heuristic (unique-region first, then clinical significance). For a
-    single-shot read that sample IS the evidence. For a tool loop it is the very
-    thing the readers replace, and keeping it is doubly wrong:
+    For a single-shot read that ``MAX_HITS`` sample IS the evidence; for a tool
+    loop it is the thing the readers replace, and keeping it is doubly wrong. The
+    API is stateless so the opening context is re-sent every turn, and on M those
+    rows are ~93% of the payload (78,655 chars with, 5,810 without — serialised
+    twice, since both members declare the same ``evidence_hits_col``). They are
+    also a pre-filtered 2% sample competing with honest query access to the table.
 
-    - **Cost.** The API is stateless, so the opening context is re-sent on every
-      turn. On the M category those rows are ~93% of the payload (measured mean
-      78,655 chars with them, 5,810 without), and both M members declare the same
-      ``evidence_hits_col``, so the identical 30 records are serialised twice.
-      Over a 4-turn loop that is the difference between ~91k and ~18k input
-      tokens per isoform.
-    - **Bias.** A pre-filtered 2% sample sitting in the prompt is the cheap thing
-      to reason from, competing with honest query access to the whole table.
-
-    The summary scalars, reason strings and interpretation hints all stay — they
-    are the aggregate the issue intends as starting context. Each member keeps its
-    ``n_hits_total`` plus a note pointing at the tools, so the model knows how much
-    data exists and how to reach it. Returns a copy; the input is not mutated.
+    Scalars, reasons and hints stay — that is the intended starting context. Each
+    member keeps ``n_hits_total`` plus a note pointing at the tools. Returns a
+    copy; the input is not mutated.
     """
     members = []
     for member in category_record.get("members") or []:
@@ -1254,9 +1288,7 @@ def _run_tool_category(
     out of turns is exactly the one worth inspecting. Returns the verdict payload,
     or re-raises so the caller's per-category error handling applies.
     """
-    dispatch = config["make_dispatch"](
-        config["variants_long"], iso.get("tis_id"), iso.get("orf_type")
-    )
+    dispatch = config["dispatch_for"](iso)
     prompt_user = json.dumps(_strip_hits_for_tools(category_record), indent=2, ensure_ascii=False)
     trace_path = out_dir / f"{letter}_trace.json"
 
@@ -1318,7 +1350,7 @@ def _run_category_pass(
     loop, reading their own underlying data before emitting the same
     ``{verdict, reasoning}`` shape, and additionally write ``{letter}_trace.json``.
     """
-    tool_configs = _tool_categories(args, prompts_root)
+    tool_configs = _tool_categories(args, prompts_root, records)
 
     if getattr(args, "batch", False) and not args.dry_run:
         return _run_category_pass_batch(
