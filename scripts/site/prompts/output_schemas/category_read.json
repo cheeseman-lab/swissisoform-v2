@@ -6,6 +6,11 @@
   "required": ["verdict", "reasoning"],
   "properties": {
     "verdict": {"type": "string", "enum": ["interesting", "neutral", "not_interesting"]},
-    "reasoning": {"type": "string", "minLength": 1, "maxLength": 1500}
+    "reasoning": {"type": "string", "minLength": 1, "maxLength": 1500},
+    "evidence_used": {
+      "description": "Optional. Emitted only by tool-loop categories (see TOOL_CATEGORY_PROMPTS in site/llm.py): which tool findings drove the verdict. Ignored by the website, which reads verdict + reasoning.",
+      "type": "array",
+      "items": {"type": "string"}
+    }
   }
 }

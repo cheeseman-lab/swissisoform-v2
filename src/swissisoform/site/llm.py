@@ -24,7 +24,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # Default prompts location — the thin CLI overrides this with its own
 # scripts/site/prompts/ path. Resolves relative to the repo root so the
@@ -269,6 +269,16 @@ PASS_REGISTRY: dict[str, PassSpec] = {
 }
 
 
+# Categories that read their own data through a multi-turn tool loop instead of
+# a single-shot call, mapped to the system prompt that describes their tools.
+# Their aggregate slice is lossiest — M collapses several hundred variants into
+# ~20 scalars — so they gain the most from querying at verdict time. Multi-turn
+# means they cannot go through the Message Batches API; see
+# _run_category_pass_batch. Everything not listed here keeps the single-shot
+# path and stays batchable.
+TOOL_CATEGORY_PROMPTS: dict[str, str] = {"M": "category-pass-M.txt"}
+
+
 # ── LLM call dispatch ─────────────────────────────────────────────────────
 
 
@@ -298,11 +308,19 @@ def _drain_usage() -> dict[str, int]:
     return _USAGE_EVENTS.pop() if _USAGE_EVENTS else dict.fromkeys(_USAGE_KEYS, 0)
 
 
-def _add_usage(acc: dict[str, dict[str, int]], key: str, ev: dict[str, int]) -> None:
+def _add_usage(
+    acc: dict[str, dict[str, int]], key: str, ev: dict[str, int], *, calls: int = 1
+) -> None:
+    """Fold one usage event into the per-isoform accumulator.
+
+    ``calls`` is the number of API round trips the event covers — 1 for a
+    single-shot call, N for an N-turn tool loop, so the report's call count
+    stays proportional to what was actually billed.
+    """
     slot = acc.setdefault(key, {**dict.fromkeys(_USAGE_KEYS, 0), "calls": 0})
     for k in _USAGE_KEYS:
         slot[k] += ev.get(k, 0)
-    slot["calls"] += 1
+    slot["calls"] += calls
 
 
 def _write_usage_report(
@@ -465,6 +483,273 @@ def call_llm(
 
 def _empty_usage() -> dict[str, int]:
     return dict.fromkeys(_USAGE_KEYS, 0)
+
+
+# ── Tool loop (multi-turn categories) ─────────────────────────────────────
+
+# A category read that queries its own data runs several API turns instead of
+# one. Defaults are deliberately tight: the readers answer in one call each, so a
+# well-behaved loop finishes in 3-5 turns and the cap only catches a model that
+# is going in circles.
+DEFAULT_MAX_TOOL_TURNS = 8
+MIN_DATA_TOOL_CALLS = 2
+# Hard cap on one serialised tool result. The readers already bound their own
+# output; this is the backstop that keeps a pathological isoform from blowing the
+# context window mid-loop.
+MAX_TOOL_RESULT_CHARS = 60_000
+
+_TOOL_NUDGE = (
+    "You did not call a tool. Use the reader tools to inspect the variant data, "
+    "then call emit_verdict exactly once with your verdict and reasoning."
+)
+
+
+class ToolLoopError(RuntimeError):
+    """A tool loop that ended without a verdict, carrying its partial trace.
+
+    The trace is attached because a loop that failed is precisely the one worth
+    inspecting; the caller persists it alongside successful ones.
+    """
+
+    def __init__(self, message: str, trace: dict[str, Any]):
+        """Store the failure message plus the transcript captured so far."""
+        super().__init__(message)
+        self.trace = trace
+
+
+def _drain_all_usage() -> tuple[dict[str, int], int]:
+    """Pop and sum every recorded call usage, with the number of events drained.
+
+    :func:`_drain_usage` pops a single event, which is right for a one-shot call
+    but under-counts a multi-turn loop that records one event per turn. The count
+    is returned so the usage report can attribute one "call" per round trip
+    rather than one per category.
+    """
+    acc = dict.fromkeys(_USAGE_KEYS, 0)
+    n = 0
+    while _USAGE_EVENTS:
+        ev = _USAGE_EVENTS.pop()
+        n += 1
+        for k in _USAGE_KEYS:
+            acc[k] += ev.get(k, 0)
+    return acc, n
+
+
+def _build_tool_request_params(
+    *,
+    model: str,
+    max_tokens: int,
+    temperature: float,
+    system: str,
+    tools: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Request params for a tool-enabled call, minus ``messages``.
+
+    Same sampling/thinking gate as :func:`_build_request_params` (see
+    :data:`_NO_SAMPLING_MODELS`); ``messages`` is supplied per turn because it
+    grows as the conversation does.
+    """
+    params: dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": system,
+        "tools": tools,
+        "tool_choice": {"type": "auto"},
+    }
+    if model in _NO_SAMPLING_MODELS:
+        params["thinking"] = {"type": "disabled"}
+    else:
+        params["temperature"] = temperature
+    return params
+
+
+def _block_to_trace(block: Any) -> dict[str, Any]:
+    """Serialise one SDK content block for the persisted transcript."""
+    kind = getattr(block, "type", None)
+    if kind == "text":
+        return {"type": "text", "text": getattr(block, "text", "")}
+    if kind == "thinking":
+        return {"type": "thinking", "thinking": getattr(block, "thinking", "")}
+    if kind == "tool_use":
+        return {
+            "type": "tool_use",
+            "id": getattr(block, "id", None),
+            "name": getattr(block, "name", None),
+            "input": dict(getattr(block, "input", None) or {}),
+        }
+    return {"type": str(kind)}
+
+
+def run_tool_loop(
+    *,
+    system: str,
+    user: str,
+    tools: list[dict[str, Any]],
+    dispatch: Callable[[str, dict[str, Any]], dict[str, Any]],
+    model: str,
+    max_tokens: int,
+    api_key: str,
+    temperature: float = DEFAULT_TEMPERATURE,
+    terminal_tool: str = "emit_verdict",
+    min_data_calls: int = MIN_DATA_TOOL_CALLS,
+    max_turns: int = DEFAULT_MAX_TOOL_TURNS,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Drive a multi-turn tool conversation to a terminal verdict.
+
+    The model receives ``user`` as its opening context (for the category passes,
+    the same precomputed slice the single-shot path uses) plus ``tools``. On each
+    ``tool_use`` block the corresponding reader runs locally via ``dispatch`` and
+    its JSON result is fed back as a ``tool_result``. The loop ends when the model
+    calls ``terminal_tool``, whose input becomes the returned verdict.
+
+    Requires the official ``anthropic`` SDK — mozzarellm's client has no tool
+    support, so unlike :func:`call_llm` there is no fallback.
+
+    Args:
+        system: System prompt describing the tools and the expected verdict.
+        user: Opening user message — the precomputed category slice.
+        tools: Anthropic tool definitions, including the terminal tool.
+        dispatch: ``(name, input) -> result`` executor for the reader tools.
+        model: Anthropic model id.
+        max_tokens: Per-turn output cap.
+        api_key: Anthropic API key.
+        temperature: Sampling temperature, omitted for models that reject it.
+        terminal_tool: Name of the tool whose input becomes the verdict.
+        min_data_calls: Terminal calls made before this many successful data-tool
+            calls are rejected with an error ``tool_result``, and the loop
+            continues. Stops the model from restating the aggregate it was handed
+            without ever looking at the underlying rows.
+        max_turns: Backstop on API round trips.
+
+    Returns:
+        ``(verdict, trace)``. ``verdict`` is the terminal tool's input dict;
+        ``trace`` is the full transcript, written out by the caller as an audit
+        artifact.
+
+    Raises:
+        ToolLoopError: No verdict within ``max_turns``, or the model refused to
+            use tools twice running. Carries the partial trace.
+        RuntimeError: The ``anthropic`` SDK is unavailable.
+    """
+    anthropic = _try_import_anthropic()
+    if anthropic is None:
+        raise RuntimeError(
+            "Tool-augmented category reads require the official `anthropic` SDK "
+            "(mozzarellm's client does not support tool use). Install it with "
+            "`pip install anthropic`, or pass --no-tools to run every category "
+            "through the single-shot path."
+        )
+
+    client = anthropic.Anthropic(api_key=api_key)
+    params = _build_tool_request_params(
+        model=model, max_tokens=max_tokens, temperature=temperature, system=system, tools=tools
+    )
+    messages: list[dict[str, Any]] = [{"role": "user", "content": [{"type": "text", "text": user}]}]
+    trace: dict[str, Any] = {
+        "model": model,
+        "max_turns": max_turns,
+        "min_data_calls": min_data_calls,
+        "turns": [],
+    }
+    n_data_calls = 0
+    nudged = False
+
+    for turn in range(1, max_turns + 1):
+        response = client.messages.create(**params, messages=messages)
+        _record_usage(getattr(response, "usage", None))
+        content = list(response.content or [])
+        turn_record: dict[str, Any] = {
+            "turn": turn,
+            "stop_reason": getattr(response, "stop_reason", None),
+            "assistant": [_block_to_trace(b) for b in content],
+            "tool_results": [],
+        }
+        trace["turns"].append(turn_record)
+
+        # Append the assistant turn wholesale so any thinking/redacted blocks
+        # survive intact — reconstructing content block-by-block breaks models
+        # that require their thinking blocks echoed back verbatim.
+        messages.append({"role": "assistant", "content": content})
+
+        tool_uses = [b for b in content if getattr(b, "type", None) == "tool_use"]
+        if not tool_uses:
+            # No tool call. Accept a verdict the model wrote as plain JSON, else
+            # nudge once before giving up.
+            text = _extract_text(content)
+            payload: Any = None
+            if text:
+                try:
+                    payload = parse_response(text)
+                except json.JSONDecodeError:
+                    payload = None
+            if isinstance(payload, dict) and payload.get("verdict"):
+                trace["outcome"] = "text_verdict"
+                trace["n_data_calls"] = n_data_calls
+                return payload, trace
+            if nudged:
+                trace["outcome"] = "no_tool_call"
+                raise ToolLoopError(
+                    f"model made no tool call and returned no parseable verdict after {turn} turns",
+                    trace,
+                )
+            nudged = True
+            turn_record["nudged"] = True
+            messages.append({"role": "user", "content": [{"type": "text", "text": _TOOL_NUDGE}]})
+            continue
+
+        results: list[dict[str, Any]] = []
+        for block in tool_uses:
+            name = getattr(block, "name", "")
+            tool_input = dict(getattr(block, "input", None) or {})
+
+            if name == terminal_tool:
+                if n_data_calls < min_data_calls:
+                    msg = (
+                        f"Rejected: call at least {min_data_calls} reader tools before "
+                        f"{terminal_tool}. You have made {n_data_calls} successful "
+                        "data call(s). Inspect the variant data first, then emit "
+                        "your verdict."
+                    )
+                    results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": getattr(block, "id", None),
+                            "is_error": True,
+                            "content": msg,
+                        }
+                    )
+                    turn_record["tool_results"].append({"name": name, "rejected": msg})
+                    continue
+                trace["outcome"] = "emit_verdict"
+                trace["n_data_calls"] = n_data_calls
+                return tool_input, trace
+
+            result = dispatch(name, tool_input)
+            # Only a call that returned data counts toward min_data_calls —
+            # a rejected argument or an unknown tool name is not evidence.
+            if not (isinstance(result, dict) and "error" in result):
+                n_data_calls += 1
+            body = json.dumps(result, ensure_ascii=False, default=str)
+            if len(body) > MAX_TOOL_RESULT_CHARS:
+                body = body[:MAX_TOOL_RESULT_CHARS] + "\n... [tool result truncated]"
+            results.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": getattr(block, "id", None),
+                    "content": body,
+                }
+            )
+            turn_record["tool_results"].append(
+                {"name": name, "input": tool_input, "result": result}
+            )
+
+        messages.append({"role": "user", "content": results})
+
+    trace["outcome"] = "max_turns_exhausted"
+    trace["n_data_calls"] = n_data_calls
+    raise ToolLoopError(
+        f"tool loop exhausted {max_turns} turns without calling {terminal_tool}", trace
+    )
 
 
 def call_llm_batch(
@@ -725,6 +1010,27 @@ def build_parser() -> argparse.ArgumentParser:
         choices=sorted(PASS_REGISTRY),
         help="Which LLM pass to run (default = V1 single-pass).",
     )
+    parser.add_argument(
+        "--variants-long",
+        type=Path,
+        default=None,
+        help="variants_long.parquet backing the M-category reader tools. Default: "
+        "a sibling of --records (i.e. {run_dir}/variants_long.parquet), which is "
+        "where the evidence stage writes it.",
+    )
+    parser.add_argument(
+        "--no-tools",
+        action="store_true",
+        help="Run every category through the single-shot path, including the ones "
+        "that would otherwise query their own data in a tool loop. Use to A/B "
+        "against the pre-tool behaviour, or when the variants table is unavailable.",
+    )
+    parser.add_argument(
+        "--max-tool-turns",
+        type=int,
+        default=DEFAULT_MAX_TOOL_TURNS,
+        help="API round-trip cap per tool-loop category (default: %(default)s).",
+    )
     return parser
 
 
@@ -770,11 +1076,11 @@ def main(argv: list[str] | None = None, *, prompts_dir: Path | None = None) -> i
     # V1 default-pass reads SYSTEM_PROMPT_PATH / OUTPUT_SCHEMA_PATH directly so tests
     # that monkeypatch those constants keep working bit-identically. Other passes
     # resolve their files relative to the prompts dir.
+    prompts_root = prompts_dir or SYSTEM_PROMPT_PATH.parent
     if spec.name == "default":
         system_prompt = load_system_prompt()
         output_schema = load_output_schema()
     else:
-        prompts_root = prompts_dir or SYSTEM_PROMPT_PATH.parent
         system_prompt = load_system_prompt(prompts_root / spec.system_prompt_filename)
         output_schema = load_output_schema(prompts_root / spec.output_schema_filename)
 
@@ -792,7 +1098,9 @@ def main(argv: list[str] | None = None, *, prompts_dir: Path | None = None) -> i
             return 2
 
     if spec.iterates_categories:
-        return _run_category_pass(records, spec, args, system_prompt, output_schema)
+        return _run_category_pass(
+            records, spec, args, system_prompt, output_schema, prompts_root=prompts_root
+        )
 
     if spec.name == "synthesis":
         return _run_synthesis_pass(records, spec, args, system_prompt, output_schema)
@@ -854,6 +1162,130 @@ def _tis_slug(tis_id: str | None) -> str:
     return re.sub(r"[:.]+", "-", tis_id or "unknown")
 
 
+def _resolve_variants_long(args) -> Path:
+    """Path to variants_long.parquet for the tool readers.
+
+    Defaults to a sibling of ``--records``: the evidence stage writes
+    ``{OUT}/llm_evidence/`` and ``{OUT}/variants_long.parquet`` together, so the
+    parent of the records dir is the run directory.
+    """
+    explicit = getattr(args, "variants_long", None)
+    return Path(explicit) if explicit else Path(args.records).parent / "variants_long.parquet"
+
+
+def _tool_categories(args, prompts_root: Path) -> dict[str, dict[str, Any]]:
+    """Per-letter tool config for categories that run as a loop, or ``{}``.
+
+    Returns an empty mapping — meaning every category takes the single-shot path
+    — for ``--no-tools`` and for ``--dry-run`` (which makes no API calls, so
+    there is nothing to loop). Otherwise validates the variants table up front so
+    a misconfigured run fails before the first API call rather than after it.
+    """
+    if getattr(args, "no_tools", False) or getattr(args, "dry_run", False):
+        return {}
+
+    from swissisoform.site import tools as m_tools
+
+    variants_long = m_tools.require_variants_long(_resolve_variants_long(args))
+    out: dict[str, dict[str, Any]] = {}
+    for letter, prompt_filename in TOOL_CATEGORY_PROMPTS.items():
+        prompt_path = prompts_root / prompt_filename
+        if not prompt_path.exists():
+            raise FileNotFoundError(
+                f"Tool-loop system prompt for category {letter} not found at "
+                f"{prompt_path}. Restore it, or pass --no-tools."
+            )
+        out[letter] = {
+            "system": prompt_path.read_text(encoding="utf-8").strip(),
+            "tools": m_tools.M_TOOLS,
+            "make_dispatch": m_tools.make_m_dispatch,
+            "variants_long": variants_long,
+        }
+    return out
+
+
+def _strip_hits_for_tools(category_record: dict[str, Any]) -> dict[str, Any]:
+    """Drop the truncated hit rows from a tool-loop category's opening context.
+
+    ``slice_criterion`` attaches up to ``MAX_HITS`` raw records per member, picked
+    by a fixed heuristic (unique-region first, then clinical significance). For a
+    single-shot read that sample IS the evidence. For a tool loop it is the very
+    thing the readers replace, and keeping it is doubly wrong:
+
+    - **Cost.** The API is stateless, so the opening context is re-sent on every
+      turn. On the M category those rows are ~93% of the payload (measured mean
+      78,655 chars with them, 5,810 without), and both M members declare the same
+      ``evidence_hits_col``, so the identical 30 records are serialised twice.
+      Over a 4-turn loop that is the difference between ~91k and ~18k input
+      tokens per isoform.
+    - **Bias.** A pre-filtered 2% sample sitting in the prompt is the cheap thing
+      to reason from, competing with honest query access to the whole table.
+
+    The summary scalars, reason strings and interpretation hints all stay — they
+    are the aggregate the issue intends as starting context. Each member keeps its
+    ``n_hits_total`` plus a note pointing at the tools, so the model knows how much
+    data exists and how to reach it. Returns a copy; the input is not mutated.
+    """
+    members = []
+    for member in category_record.get("members") or []:
+        n_total = member.get("n_hits_total") or 0
+        members.append(
+            {
+                **member,
+                "hits": [],
+                "n_hits_shown": 0,
+                "hits_note": (
+                    f"{n_total} variant records exist for this isoform. Example rows "
+                    "are deliberately omitted here: query them with the reader tools "
+                    "so you choose the filter, rather than reasoning from a fixed "
+                    "sample."
+                ),
+            }
+        )
+    return {**category_record, "members": members}
+
+
+def _run_tool_category(
+    *, config, iso, category_record, args, api_key, out_dir: Path, letter: str
+) -> dict[str, Any]:
+    """Run one category as a tool loop and persist its transcript.
+
+    The trace is written whether the loop succeeded or failed — a loop that ran
+    out of turns is exactly the one worth inspecting. Returns the verdict payload,
+    or re-raises so the caller's per-category error handling applies.
+    """
+    dispatch = config["make_dispatch"](
+        config["variants_long"], iso.get("tis_id"), iso.get("orf_type")
+    )
+    prompt_user = json.dumps(_strip_hits_for_tools(category_record), indent=2, ensure_ascii=False)
+    trace_path = out_dir / f"{letter}_trace.json"
+
+    def _persist(trace: dict[str, Any]) -> None:
+        # Recorded so the cost of the multi-turn path can be measured from the
+        # transcripts alone (the opening context is billed once per turn).
+        trace["opening_context_chars"] = len(prompt_user)
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        trace_path.write_text(json.dumps(trace, indent=2, ensure_ascii=False, default=str))
+
+    try:
+        verdict, trace = run_tool_loop(
+            system=config["system"],
+            user=prompt_user,
+            tools=config["tools"],
+            dispatch=dispatch,
+            model=args.model,
+            max_tokens=args.max_tokens,
+            api_key=api_key,
+            temperature=args.temperature,
+            max_turns=getattr(args, "max_tool_turns", DEFAULT_MAX_TOOL_TURNS),
+        )
+    except ToolLoopError as e:
+        _persist(e.trace)
+        raise
+    _persist(trace)
+    return verdict
+
+
 def _check_prereqs(records, out_dir: Path, prereqs: tuple[str, ...]) -> list[str]:
     """Return tis_slugs missing any prereq output file."""
     missing: list[str] = []
@@ -871,7 +1303,9 @@ def _check_prereqs(records, out_dir: Path, prereqs: tuple[str, ...]) -> list[str
     return missing
 
 
-def _run_category_pass(records, spec, args, system_prompt, output_schema) -> int:
+def _run_category_pass(
+    records, spec, args, system_prompt, output_schema, *, prompts_root: Path
+) -> int:
     """Per-(isoform, category) dispatch — one call per CDLMPS category.
 
     Each call bundles all of the category's members (all first-class scored
@@ -879,9 +1313,17 @@ def _run_category_pass(records, spec, args, system_prompt, output_schema) -> int
     for a single ``{verdict, reasoning}``. Writes ``{tis_slug}/categories.json`` as
     a dict keyed by category name (the shape ``category_verdicts_for_isoform``
     consumes).
+
+    Categories in :data:`TOOL_CATEGORY_PROMPTS` instead run a multi-turn tool
+    loop, reading their own underlying data before emitting the same
+    ``{verdict, reasoning}`` shape, and additionally write ``{letter}_trace.json``.
     """
+    tool_configs = _tool_categories(args, prompts_root)
+
     if getattr(args, "batch", False) and not args.dry_run:
-        return _run_category_pass_batch(records, spec, args, system_prompt, output_schema)
+        return _run_category_pass_batch(
+            records, spec, args, system_prompt, output_schema, tool_configs=tool_configs
+        )
 
     from swissisoform.site.evidence import CATEGORIES, slice_category
 
@@ -895,6 +1337,7 @@ def _run_category_pass(records, spec, args, system_prompt, output_schema) -> int
     n_calls = 0
     n_ok = 0
     usage_by_slug: dict[str, dict[str, int]] = {}
+    tool_usage_by_slug: dict[str, dict[str, int]] = {}
 
     for gene_name, gene_record in records.items():
         for iso in gene_record.get("isoforms", []) or []:
@@ -916,25 +1359,41 @@ def _run_category_pass(records, spec, args, system_prompt, output_schema) -> int
             iso_with_gene = {**iso, "gene": {"name": gene_name}}
             results: dict[str, Any] = {}
             for category in CATEGORIES:
+                letter = category["letter"]
+                tool_config = tool_configs.get(letter)
                 category_record = slice_category(iso_with_gene, category)
                 prompt = build_prompt(category_record, system_prompt, output_schema)
                 n_calls += 1
                 if args.dry_run:
                     print(
                         f"[{n_calls}] {gene_name} {tis_slug_val} category: "
-                        f"{category['letter']} ({category['name']}) input chars: {len(prompt.user)}"
+                        f"{letter} ({category['name']}) input chars: {len(prompt.user)}"
                     )
                     continue
                 try:
-                    response_text = call_llm(
-                        prompt,
-                        model=args.model,
-                        temperature=args.temperature,
-                        max_tokens=args.max_tokens,
-                        api_key=api_key,
-                    )
-                    _add_usage(usage_by_slug, tis_slug_val, _drain_usage())
-                    payload = parse_response(response_text)
+                    if tool_config is not None:
+                        payload = _run_tool_category(
+                            config=tool_config,
+                            iso=iso_with_gene,
+                            category_record=category_record,
+                            args=args,
+                            api_key=api_key,
+                            out_dir=out_dir,
+                            letter=letter,
+                        )
+                        # One usage event per turn, so drain them all.
+                        _tool_usage, _tool_turns = _drain_all_usage()
+                        _add_usage(tool_usage_by_slug, tis_slug_val, _tool_usage, calls=_tool_turns)
+                    else:
+                        response_text = call_llm(
+                            prompt,
+                            model=args.model,
+                            temperature=args.temperature,
+                            max_tokens=args.max_tokens,
+                            api_key=api_key,
+                        )
+                        _add_usage(usage_by_slug, tis_slug_val, _drain_usage())
+                        payload = parse_response(response_text)
                     _emit_schema_warnings(
                         payload, output_schema,
                         f"{tis_slug_val}/{category['name']}",
@@ -943,7 +1402,10 @@ def _run_category_pass(records, spec, args, system_prompt, output_schema) -> int
                     results[category["name"]] = payload
                     n_ok += 1
                 except Exception as e:
-                    print(f"[{n_calls}] {category['letter']} FAIL: {e}", file=sys.stderr)
+                    if tool_config is not None:
+                        _tool_usage, _tool_turns = _drain_all_usage()
+                        _add_usage(tool_usage_by_slug, tis_slug_val, _tool_usage, calls=_tool_turns)
+                    print(f"[{n_calls}] {letter} FAIL: {e}", file=sys.stderr)
                     results[category["name"]] = {"error": str(e)}
 
             if args.dry_run:
@@ -954,18 +1416,31 @@ def _run_category_pass(records, spec, args, system_prompt, output_schema) -> int
     if args.dry_run:
         return 0
     _write_usage_report(args.out, "category", args.model, usage_by_slug)
+    if tool_usage_by_slug:
+        # Separate report: tool categories are multi-turn and never batched, so
+        # folding them into the batch-priced total would misstate both.
+        _write_usage_report(args.out, "category_tools", args.model, tool_usage_by_slug)
     print(f"{spec.name}: {n_ok}/{n_calls} successful")
     return 0 if n_ok == n_calls else 1
 
 
-def _run_category_pass_batch(records, spec, args, system_prompt, output_schema) -> int:
+def _run_category_pass_batch(
+    records, spec, args, system_prompt, output_schema, *, tool_configs=None
+) -> int:
     """Category pass via the Message Batches API.
 
     One batch of all (isoform, category) calls at 50% token price; identical
     prompts/outputs to the sequential path.
+
+    Tool-loop categories are excluded from the batch and run interactively after
+    it. A batch request is fire-and-forget — there is no way to intercept a
+    ``tool_use`` mid-flight and feed a ``tool_result`` back — so multi-turn
+    categories are structurally unbatchable, not merely slower. They pay full
+    price and are reported separately.
     """
     from swissisoform.site.evidence import CATEGORIES, slice_category
 
+    tool_configs = tool_configs or {}
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY is not set.")
@@ -975,6 +1450,9 @@ def _run_category_pass_batch(records, spec, args, system_prompt, output_schema) 
     meta: dict[str, tuple[str, str]] = {}  # custom_id -> (tis_slug, category_name)
     iso_results: dict[str, dict[str, Any]] = {}  # tis_slug -> {category_name: payload}
     iso_out: dict[str, Path] = {}  # tis_slug -> categories.json path
+    # tis_slug -> (iso_with_gene, [(category, sliced_record), ...]) for the
+    # interactive tool pass below.
+    tool_work: dict[str, tuple[dict[str, Any], list[tuple[dict[str, Any], dict[str, Any]]]]] = {}
     for gene_name, gene_record in records.items():
         for iso in gene_record.get("isoforms", []) or []:
             tis_slug_val = _tis_slug(iso.get("tis_id"))
@@ -986,17 +1464,28 @@ def _run_category_pass_batch(records, spec, args, system_prompt, output_schema) 
             iso_out[tis_slug_val] = out_path
             for category in CATEGORIES:
                 record = slice_category(iso_with_gene, category)
+                if category["letter"] in tool_configs:
+                    entry = tool_work.setdefault(tis_slug_val, (iso_with_gene, []))
+                    entry[1].append((category, record))
+                    continue
                 cid = f"c{len(items)}"
                 items.append((cid, build_prompt(record, system_prompt, output_schema)))
                 meta[cid] = (tis_slug_val, category["name"])
 
-    if not items:
+    if not items and not tool_work:
         print("category: nothing to do (all outputs exist; use --force to rebuild).")
         return 0
 
-    responses = call_llm_batch(
-        items, model=args.model, temperature=args.temperature,
-        max_tokens=args.max_tokens, api_key=api_key,
+    responses = (
+        call_llm_batch(
+            items,
+            model=args.model,
+            temperature=args.temperature,
+            max_tokens=args.max_tokens,
+            api_key=api_key,
+        )
+        if items
+        else {}
     )
 
     usage_by_slug: dict[str, dict[str, int]] = {}
@@ -1020,14 +1509,57 @@ def _run_category_pass_batch(records, spec, args, system_prompt, output_schema) 
             print(f"[{cid}] {cat_name} parse FAIL: {e}", file=sys.stderr)
             iso_results[tis_slug_val][cat_name] = {"error": str(e)}
 
+    # Tool categories, interactively, merged into the same categories.json.
+    tool_usage_by_slug: dict[str, dict[str, int]] = {}
+    n_tool_calls = 0
+    n_tool_ok = 0
+    for tis_slug_val, (iso_with_gene, categories) in tool_work.items():
+        out_dir = args.out / tis_slug_val
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for category, record in categories:
+            letter = category["letter"]
+            n_tool_calls += 1
+            try:
+                payload = _run_tool_category(
+                    config=tool_configs[letter],
+                    iso=iso_with_gene,
+                    category_record=record,
+                    args=args,
+                    api_key=api_key,
+                    out_dir=out_dir,
+                    letter=letter,
+                )
+                _tool_usage, _tool_turns = _drain_all_usage()
+                _add_usage(tool_usage_by_slug, tis_slug_val, _tool_usage, calls=_tool_turns)
+                _emit_schema_warnings(
+                    payload,
+                    output_schema,
+                    f"{tis_slug_val}/{category['name']}",
+                    verbose=getattr(args, "verbose", False),
+                )
+                iso_results[tis_slug_val][category["name"]] = payload
+                n_tool_ok += 1
+            except Exception as e:
+                _tool_usage, _tool_turns = _drain_all_usage()
+                _add_usage(tool_usage_by_slug, tis_slug_val, _tool_usage, calls=_tool_turns)
+                print(f"[{tis_slug_val}] {letter} FAIL: {e}", file=sys.stderr)
+                iso_results[tis_slug_val][category["name"]] = {"error": str(e)}
+
     for tis_slug_val, results in iso_results.items():
         out_path = iso_out[tis_slug_val]
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(results, indent=2, ensure_ascii=False))
 
-    _write_usage_report(args.out, "category", args.model, usage_by_slug, batch=True)
-    print(f"category: {n_ok}/{len(items)} successful (batch)")
-    return 0 if n_ok == len(items) else 1
+    if items:
+        _write_usage_report(args.out, "category", args.model, usage_by_slug, batch=True)
+    if tool_usage_by_slug:
+        _write_usage_report(args.out, "category_tools", args.model, tool_usage_by_slug)
+    total = len(items) + n_tool_calls
+    print(
+        f"category: {n_ok}/{len(items)} successful (batch)"
+        + (f" + {n_tool_ok}/{n_tool_calls} tool-loop (direct)" if n_tool_calls else "")
+    )
+    return 0 if (n_ok + n_tool_ok) == total else 1
 
 
 def _build_synthesis_record(
@@ -1052,9 +1584,14 @@ def _build_synthesis_record(
         category_reads = json.loads(pp.read_text(encoding="utf-8"))
 
     iso_with_gene = {**isoform, "gene": {"name": gene_name}}
-    criteria_evidence: dict[str, Any] = {
-        cid: slice_criterion(iso_with_gene, cid) for cid in CRITERIA
-    }
+    # Drop each criterion's own identity block: the record's top-level ``isoform``
+    # block below states the same thing (and adds differential_region_location).
+    # Keeping them repeated the same seven fields 15 times, once per criterion.
+    criteria_evidence: dict[str, Any] = {}
+    for cid in CRITERIA:
+        entry = slice_criterion(iso_with_gene, cid)
+        entry.pop("isoform", None)
+        criteria_evidence[cid] = entry
 
     gene_block = {
         "name": gene_name,

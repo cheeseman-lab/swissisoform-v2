@@ -121,6 +121,73 @@ def _scalar_or_none(row: pd.Series, key: str) -> Any:
     return value
 
 
+# ── Clinical-significance normalisation ───────────────────────────────────
+#
+# ``clinical_significance`` is a ClinVar-only free-text field: gnomAD and COSMIC
+# rows carry no value at all, and ClinVar spells the same call several ways
+# ("Pathogenic", "Pathogenic/Likely pathogenic", "Likely pathogenic"). Anything
+# selecting on it must match by family rather than by equality, or it silently
+# undercounts. Both helpers below live here so the LLM tool readers
+# (``swissisoform.site.tools``) and the hit-truncation sort agree on what
+# "pathogenic" means.
+
+CLINSIG_FAMILIES = ("pathogenic", "benign", "uncertain", "conflicting", "none")
+
+
+def clinsig_family(value: Any) -> str:
+    """Bucket a ClinVar ``clinical_significance`` string into a coarse family.
+
+    Families are the ones a caller actually filters on:
+    ``pathogenic`` (Pathogenic + Pathogenic/Likely pathogenic + Likely
+    pathogenic), ``benign`` (Benign + Benign/Likely benign + Likely benign),
+    ``uncertain``, ``conflicting``, and ``none`` for an absent value (every
+    gnomAD/COSMIC row, plus ClinVar rows with no assertion).
+
+    ``conflicting`` is tested first because "Conflicting classifications of
+    pathogenicity" contains the substring "pathogenic" and would otherwise be
+    counted as a pathogenic call.
+    """
+    sig = str(value or "").strip().lower()
+    if not sig or sig == "nan" or sig == "none":
+        return "none"
+    if "conflicting" in sig:
+        return "conflicting"
+    if "pathogenic" in sig:
+        return "pathogenic"
+    if "uncertain" in sig:
+        return "uncertain"
+    if "benign" in sig:
+        return "benign"
+    return "none"
+
+
+def clinsig_rank(hit: dict[str, Any]) -> int:
+    """Truncation-sort priority for one variant hit — lower surfaces first.
+
+    Finer-grained than :func:`clinsig_family` because the sort separates a firm
+    Pathogenic call from a Likely pathogenic one. Used by
+    :func:`slice_criterion` to decide which hits survive the ``MAX_HITS`` cap.
+
+    Note: a "Conflicting classifications of pathogenicity" value ranks 0 here
+    (it contains "pathogenic" and not "likely"), which is more generous than
+    :func:`clinsig_family`, where it is its own family. Kept as-is so the
+    existing truncation order is unchanged; it only affects which hits appear in
+    a capped view, never a count.
+    """
+    sig = str(hit.get("clinical_significance") or "").lower()
+    if "pathogenic" in sig and "likely" not in sig:
+        return 0  # Pathogenic
+    if "likely_pathogenic" in sig or "likely pathogenic" in sig:
+        return 1
+    if hit.get("effect_damaging") is True:
+        return 2
+    if "uncertain" in sig:
+        return 4
+    if "benign" in sig:
+        return 5
+    return 3  # other / unknown
+
+
 def _diff_space_from_orf_type(orf_type: Any) -> str | None:
     if orf_type is None:
         return None
@@ -1843,26 +1910,12 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
                 prioritize_unique = criterion_id in unique_region_criteria
                 if n_hits_total > MAX_HITS:
 
-                    def _clinsig_rank(h: dict[str, Any]) -> int:
-                        sig = str(h.get("clinical_significance") or "").lower()
-                        if "pathogenic" in sig and "likely" not in sig:
-                            return 0  # Pathogenic
-                        if "likely_pathogenic" in sig or "likely pathogenic" in sig:
-                            return 1
-                        if h.get("effect_damaging") is True:
-                            return 2
-                        if "uncertain" in sig:
-                            return 4
-                        if "benign" in sig:
-                            return 5
-                        return 3  # other / unknown
-
                     def _priority(h: dict[str, Any]) -> tuple[int, int]:
                         # Lead with unique-region membership for unique-region
                         # criteria so those hits survive truncation; clinical
                         # significance is the secondary sort within each bucket.
                         in_unique = 0 if (prioritize_unique and h.get("in_isoform_unique")) else 1
-                        return (in_unique, _clinsig_rank(h))
+                        return (in_unique, clinsig_rank(h))
 
                     hits = sorted(all_hits, key=_priority)[:MAX_HITS]
                 else:
@@ -2057,6 +2110,14 @@ def slice_category(isoform_record: dict[str, Any], category: dict[str, Any]) -> 
         ``kind="criterion"``); a member whose ``CRITERIA`` entry sets
         ``omit_if_empty`` and produced no evidence (e.g. S2/S3 when biophysics/SAE
         did not run) is dropped from the display.
+
+        Each member's own ``isoform`` block is DROPPED here: the category-level
+        block above carries the same identity (plus ``differential_region_location``),
+        so keeping the per-member copies repeated it once per member — four
+        near-identical blocks in a 3-member category, 5-10% of the payload.
+        ``slice_criterion`` still returns the block for standalone callers (the
+        website UI tiles, the synthesis pass), which have no outer block to
+        inherit from; only the bundled form drops it.
     """
     members: list[dict[str, Any]] = []
     for member in category["members"]:
@@ -2066,6 +2127,7 @@ def slice_category(isoform_record: dict[str, Any], category: dict[str, Any]) -> 
         if CRITERIA[member].get("omit_if_empty") and not entry["evidence"]:
             continue
         entry["kind"] = "criterion"
+        entry.pop("isoform", None)
         members.append(entry)
 
     return {

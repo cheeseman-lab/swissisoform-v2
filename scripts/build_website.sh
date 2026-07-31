@@ -73,8 +73,12 @@ else
     # slice_category payload — never the full _raw record (which is megabytes of
     # raw variant hits and blows past the API context limit). Writes
     # {tis_slug}/categories.json and {tis_slug}/synthesis.json.
+    # --variants-long is what the M category's reader tools query at verdict
+    # time; the evidence stage above writes it. Passed explicitly (it would
+    # otherwise be derived from --records) so the data dependency is visible.
     run_stage llm_category python scripts/site/run_llm_interpretation.py \
-        --records "${OUT}/llm_evidence/" --out "${OUT}/llm/" --pass category $llm_batch
+        --records "${OUT}/llm_evidence/" --out "${OUT}/llm/" --pass category \
+        --variants-long "${OUT}/variants_long.parquet" $llm_batch
     run_stage llm_synthesis python scripts/site/run_llm_interpretation.py \
         --records "${OUT}/llm_evidence/" --out "${OUT}/llm/" --pass synthesis $llm_batch
 fi

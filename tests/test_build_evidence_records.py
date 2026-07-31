@@ -314,6 +314,33 @@ def test_slice_category_bundles_scored_members():
     assert by_member["S3_sae"]["evidence"]["top_gained"]["feature_index"] == 42
 
 
+def test_slice_category_carries_one_identity_block_not_one_per_member():
+    """The category block states the isoform once; members inherit it.
+
+    Regression on a legacy of the per-criterion LLM pass: each criterion was its
+    own API call and so carried its own identity. Bundling them into one call
+    (commit 6760c84) repeated the same seven fields once per member.
+    """
+    iso_record = {
+        "tis_id": "chr1:100:+:ATG:ENST_A",
+        "gene": {"name": "GENE_A"},
+        "orf_type": "extended",
+        "differential_sequence": "MABC",
+        "diff_space": "isoform",
+        "isoform_length_aa": 60,
+        "canonical_length_aa": 50,
+        "scoring": {"criteria": {}},
+        "_raw": {"cmp_interproscan_n_hits_in_diff_region": 1},
+    }
+    out = ber.slice_category(iso_record, _S_CATEGORY())
+    assert out["isoform"]["tis_id"] == "chr1:100:+:ATG:ENST_A"
+    assert out["isoform"]["differential_sequence"] == "MABC"
+    assert all("isoform" not in m for m in out["members"])
+    # Standalone callers (website tiles, synthesis pass) have no outer block to
+    # inherit from, so slice_criterion itself is unchanged.
+    assert "isoform" in ber.slice_criterion(iso_record, "S1_domain_change")
+
+
 def test_slice_category_omits_empty_builder_members_without_data():
     """S2/S3 (omit_if_empty) drop out when their columns are absent; S1 survives."""
     iso_record = {
