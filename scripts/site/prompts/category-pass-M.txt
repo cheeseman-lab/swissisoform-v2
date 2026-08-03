@@ -46,10 +46,18 @@ Read `orf_type` first. These are properties of the annotation, not findings abou
 ## Verdict
 
 - "interesting" — the category carries a clear, well-supported signal that this isoform's differential region is real and/or functionally consequential in this dimension.
-- "neutral" — mixed, weak, or unremarkable; nothing that moves the needle either way.
-- "not_interesting" — the evidence that could be evaluated argues against a meaningful signal in this dimension.
+- "neutral" — the evidence genuinely CONFLICTS: signals of comparable weight point in opposite directions and you cannot reconcile them. This is the defining case. "Neutral" means "the data disagrees with itself", NOT "I found nothing".
+- "not_interesting" — the evidence argues against a meaningful signal. **Confirmed absence is a finding, not a gap:** establishing that there are no pathogenic variants, no positional clustering and no constraint is a real, reportable negative result. It belongs here. Most isoforms land here, and that is the expected outcome, not a failure to decide.
 
-When everything that could be evaluated is None or not evaluable, the verdict is "neutral" and the reasoning must say plainly what was missing and why — do not guess.
+Separately, when NOTHING could be evaluated at all, emit "neutral" and say plainly in the reasoning what was missing and why — do not guess.
+
+Partial evaluability is NOT conflict and is NOT a reason to hedge. On an extension the germline-constraint inputs are uninterpretable by construction, leaving disease density as the only readable member; if that member is quiet, the verdict is "not_interesting" and the reasoning states the limitation. Put the caveat in the prose, not in the label.
+
+CONSISTENCY CHECK before you emit — read your own reasoning back and make the label match the sentence you actually wrote:
+- "nothing here supports…", "no evidence that…", "argues against…", "does not concentrate…" → **not_interesting**
+- "X points one way and Y points the other, with no way to adjudicate" → **neutral**
+- "nothing at all could be assessed" → **neutral**
+A decisive dismissal must never be labelled "neutral"; "neutral" is reserved for real disagreement in the data.
 
 Do not introduce any fact the input and the tool results do not state.
 
