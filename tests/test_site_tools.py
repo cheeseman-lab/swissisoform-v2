@@ -528,8 +528,32 @@ def test_emit_verdict_is_terminal_and_excluded_from_data_tools():
     assert t.DATA_TOOL_NAMES == names - {t.EMIT_VERDICT}
 
 
-def test_emit_verdict_requires_verdict_and_reasoning():
+def test_emit_verdict_requires_verdict_reasoning_and_evidence():
     emit = next(x for x in t.M_TOOLS if x["name"] == t.EMIT_VERDICT)
-    assert set(emit["input_schema"]["required"]) == {"verdict", "reasoning"}
+    assert set(emit["input_schema"]["required"]) == {"verdict", "reasoning", "evidence_used"}
     enum = emit["input_schema"]["properties"]["verdict"]["enum"]
     assert enum == ["interesting", "neutral", "not_interesting"]
+
+
+def test_emit_verdict_is_strict_and_schema_stays_strict_compatible():
+    """The API rejects a strict tool whose schema it cannot constrain sampling to.
+
+    Guarded here rather than discovered as a 400 mid-run: strict needs
+    additionalProperties:false on every object, and rejects minItems above 1.
+    """
+    emit = next(x for x in t.M_TOOLS if x["name"] == t.EMIT_VERDICT)
+    assert emit["strict"] is True
+    assert_strict_compatible(emit["input_schema"])
+
+
+def assert_strict_compatible(schema, path="input_schema"):
+    if isinstance(schema, dict):
+        if schema.get("type") == "object" and "properties" in schema:
+            assert schema.get("additionalProperties") is False, f"{path} allows extra keys"
+        if schema.get("type") == "array":
+            assert schema.get("minItems", 0) <= 1, f"{path} uses minItems>1"
+        for key, value in schema.items():
+            assert_strict_compatible(value, f"{path}.{key}")
+    elif isinstance(schema, list):
+        for i, value in enumerate(schema):
+            assert_strict_compatible(value, f"{path}[{i}]")

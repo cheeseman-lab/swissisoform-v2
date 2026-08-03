@@ -358,9 +358,25 @@ def test_emit_verdict_is_terminal_and_excluded_from_data_tools():
     }
 
 
-def test_emit_verdict_requires_verdict_and_reasoning():
+def test_emit_verdict_requires_verdict_reasoning_and_evidence():
     emit = next(t for t in st.P_TOOLS if t["name"] == st.EMIT_VERDICT)
-    assert set(emit["input_schema"]["required"]) == {"verdict", "reasoning"}
+    assert set(emit["input_schema"]["required"]) == {"verdict", "reasoning", "evidence_used"}
     assert emit["input_schema"]["properties"]["verdict"]["enum"] == [
         "interesting", "neutral", "not_interesting",
     ]
+
+
+def test_emit_verdict_is_strict_and_schema_stays_strict_compatible():
+    from tests.test_site_tools import assert_strict_compatible
+
+    emit = next(t for t in st.P_TOOLS if t["name"] == st.EMIT_VERDICT)
+    assert emit["strict"] is True
+    assert_strict_compatible(emit["input_schema"])
+
+
+def test_only_emit_verdict_is_strict():
+    """pae_block's two-element range params are not strict-expressible (minItems:2),
+    and a reader's bad argument is already answered with an error the model can
+    recover from — so strict is deliberately scoped to the persisted verdict."""
+    strict = {t["name"] for t in st.P_TOOLS if t.get("strict")}
+    assert strict == {st.EMIT_VERDICT}

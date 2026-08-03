@@ -1214,121 +1214,38 @@ _ARRAY_SCHEMA = {
 }
 
 
-def test_normalise_coerces_the_observed_item_markup(mod):
-    out, coerced = mod._normalise_tool_input(
-        {"verdict": "interesting", "evidence_used": _OBSERVED_STRING}, _ARRAY_SCHEMA
-    )
-    assert out["evidence_used"] == [
-        "Canonical region 1-32 mean pLDDT 0.899",
-        "PAE to the body averages 5.09 A",
-    ]
-    assert coerced == ["evidence_used"]
-    assert out["verdict"] == "interesting"  # non-array fields untouched
+def test_tool_loop_returns_the_tool_input_verbatim(mod, monkeypatch):
+    """The loop must not rewrite what the model emitted.
 
-
-def test_normalise_leaves_a_correct_list_alone(mod):
-    payload = {"evidence_used": ["already", "a list"]}
-    out, coerced = mod._normalise_tool_input(payload, _ARRAY_SCHEMA)
-    assert out["evidence_used"] == ["already", "a list"]
-    assert coerced == []
-
-
-def test_normalise_wraps_an_untagged_string(mod):
-    out, _ = mod._normalise_tool_input({"evidence_used": "one plain note"}, _ARRAY_SCHEMA)
-    assert out["evidence_used"] == ["one plain note"]
-
-
-def test_normalise_handles_missing_and_empty(mod):
-    assert mod._normalise_tool_input({}, _ARRAY_SCHEMA)[0] == {}
-    assert mod._normalise_tool_input({"evidence_used": ""}, _ARRAY_SCHEMA)[0][
-        "evidence_used"
-    ] == []
-
-
-def test_normalise_is_schema_driven_not_field_specific(mod):
-    """Any array-declared parameter is covered, not just evidence_used."""
-    schema = {"type": "object", "properties": {"citations": {"type": "array"}}}
-    out, coerced = mod._normalise_tool_input(
-        {"citations": "<item>a</item><item>b</item>"}, schema
-    )
-    assert out["citations"] == ["a", "b"]
-    assert coerced == ["citations"]
-
-
-def test_normalise_is_a_noop_without_a_schema(mod):
-    payload = {"evidence_used": _OBSERVED_STRING}
-    assert mod._normalise_tool_input(payload, None)[0] == payload
-
-
-# Verbatim from the CBX1 Predicted-Structure verdict (cheeseman_test, live P run):
-# the model closed `reasoning` and opened `evidence_used` inside the string it was
-# writing, so the tool call arrived with only `verdict` and `reasoning` keys and
-# the raw markup rendered on the website.
-_LEAKED_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "verdict": {"type": "string"},
-        "reasoning": {"type": "string"},
-        "evidence_used": {"type": "array", "items": {"type": "string"}},
-    },
-}
-_LEAKED_REASONING = (
-    "The truncation removes a short but confidently folded element."
-    '</reasoning>\n<parameter name="evidence_used">'
-    '["5-residue strand at 35-39, pLDDT 0.92", "PAE 1.39 A to residues 44-60"]'
-)
-
-
-def test_normalise_recovers_a_parameter_leaked_into_the_previous_value(mod):
-    out, touched = mod._normalise_tool_input(
-        {"verdict": "interesting", "reasoning": _LEAKED_REASONING}, _LEAKED_SCHEMA
-    )
-    assert out["reasoning"] == "The truncation removes a short but confidently folded element."
-    assert "<parameter" not in out["reasoning"] and "</reasoning>" not in out["reasoning"]
-    assert out["evidence_used"] == [
-        "5-residue strand at 35-39, pLDDT 0.92",
-        "PAE 1.39 A to residues 44-60",
-    ]
-    assert touched == ["reasoning(leak-trimmed)", "evidence_used(recovered)"]
-
-
-def test_normalise_recovers_item_markup_from_a_leaked_parameter(mod):
-    """The two failure modes compose: a leaked param whose value is <item> markup."""
-    leaked = (
-        "prose</reasoning>\n"
-        '<parameter name="evidence_used"><item>first</item><item>second</item>'
-    )
-    out, _ = mod._normalise_tool_input({"reasoning": leaked}, _LEAKED_SCHEMA)
-    assert out["evidence_used"] == ["first", "second"]
-
-
-def test_normalise_never_clobbers_a_properly_emitted_parameter(mod):
-    out, _ = mod._normalise_tool_input(
-        {"reasoning": _LEAKED_REASONING, "evidence_used": ["the real one"]}, _LEAKED_SCHEMA
-    )
-    assert out["evidence_used"] == ["the real one"]
-    assert out["reasoning"].endswith("element.")
-
-
-def test_normalise_ignores_a_leaked_parameter_not_in_the_schema(mod):
-    out, touched = mod._normalise_tool_input(
-        {"reasoning": 'x</reasoning><parameter name="bogus">y'}, _LEAKED_SCHEMA
-    )
-    assert "bogus" not in out
-    assert out["reasoning"] == "x"
-    assert touched == ["reasoning(leak-trimmed)"]
-
-
-def test_normalise_leaves_a_clean_reasoning_alone(mod):
-    payload = {"verdict": "neutral", "reasoning": "No </other> tag matters here."}
-    out, touched = mod._normalise_tool_input(payload, _LEAKED_SCHEMA)
-    assert out["reasoning"] == payload["reasoning"]
-    assert touched == []
-
-
-def test_tool_loop_returns_a_normalised_verdict(mod, monkeypatch):
-    """End-to-end: the loop must not hand a string-typed array to its caller."""
+    emit_verdict is declared strict, so the API guarantees the shape; coercing
+    client-side would only paper over a broken contract. A wrong payload is
+    meant to reach _emit_schema_warnings and be reported, not silently fixed.
+    """
     calls: list = []
+    emitted = {"verdict": "neutral", "reasoning": "x", "evidence_used": ["a", "b"]}
+    script = [
+        _Response([_tool_use("query_variants", {}, "t1")]),
+        _Response([_tool_use("variant_effect_stats", {}, "t2")]),
+        _Response([_tool_use("emit_verdict", emitted, "t3")]),
+    ]
+    monkeypatch.setattr(mod, "_try_import_anthropic", lambda: _fake_anthropic(script, calls))
+    tools = [{"name": "emit_verdict", "input_schema": _ARRAY_SCHEMA}]
+
+    verdict, trace = mod.run_tool_loop(
+        system="S", user="U", tools=tools, dispatch=_dispatch_ok,
+        model="claude-sonnet-5", max_tokens=1000, api_key="k",
+    )
+    assert verdict == emitted
+    assert "normalised" not in trace["turns"][-1]
+
+
+def test_tool_loop_does_not_repair_a_malformed_verdict(mod, monkeypatch):
+    """A string where an array is declared passes straight through, unrepaired.
+
+    This is the shape a live run produced before emit_verdict became strict. It
+    is preserved as a fixture because the schema validator must still flag it —
+    see test_schema_validation_is_actually_running.
+    """
     script = [
         _Response([_tool_use("query_variants", {}, "t1")]),
         _Response([_tool_use("variant_effect_stats", {}, "t2")]),
@@ -1342,17 +1259,13 @@ def test_tool_loop_returns_a_normalised_verdict(mod, monkeypatch):
             ]
         ),
     ]
-    monkeypatch.setattr(mod, "_try_import_anthropic", lambda: _fake_anthropic(script, calls))
-    tools = [{"name": "emit_verdict", "input_schema": _ARRAY_SCHEMA}]
-
-    verdict, trace = mod.run_tool_loop(
-        system="S", user="U", tools=tools, dispatch=_dispatch_ok,
-        model="claude-sonnet-5", max_tokens=1000, api_key="k",
+    monkeypatch.setattr(mod, "_try_import_anthropic", lambda: _fake_anthropic(script, []))
+    verdict, _ = mod.run_tool_loop(
+        system="S", user="U",
+        tools=[{"name": "emit_verdict", "input_schema": _ARRAY_SCHEMA}],
+        dispatch=_dispatch_ok, model="claude-sonnet-5", max_tokens=1000, api_key="k",
     )
-    assert isinstance(verdict["evidence_used"], list)
-    assert len(verdict["evidence_used"]) == 2
-    # The transcript records that the stored shape differs from what was emitted.
-    assert trace["turns"][-1]["normalised"] == ["evidence_used"]
+    assert verdict["evidence_used"] == _OBSERVED_STRING
 
 
 def test_schema_validation_is_actually_running(mod):
