@@ -584,100 +584,6 @@ def _block_to_trace(block: Any) -> dict[str, Any]:
     return {"type": str(kind)}
 
 
-_ITEM_TAG = re.compile(r"<item>(.*?)</item>", re.DOTALL)
-_PARAM_TAG = re.compile(
-    r'<parameter\s+name="([^"]+)"\s*>(.*?)(?=<parameter\s+name="|</?(?:parameter|invoke|function_calls)\b|\Z)',
-    re.DOTALL,
-)
-
-
-def _as_list(value: str) -> list[str]:
-    """Best-effort list from a string the model wrote where an array was declared."""
-    text = value.strip()
-    if text.startswith("["):
-        try:
-            parsed = json.loads(text)
-        except ValueError:
-            parsed = None
-        if isinstance(parsed, list):
-            return [str(x).strip() for x in parsed if str(x).strip()]
-    items = [m.strip() for m in _ITEM_TAG.findall(text) if m.strip()]
-    # No tags at all → the model wrote one plain entry, not a list of them.
-    return items if items else ([text] if text else [])
-
-
-def _recover_leaked_params(
-    out: dict[str, Any], props: dict[str, Any]
-) -> list[str]:
-    """Split parameters the model serialised *inside* a preceding string value.
-
-    Occasionally a model closes one parameter and opens the next as literal text
-    within the value it is writing, so ``reasoning`` arrives as
-    ``…prose</reasoning>\\n<parameter name="evidence_used">[…]`` and
-    ``evidence_used`` never appears as a key at all. Observed once in 36
-    tool-loop verdicts on cheeseman_test — rare, but it surfaces raw markup on
-    the website and silently drops a field the schema requires.
-
-    Mutates ``out`` in place: truncates the host value at its own closing tag and
-    fills any parameter recovered from the tail (never overwriting a key the
-    model also emitted properly). Returns the names of the fields it touched.
-    """
-    touched: list[str] = []
-    for name in list(out):
-        value = out.get(name)
-        if not isinstance(value, str):
-            continue
-        cut = value.find(f"</{name}>")
-        if cut < 0:
-            continue
-        tail = value[cut + len(name) + 3 :]
-        out[name] = value[:cut].strip()
-        touched.append(f"{name}(leak-trimmed)")
-        for key, raw in _PARAM_TAG.findall(tail):
-            # Only recover declared parameters, and never clobber a real one.
-            if key not in props or out.get(key) not in (None, "", [], {}):
-                continue
-            spec = props[key] if isinstance(props[key], dict) else {}
-            out[key] = _as_list(raw) if spec.get("type") == "array" else raw.strip()
-            touched.append(f"{key}(recovered)")
-    return touched
-
-
-def _normalise_tool_input(
-    tool_input: dict[str, Any], schema: dict[str, Any] | None
-) -> tuple[dict[str, Any], list[str]]:
-    """Repair tool-call parameters the model serialised as text.
-
-    Two failure modes, both the model's own encoding leaking through unparsed:
-
-    1. A list-valued parameter arrives as a single string of ``<item>…</item>``
-       markup — ~8% of ``emit_verdict`` calls on a real cheeseman_test run.
-    2. A parameter's value runs on past its own closing tag into the next
-       ``<parameter name="…">`` block, so that block is never parsed as a key —
-       see :func:`_recover_leaked_params`.
-
-    Both leave the shape a caller receives intermittently wrong, which is worse
-    than consistently wrong: it passes tests and breaks in production.
-
-    Driven off the tool's own ``input_schema`` rather than a fixed field name, so
-    any tool declaring an array parameter is covered — both M and P already do.
-    Returns the (possibly rewritten) input plus the names of repaired fields, so
-    the caller can record that the transcript differs from what the model emitted.
-    """
-    props = ((schema or {}).get("properties") or {}) if isinstance(schema, dict) else {}
-    out = dict(tool_input)
-    coerced = _recover_leaked_params(out, props)
-    for name, spec in props.items():
-        if not isinstance(spec, dict) or spec.get("type") != "array":
-            continue
-        value = out.get(name)
-        if not isinstance(value, str):
-            continue
-        out[name] = _as_list(value)
-        coerced.append(name)
-    return out, coerced
-
-
 def run_tool_loop(
     *,
     system: str,
@@ -818,16 +724,15 @@ def run_tool_loop(
                     )
                     turn_record["tool_results"].append({"name": name, "rejected": msg})
                     continue
-                schema = next(
-                    (t.get("input_schema") for t in tools if t.get("name") == terminal_tool),
-                    None,
-                )
-                verdict, coerced = _normalise_tool_input(tool_input, schema)
-                if coerced:
-                    turn_record["normalised"] = coerced
+                # Taken verbatim. The terminal tool declares strict:true, so the
+                # API constrains sampling to its schema and the input arrives with
+                # the declared keys and types or not at all — no client-side
+                # coercion, which would only hide a contract the model broke.
+                # A payload that is still wrong surfaces downstream through
+                # _emit_schema_warnings against output_schemas/category_read.json.
                 trace["outcome"] = "emit_verdict"
                 trace["n_data_calls"] = n_data_calls
-                return verdict, trace
+                return tool_input, trace
 
             result = dispatch(name, tool_input)
             # Only a call that returned data counts toward min_data_calls —
