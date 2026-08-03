@@ -1318,6 +1318,63 @@ def test_schema_warnings_print_without_verbose(mod, capsys):
     assert "schema warning [some/label]" in capsys.readouterr().err
 
 
+def _p_record_with_pae() -> dict:
+    return {
+        "category": "P",
+        "name": "Predicted Structure",
+        "isoform": {"tis_id": TIS_ID},
+        "members": [
+            {
+                "criterion_id": "P1_structured_extension",
+                "evidence": {
+                    "isoform_structure_plddt_diffregion_mean": 0.82,
+                    "isoform_structure_pae_diff_vs_diff": 2.3,
+                    "isoform_structure_pae_body_vs_body": 2.5,
+                    "isoform_structure_pae_diff_vs_body": 20.1,
+                    "isoform_structure_pae_status": "ok",
+                },
+            }
+        ],
+    }
+
+
+def test_superseded_pae_means_are_dropped_for_p(mod):
+    """pae_block() with defaults IS diff_vs_body — shipping it pre-computed
+    hands the model the answer to its own tool call, and 10/18 live reasonings
+    cited it rather than querying.
+    """
+    ev = mod._strip_superseded_evidence(_p_record_with_pae(), "P")["members"][0]["evidence"]
+    for gone in (
+        "isoform_structure_pae_diff_vs_diff",
+        "isoform_structure_pae_body_vs_body",
+        "isoform_structure_pae_diff_vs_body",
+    ):
+        assert gone not in ev
+    assert "_superseded_note" in ev
+
+
+def test_pae_status_is_retained(mod):
+    """Availability metadata, not a measurement — keeping it saves a wasted call."""
+    ev = mod._strip_superseded_evidence(_p_record_with_pae(), "P")["members"][0]["evidence"]
+    assert ev["isoform_structure_pae_status"] == "ok"
+
+
+def test_non_pae_evidence_survives(mod):
+    ev = mod._strip_superseded_evidence(_p_record_with_pae(), "P")["members"][0]["evidence"]
+    assert ev["isoform_structure_plddt_diffregion_mean"] == 0.82
+
+
+def test_other_categories_are_untouched(mod):
+    """Only P declares superseded columns; M and the single-shot four keep everything."""
+    rec = _p_record_with_pae()
+    for letter in ("M", "C", "S"):
+        out = mod._strip_superseded_evidence(rec, letter)
+        assert out is rec  # returned unchanged, not even copied
+    # And the caller is not mutated by the P path.
+    mod._strip_superseded_evidence(rec, "P")
+    assert "isoform_structure_pae_diff_vs_body" in rec["members"][0]["evidence"]
+
+
 def test_p_dispatch_is_bound_to_the_isoforms_own_raw_row(mod, tmp_path, category_records):
     """Each isoform's readers must resolve through its own hashes, not a shared one."""
     records = mod.load_records(category_records)

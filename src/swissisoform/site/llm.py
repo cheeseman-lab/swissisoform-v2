@@ -1292,6 +1292,52 @@ def _tool_categories(args, prompts_root: Path, records=None) -> dict[str, dict[s
     return out
 
 
+# Evidence columns a category's readers SUPERSEDE, dropped from that category's
+# opening context when it runs as a tool loop. These are pre-computed answers to
+# questions the model can now ask itself over the real arrays, so shipping them
+# is both redundant and anchoring — measured on a live run, 10 of 18 P reasonings
+# cited the pre-computed PAE block means rather than the values they had queried.
+#
+# P: ``pae_region_blocks`` partitions the structure into diff/body and reports the
+# three block means. ``pae_block()`` with default arguments computes exactly the
+# diff-vs-body value, so the loop was shipping the answer to one of its own tool
+# calls on every turn. ``pae_status`` is deliberately RETAINED — it is
+# availability metadata, not a measurement, and it saves a wasted call
+# discovering that no PAE matrix exists.
+SUPERSEDED_BY_TOOLS: dict[str, tuple[str, ...]] = {
+    "P": (
+        "isoform_structure_pae_diff_vs_diff",
+        "isoform_structure_pae_body_vs_body",
+        "isoform_structure_pae_diff_vs_body",
+    ),
+}
+
+
+def _strip_superseded_evidence(
+    category_record: dict[str, Any], letter: str
+) -> dict[str, Any]:
+    """Drop evidence columns this category's readers replace. Returns a copy."""
+    cols = SUPERSEDED_BY_TOOLS.get(letter)
+    if not cols:
+        return category_record
+    members = []
+    for member in category_record.get("members") or []:
+        evidence = member.get("evidence")
+        if not isinstance(evidence, dict):
+            members.append(member)
+            continue
+        dropped = [c for c in cols if c in evidence]
+        kept = {k: v for k, v in evidence.items() if k not in cols}
+        if dropped:
+            kept["_superseded_note"] = (
+                "Pre-computed PAE block means are omitted here: query pae_block "
+                "over the ranges you care about instead of reading a fixed "
+                "diff/body partition."
+            )
+        members.append({**member, "evidence": kept})
+    return {**category_record, "members": members}
+
+
 def _strip_hits_for_tools(category_record: dict[str, Any]) -> dict[str, Any]:
     """Drop the truncated hit rows from a tool-loop category's opening context.
 
@@ -1335,7 +1381,8 @@ def _run_tool_category(
     or re-raises so the caller's per-category error handling applies.
     """
     dispatch = config["dispatch_for"](iso)
-    prompt_user = json.dumps(_strip_hits_for_tools(category_record), indent=2, ensure_ascii=False)
+    opening = _strip_superseded_evidence(_strip_hits_for_tools(category_record), letter)
+    prompt_user = json.dumps(opening, indent=2, ensure_ascii=False)
     trace_path = out_dir / f"{letter}_trace.json"
 
     def _persist(trace: dict[str, Any]) -> None:
