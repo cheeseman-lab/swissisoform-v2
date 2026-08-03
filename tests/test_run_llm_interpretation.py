@@ -1260,6 +1260,72 @@ def test_normalise_is_a_noop_without_a_schema(mod):
     assert mod._normalise_tool_input(payload, None)[0] == payload
 
 
+# Verbatim from the CBX1 Predicted-Structure verdict (cheeseman_test, live P run):
+# the model closed `reasoning` and opened `evidence_used` inside the string it was
+# writing, so the tool call arrived with only `verdict` and `reasoning` keys and
+# the raw markup rendered on the website.
+_LEAKED_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string"},
+        "reasoning": {"type": "string"},
+        "evidence_used": {"type": "array", "items": {"type": "string"}},
+    },
+}
+_LEAKED_REASONING = (
+    "The truncation removes a short but confidently folded element."
+    '</reasoning>\n<parameter name="evidence_used">'
+    '["5-residue strand at 35-39, pLDDT 0.92", "PAE 1.39 A to residues 44-60"]'
+)
+
+
+def test_normalise_recovers_a_parameter_leaked_into_the_previous_value(mod):
+    out, touched = mod._normalise_tool_input(
+        {"verdict": "interesting", "reasoning": _LEAKED_REASONING}, _LEAKED_SCHEMA
+    )
+    assert out["reasoning"] == "The truncation removes a short but confidently folded element."
+    assert "<parameter" not in out["reasoning"] and "</reasoning>" not in out["reasoning"]
+    assert out["evidence_used"] == [
+        "5-residue strand at 35-39, pLDDT 0.92",
+        "PAE 1.39 A to residues 44-60",
+    ]
+    assert touched == ["reasoning(leak-trimmed)", "evidence_used(recovered)"]
+
+
+def test_normalise_recovers_item_markup_from_a_leaked_parameter(mod):
+    """The two failure modes compose: a leaked param whose value is <item> markup."""
+    leaked = (
+        "prose</reasoning>\n"
+        '<parameter name="evidence_used"><item>first</item><item>second</item>'
+    )
+    out, _ = mod._normalise_tool_input({"reasoning": leaked}, _LEAKED_SCHEMA)
+    assert out["evidence_used"] == ["first", "second"]
+
+
+def test_normalise_never_clobbers_a_properly_emitted_parameter(mod):
+    out, _ = mod._normalise_tool_input(
+        {"reasoning": _LEAKED_REASONING, "evidence_used": ["the real one"]}, _LEAKED_SCHEMA
+    )
+    assert out["evidence_used"] == ["the real one"]
+    assert out["reasoning"].endswith("element.")
+
+
+def test_normalise_ignores_a_leaked_parameter_not_in_the_schema(mod):
+    out, touched = mod._normalise_tool_input(
+        {"reasoning": 'x</reasoning><parameter name="bogus">y'}, _LEAKED_SCHEMA
+    )
+    assert "bogus" not in out
+    assert out["reasoning"] == "x"
+    assert touched == ["reasoning(leak-trimmed)"]
+
+
+def test_normalise_leaves_a_clean_reasoning_alone(mod):
+    payload = {"verdict": "neutral", "reasoning": "No </other> tag matters here."}
+    out, touched = mod._normalise_tool_input(payload, _LEAKED_SCHEMA)
+    assert out["reasoning"] == payload["reasoning"]
+    assert touched == []
+
+
 def test_tool_loop_returns_a_normalised_verdict(mod, monkeypatch):
     """End-to-end: the loop must not hand a string-typed array to its caller."""
     calls: list = []
