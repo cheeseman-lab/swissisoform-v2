@@ -32,7 +32,12 @@ from swissisoform.structure.fold import (
     load_cache,
     protein_hash,
 )
-from swissisoform.structure.sse import annotate_sse, sse_elements, summarise_elements
+from swissisoform.structure.sse import (
+    annotate_sse,
+    classify_elements,
+    sse_elements,
+    summarise_elements,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +87,10 @@ class StructureModule:
         "structure_sse_isoform",
         "structure_sse_canonical",
         "structure_sse_diff_elements",
+        # Whole-protein scan, each element tagged region=unique/shared/spans.
+        # Display-only (the P3 card's two-column listing); P3 itself scores on
+        # sse_diff_elements above.
+        "structure_sse_all_elements",
         "structure_sse_longest_helix_diff",
         "structure_sse_longest_strand_diff",
         "structure_sse_max_confident_element_diff",
@@ -145,6 +154,7 @@ class StructureModule:
             "sse_isoform": None,
             "sse_canonical": None,
             "sse_diff_elements": [],
+            "sse_all_elements": [],
             "sse_longest_helix_diff": None,
             "sse_longest_strand_diff": None,
             "sse_max_confident_element_diff": None,
@@ -303,6 +313,7 @@ class StructureModule:
             "sse_isoform": None,
             "sse_canonical": None,
             "sse_diff_elements": [],
+            "sse_all_elements": [],
             "sse_longest_helix_diff": None,
             "sse_longest_strand_diff": None,
             "sse_max_confident_element_diff": None,
@@ -324,9 +335,20 @@ class StructureModule:
         # diff bounds are 0-based half-open; sse_elements is 1-based inclusive.
         elements = sse_elements(sse, plddt, start=int(start) + 1, end=int(end))
         summary = summarise_elements(elements, min_plddt=self._min_sse_plddt)
+        # A second, independent scan over the WHOLE protein, tagged by region.
+        # Display-only: the P3 card lists unique vs shared side by side, and the
+        # diff-region scan above cannot answer "what else does this protein have".
+        # Deliberately not reused to derive sse_diff_elements — that one is
+        # window-clipped by design and P3 scores on it, so recomputing it from
+        # here would move verdicts as a side effect of a display feature.
         out.update(
             sse_status="ok",
             sse_diff_elements=elements,
+            sse_all_elements=classify_elements(
+                sse_elements(sse, plddt),
+                diff_start=int(start) + 1,
+                diff_end=int(end),
+            ),
             sse_longest_helix_diff=summary["longest_helix"],
             sse_longest_strand_diff=summary["longest_strand"],
             sse_max_confident_element_diff=summary["longest_confident"],

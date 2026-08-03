@@ -319,3 +319,79 @@ def test_slice_criterion_survives_a_raw_numpy_row():
         "P3_secondary_structure",
     )
     assert sl["headline"]
+
+
+# ── Region classification (whole-protein scan for the P3 card) ────────────
+
+
+def _els(*spans):
+    return [{"type": "helix", "start": s, "end": e, "length": e - s + 1} for s, e in spans]
+
+
+def test_classify_tags_unique_shared_and_spanning():
+    from swissisoform.structure.sse import classify_elements
+
+    # diff region 1-20; elements: inside, outside, crossing the boundary.
+    out = classify_elements(_els((3, 10), (25, 40), (15, 30)), diff_start=1, diff_end=20)
+    assert [e["region"] for e in out] == ["unique", "shared", "spans"]
+
+
+def test_classify_boundary_exactly_flush_is_not_spanning():
+    """An element ending exactly on the last diff residue is unique, not spanning."""
+    from swissisoform.structure.sse import classify_elements
+
+    out = classify_elements(_els((10, 20), (21, 30)), diff_start=1, diff_end=20)
+    assert [e["region"] for e in out] == ["unique", "shared"]
+
+
+def test_classify_counts_every_element_exactly_once():
+    """The reason this is one tagged scan and not two window scans.
+
+    Two separate scans clip a boundary-crossing element at each window edge, so
+    it appears twice with two wrong lengths. Here the totals must reconcile and
+    the true length must survive.
+    """
+    from swissisoform.structure.sse import classify_elements
+
+    spans = [(3, 10), (15, 30), (25, 40), (50, 60)]
+    out = classify_elements(_els(*spans), diff_start=1, diff_end=20)
+    assert len(out) == len(spans)
+    crossing = [e for e in out if e["region"] == "spans"]
+    assert len(crossing) == 1
+    assert crossing[0]["length"] == 16  # 15-30 inclusive, unclipped
+
+
+def test_classify_leaves_other_fields_alone():
+    from swissisoform.structure.sse import classify_elements
+
+    els = [{"type": "strand", "start": 5, "end": 9, "length": 5, "plddt_mean": 0.91}]
+    out = classify_elements(els, diff_start=1, diff_end=20)
+    assert out[0]["plddt_mean"] == 0.91 and out[0]["type"] == "strand"
+
+
+@_real
+def test_module_emits_all_elements_superset_of_diff_elements():
+    """The whole-protein scan must contain every diff-region element's residues.
+
+    Not identity: the diff scan is window-clipped, so a spanning element differs
+    in length between the two lists by design.
+    """
+    import pandas as pd
+
+    df = pd.read_parquet(PAIRED)
+    if "isoform_structure_sse_all_elements" not in df.columns:
+        import pytest
+
+        pytest.skip("parquet predates structure_sse_all_elements")
+    checked = 0
+    for _, row in df.iterrows():
+        if row["isoform_structure_sse_status"] != "ok":
+            continue
+        allo = row["isoform_structure_sse_all_elements"]
+        diff = row["isoform_structure_sse_diff_elements"]
+        allo = [e for e in (allo if allo is not None else []) if isinstance(e, dict)]
+        diff = [e for e in (diff if diff is not None else []) if isinstance(e, dict)]
+        assert len(allo) >= len(diff)
+        assert all(e.get("region") in {"unique", "shared", "spans"} for e in allo)
+        checked += 1
+    assert checked >= 15, f"only {checked} isoforms exercised"

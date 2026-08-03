@@ -126,6 +126,43 @@ def sse_elements(
     return out
 
 
+UNIQUE = "unique"
+SHARED = "shared"
+SPANS = "spans"
+
+
+def classify_elements(
+    elements: list[dict[str, Any]], *, diff_start: int, diff_end: int
+) -> list[dict[str, Any]]:
+    """Tag each element by where it sits relative to the differential region.
+
+    Adds a ``region`` field in place and returns the same list: ``unique`` when
+    the element lies wholly inside the differential region, ``shared`` when
+    wholly outside it, ``spans`` when it crosses the boundary.
+
+    Classifying a single whole-protein scan is deliberate. Scanning the two
+    regions separately would clip a boundary-crossing element at each window
+    edge, so it would appear twice with two wrong lengths; here it appears once,
+    at its true extent, flagged. That case is worth seeing rather than hiding —
+    a helix that begins in an extension and continues into the core is a
+    structural-continuity claim, not a bookkeeping nuisance.
+
+    Args:
+        elements: From :func:`sse_elements`, 1-based inclusive.
+        diff_start: First residue of the differential region, 1-based inclusive.
+        diff_end: Last residue of the differential region, 1-based inclusive.
+    """
+    for element in elements:
+        start, end = element["start"], element["end"]
+        if start >= diff_start and end <= diff_end:
+            element["region"] = UNIQUE
+        elif end < diff_start or start > diff_end:
+            element["region"] = SHARED
+        else:
+            element["region"] = SPANS
+    return elements
+
+
 def summarise_elements(
     elements: list[dict[str, Any]], *, min_plddt: float | None = None
 ) -> dict[str, Any]:
