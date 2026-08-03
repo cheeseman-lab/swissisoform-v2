@@ -1196,6 +1196,128 @@ def test_p_category_fails_loudly_without_the_hash_columns(
         mod.main(_category_run_args(records_dir, tmp_path / "out", []))
 
 
+# ── Output-shape normalisation + schema validation ────────────────────────
+
+
+# The exact shape observed on a live cheeseman_test run: the model returned an
+# array-declared tool parameter as one string of <item> markup.
+_OBSERVED_STRING = (
+    "\n<item>Canonical region 1-32 mean pLDDT 0.899</item>"
+    "\n<item>PAE to the body averages 5.09 A</item>"
+)
+_ARRAY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string"},
+        "evidence_used": {"type": "array", "items": {"type": "string"}},
+    },
+}
+
+
+def test_normalise_coerces_the_observed_item_markup(mod):
+    out, coerced = mod._normalise_tool_input(
+        {"verdict": "interesting", "evidence_used": _OBSERVED_STRING}, _ARRAY_SCHEMA
+    )
+    assert out["evidence_used"] == [
+        "Canonical region 1-32 mean pLDDT 0.899",
+        "PAE to the body averages 5.09 A",
+    ]
+    assert coerced == ["evidence_used"]
+    assert out["verdict"] == "interesting"  # non-array fields untouched
+
+
+def test_normalise_leaves_a_correct_list_alone(mod):
+    payload = {"evidence_used": ["already", "a list"]}
+    out, coerced = mod._normalise_tool_input(payload, _ARRAY_SCHEMA)
+    assert out["evidence_used"] == ["already", "a list"]
+    assert coerced == []
+
+
+def test_normalise_wraps_an_untagged_string(mod):
+    out, _ = mod._normalise_tool_input({"evidence_used": "one plain note"}, _ARRAY_SCHEMA)
+    assert out["evidence_used"] == ["one plain note"]
+
+
+def test_normalise_handles_missing_and_empty(mod):
+    assert mod._normalise_tool_input({}, _ARRAY_SCHEMA)[0] == {}
+    assert mod._normalise_tool_input({"evidence_used": ""}, _ARRAY_SCHEMA)[0][
+        "evidence_used"
+    ] == []
+
+
+def test_normalise_is_schema_driven_not_field_specific(mod):
+    """Any array-declared parameter is covered, not just evidence_used."""
+    schema = {"type": "object", "properties": {"citations": {"type": "array"}}}
+    out, coerced = mod._normalise_tool_input(
+        {"citations": "<item>a</item><item>b</item>"}, schema
+    )
+    assert out["citations"] == ["a", "b"]
+    assert coerced == ["citations"]
+
+
+def test_normalise_is_a_noop_without_a_schema(mod):
+    payload = {"evidence_used": _OBSERVED_STRING}
+    assert mod._normalise_tool_input(payload, None)[0] == payload
+
+
+def test_tool_loop_returns_a_normalised_verdict(mod, monkeypatch):
+    """End-to-end: the loop must not hand a string-typed array to its caller."""
+    calls: list = []
+    script = [
+        _Response([_tool_use("query_variants", {}, "t1")]),
+        _Response([_tool_use("variant_effect_stats", {}, "t2")]),
+        _Response(
+            [
+                _tool_use(
+                    "emit_verdict",
+                    {"verdict": "neutral", "reasoning": "x", "evidence_used": _OBSERVED_STRING},
+                    "t3",
+                )
+            ]
+        ),
+    ]
+    monkeypatch.setattr(mod, "_try_import_anthropic", lambda: _fake_anthropic(script, calls))
+    tools = [{"name": "emit_verdict", "input_schema": _ARRAY_SCHEMA}]
+
+    verdict, trace = mod.run_tool_loop(
+        system="S", user="U", tools=tools, dispatch=_dispatch_ok,
+        model="claude-sonnet-5", max_tokens=1000, api_key="k",
+    )
+    assert isinstance(verdict["evidence_used"], list)
+    assert len(verdict["evidence_used"]) == 2
+    # The transcript records that the stored shape differs from what was emitted.
+    assert trace["turns"][-1]["normalised"] == ["evidence_used"]
+
+
+def test_schema_validation_is_actually_running(mod):
+    """Guard against the dependency silently vanishing again.
+
+    ``validate_against_schema`` is defensive — it returns [] when jsonschema is
+    absent — so without this test the whole mechanism can rot back to a no-op
+    unnoticed, which is exactly what happened between a64d8fa and this commit.
+    """
+    assert mod._try_import_jsonschema() is not None, "jsonschema missing from the env"
+
+    schema = json.loads(
+        (ROOT / "scripts/site/prompts/output_schemas/category_read.json").read_text()
+    )
+    # A genuine violation: evidence_used declared array, supplied as a string.
+    bad = {"verdict": "neutral", "reasoning": "x", "evidence_used": _OBSERVED_STRING}
+    assert mod.validate_against_schema(bad, schema), "validator did not flag a real violation"
+    good = {"verdict": "neutral", "reasoning": "x", "evidence_used": ["a", "b"]}
+    assert mod.validate_against_schema(good, schema) == []
+
+
+def test_schema_warnings_print_without_verbose(mod, capsys):
+    """Violations must not hide behind --verbose; that is how this went unnoticed."""
+    schema = json.loads(
+        (ROOT / "scripts/site/prompts/output_schemas/category_read.json").read_text()
+    )
+    bad = {"verdict": "not_a_valid_enum_value", "reasoning": "x"}
+    mod._emit_schema_warnings(bad, schema, "some/label", verbose=False)
+    assert "schema warning [some/label]" in capsys.readouterr().err
+
+
 def test_p_dispatch_is_bound_to_the_isoforms_own_raw_row(mod, tmp_path, category_records):
     """Each isoform's readers must resolve through its own hashes, not a shared one."""
     records = mod.load_records(category_records)

@@ -584,6 +584,41 @@ def _block_to_trace(block: Any) -> dict[str, Any]:
     return {"type": str(kind)}
 
 
+_ITEM_TAG = re.compile(r"<item>(.*?)</item>", re.DOTALL)
+
+
+def _normalise_tool_input(
+    tool_input: dict[str, Any], schema: dict[str, Any] | None
+) -> tuple[dict[str, Any], list[str]]:
+    """Coerce array-declared parameters that arrived as strings back to lists.
+
+    A model sometimes returns a list-valued tool parameter as a single string of
+    ``<item>…</item>`` markup — its internal encoding, leaking through unparsed.
+    Measured at ~8% of ``emit_verdict`` calls on a real cheeseman_test run, so
+    the shape a caller receives is intermittently wrong, which is worse than
+    consistently wrong: it passes tests and breaks in production.
+
+    Driven off the tool's own ``input_schema`` rather than a fixed field name, so
+    any tool declaring an array parameter is covered — both M and P already do.
+    Returns the (possibly rewritten) input plus the names of coerced fields, so
+    the caller can record that the transcript differs from what the model emitted.
+    """
+    props = ((schema or {}).get("properties") or {}) if isinstance(schema, dict) else {}
+    out = dict(tool_input)
+    coerced: list[str] = []
+    for name, spec in props.items():
+        if not isinstance(spec, dict) or spec.get("type") != "array":
+            continue
+        value = out.get(name)
+        if not isinstance(value, str):
+            continue
+        items = [m.strip() for m in _ITEM_TAG.findall(value) if m.strip()]
+        # No tags at all → the model wrote one plain entry, not a list of them.
+        out[name] = items if items else ([value.strip()] if value.strip() else [])
+        coerced.append(name)
+    return out, coerced
+
+
 def run_tool_loop(
     *,
     system: str,
@@ -724,9 +759,16 @@ def run_tool_loop(
                     )
                     turn_record["tool_results"].append({"name": name, "rejected": msg})
                     continue
+                schema = next(
+                    (t.get("input_schema") for t in tools if t.get("name") == terminal_tool),
+                    None,
+                )
+                verdict, coerced = _normalise_tool_input(tool_input, schema)
+                if coerced:
+                    turn_record["normalised"] = coerced
                 trace["outcome"] = "emit_verdict"
                 trace["n_data_calls"] = n_data_calls
-                return tool_input, trace
+                return verdict, trace
 
             result = dispatch(name, tool_input)
             # Only a call that returned data counts toward min_data_calls —
@@ -870,12 +912,16 @@ def _emit_schema_warnings(
 ) -> None:
     """Validate ``payload`` and print any warnings to stderr.
 
-    Parity with the default per-gene pass. No-op unless ``verbose``; never raises.
+    Real violations print unconditionally; ``verbose`` only adds the clean-pass
+    line. The reverse — gating violations behind ``--verbose`` — is how the
+    ``evidence_used`` type drift went unnoticed across a full run. Never raises:
+    a schema mismatch on a cosmetic field should not kill a batch.
     """
-    if not verbose:
-        return
-    for w in validate_against_schema(payload, schema):
+    warnings = validate_against_schema(payload, schema)
+    for w in warnings:
         print(f"    schema warning [{label}]: {w}", file=sys.stderr)
+    if verbose and not warnings:
+        print(f"    schema ok [{label}]", file=sys.stderr)
 
 
 # ── Per-gene runner ───────────────────────────────────────────────────────
