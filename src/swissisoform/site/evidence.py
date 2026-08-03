@@ -37,6 +37,7 @@ _SIMILARITY_HEADLINES = {
 _GNOMAD_FOLD = "__gnomad_fold__"
 _DISEASE_FOLD = "__disease_fold__"
 _DIVERGING_DOMAINS = "__diverging_domains__"
+_SSE_HEADLINE = "__sse_headline__"
 # Fold-change variant-density headlines (M1/M2): "{noun} {fold}x more/less in
 # unique region — {call}". low/high = call word for ratio <1 / >1.
 _VARIANT_FOLD_HEADLINES = {
@@ -868,6 +869,43 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "the raw unique/shared disease and pathogenic counts are context."
         ),
     },
+    "P3_secondary_structure": {
+        "axis": "F",
+        "label": "Secondary Structure",
+        "short_label": "SSE",
+        "evidence_cols": [
+            "isoform_structure_sse_status",
+            "isoform_structure_sse_longest_helix_diff",
+            "isoform_structure_sse_longest_strand_diff",
+            "isoform_structure_sse_max_confident_element_diff",
+            "isoform_structure_plddt_diffregion_mean",
+            "isoform_structure_ptm_isoform",
+            "isoform_structure_ptm_canonical",
+        ],
+        "evidence_hits_col": "isoform_structure_sse_diff_elements",
+        "headline_col": _SSE_HEADLINE,
+        "interpretation_hint": (
+            "Does the differential region contain actual secondary structure — a "
+            "helix or strand — as opposed to coil? Assigned from the predicted "
+            "coordinates (P-SEA), so each element carries its own mean pLDDT and "
+            "BOTH length and confidence are required to score: a geometrically "
+            "clean helix running through a disordered stretch is geometry fitted "
+            "to a guess, not a structural finding. "
+            "Symmetric across ORF types, opposite narrative — on an EXTENSION the "
+            "isoform GAINS the element (a candidate functional addition); on a "
+            "TRUNCATION it LOSES one, and the element is read off the CANONICAL "
+            "structure because the removed segment exists only there, so a hit "
+            "means the truncation deletes real structure rather than a "
+            "disordered tail. "
+            "This says nothing about whether the element is INTEGRATED with the "
+            "rest of the fold — whether a gained helix packs against the core, or "
+            "a lost one was load-bearing. Read the contact and PAE evidence in "
+            "this same category for that; do not infer it from the presence of an "
+            "element alone. pLDDT is not a proxy for secondary structure and the "
+            "two often disagree: the highest-confidence stretch of a region is "
+            "frequently coil."
+        ),
+    },
     "P2_shared_structural_change": {
         "axis": "F",
         "label": "Core Fold Perturbation",
@@ -1007,7 +1045,11 @@ CATEGORIES: list[dict[str, Any]] = [
     {
         "letter": "P",
         "name": "Predicted Structure",
-        "members": ["P1_structured_extension", "P2_shared_structural_change"],
+        "members": [
+            "P1_structured_extension",
+            "P2_shared_structural_change",
+            "P3_secondary_structure",
+        ],
     },
     {
         "letter": "S",
@@ -1741,6 +1783,28 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
             ]
         else:
             headline = None
+        headline_fmt = "str"
+    elif headline_col == _SSE_HEADLINE:
+        # "17-res helix (pLDDT 0.75)" — the longest CONFIDENT element, which is
+        # what P3 scores on. Falls back to naming the longest element and its
+        # shortfall so a near-miss is visible rather than reading as "nothing".
+        _all = raw.get("isoform_structure_sse_diff_elements") or []
+        els = [e for e in _all if isinstance(e, dict)]
+        if not els:
+            ok = raw.get("isoform_structure_sse_status") == "ok"
+            headline = "No helix or strand in region" if ok else None
+        else:
+            best = max(
+                els,
+                key=lambda e: ((e.get("plddt_mean") or 0) >= 0.70, e.get("length") or 0),
+            )
+            n, kind = best.get("length"), best.get("type")
+            pl = best.get("plddt_mean")
+            headline = f"{n}-res {kind}" + (f" (pLDDT {pl:.2f})" if pl is not None else "")
+            headline_segments = [
+                {"t": f"{n}-res {kind}", "strong": True},
+                {"t": f" (pLDDT {pl:.2f})" if pl is not None else "", "strong": False},
+            ]
         headline_fmt = "str"
     elif headline_col == _CODING_SELECTION:
         # Mean PhyloP over the isoform-unique region + a selection call: PhyloP

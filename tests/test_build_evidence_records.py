@@ -243,12 +243,13 @@ def test_categories_cover_all_criteria_once():
     members = [m for cat in ber.CATEGORIES for m in cat["members"]]
     # All members are first-class criteria now — no descriptive magic strings.
     assert all(m in ber.CRITERIA for m in members)
-    # All 15 criteria covered exactly once.
+    # All 16 criteria covered exactly once.
     assert sorted(members) == sorted(ber.CRITERIA)
-    assert len(members) == len(set(members)) == 15
-    # S2/S3 live once each, in category S.
+    assert len(members) == len(set(members)) == 16
+    # S2/S3 live once each, in category S; P3 once, in category P.
     assert members.count("S2_biophysics") == 1
     assert members.count("S3_sae") == 1
+    assert members.count("P3_secondary_structure") == 1
     assert not hasattr(ber, "LLM_EXCLUDED_CRITERIA")
     assert not hasattr(ber, "DESCRIPTIVE_MEMBERS")
 

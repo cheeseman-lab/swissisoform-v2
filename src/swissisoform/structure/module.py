@@ -32,6 +32,7 @@ from swissisoform.structure.fold import (
     load_cache,
     protein_hash,
 )
+from swissisoform.structure.sse import annotate_sse, sse_elements, summarise_elements
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,17 @@ class StructureModule:
         # present even when nothing has been folded yet.
         "structure_canonical_hash",
         "structure_isoform_hash",
+        # Secondary structure, derived from the coordinates via P-SEA. Each
+        # element in ``sse_diff_elements`` carries its own plddt_mean, so a
+        # geometrically clean helix through a disordered stretch is
+        # distinguishable from a real one; P3 scores on the confident subset.
+        "structure_sse_status",
+        "structure_sse_isoform",
+        "structure_sse_canonical",
+        "structure_sse_diff_elements",
+        "structure_sse_longest_helix_diff",
+        "structure_sse_longest_strand_diff",
+        "structure_sse_max_confident_element_diff",
     ]
     SCOPE: str = "C"
 
@@ -94,6 +106,8 @@ class StructureModule:
         self.config = config
         self.cache_dir = Path(cache_dir)
         self.backend = backend
+        # Confidence floor for "this element is real", shared with the P3 scorer.
+        self._min_sse_plddt = getattr(getattr(config, "scoring", None), "p3_min_sse_plddt", 0.70)
 
     def _load(self, protein: str) -> dict[str, Any] | None:
         if not protein:
@@ -127,6 +141,13 @@ class StructureModule:
             "pae_status": reason,
             "canonical_hash": None,
             "isoform_hash": None,
+            "sse_status": reason,
+            "sse_isoform": None,
+            "sse_canonical": None,
+            "sse_diff_elements": [],
+            "sse_longest_helix_diff": None,
+            "sse_longest_strand_diff": None,
+            "sse_max_confident_element_diff": None,
         }
 
     @staticmethod
@@ -222,7 +243,35 @@ class StructureModule:
         for k, v in self._pae_blocks(site, can, iso).items():
             out[k] = v
 
+        for k, v in self._sse(site, can, iso).items():
+            out[k] = v
+
         return out
+
+    @staticmethod
+    def _diff_side(
+        site: TranslationInitiationSite,
+        can: dict[str, Any] | None,
+        iso: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any] | None, int | None, int | None, str]:
+        """The structure CONTAINING the differential region, and its bounds.
+
+        Extensions and separate ORFs add sequence that exists only in the isoform
+        fold; truncations remove sequence that exists only in the canonical one.
+        Every per-region metric — PAE blocks, secondary structure — must be read
+        off the right side or it describes the wrong protein.
+
+        Returns ``(entry, start, end, space)`` with 0-based half-open bounds.
+        """
+        dr = site.diff_region
+        orf = site.orf_type.value if site.orf_type else None
+        iso_start = getattr(dr, "isoform_start", None) if dr else None
+        can_start = getattr(dr, "canonical_start", None) if dr else None
+        truncated = (orf == "truncated") or (iso_start is None and can_start is not None)
+
+        if truncated:
+            return can, can_start, getattr(dr, "canonical_end", None) if dr else None, "canonical"
+        return iso, iso_start, getattr(dr, "isoform_end", None) if dr else None, "isoform"
 
     def _pae_blocks(
         self,
@@ -231,27 +280,58 @@ class StructureModule:
         iso: dict[str, Any] | None,
     ) -> dict[str, Any]:
         """Compute PAE block means over the structure carrying the diff region."""
-        dr = site.diff_region
-        orf = site.orf_type.value if site.orf_type else None
-        iso_start = getattr(dr, "isoform_start", None) if dr else None
-        can_start = getattr(dr, "canonical_start", None) if dr else None
-        truncated = (orf == "truncated") or (iso_start is None and can_start is not None)
-
-        if truncated:
-            entry, start, end = (
-                can,
-                can_start,
-                getattr(dr, "canonical_end", None) if dr else None,
-            )
-        else:
-            entry, start, end = (
-                iso,
-                iso_start,
-                getattr(dr, "isoform_end", None) if dr else None,
-            )
-
+        entry, start, end, _ = self._diff_side(site, can, iso)
         pae = load_pae((entry or {}).get("pae_path")) if entry else None
         return pae_region_blocks(pae, start, end)
+
+    def _sse(
+        self,
+        site: TranslationInitiationSite,
+        can: dict[str, Any] | None,
+        iso: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Secondary structure of the differential region, per-element.
+
+        Derived from coordinates (P-SEA) rather than predicted, so every element
+        carries its own mean pLDDT: without that, a geometrically clean helix
+        through a disordered stretch reads identically to a real one. P3 scores
+        on ``sse_max_confident_element_diff``, which requires both length and
+        confidence.
+        """
+        out: dict[str, Any] = {
+            "sse_status": "no_structure",
+            "sse_isoform": None,
+            "sse_canonical": None,
+            "sse_diff_elements": [],
+            "sse_longest_helix_diff": None,
+            "sse_longest_strand_diff": None,
+            "sse_max_confident_element_diff": None,
+        }
+        sse_iso = annotate_sse((iso or {}).get("cif_path")) if iso else None
+        sse_can = annotate_sse((can or {}).get("cif_path")) if can else None
+        out["sse_isoform"] = sse_iso
+        out["sse_canonical"] = sse_can
+
+        entry, start, end, space = self._diff_side(site, can, iso)
+        sse = sse_iso if space == "isoform" else sse_can
+        if not sse or entry is None:
+            return out
+        if start is None or end is None:
+            out["sse_status"] = "no_diff_region"
+            return out
+
+        plddt = (entry.get("confidence") or {}).get("plddt")
+        # diff bounds are 0-based half-open; sse_elements is 1-based inclusive.
+        elements = sse_elements(sse, plddt, start=int(start) + 1, end=int(end))
+        summary = summarise_elements(elements, min_plddt=self._min_sse_plddt)
+        out.update(
+            sse_status="ok",
+            sse_diff_elements=elements,
+            sse_longest_helix_diff=summary["longest_helix"],
+            sse_longest_strand_diff=summary["longest_strand"],
+            sse_max_confident_element_diff=summary["longest_confident"],
+        )
+        return out
 
     def run(self, tis_sites: list[TranslationInitiationSite]) -> list[TranslationInitiationSite]:
         """Attach structure annotations to each TIS."""

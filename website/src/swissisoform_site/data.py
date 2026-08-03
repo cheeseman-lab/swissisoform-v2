@@ -2250,6 +2250,12 @@ CRITERIA_FOR_PAGE = [
         "label": "Core Fold Perturbation",
         "short_label": "Shared RMSD",
     },
+    {
+        "id": "P3_secondary_structure",
+        "axis": "F",
+        "label": "Secondary Structure",
+        "short_label": "SSE",
+    },
     # S2/S3 are first-class scored criteria (biophysics + SAE); the page renders
     # them via their bespoke cards (_biophysics_card.html / _sae_card.html), but
     # they must appear here to stay in sync with the backend CRITERIA registry.

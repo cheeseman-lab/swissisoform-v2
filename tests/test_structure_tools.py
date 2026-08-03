@@ -350,7 +350,12 @@ def test_emit_verdict_is_terminal_and_excluded_from_data_tools():
     names = {t["name"] for t in st.P_TOOLS}
     assert st.EMIT_VERDICT in names
     assert st.DATA_TOOL_NAMES == names - {st.EMIT_VERDICT}
-    assert st.DATA_TOOL_NAMES == {"plddt_profile", "pae_block", "contacts"}
+    assert st.DATA_TOOL_NAMES == {
+        "plddt_profile",
+        "secondary_structure",
+        "pae_block",
+        "contacts",
+    }
 
 
 def test_emit_verdict_requires_verdict_and_reasoning():

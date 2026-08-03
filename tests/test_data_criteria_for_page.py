@@ -10,13 +10,13 @@ pytest.importorskip("swissisoform_site")  # optional website package; skip if no
 from swissisoform_site.data import CARD_GROUPS, CRITERIA_FOR_PAGE, category_verdicts_for_isoform
 
 
-def test_criteria_for_page_has_15_entries() -> None:
-    # 13 flat criteria + S2 biophysics + S3 SAE (now first-class scored criteria).
-    assert len(CRITERIA_FOR_PAGE) == 15
+def test_criteria_for_page_has_16_entries() -> None:
+    # 13 flat criteria + S2 biophysics + S3 SAE + P3 secondary structure.
+    assert len(CRITERIA_FOR_PAGE) == 16
     e_count = sum(1 for c in CRITERIA_FOR_PAGE if c["axis"] == "E")
     f_count = sum(1 for c in CRITERIA_FOR_PAGE if c["axis"] == "F")
     assert e_count == 6
-    assert f_count == 9
+    assert f_count == 10
 
 
 def test_criteria_for_page_ids_match_ber() -> None:

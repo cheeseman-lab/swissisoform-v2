@@ -262,6 +262,13 @@ class ScoringConfig:
     f7_rmsd_shared_min: float = 2.0  # CALIBRATE ON GENOME-WIDE RUN — provisional
     f7_min_shared_len: int = 20  # CALIBRATE ON GENOME-WIDE RUN — provisional
     f7_plddt_min: float = 0.70  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    # P3 secondary structure in the differential region. BOTH must hold for an
+    # element to count: length (a helix turn is ~3.6 residues, so 6+ is a real
+    # element rather than a geometric blip) AND its own mean pLDDT — secondary
+    # structure here is derived from predicted coordinates, so a clean-looking
+    # helix through a disordered stretch is geometry fitted to a guess.
+    p3_min_sse_length: int = 6  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    p3_min_sse_plddt: float = 0.70  # mirrors f1_plddt_threshold (0–1 ESMFold2 scale)
     # Dormant per-variant damaging cutoffs (VariantEffectModule still reads
     # f5_llr_damaging_threshold for ΔLLR labeling; F5 scoring no longer uses
     # these — see f5_constraint_enrichment_min / f5_depletion_ratio_max).

@@ -47,6 +47,7 @@ __all__ = [
     "pae_block",
     "plddt_profile",
     "require_structure_hashes",
+    "secondary_structure",
 ]
 
 
@@ -305,6 +306,70 @@ def pae_block(
     }
 
 
+_SSE_COL = {"canonical": "isoform_structure_sse_canonical",
+            "isoform": "isoform_structure_sse_isoform"}
+
+
+@lru_cache(maxsize=32)
+def _sse_from_cif(cif_path: str) -> str | None:
+    """Per-residue SSE for one structure, parsed once per process."""
+    from swissisoform.structure.sse import annotate_sse as _annotate
+
+    return _annotate(cif_path)
+
+
+def secondary_structure(
+    raw: dict[str, Any],
+    *,
+    side: str | None = None,
+    start: Any = None,
+    end: Any = None,
+    cache_dir: Path | str = DEFAULT_CACHE_DIR,
+    backend: str | None = None,
+) -> dict[str, Any]:
+    """Helices and strands over a residue window, with per-element confidence.
+
+    Answers "where IS the structure" — which pLDDT does not. Measured on UBE2M,
+    the highest-confidence stretch of its extension (pLDDT 0.91) is coil, while
+    the real 17-residue helix scores 0.75; selecting a window by confidence finds
+    the wrong region. Every element carries its own ``plddt_mean`` so a
+    geometrically clean helix through a disordered stretch stays distinguishable
+    from a genuine one.
+
+    Prefers the per-residue assignment already on the record and falls back to
+    computing it from the CIF, so it works on runs predating those columns. This
+    is not the pre-computed-answer anti-pattern that motivated stripping the PAE
+    block means: the stored value is the FULL per-residue assignment, not a lossy
+    summary, so reading it loses nothing.
+    """
+    from swissisoform.structure.sse import sse_elements, summarise_elements
+
+    side = side or _default_side(raw)
+    entry, status = _resolve(raw, side, cache_dir, backend)
+    empty = {"side": side, "region": None, "sse_string": None, "elements": [],
+             "n_helix": 0, "n_strand": 0, "longest_helix": 0, "longest_strand": 0,
+             "status": status}
+    if status != "ok":
+        return empty
+
+    sse = (raw or {}).get(_SSE_COL[side]) or _sse_from_cif(str(entry.get("cif_path") or ""))
+    if not sse:
+        return {**empty, "status": "no_structure"}
+
+    plddt = list(entry["confidence"]["plddt"])
+    s, e = _window(start, end, len(sse), raw, side)
+    elements = sse_elements(sse, plddt, start=s, end=e)
+    return {
+        "side": side,
+        "region": [s, e],
+        "protein_length": len(sse),
+        "sse_string": sse[s - 1 : e],
+        "elements": elements,
+        **summarise_elements(elements),
+        "status": "ok",
+    }
+
+
 @lru_cache(maxsize=32)
 def _ca_coords(cif_path: str):
     """Cα coordinates for one structure, parsed once per process."""
@@ -440,6 +505,25 @@ P_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "secondary_structure",
+        "description": (
+            "Where the helices and strands actually are, as a list of elements with "
+            "their residue ranges, lengths and per-element mean pLDDT. Use this to "
+            "LOCATE structure — pLDDT tells you how confident a region is, NOT "
+            "whether it is a helix, and the two frequently disagree. Omit start/end "
+            "to cover the differential region."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "side": _SIDE_PROP,
+                "start": {"type": "integer", "description": "First residue, 1-based inclusive."},
+                "end": {"type": "integer", "description": "Last residue, 1-based inclusive."},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "contacts",
         "description": (
             "Ca-Ca contacts between a residue window and the rest of the structure, "
@@ -517,6 +601,7 @@ def make_p_dispatch(
     backend = (raw or {}).get(_BACKEND_COL) or DEFAULT_BACKEND
     readers: dict[str, Callable[..., dict[str, Any]]] = {
         "plddt_profile": plddt_profile,
+        "secondary_structure": secondary_structure,
         "pae_block": pae_block,
         "contacts": contacts,
     }

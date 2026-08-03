@@ -663,8 +663,8 @@ class TestModuleIntegration:
 class TestMetadata:
     def test_counts(self):
         assert len(EXISTENCE_CRITERIA) == 6
-        assert len(FUNCTIONAL_CRITERIA) == 9
-        assert len(EXISTENCE_CRITERIA) + len(FUNCTIONAL_CRITERIA) == 15
+        assert len(FUNCTIONAL_CRITERIA) == 10
+        assert len(EXISTENCE_CRITERIA) + len(FUNCTIONAL_CRITERIA) == 16
 
     def test_output_columns(self):
         cols = EvidenceScoringModule.OUTPUT_COLUMNS

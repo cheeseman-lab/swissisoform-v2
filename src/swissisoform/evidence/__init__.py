@@ -76,6 +76,9 @@ from swissisoform.evidence import (
     p2_shared_rmsd as p2,
 )
 from swissisoform.evidence import (
+    p3_secondary_structure as p3,
+)
+from swissisoform.evidence import (
     s1_domains as s1,
 )
 from swissisoform.evidence import (
@@ -93,7 +96,7 @@ CATEGORY_CRITERIA: dict[str, list[Criterion]] = {
     "D": [d1.score, d2.score, d3.score],
     "L": [l1.score, l2.score],
     "M": [m1.score, m2.score],
-    "P": [p1.score, p2.score],
+    "P": [p1.score, p2.score, p3.score],
     "S": [s1.score, s2.score, s3.score],
 }
 
