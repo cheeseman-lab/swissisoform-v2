@@ -554,6 +554,8 @@ P_TOOLS: list[dict[str, Any]] = [
             "Terminal call: record the category verdict and stop. Call it exactly "
             "once, after gathering enough data with the reader tools to justify it."
         ),
+        # See tools.py's EMIT_VERDICT for why this one tool is strict.
+        "strict": True,
         "input_schema": {
             "type": "object",
             "properties": {
@@ -575,7 +577,8 @@ P_TOOLS: list[dict[str, Any]] = [
                     "description": "Short notes on which tool findings drove the verdict.",
                 },
             },
-            "required": ["verdict", "reasoning"],
+            "required": ["verdict", "reasoning", "evidence_used"],
+            "additionalProperties": False,
         },
     },
 ]

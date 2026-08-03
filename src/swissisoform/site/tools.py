@@ -564,6 +564,20 @@ M_TOOLS: list[dict[str, Any]] = [
             "once, after you have gathered enough data with the reader tools to "
             "justify the call."
         ),
+        # Strict mode: the API constrains sampling to this schema, so the input
+        # cannot arrive with a missing key, an extra key, or a parameter typed as
+        # something other than what is declared. Applied to the terminal tool
+        # specifically because its input is *persisted* — a malformed reader call
+        # is answered with an error the model can recover from mid-loop, whereas a
+        # malformed verdict is written to categories.json and rendered.
+        #
+        # Strict requires additionalProperties:false and rejects minItems>1, which
+        # is why P's pae_block (two-element range params) stays unstrict.
+        #
+        # It guarantees the *shape*, not the prose: a string parameter may still
+        # contain anything, so _normalise_tool_input in llm.py remains as a
+        # backstop and now warns when it fires.
+        "strict": True,
         "input_schema": {
             "type": "object",
             "properties": {
@@ -588,7 +602,10 @@ M_TOOLS: list[dict[str, Any]] = [
                     ),
                 },
             },
-            "required": ["verdict", "reasoning"],
+            # evidence_used is required so a verdict cannot be recorded without
+            # its citations — under strict that is a guarantee, not a request.
+            "required": ["verdict", "reasoning", "evidence_used"],
+            "additionalProperties": False,
         },
     },
 ]
