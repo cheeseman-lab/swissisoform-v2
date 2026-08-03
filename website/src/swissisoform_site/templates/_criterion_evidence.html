@@ -39,6 +39,36 @@
     </div>
     {% endif %}
 
+    {# ── Box 1b · Paired two-column listings (e.g. P3 secondary structure) ── #}
+    {% set pair_secs = ce.sections | selectattr('pairs') | list %}
+    {% if pair_secs %}
+    <div class="crit-box">
+      {% for s in pair_secs %}
+      <h4 class="crit-box-h">{{ s.title }}</h4>
+      {% if s.subtitle %}<p class="crit-grp-s">{{ s.subtitle }}</p>{% endif %}
+      <table class="crit-pairs">
+        <thead><tr>{% for h in s.pair_headers %}<th>{{ h }}</th>{% endfor %}</tr></thead>
+        <tbody>
+          {% for p in s.pairs %}
+          <tr>
+            {% for c in [p.left, p.right] %}
+            <td class="{{ 'dm-shared' if loop.index0 else '' }}">
+              {% if c %}
+                <span class="diff-hit-kind diff-hit-{{ c.kind }}">{{ c.kind }}</span>
+                <span class="sse-span">{{ c.span }}</span>
+                <span class="sse-detail">{{ c.detail }}</span>
+                {% if c.note %}<span class="sse-note">{{ c.note }}</span>{% endif %}
+              {% else %}<span class="sse-empty">—</span>{% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endfor %}
+    </div>
+    {% endif %}
+
     {# ── Box 2 · Details (non-comparison metrics + hits) ── #}
     {% set has_detail = (ce.sections|selectattr('rows')|list) or (ce.sections|selectattr('hits')|list) or (ce.sections|selectattr('seq')|list) %}
     {% if has_detail %}

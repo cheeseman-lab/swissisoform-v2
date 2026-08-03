@@ -1116,6 +1116,19 @@
 .crit-metrics .dm-label { padding: .26rem .6rem .26rem 0; color: #475569; font-size: .84rem; }
 .crit-metrics .dm-val { padding: .26rem 0; text-align: right; font-variant-numeric: tabular-nums;
   font-weight: 600; color: #1e293b; font-size: .84rem; }
+/* paired two-column listing (P3 secondary structure: unique | shared core) */
+.crit-pairs { border-collapse: collapse; width: 100%; table-layout: fixed; margin-top: .4rem; }
+.crit-pairs th { text-align: left; font-size: .7rem; text-transform: uppercase; letter-spacing: .03em;
+  color: #94a3b8; padding: .15rem .55rem .3rem; border-bottom: 1px solid #e2e8f0; width: 50%; }
+.crit-pairs td { padding: .28rem .55rem; font-size: .82rem; border-bottom: 1px solid #f1f5f9;
+  vertical-align: top; }
+.crit-pairs td.dm-shared { color: #94a3b8; }
+.crit-pairs .sse-span { font-variant-numeric: tabular-nums; font-weight: 600; color: #1e293b;
+  margin: 0 .35rem; }
+.crit-pairs td.dm-shared .sse-span { color: #64748b; font-weight: 500; }
+.crit-pairs .sse-detail { color: #64748b; }
+.crit-pairs .sse-note { display: block; font-size: .72rem; color: #9a3412; }
+.crit-pairs .sse-empty { color: #cbd5e1; }
 .crit-hits { list-style: none; padding: 0; margin: .5rem 0 0; display: flex; flex-direction: column; gap: .25rem; }
 .crit-hits li { font-size: .82rem; color: #334155; }
 .crit-seq { font-family: ui-monospace, monospace; font-size: .72rem; color: #64748b; word-break: break-all;

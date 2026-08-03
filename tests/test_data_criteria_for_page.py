@@ -98,3 +98,85 @@ def test_clean_nan_still_unwraps_numpy_scalars() -> None:
     assert isinstance(_clean_nan(np.int64(19)), int)
     assert _clean_nan(np.float64("nan")) is None
     assert _clean_nan("abc") == "abc"
+
+
+# ── P3 evidence modal: two-column SSE listing ─────────────────────────────
+
+
+class _Iso:
+    def __init__(self, raw, orf_type="extended", diff_space="isoform"):
+        self.raw, self.orf_type, self.diff_space = raw, orf_type, diff_space
+
+
+def _sse_raw(*elements):
+    return {
+        "isoform_structure_sse_status": "ok",
+        "isoform_structure_sse_all_elements": list(elements),
+    }
+
+
+def _el(kind, start, end, region, plddt=0.9):
+    return {
+        "type": kind, "start": start, "end": end,
+        "length": end - start + 1, "plddt_mean": plddt, "region": region,
+    }
+
+
+def _p3(iso):
+    from swissisoform_site.data import criterion_evidence_for
+
+    return criterion_evidence_for(iso)["P3_secondary_structure"]
+
+
+def test_p3_modal_splits_unique_and_shared() -> None:
+    ce = _p3(_Iso(_sse_raw(
+        _el("helix", 16, 32, "unique"),
+        _el("strand", 40, 44, "shared"),
+        _el("helix", 60, 75, "shared"),
+    )))
+    summary, listing = ce["sections"]
+    assert summary["cmp_headers"] == ["Metric", "Isoform-unique", "Shared core"]
+    # helices: 1 unique / 1 shared;  strands: 0 unique / 1 shared
+    assert [r["cols"] for r in summary["compare_rows"]][:2] == [["1", "1"], ["0", "1"]]
+    # One row per element, padded to the longer side.
+    assert len(listing["pairs"]) == 2
+    assert listing["pairs"][0]["left"]["span"] == "16–32"
+    assert listing["pairs"][1]["left"] is None  # padding
+
+
+def test_p3_modal_relabels_the_unique_column_for_truncations() -> None:
+    """On a truncation the region exists only in the canonical protein, so
+    calling that column "isoform-unique" would name the one protein lacking it.
+    """
+    ce = _p3(_Iso(_sse_raw(_el("helix", 13, 31, "unique")),
+                  orf_type="truncated", diff_space="canonical"))
+    assert ce["sections"][0]["cmp_headers"][1] == "Removed (canonical)"
+    assert ce["sections"][1]["pair_headers"][0] == "Removed (canonical)"
+
+
+def test_p3_modal_flags_a_boundary_spanning_element() -> None:
+    """A spanning element lists on the unique side, marked — a reader must not
+    read it as sitting wholly inside the differential region.
+    """
+    ce = _p3(_Iso(_sse_raw(_el("helix", 13, 35, "spans"))))
+    cell = ce["sections"][1]["pairs"][0]["left"]
+    assert cell["span"] == "13–35" and "shared core" in cell["note"]
+
+
+def test_p3_modal_absent_when_sse_did_not_run() -> None:
+    from swissisoform_site.data import criterion_evidence_for
+
+    ce = criterion_evidence_for(_Iso({"isoform_structure_sse_status": "no_cache"}))
+    assert ce["P3_secondary_structure"]["sections"] == []
+
+
+def test_p3_modal_survives_a_numpy_element_array() -> None:
+    """The parquet hands back a numpy object array, not a list."""
+    np = pytest.importorskip("numpy")
+    arr = np.empty(1, dtype=object)
+    arr[0] = _el("helix", 16, 32, "unique")
+    ce = _p3(_Iso({
+        "isoform_structure_sse_status": "ok",
+        "isoform_structure_sse_all_elements": arr,
+    }))
+    assert ce["sections"][1]["pairs"][0]["left"]["span"] == "16–32"

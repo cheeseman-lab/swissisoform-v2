@@ -26,6 +26,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from functools import lru_cache
+from itertools import zip_longest
 from pathlib import Path
 from typing import Any
 
@@ -1119,6 +1120,20 @@ CRITERION_ABOUT = {
         "1×)? Disease variants concentrating in the unique region tie it to "
         "phenotype."
     ),
+    "P3_secondary_structure": (
+        "Does the differential region contain actual secondary structure — a helix "
+        "or strand — rather than coil? ESMFold2 predicts coordinates but no "
+        "secondary structure, so elements are assigned from those coordinates "
+        "(P-SEA, Cα geometry). Because they are derived from a prediction, each "
+        "element carries its own mean pLDDT: a geometrically clean helix running "
+        "through a disordered stretch is geometry fitted to a guess, so BOTH "
+        "length and confidence are required to score. The direction differs by ORF "
+        "type — an extension GAINS the element (a candidate functional addition), "
+        "a truncation LOSES one, and there the element is read off the canonical "
+        "structure because the removed segment exists only in it. This says "
+        "nothing about whether the element is integrated with the rest of the "
+        "fold; the contact and PAE evidence in this same category answers that."
+    ),
     "P2_shared_structural_change": (
         "The shared region is the stretch of protein identical in both the isoform "
         "and the canonical (the canonical body for an extension; the post-truncation "
@@ -1586,6 +1601,106 @@ def criterion_evidence_for(iso) -> dict:
             "cmp_headers": ["Metric", "Differential", "Shared", "Enrichment"],
             "col_classes": DIFF_SHARED_3,
             "compare_rows": [row],
+        }
+
+    def _sse_split():
+        """Whole-protein SSE elements split into (unique, shared) lists.
+
+        Reads ``isoform_structure_sse_all_elements``, where each element is
+        tagged ``unique`` / ``shared`` / ``spans`` by the pipeline. A ``spans``
+        element crosses the boundary and is listed on the unique side — the
+        differential region is what the card is about, and a helix that starts
+        there and continues into the core is the interesting case, not a
+        shared-core element that happens to poke out.
+        """
+        raw_all = g("isoform_structure_sse_all_elements")
+        els = [e for e in (raw_all if raw_all is not None else []) if isinstance(e, dict)]
+        unique = [e for e in els if e.get("region") in ("unique", "spans")]
+        shared = [e for e in els if e.get("region") == "shared"]
+        return unique, shared
+
+    def _sse_stat(els, kind):
+        return sum(1 for e in els if e.get("type") == kind)
+
+    def _sse_longest(els):
+        return max((e.get("length") or 0 for e in els), default=0)
+
+    def _sse_mean_plddt(els):
+        vals = [e["plddt_mean"] for e in els if e.get("plddt_mean") is not None]
+        return sum(vals) / len(vals) if vals else None
+
+    def _sse_unique_label():
+        # On a truncation the differential region exists only in the canonical
+        # protein — calling that column "isoform-unique" would name the one
+        # protein that does not contain it.
+        return "Removed (canonical)" if is_trunc else "Isoform-unique"
+
+    def sec_sse_summary():
+        if g("isoform_structure_sse_status") != "ok":
+            return None
+        unique, shared = _sse_split()
+        if not unique and not shared:
+            return None
+
+        def row(label, fn, fmt=str):
+            u, s = fn(unique), fn(shared)
+            return {
+                "label": label,
+                "cols": [fmt(u) if u is not None else "—", fmt(s) if s is not None else "—"],
+                "hot": False,
+                **_term(label),
+            }
+
+        rows = [
+            row("Helices", lambda e: _sse_stat(e, "helix")),
+            row("Strands", lambda e: _sse_stat(e, "strand")),
+            row("Longest element (aa)", _sse_longest),
+            row("Mean pLDDT", _sse_mean_plddt, lambda v: f"{v:.2f}"),
+        ]
+        return {
+            "title": "Secondary structure · differential vs shared region",
+            "subtitle": "helices and strands assigned from the predicted coordinates (P-SEA)",
+            "cmp_headers": ["Metric", _sse_unique_label(), "Shared core"],
+            "col_classes": DIFF_SHARED_2,
+            "compare_rows": rows,
+        }
+
+    def sec_sse_list():
+        """Every element with its coordinates, in two columns."""
+        if g("isoform_structure_sse_status") != "ok":
+            return None
+        unique, shared = _sse_split()
+        if not unique and not shared:
+            return None
+
+        def cell(e):
+            if e is None:
+                return None
+            span = f"{e.get('start')}–{e.get('end')}"
+            bits = [f"{e.get('length')} aa"]
+            if e.get("plddt_mean") is not None:
+                bits.append(f"pLDDT {e['plddt_mean']:.2f}")
+            return {
+                "kind": e.get("type") or "",
+                "span": span,
+                "detail": " · ".join(bits),
+                # Flagged so a reader is not misled into thinking a spanning
+                # element sits wholly inside the differential region.
+                "note": "crosses into shared core" if e.get("region") == "spans" else "",
+            }
+
+        pairs = [
+            {"left": cell(u), "right": cell(s)}
+            for u, s in zip_longest(unique, shared, fillvalue=None)
+        ]
+        return {
+            "title": "Elements and coordinates",
+            "subtitle": (
+                f"{len(unique)} in the differential region, {len(shared)} in the shared core "
+                "— residue numbering is 1-based on the protein containing the region"
+            ),
+            "pair_headers": [_sse_unique_label(), "Shared core"],
+            "pairs": pairs,
         }
 
     def sec_shared_rmsd():
@@ -2106,6 +2221,7 @@ def criterion_evidence_for(iso) -> dict:
         "D2_initiation_efficiency": [sec_efficiency()],
         "D3_mass_spec": [sec_massspec()],
         "P1_structured_extension": [sec_structure(), sec_structure_region()],
+        "P3_secondary_structure": [sec_sse_summary(), sec_sse_list()],
         "L1_localization_change": [sec_deeploc()],
         "S1_domain_change": [sec_domains_motifs()],
         "L2_targeting_change": [sec_targeting()],
