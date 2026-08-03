@@ -223,6 +223,15 @@ def _clean_nan(obj: Any) -> Any:
         return {k: _clean_nan(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [_clean_nan(v) for v in obj]
+    # numpy arrays are sequences, not scalars, and must be handled BEFORE the
+    # .item() branch: a size-1 object array satisfies hasattr(obj, "item") and
+    # .item() returns the single element, silently turning a one-hit list into a
+    # bare dict. Consumers then iterate it and get key strings instead of hits —
+    # which is how a real 19-residue helix rendered as "No helix or strand in
+    # region" for every isoform whose region held exactly one element. numpy
+    # scalars (np.float64, np.int64) are ndim 0 and still take the branch below.
+    if getattr(obj, "ndim", 0) > 0:
+        return [_clean_nan(v) for v in obj]
     # pandas/numpy scalars: convert via item() if available
     if hasattr(obj, "item") and not isinstance(obj, (str, bytes)):
         try:

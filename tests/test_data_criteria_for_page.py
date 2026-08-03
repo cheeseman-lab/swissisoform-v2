@@ -55,3 +55,46 @@ def test_category_verdicts_reads_categories_json(tmp_path: Path) -> None:
     out = category_verdicts_for_isoform(llm_dir=tmp_path, tis_slug=slug)
     assert out["Conservation"]["verdict"] == "interesting"
     assert "frac_intact" in out["Conservation"]["reasoning"]
+
+
+# ── _clean_nan must not collapse one-element arrays ───────────────────────
+
+
+def test_clean_nan_keeps_a_one_element_array_a_list() -> None:
+    """A size-1 numpy object array must stay a list, not become its element.
+
+    ``.item()`` on a size-1 array returns the single element, so a one-hit
+    positional column silently arrived as a bare dict. Consumers iterate it and
+    get key strings instead of hits — which is how MAD2L1's real 19-residue
+    helix (pLDDT 0.97) rendered as "No helix or strand in region". It hit 6
+    columns (SSE elements, motifs, massspec, InterProScan), always and only when
+    a protein had exactly one hit, which is why it survived: the multi-hit
+    proteins everyone checked looked fine.
+    """
+    np = pytest.importorskip("numpy")
+    from swissisoform_site.data import _clean_nan
+
+    one = np.empty(1, dtype=object)
+    one[0] = {"type": "helix", "start": 13, "end": 31, "length": 19}
+    out = _clean_nan(one)
+    assert isinstance(out, list) and len(out) == 1
+    assert out[0]["type"] == "helix"
+
+    two = np.empty(2, dtype=object)
+    two[0], two[1] = {"a": 1}, {"a": 2}
+    assert [d["a"] for d in _clean_nan(two)] == [1, 2]
+
+    empty = np.empty(0, dtype=object)
+    assert _clean_nan(empty) == []
+
+
+def test_clean_nan_still_unwraps_numpy_scalars() -> None:
+    """The ndim guard must not break the branch it sits in front of."""
+    np = pytest.importorskip("numpy")
+    from swissisoform_site.data import _clean_nan
+
+    assert _clean_nan(np.float64(0.966)) == pytest.approx(0.966)
+    assert _clean_nan(np.int64(19)) == 19
+    assert isinstance(_clean_nan(np.int64(19)), int)
+    assert _clean_nan(np.float64("nan")) is None
+    assert _clean_nan("abc") == "abc"
