@@ -38,6 +38,11 @@ _GNOMAD_FOLD = "__gnomad_fold__"
 _DISEASE_FOLD = "__disease_fold__"
 _DIVERGING_DOMAINS = "__diverging_domains__"
 _SSE_HEADLINE = "__sse_headline__"
+# Mirror of ScoringConfig.p3_min_sse_length / p3_min_sse_plddt. The tile is
+# rendered without a config object, so the thresholds are restated here; the
+# test suite asserts the headline never disagrees with the P3 verdict.
+_P3_MIN_LEN = 6
+_P3_MIN_PLDDT = 0.70
 # Fold-change variant-density headlines (M1/M2): "{noun} {fold}x more/less in
 # unique region — {call}". low/high = call word for ratio <1 / >1.
 _VARIANT_FOLD_HEADLINES = {
@@ -1788,23 +1793,41 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         # "17-res helix (pLDDT 0.75)" — the longest CONFIDENT element, which is
         # what P3 scores on. Falls back to naming the longest element and its
         # shortfall so a near-miss is visible rather than reading as "nothing".
-        _all = raw.get("isoform_structure_sse_diff_elements") or []
-        els = [e for e in _all if isinstance(e, dict)]
+        # `or []` would call __bool__ on a numpy object array and raise; the hits
+        # branch below avoids the same trap with an explicit None check.
+        _all = raw.get("isoform_structure_sse_diff_elements")
+        els = [e for e in (_all if _all is not None else []) if isinstance(e, dict)]
         if not els:
             ok = raw.get("isoform_structure_sse_status") == "ok"
             headline = "No helix or strand in region" if ok else None
         else:
-            best = max(
-                els,
-                key=lambda e: ((e.get("plddt_mean") or 0) >= 0.70, e.get("length") or 0),
-            )
-            n, kind = best.get("length"), best.get("type")
-            pl = best.get("plddt_mean")
-            headline = f"{n}-res {kind}" + (f" (pLDDT {pl:.2f})" if pl is not None else "")
-            headline_segments = [
-                {"t": f"{n}-res {kind}", "strong": True},
-                {"t": f" (pLDDT {pl:.2f})" if pl is not None else "", "strong": False},
+            # Must agree with P3, which requires BOTH length and confidence. A
+            # headline naming a sub-threshold element reads as a finding while
+            # the criterion scores False — the tile and the verdict then tell a
+            # reader opposite things.
+            ok = [
+                e for e in els
+                if (e.get("length") or 0) >= _P3_MIN_LEN
+                and (e.get("plddt_mean") or 0) >= _P3_MIN_PLDDT
             ]
+            if ok:
+                best = max(ok, key=lambda e: e.get("length") or 0)
+                n, kind = best.get("length"), best.get("type")
+                pl = best.get("plddt_mean")
+                headline = f"{n}-res {kind}" + (f" (pLDDT {pl:.2f})" if pl is not None else "")
+                headline_segments = [
+                    {"t": f"{n}-res {kind}", "strong": True},
+                    {"t": f" (pLDDT {pl:.2f})" if pl is not None else "", "strong": False},
+                ]
+            else:
+                # Keep the near-miss visible rather than reading as "nothing".
+                longest = max(els, key=lambda e: e.get("length") or 0)
+                n, kind = longest.get("length"), longest.get("type")
+                headline = f"longest {kind} {n} aa — below threshold"
+                headline_segments = [
+                    {"t": f"longest {kind} {n} aa", "strong": True},
+                    {"t": " — below threshold", "strong": False},
+                ]
         headline_fmt = "str"
     elif headline_col == _CODING_SELECTION:
         # Mean PhyloP over the isoform-unique region + a selection call: PhyloP

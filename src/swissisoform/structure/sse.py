@@ -28,6 +28,16 @@ COIL = "c"
 _STRUCTURED = (HELIX, STRAND)
 _LABEL = {HELIX: "helix", STRAND: "strand"}
 
+# Biophysical floor: below this a run is not an element, it is a labelling blip.
+# An alpha-helix is 3.6 residues per turn, so 4 is a single turn (DSSP's own
+# minimum) and 5 is a safe floor for "a real helix" — P-SEA emitted a 2-residue
+# and a 4-residue "helix" on the cheeseman set, against a clean gap up to 13.
+# Beta-strands are legitimately shorter: 5-residue strands are common and a
+# 3-residue strand in a sheet is real, so they need their own, lower floor. A
+# single shared cutoff of 5-6 would be right for helices and would discard 7 of
+# 19 genuine strands.
+MIN_LENGTH = {HELIX: 5, STRAND: 3}
+
 
 def annotate_sse(cif_path: Path | str | None) -> str | None:
     """Per-residue secondary structure for one structure, or ``None``.
@@ -58,7 +68,7 @@ def sse_elements(
     *,
     start: int = 1,
     end: int | None = None,
-    min_length: int = 1,
+    min_length: dict[str, int] | int | None = None,
 ) -> list[dict[str, Any]]:
     """Collapse a per-residue SSE string into helix/strand elements.
 
@@ -74,8 +84,15 @@ def sse_elements(
             as a real one.
         start: First residue of the window to scan, 1-based inclusive.
         end: Last residue, 1-based inclusive; defaults to the end of ``sse``.
-        min_length: Drop elements shorter than this.
+        min_length: Per-type floor, defaulting to :data:`MIN_LENGTH`. An int
+            applies one floor to both types; ``0`` disables filtering.
     """
+    if min_length is None:
+        floors = MIN_LENGTH
+    elif isinstance(min_length, dict):
+        floors = min_length
+    else:
+        floors = dict.fromkeys(_STRUCTURED, min_length)
     if not sse:
         return []
     n = len(sse)
@@ -92,7 +109,7 @@ def sse_elements(
         if ch != run_type:
             if run_type in _STRUCTURED:
                 length = i - run_start
-                if length >= min_length:
+                if length >= floors.get(run_type, 0):
                     element: dict[str, Any] = {
                         "type": _LABEL[run_type],
                         "start": run_start,

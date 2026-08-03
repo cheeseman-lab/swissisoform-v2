@@ -13,7 +13,12 @@ import pytest
 
 from swissisoform.config import ScoringConfig
 from swissisoform.evidence.p3_secondary_structure import score as p3_score
-from swissisoform.structure.sse import annotate_sse, sse_elements, summarise_elements
+from swissisoform.structure.sse import (
+    MIN_LENGTH,
+    annotate_sse,
+    sse_elements,
+    summarise_elements,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -34,15 +39,18 @@ def test_coil_is_never_an_element():
 
 
 def test_bounds_are_one_based_inclusive():
-    """So an element can be handed straight to plddt_profile / contacts."""
-    (el,) = sse_elements("caaac")
+    """So an element can be handed straight to plddt_profile / contacts.
+
+    min_length=0 isolates the collapsing arithmetic from the biophysical floor.
+    """
+    (el,) = sse_elements("caaac", min_length=0)
     assert (el["start"], el["end"]) == (2, 4)
     assert el["length"] == 3
 
 
 def test_element_carries_its_own_plddt():
     plddt = [0.1, 0.9, 0.9, 0.9, 0.1]
-    (el,) = sse_elements("caaac", plddt)
+    (el,) = sse_elements("caaac", plddt, min_length=0)
     assert el["plddt_mean"] == pytest.approx(0.9)
 
 
@@ -56,9 +64,27 @@ def test_min_length_filters():
     assert len(sse_elements("caaac", min_length=3)) == 1
 
 
+def test_helix_and_strand_have_different_floors():
+    """A 2-residue "helix" is a labelling blip, not a helix: an alpha-helix is
+    3.6 residues per turn. Strands are legitimately shorter, so a single shared
+    cutoff would discard real ones — on cheeseman_test, 7 of 19.
+    """
+    assert MIN_LENGTH["a"] == 5 and MIN_LENGTH["b"] == 3
+    assert sse_elements("caac") == []            # 2-res helix — dropped
+    assert sse_elements("caaaac") == []          # 4-res helix — one turn, still dropped
+    assert len(sse_elements("caaaaac")) == 1     # 5-res helix — kept
+    assert sse_elements("cbbc") == []            # 2-res strand — dropped
+    assert len(sse_elements("cbbbc")) == 1       # 3-res strand — kept
+
+
+def test_floor_can_be_overridden():
+    assert len(sse_elements("caac", min_length=0)) == 1
+    assert len(sse_elements("caac", min_length={"a": 2, "b": 2})) == 1
+
+
 def test_trailing_run_is_flushed():
     """A run ending at the last residue must not be dropped."""
-    (el,) = sse_elements("ccaaa")
+    (el,) = sse_elements("ccaaa", min_length=0)
     assert (el["start"], el["end"]) == (3, 5)
 
 
@@ -221,3 +247,75 @@ def test_ube2m_pldd_confident_window_is_coil_and_has_no_core_contacts(ube2m):
     assert [e for e in sse["elements"] if e["type"] == "helix"] == []
     contacts = st.contacts(ube2m, start=37, end=59)
     assert {p["residue"] for p in contacts["contact_partners"] if p["residue"] > 65} == set()
+
+
+# ── Tile headline must agree with the P3 verdict ──────────────────────────
+
+
+def _headline_is_positive(headline: str | None) -> bool:
+    """The tile reads as a finding (named element), not a near-miss or absence."""
+    if not headline:
+        return False
+    return "below threshold" not in headline and "No helix or strand" not in headline
+
+
+@_real
+def test_headline_never_disagrees_with_the_score():
+    """Guards a real duplication: site/evidence.py restates P3's thresholds
+    because the tile renders without a ScoringConfig. If the two drift, a tile
+    can name an element as a finding while the criterion scores False — which
+    is exactly what a 2-residue "helix" at pLDDT 0.98 used to do.
+    """
+    import pandas as pd
+
+    from swissisoform.site.evidence import slice_criterion
+
+    df = pd.read_parquet(PAIRED)
+    checked = 0
+    for i in range(len(df)):
+        row = df.iloc[i]
+        if row["isoform_structure_sse_status"] != "ok":
+            continue
+        els = [
+            dict(e)
+            for e in list(row["isoform_structure_sse_diff_elements"])
+            if e["length"] >= MIN_LENGTH["a" if e["type"] == "helix" else "b"]
+        ]
+        raw = row.to_dict()
+        raw["isoform_structure_sse_diff_elements"] = els
+        sl = slice_criterion(
+            {"tis_id": row["tis_id"], "_raw": raw, "scoring": {"criteria": {}}},
+            "P3_secondary_structure",
+        )
+        verdict = p3_score(
+            SimpleNamespace(
+                isoform_annotations={
+                    "structure": {"status": "ok", "sse_status": "ok", "sse_diff_elements": els}
+                }
+            ),
+            CFG,
+        )
+        assert _headline_is_positive(sl["headline"]) is bool(verdict.value), (
+            f"{row['gene_name']} {row['orf_type']}: headline {sl['headline']!r} "
+            f"disagrees with P3 value {verdict.value}"
+        )
+        checked += 1
+    assert checked >= 15, f"only {checked} isoforms exercised"
+
+
+@_real
+def test_slice_criterion_survives_a_raw_numpy_row():
+    """`raw.get(...) or []` raises on a numpy object array; the hits branch
+    avoids that with an explicit None check and the headline must too.
+    """
+    import pandas as pd
+
+    from swissisoform.site.evidence import slice_criterion
+
+    df = pd.read_parquet(PAIRED)
+    row = df[df["isoform_structure_sse_status"] == "ok"].iloc[0]
+    sl = slice_criterion(
+        {"tis_id": row["tis_id"], "_raw": row.to_dict(), "scoring": {"criteria": {}}},
+        "P3_secondary_structure",
+    )
+    assert sl["headline"]
