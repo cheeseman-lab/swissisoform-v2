@@ -484,3 +484,49 @@ def test_headline_segments_bold_only_the_count():
     assert segs[0] == {"t": "2", "strong": True}
     assert segs[1]["strong"] is False
     assert segs[1]["t"].startswith(" secondary structures")
+
+
+# ── MAX_HITS truncation must keep the scored elements ─────────────────────
+
+
+def test_p3_hits_truncation_keeps_qualifying_unique_elements():
+    """A >30-element protein must not lose the elements P3 scored on.
+
+    ~1 SSE element per 18 residues, so the 30-hit cap bites above ~545 aa —
+    39% of full_catalog isoforms. Without a P3-aware rule every element ties in
+    the sort and the survivors are simply the first 30 by position.
+    """
+    from swissisoform.site.evidence import slice_criterion
+
+    els = []
+    # One qualifying unique element, buried past the cap by C-terminal filler.
+    els.append({"type": "helix", "start": 500, "end": 520, "length": 21,
+                "plddt_mean": 0.95, "region": "unique"})
+    # A sub-threshold one in the same region.
+    els.append({"type": "strand", "start": 530, "end": 532, "length": 3,
+                "plddt_mean": 0.95, "region": "unique"})
+    for i in range(60):  # shared-core filler, all qualifying
+        s = 1 + i * 8
+        els.append({"type": "strand", "start": s, "end": s + 6, "length": 7,
+                    "plddt_mean": 0.9, "region": "shared"})
+    raw = {"isoform_structure_sse_status": "ok", "isoform_structure_sse_all_elements": els}
+    sl = slice_criterion({"_raw": raw, "scoring": {"criteria": {}}}, "P3_secondary_structure")
+
+    assert sl["n_hits_total"] == 62
+    assert sl["n_hits_shown"] == 30
+    kept = sl["hits"]
+    # The scored element leads; the sub-threshold same-region one follows.
+    assert kept[0]["start"] == 500 and kept[0]["length"] == 21
+    assert kept[1]["start"] == 530
+    # Shared-core filler fills the rest, never displacing the two above.
+    assert all(h["region"] == "shared" for h in kept[2:])
+
+
+def test_p3_hits_untouched_when_under_the_cap():
+    from swissisoform.site.evidence import slice_criterion
+
+    els = [{"type": "helix", "start": 10, "end": 30, "length": 21,
+            "plddt_mean": 0.9, "region": "shared"} for _ in range(5)]
+    raw = {"isoform_structure_sse_status": "ok", "isoform_structure_sse_all_elements": els}
+    sl = slice_criterion({"_raw": raw, "scoring": {"criteria": {}}}, "P3_secondary_structure")
+    assert sl["n_hits_shown"] == 5 and sl["n_hits_total"] == 5
