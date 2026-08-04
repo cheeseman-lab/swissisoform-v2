@@ -1061,8 +1061,18 @@
 .diff-hit-kind {
   display: inline-block; font-size: .68rem; text-transform: uppercase; letter-spacing: .03em;
   padding: .05rem .35rem; border-radius: 4px; margin-right: .4rem; color: #fff; font-weight: 600;
+  /* Fallback background. The text is white, so a kind with no rule below would
+     render white-on-white — invisible except when selected. */
+  background: #64748b;
 }
 .diff-hit-domain { background: #2ca02c; }
+/* Secondary structure. Unlike the badges above these are LIGHT fills, so each
+   overrides the base class's white text with a dark tone of its own hue —
+   reusing the site's existing light-chip palette (.ev-true / .ev-false /
+   .orf-extended) rather than inventing new colors. */
+.diff-hit-helix  { background: #fee2e2; color: #7f1d1d; }  /* alpha helix — light red */
+.diff-hit-strand { background: #dcfce7; color: #14532d; }  /* beta strand — light green */
+.diff-hit-coil   { background: #dbeafe; color: #1e40af; }  /* coil / loop  — light blue */
 .diff-hit-motif { background: #9467bd; }
 .diff-hit-peptide { background: #0891b2; }
 .diff-hit-gained { background: #16a34a; }
@@ -1127,7 +1137,6 @@
   margin: 0 .35rem; }
 .crit-pairs td.dm-shared .sse-span { color: #64748b; font-weight: 500; }
 .crit-pairs .sse-detail { color: #64748b; }
-.crit-pairs .sse-note { display: block; font-size: .72rem; color: #9a3412; }
 .crit-pairs .sse-empty { color: #cbd5e1; }
 .crit-hits { list-style: none; padding: 0; margin: .5rem 0 0; display: flex; flex-direction: column; gap: .25rem; }
 .crit-hits li { font-size: .82rem; color: #334155; }
