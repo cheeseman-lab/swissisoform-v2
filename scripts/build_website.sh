@@ -6,7 +6,9 @@
 # Stages (each timed):
 #   skeletons   transcript exon skeletons for the IGV-style transcript view
 #   evidence    per-gene LLM evidence JSON + flat variants_long parquet
-#   llm         Anthropic per-category interpretation + synthesis (SKIP with --skip-llm)
+#   llm         Anthropic per-category interpretation + synthesis — always
+#               regenerated (--force), since the evidence records it reads are
+#               rebuilt from the parquet one stage earlier (SKIP with --skip-llm)
 #   structures  re-assemble folded CIFs from the structure cache
 #   stage       website/prepare_deploy.sh — copy artifacts into website/data/
 #
@@ -76,11 +78,21 @@ else
     # --variants-long is what the M category's reader tools query at verdict
     # time; the evidence stage above writes it. Passed explicitly (it would
     # otherwise be derived from --records) so the data dependency is visible.
+    #
+    # --force is REQUIRED, not an optimisation. run_llm_interpretation skips any
+    # isoform that already has output, so without it a rebuild after a pipeline
+    # change reports "category: 0/0 successful" in four seconds and stages the
+    # PREVIOUS run's verdicts against the new parquet — a site whose reasoning
+    # describes data it was never shown, with nothing in the log to say so.
+    # Observed 2026-08-03: P3 landed in the parquet and every verdict still
+    # predated it. The evidence records these read are regenerated from
+    # $PAIRED one stage above, so there is never a case where reusing the old
+    # verdicts is correct. Use --skip-llm to deliberately keep them.
     run_stage llm_category python scripts/site/run_llm_interpretation.py \
         --records "${OUT}/llm_evidence/" --out "${OUT}/llm/" --pass category \
-        --variants-long "${OUT}/variants_long.parquet" $llm_batch
+        --variants-long "${OUT}/variants_long.parquet" --force $llm_batch
     run_stage llm_synthesis python scripts/site/run_llm_interpretation.py \
-        --records "${OUT}/llm_evidence/" --out "${OUT}/llm/" --pass synthesis $llm_batch
+        --records "${OUT}/llm_evidence/" --out "${OUT}/llm/" --pass synthesis --force $llm_batch
 fi
 
 run_stage structures python scripts/export/export_structures.py --preset "$PRESET"

@@ -29,6 +29,8 @@ dependencies = [
     "jsonschema>=4.0",
     "tmtools>=0.3.0",
     "biotite>=1.0",
+    # LLM stage. Floor is where strict tool schemas were verified.
+    "anthropic>=0.116.0",
 ]
 
 [project.optional-dependencies]
