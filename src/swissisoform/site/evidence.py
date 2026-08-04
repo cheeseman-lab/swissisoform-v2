@@ -880,14 +880,16 @@ CRITERIA: dict[str, dict[str, Any]] = {
         "short_label": "SSE",
         "evidence_cols": [
             "isoform_structure_sse_status",
-            "isoform_structure_sse_longest_helix_diff",
-            "isoform_structure_sse_longest_strand_diff",
-            "isoform_structure_sse_max_confident_element_diff",
             "isoform_structure_plddt_diffregion_mean",
             "isoform_structure_ptm_isoform",
             "isoform_structure_ptm_canonical",
         ],
-        "evidence_hits_col": "isoform_structure_sse_diff_elements",
+        # The whole-protein scan, each element region-tagged and at its TRUE
+        # length. The window-clipped list this used to point at measured only
+        # the portion inside the differential region, so a boundary-crossing
+        # element reached the model short — or, when the clipped portion fell
+        # below the per-type emission floor, not at all.
+        "evidence_hits_col": "isoform_structure_sse_all_elements",
         "headline_col": _SSE_HEADLINE,
         "interpretation_hint": (
             "Does the differential region contain actual secondary structure — a "
@@ -1790,19 +1792,29 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
             headline = None
         headline_fmt = "str"
     elif headline_col == _SSE_HEADLINE:
-        # "17-res helix (pLDDT 0.75)" — the longest CONFIDENT element, which is
-        # what P3 scores on. Falls back to naming the longest element and its
-        # shortfall so a near-miss is visible rather than reading as "nothing".
+        # "2 secondary structures identified in unique region" — a COUNT of the
+        # confident elements, which is what P3 scores on. A count rather than the
+        # single longest element, because the modal below lists every element
+        # with its true span; naming one up here invited the reader to compare
+        # two numbers for the same helix (the headline's clipped to the region,
+        # the table's not) and read the difference as an error.
+        # Reads the SAME source as the P3 scorer: elements touching the unique
+        # region at their true length, not the window-clipped diff scan. A
+        # different source here would let the tile and the verdict disagree.
         # `or []` would call __bool__ on a numpy object array and raise; the hits
         # branch below avoids the same trap with an explicit None check.
-        _all = raw.get("isoform_structure_sse_diff_elements")
-        els = [e for e in (_all if _all is not None else []) if isinstance(e, dict)]
+        _all = raw.get("isoform_structure_sse_all_elements")
+        els = [
+            e
+            for e in (_all if _all is not None else [])
+            if isinstance(e, dict) and e.get("region") in ("unique", "spans")
+        ]
         if not els:
             ok = raw.get("isoform_structure_sse_status") == "ok"
-            headline = "No helix or strand in region" if ok else None
+            headline = "No helix or strand in diff region" if ok else None
         else:
             # Must agree with P3, which requires BOTH length and confidence. A
-            # headline naming a sub-threshold element reads as a finding while
+            # headline counting sub-threshold elements reads as a finding while
             # the criterion scores False — the tile and the verdict then tell a
             # reader opposite things.
             ok = [
@@ -1811,23 +1823,20 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
                 and (e.get("plddt_mean") or 0) >= _P3_MIN_PLDDT
             ]
             if ok:
-                best = max(ok, key=lambda e: e.get("length") or 0)
-                n, kind = best.get("length"), best.get("type")
-                pl = best.get("plddt_mean")
-                headline = f"{n}-res {kind}" + (f" (pLDDT {pl:.2f})" if pl is not None else "")
+                n = len(ok)
+                noun = "secondary structure" if n == 1 else "secondary structures"
+                tail = f" {noun} identified in unique region"
+                headline = f"{n}{tail}"
+                # Only the count is bold — it is the whole point of the tile.
                 headline_segments = [
-                    {"t": f"{n}-res {kind}", "strong": True},
-                    {"t": f" (pLDDT {pl:.2f})" if pl is not None else "", "strong": False},
+                    {"t": str(n), "strong": True},
+                    {"t": tail, "strong": False},
                 ]
             else:
-                # Keep the near-miss visible rather than reading as "nothing".
-                longest = max(els, key=lambda e: e.get("length") or 0)
-                n, kind = longest.get("length"), longest.get("type")
-                headline = f"longest {kind} {n} aa — below threshold"
-                headline_segments = [
-                    {"t": f"longest {kind} {n} aa", "strong": True},
-                    {"t": " — below threshold", "strong": False},
-                ]
+                # Elements exist but none clear both thresholds, so the count is
+                # zero and the tile reads the same as genuinely-empty. The
+                # near-miss detail lives in the modal's element listing.
+                headline = "No helix or strand in diff region"
         headline_fmt = "str"
     elif headline_col == _CODING_SELECTION:
         # Mean PhyloP over the isoform-unique region + a selection call: PhyloP

@@ -114,7 +114,7 @@ def test_annotate_sse_missing_file_returns_none():
 
 
 def _site(**structure):
-    base = {"status": "ok", "sse_status": "ok", "sse_diff_elements": []}
+    base = {"status": "ok", "sse_status": "ok", "sse_all_elements": []}
     base.update(structure)
     return SimpleNamespace(isoform_annotations={"structure": base})
 
@@ -124,8 +124,11 @@ CFG = ScoringConfig()
 
 def test_p3_fires_on_a_long_confident_element():
     r = p3_score(
-        _site(sse_diff_elements=[
-            {"type": "helix", "start": 16, "end": 32, "length": 17, "plddt_mean": 0.75}
+        _site(sse_all_elements=[
+            {
+                "type": "helix", "start": 16, "end": 32, "length": 17,
+                "region": "unique", "plddt_mean": 0.75,
+            }
         ]),
         CFG,
     )
@@ -138,8 +141,11 @@ def test_p3_requires_confidence_not_just_length():
     stretch is geometry fitted to a guess.
     """
     r = p3_score(
-        _site(sse_diff_elements=[
-            {"type": "helix", "start": 16, "end": 32, "length": 17, "plddt_mean": 0.55}
+        _site(sse_all_elements=[
+            {
+                "type": "helix", "start": 16, "end": 32, "length": 17,
+                "region": "unique", "plddt_mean": 0.55,
+            }
         ]),
         CFG,
     )
@@ -148,8 +154,11 @@ def test_p3_requires_confidence_not_just_length():
 
 def test_p3_requires_length_not_just_confidence():
     r = p3_score(
-        _site(sse_diff_elements=[
-            {"type": "strand", "start": 1, "end": 4, "length": 4, "plddt_mean": 0.98}
+        _site(sse_all_elements=[
+            {
+                "type": "strand", "start": 1, "end": 4, "length": 4,
+                "region": "unique", "plddt_mean": 0.98,
+            }
         ]),
         CFG,
     )
@@ -171,9 +180,15 @@ def test_p3_not_evaluable_when_fold_is_unusable():
 
 def test_p3_picks_the_longest_qualifying_element():
     r = p3_score(
-        _site(sse_diff_elements=[
-            {"type": "strand", "start": 2, "end": 9, "length": 8, "plddt_mean": 0.80},
-            {"type": "helix", "start": 16, "end": 32, "length": 17, "plddt_mean": 0.75},
+        _site(sse_all_elements=[
+            {
+                "type": "strand", "start": 2, "end": 9, "length": 8,
+                "region": "unique", "plddt_mean": 0.80,
+            },
+            {
+                "type": "helix", "start": 16, "end": 32, "length": 17,
+                "region": "unique", "plddt_mean": 0.75,
+            },
         ]),
         CFG,
     )
@@ -256,7 +271,7 @@ def _headline_is_positive(headline: str | None) -> bool:
     """The tile reads as a finding (named element), not a near-miss or absence."""
     if not headline:
         return False
-    return "below threshold" not in headline and "No helix or strand" not in headline
+    return "No helix or strand" not in headline
 
 
 @_real
@@ -278,11 +293,11 @@ def test_headline_never_disagrees_with_the_score():
             continue
         els = [
             dict(e)
-            for e in list(row["isoform_structure_sse_diff_elements"])
+            for e in list(row["isoform_structure_sse_all_elements"])
             if e["length"] >= MIN_LENGTH["a" if e["type"] == "helix" else "b"]
         ]
         raw = row.to_dict()
-        raw["isoform_structure_sse_diff_elements"] = els
+        raw["isoform_structure_sse_all_elements"] = els
         sl = slice_criterion(
             {"tis_id": row["tis_id"], "_raw": raw, "scoring": {"criteria": {}}},
             "P3_secondary_structure",
@@ -290,7 +305,7 @@ def test_headline_never_disagrees_with_the_score():
         verdict = p3_score(
             SimpleNamespace(
                 isoform_annotations={
-                    "structure": {"status": "ok", "sse_status": "ok", "sse_diff_elements": els}
+                    "structure": {"status": "ok", "sse_status": "ok", "sse_all_elements": els}
                 }
             ),
             CFG,
@@ -370,28 +385,102 @@ def test_classify_leaves_other_fields_alone():
 
 
 @_real
-def test_module_emits_all_elements_superset_of_diff_elements():
-    """The whole-protein scan must contain every diff-region element's residues.
+def test_module_emits_only_the_whole_protein_scan():
+    """The window-clipped columns are gone; every element is region-tagged.
 
-    Not identity: the diff scan is window-clipped, so a spanning element differs
-    in length between the two lists by design.
+    The clipped scan measured only the portion of an element inside the
+    differential region and, when that remainder fell below the per-type
+    emission floor, dropped it entirely — so it is not a second opinion worth
+    keeping alongside the true-length scan.
     """
     import pandas as pd
+    import pytest
 
     df = pd.read_parquet(PAIRED)
-    if "isoform_structure_sse_all_elements" not in df.columns:
-        import pytest
-
-        pytest.skip("parquet predates structure_sse_all_elements")
+    dropped = [
+        "isoform_structure_sse_diff_elements",
+        "isoform_structure_sse_longest_helix_diff",
+        "isoform_structure_sse_longest_strand_diff",
+        "isoform_structure_sse_max_confident_element_diff",
+    ]
+    present = [c for c in dropped if c in df.columns]
+    if present:
+        pytest.skip(f"parquet predates the column removal: {present}")
     checked = 0
     for _, row in df.iterrows():
         if row["isoform_structure_sse_status"] != "ok":
             continue
-        allo = row["isoform_structure_sse_all_elements"]
-        diff = row["isoform_structure_sse_diff_elements"]
-        allo = [e for e in (allo if allo is not None else []) if isinstance(e, dict)]
-        diff = [e for e in (diff if diff is not None else []) if isinstance(e, dict)]
-        assert len(allo) >= len(diff)
-        assert all(e.get("region") in {"unique", "shared", "spans"} for e in allo)
+        els = [
+            e
+            for e in list(row["isoform_structure_sse_all_elements"])
+            if isinstance(e, dict)
+        ]
+        assert els, "an ok sse_status with no elements at all"
+        assert all(e.get("region") in {"unique", "shared", "spans"} for e in els)
         checked += 1
     assert checked >= 15, f"only {checked} isoforms exercised"
+
+
+# ── P3 tile headline: a count, not a named element ────────────────────────
+
+
+def _headline_for(*elements, status="ok"):
+    from swissisoform.site.evidence import slice_criterion
+
+    raw = {
+        "isoform_structure_sse_status": status,
+        "isoform_structure_sse_all_elements": list(elements),
+    }
+    return slice_criterion({"_raw": raw, "scoring": {"criteria": {}}}, "P3_secondary_structure")
+
+
+def _e(kind, length, plddt=0.9, region="unique"):
+    return {
+        "type": kind, "start": 10, "end": 9 + length, "length": length,
+        "plddt_mean": plddt, "region": region,
+    }
+
+
+def test_headline_is_a_count_of_confident_elements():
+    assert (
+        _headline_for(_e("helix", 17), _e("helix", 9))["headline"]
+        == "2 secondary structures identified in unique region"
+    )
+    assert (
+        _headline_for(_e("strand", 8))["headline"]
+        == "1 secondary structure identified in unique region"
+    )
+
+
+def test_headline_does_not_name_element_types():
+    """Deliberately type-agnostic: the modal's element listing names each one."""
+    h = _headline_for(_e("helix", 15), _e("strand", 7))["headline"]
+    assert h == "2 secondary structures identified in unique region"
+    assert "helix" not in h and "strand" not in h
+
+
+def test_headline_counts_only_elements_clearing_both_thresholds():
+    """The count must match what P3 scores on, or the tile and the verdict
+    disagree — a sub-threshold element is not a finding.
+    """
+    h = _headline_for(_e("helix", 17), _e("helix", 4), _e("helix", 12, plddt=0.5))["headline"]
+    assert h == "1 secondary structure identified in unique region"
+
+
+def test_headline_reads_as_empty_when_nothing_qualifies():
+    """Sub-threshold elements count as zero, so the tile reads the same as
+    genuinely-empty. The near-miss detail is in the modal's element listing.
+    """
+    assert _headline_for(_e("strand", 5))["headline"] == "No helix or strand in diff region"
+
+
+def test_headline_distinguishes_empty_from_not_run():
+    assert _headline_for()["headline"] == "No helix or strand in diff region"
+    assert _headline_for(status="no_cache")["headline"] is None
+
+
+def test_headline_segments_bold_only_the_count():
+    segs = _headline_for(_e("helix", 17), _e("helix", 9))["headline_segments"]
+    assert segs[0] == {"t": "2", "strong": True}
+    assert segs[1]["strong"] is False
+    assert segs[1]["t"].startswith(" secondary structures")

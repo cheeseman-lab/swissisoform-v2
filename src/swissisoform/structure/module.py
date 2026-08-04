@@ -32,12 +32,7 @@ from swissisoform.structure.fold import (
     load_cache,
     protein_hash,
 )
-from swissisoform.structure.sse import (
-    annotate_sse,
-    classify_elements,
-    sse_elements,
-    summarise_elements,
-)
+from swissisoform.structure.sse import annotate_sse, classify_elements, sse_elements
 
 logger = logging.getLogger(__name__)
 
@@ -79,21 +74,15 @@ class StructureModule:
         # present even when nothing has been folded yet.
         "structure_canonical_hash",
         "structure_isoform_hash",
-        # Secondary structure, derived from the coordinates via P-SEA. Each
-        # element in ``sse_diff_elements`` carries its own plddt_mean, so a
-        # geometrically clean helix through a disordered stretch is
-        # distinguishable from a real one; P3 scores on the confident subset.
+        # Secondary structure, derived from the coordinates via P-SEA. One
+        # whole-protein scan, each element tagged region=unique/shared/spans and
+        # carrying its own plddt_mean — so a geometrically clean helix through a
+        # disordered stretch is distinguishable from a real one. P3 scores on the
+        # unique/spans subset; the P3 card lists unique vs shared side by side.
         "structure_sse_status",
         "structure_sse_isoform",
         "structure_sse_canonical",
-        "structure_sse_diff_elements",
-        # Whole-protein scan, each element tagged region=unique/shared/spans.
-        # Display-only (the P3 card's two-column listing); P3 itself scores on
-        # sse_diff_elements above.
         "structure_sse_all_elements",
-        "structure_sse_longest_helix_diff",
-        "structure_sse_longest_strand_diff",
-        "structure_sse_max_confident_element_diff",
     ]
     SCOPE: str = "C"
 
@@ -115,8 +104,6 @@ class StructureModule:
         self.config = config
         self.cache_dir = Path(cache_dir)
         self.backend = backend
-        # Confidence floor for "this element is real", shared with the P3 scorer.
-        self._min_sse_plddt = getattr(getattr(config, "scoring", None), "p3_min_sse_plddt", 0.70)
 
     def _load(self, protein: str) -> dict[str, Any] | None:
         if not protein:
@@ -153,11 +140,7 @@ class StructureModule:
             "sse_status": reason,
             "sse_isoform": None,
             "sse_canonical": None,
-            "sse_diff_elements": [],
             "sse_all_elements": [],
-            "sse_longest_helix_diff": None,
-            "sse_longest_strand_diff": None,
-            "sse_max_confident_element_diff": None,
         }
 
     @staticmethod
@@ -300,23 +283,27 @@ class StructureModule:
         can: dict[str, Any] | None,
         iso: dict[str, Any] | None,
     ) -> dict[str, Any]:
-        """Secondary structure of the differential region, per-element.
+        """Secondary structure over the whole protein, tagged by region.
 
         Derived from coordinates (P-SEA) rather than predicted, so every element
         carries its own mean pLDDT: without that, a geometrically clean helix
         through a disordered stretch reads identically to a real one. P3 scores
-        on ``sse_max_confident_element_diff``, which requires both length and
-        confidence.
+        on the ``unique``/``spans`` subset, requiring both length and confidence.
+
+        The protein is scanned ONCE, whole, and each element classified against
+        the differential-region bounds. A window-scoped scan (the former
+        ``sse_diff_elements``) was wrong twice over: it truncated any element
+        crossing the boundary to the part inside, and — because ``sse_elements``
+        applies its per-type length floors AFTER clipping — dropped one entirely
+        when the clipped remainder fell below the floor. That turned CBX1's 7 aa
+        strand into 3 aa and made EIF2B1's 14 aa helix at pLDDT 0.97 vanish, so
+        the region read as structureless.
         """
         out: dict[str, Any] = {
             "sse_status": "no_structure",
             "sse_isoform": None,
             "sse_canonical": None,
-            "sse_diff_elements": [],
             "sse_all_elements": [],
-            "sse_longest_helix_diff": None,
-            "sse_longest_strand_diff": None,
-            "sse_max_confident_element_diff": None,
         }
         sse_iso = annotate_sse((iso or {}).get("cif_path")) if iso else None
         sse_can = annotate_sse((can or {}).get("cif_path")) if can else None
@@ -332,26 +319,14 @@ class StructureModule:
             return out
 
         plddt = (entry.get("confidence") or {}).get("plddt")
-        # diff bounds are 0-based half-open; sse_elements is 1-based inclusive.
-        elements = sse_elements(sse, plddt, start=int(start) + 1, end=int(end))
-        summary = summarise_elements(elements, min_plddt=self._min_sse_plddt)
-        # A second, independent scan over the WHOLE protein, tagged by region.
-        # Display-only: the P3 card lists unique vs shared side by side, and the
-        # diff-region scan above cannot answer "what else does this protein have".
-        # Deliberately not reused to derive sse_diff_elements — that one is
-        # window-clipped by design and P3 scores on it, so recomputing it from
-        # here would move verdicts as a side effect of a display feature.
         out.update(
             sse_status="ok",
-            sse_diff_elements=elements,
+            # diff bounds are 0-based half-open; sse_elements is 1-based inclusive.
             sse_all_elements=classify_elements(
                 sse_elements(sse, plddt),
                 diff_start=int(start) + 1,
                 diff_end=int(end),
             ),
-            sse_longest_helix_diff=summary["longest_helix"],
-            sse_longest_strand_diff=summary["longest_strand"],
-            sse_max_confident_element_diff=summary["longest_confident"],
         )
         return out
 
