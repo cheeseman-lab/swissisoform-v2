@@ -1090,7 +1090,7 @@ _BIOPHYSICS_FEATURES: list[tuple[str, str]] = [
 # ──────────────────────────────────────────────────────────────────────────
 
 CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
-    # E1/E2 — conservation_frame primate + mammalian
+    # C1/C2 — conservation_frame primate + mammalian
     "isoform_conservation_frame_primate_frac_intact": {
         "label": "Fraction of primates with intact ORF",
         "format": "percent",
@@ -1147,7 +1147,7 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "Max evolutionary depth (mammals)",
         "format": "int",
     },
-    # E1/E2 — canonical (within-gene baseline) twins
+    # C1/C2 — canonical (within-gene baseline) twins
     "isoform_conservation_frame_primate_canonical_mean_pident": {
         "label": "Canonical mean % identity to primate orthologs",
         "format": "percent",
@@ -1172,7 +1172,7 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "Canonical mammalian species aligned",
         "format": "int",
     },
-    # E3 — phyloP / phastCons
+    # C3 — phyloP / phastCons
     "isoform_conservation_phylop_at_tis": {
         "label": "PhyloP score at TIS",
         "format": "float3",
@@ -1209,17 +1209,17 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "phastCons mean over Kozak window",
         "format": "float3",
     },
-    # E5 — initiation efficiency stats
+    # D2 — initiation efficiency stats
     "ribo_pvalue": {"label": "Ribo-TISH p-value", "format": "sci"},
     "tis_pvalue": {"label": "TIS detection p-value", "format": "sci"},
     "fisher_qvalue": {"label": "Fisher combined q-value", "format": "sci"},
-    # E6 — mass spec
+    # D3 — mass spec
     "isoform_massspec_summary": {"label": "PepQuery2 summary", "format": "json"},
     "cmp_massspec_n_hits_in_diff_region": {
         "label": "MS peptides in diff region",
         "format": "int",
     },
-    # F1 — structure pLDDT
+    # P1 — structure pLDDT
     "isoform_structure_status": {"label": "Structure prediction status", "format": "str"},
     "isoform_structure_plddt_canonical_mean": {
         "label": "Mean pLDDT (canonical)",
@@ -1261,7 +1261,7 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "Extension↔body Cα contacts (<8 Å)",
         "format": "int",
     },
-    # F1 — biophysical distinctness (unique vs shared region)
+    # P1 — biophysical distinctness (unique vs shared region)
     "cmp_biophysics_gravy_delta": {"label": "Δ GRAVY (isoform − canonical)", "format": "float3"},
     "cmp_biophysics_fraction_charged_delta": {
         "label": "Δ fraction charged (isoform − canonical)",
@@ -1304,7 +1304,7 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "Disorder-promoting fraction unique/shared ratio",
         "format": "float3",
     },
-    # F2/F4 — localization
+    # L1/L2 — localization
     "canonical_localization_deeploc_prediction": {
         "label": "DeepLoc prediction (canonical)",
         "format": "str",
@@ -1365,7 +1365,7 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "Isoform membrane state",
         "format": "str",
     },
-    # F4 — SignalP / TargetP N-terminal sorting signals
+    # L2 — SignalP / TargetP N-terminal sorting signals
     "cmp_signalp_signalp_prediction_changed": {
         "label": "Signal-peptide prediction changes",
         "format": "bool",
@@ -1438,13 +1438,13 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "TargetP prediction (isoform)",
         "format": "str",
     },
-    # F3 — InterProScan domains
+    # S1 — InterProScan domains
     "isoform_interproscan_summary": {"label": "InterProScan summary", "format": "json"},
     "cmp_interproscan_n_hits_in_diff_region": {
         "label": "Domains in diff region",
         "format": "int",
     },
-    # F5/F6 — variant intersection + variant effect
+    # M1/M2 — variant intersection + variant effect
     "isoform_variant_intersection_gnomad_depletion_ratio": {
         "label": "gnomAD depletion ratio (unique/shared density)",
         "format": "float3",
@@ -1469,7 +1469,7 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "gnomAD variants in shared region",
         "format": "int",
     },
-    # F5 — ESM-C (PLM VEP) constraint
+    # M1 — ESM-C (PLM VEP) constraint
     "isoform_plm_vep_status": {"label": "PLM VEP status", "format": "str"},
     "isoform_plm_vep_constraint_enrichment": {
         "label": "ESM-C constraint enrichment (unique vs shared)",
@@ -1547,7 +1547,7 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "Mean AlphaMissense pathogenicity, germline (unique)",
         "format": "float3",
     },
-    # F7 — shared-region structural change (structure)
+    # P2 — shared-region structural change (structure)
     "isoform_structure_rmsd_shared": {
         "label": "Shared-region Cα RMSD",
         "format": "angstrom",
@@ -1582,7 +1582,7 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
     },
 }
 
-# E4/E5 — per-cell-line expression columns (generated programmatically)
+# D1/D2 — per-cell-line expression columns (generated programmatically)
 for _sample in ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"):
     _display = _sample.replace("_", " ")
     CRITERIA_METRIC_LABELS[f"expr_{_sample}_initiation_efficiency"] = {
@@ -1858,7 +1858,7 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         headline_fmt = "str"
     elif headline_col == _N_CELL_LINES_DETECTED:
         # "detected in n/m cell lines": n = cell lines with an expression record
-        # for this TIS (present per-sample column, mirrors the E4 scorer's
+        # for this TIS (present per-sample column, mirrors the D1 scorer's
         # ``len(site.expression)``); m = the full cell-line panel.
         n = 0
         for s in _INITIATION_EFFICIENCY_SAMPLES:
@@ -1875,7 +1875,7 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         headline_fmt = "str"
     elif headline_col == _MASSPEC_VALIDATED:
         # "{v}/{u} isoform-unique peptides validated": v = isoform-unique tryptic
-        # peptides matched to public MS spectra by PepQuery2 (the E6 score
+        # peptides matched to public MS spectra by PepQuery2 (the D3 score
         # numerator), u = total isoform-unique peptides searched. The isoform
         # digest is scoped to unique peptides, so ``validated_peptides`` == the
         # validated-unique count. Unscored (—) until PepQuery has run.
@@ -1895,7 +1895,7 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         headline_fmt = "str"
     elif headline_col == _DIVERGING_DOMAINS:
         # Curated count of real domains changed in the differential region — the
-        # same value the F3 score uses (>=1 passes). Rendered "n diverging domains".
+        # same value the S1 score uses (>=1 passes). Rendered "n diverging domains".
         n = raw.get("cmp_interproscan_n_real_domains_changed_in_diff_region")
         if n is None or (isinstance(n, float) and math.isnan(n)):
             headline = None
@@ -1994,7 +1994,7 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
                 all_hits = [h for h in raw_hits if isinstance(h, dict)]
                 n_hits_total = len(all_hits)
                 # Cap at MAX_HITS to keep the LLM prompt under the 200k token limit.
-                # F5/F6 are unique-region claims, so prioritise unique-region hits
+                # M1/M2 are unique-region claims, so prioritise unique-region hits
                 # first (then pathogenic/damaging within that), ensuring the
                 # truncated view always surfaces the region the criterion is about.
                 MAX_HITS = 30

@@ -1,4 +1,4 @@
-"""F7 — shared-region structural change. Plumbing: swissisoform.structure.
+"""P2 — shared-region structural change. Plumbing: swissisoform.structure.
 
 The shared region is the amino-acid sequence retained in both the isoform and
 its canonical protein (canonical body for an extension; post-truncation body for
@@ -22,18 +22,18 @@ _NAME = "P2_shared_structural_change"
 
 
 def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResult:
-    """F7: the retained (shared) region folds significantly differently.
+    """P2: the retained (shared) region folds significantly differently.
 
     ``True`` requires the shared region to be confidently folded in BOTH
-    structures (min per-side mean pLDDT >= ``cfg.f7_plddt_min``) AND a shared-
-    region Cα RMSD >= ``cfg.f7_rmsd_shared_min`` (Å). ``False`` when confidently
+    structures (min per-side mean pLDDT >= ``cfg.p2_plddt_min``) AND a shared-
+    region Cα RMSD >= ``cfg.p2_rmsd_shared_min`` (Å). ``False`` when confidently
     folded but below threshold. Returns ``None`` (not evaluable) when:
 
     - the structure module didn't run / cache is cold (``status`` unusable),
     - the backend produced only a uniform pLDDT fill (``uniform_plddt``),
     - there is no shared region (uORF/altORF/internal) or the diff-region
       alignment is unverified (``rmsd_shared_status`` != ``ok``),
-    - the shared region is shorter than ``cfg.f7_min_shared_len`` (too noisy),
+    - the shared region is shorter than ``cfg.p2_min_shared_len`` (too noisy),
     - the shared region is not confidently folded (low pLDDT).
 
     A low-confidence floppy loop must not masquerade as a structural change, so
@@ -43,7 +43,7 @@ def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResul
     if ann is None:
         return CriterionResult(_NAME, None, "structure annotation missing")
 
-    # Overall structure status gates the same failure modes as F1 (uniform_plddt
+    # Overall structure status gates the same failure modes as P1 (uniform_plddt
     # gives a planted scalar pLDDT that would defeat the confidence gate).
     status = ann.get("status")
     if status in ("no_cache", "too_long", "failed", "uniform_plddt", "partial"):
@@ -57,9 +57,9 @@ def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResul
         )
 
     n = ann.get("shared_region_len")
-    if n is None or n < cfg.f7_min_shared_len:
+    if n is None or n < cfg.p2_min_shared_len:
         return CriterionResult(
-            _NAME, None, f"shared region too short ({n} < {cfg.f7_min_shared_len} aa)"
+            _NAME, None, f"shared region too short ({n} < {cfg.p2_min_shared_len} aa)"
         )
 
     plddt_iso = ann.get("plddt_shared_mean_isoform")
@@ -67,21 +67,21 @@ def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResul
     if plddt_iso is None or plddt_can is None:
         return CriterionResult(_NAME, None, "shared-region pLDDT unavailable")
     plddt = min(plddt_iso, plddt_can)
-    if plddt < cfg.f7_plddt_min:
+    if plddt < cfg.p2_plddt_min:
         return CriterionResult(
             _NAME,
             None,
             f"shared region not confidently folded "
-            f"(min pLDDT {plddt:.2f} < {cfg.f7_plddt_min})",
+            f"(min pLDDT {plddt:.2f} < {cfg.p2_plddt_min})",
         )
 
     tm = ann.get("tm_score_shared")
     tm_str = f"{tm:.2f}" if isinstance(tm, (int, float)) else "n/a"
-    passed = rmsd >= cfg.f7_rmsd_shared_min
+    passed = rmsd >= cfg.p2_rmsd_shared_min
     rel = "≥" if passed else "<"
     return CriterionResult(
         _NAME,
         passed,
-        f"shared-region Cα RMSD {rmsd:.2f} Å ({rel} {cfg.f7_rmsd_shared_min} Å "
+        f"shared-region Cα RMSD {rmsd:.2f} Å ({rel} {cfg.p2_rmsd_shared_min} Å "
         f"threshold), TM-score {tm_str}, {n} aa, min shared pLDDT {plddt:.2f}",
     )

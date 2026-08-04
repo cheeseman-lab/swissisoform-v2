@@ -43,7 +43,7 @@ def _protein_hash(protein: str) -> str:
 # Member databases that report disorder / coiled-coil / signal-peptide /
 # transmembrane / low-complexity regions rather than true functional
 # domains. A "real functional domain" must additionally carry an InterPro
-# cross-reference, so these are excluded from real-domain counting (F3).
+# cross-reference, so these are excluded from real-domain counting (S1).
 # Matched case-insensitively against the hit ``db`` field.
 DISORDER_STRUCTURAL_DBS = frozenset(
     {
@@ -64,7 +64,7 @@ def is_real_domain(hit: dict[str, Any]) -> bool:
     (``interpro_id``) AND comes from a member DB that is not in the
     disorder / structural-only set (MobiDB-lite, Coils, low_complexity,
     SignalP, Phobius, TMHMM). The comparator uses this to count only
-    genuine domain gain/loss for F3, ignoring disorder/coiled-coil noise.
+    genuine domain gain/loss for S1, ignoring disorder/coiled-coil noise.
 
     Args:
         hit: One entry from an interproscan ``hits`` list.
@@ -79,7 +79,7 @@ def is_real_domain(hit: dict[str, Any]) -> bool:
     return db not in DISORDER_STRUCTURAL_DBS
 
 
-# Alias — the comparator imports this name for the F3 real-domain count.
+# Alias — the comparator imports this name for the S1 real-domain count.
 is_real_functional_domain = is_real_domain
 
 
@@ -503,7 +503,7 @@ class InterProScanModule:
         - ``status='ok'`` — precompute ran and this protein was scanned
           (``n_hits`` may legitimately be 0 — a real measurement).
         - ``status='no_data'`` — precompute failed or this protein's
-          hash isn't in the predictions dict. Scoring (F3) should
+          hash isn't in the predictions dict. Scoring (S1) should
           return ``None`` rather than ``False``.
         """
         h = _protein_hash(protein)

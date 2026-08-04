@@ -15,8 +15,8 @@ scores than slicing the same positions out of the full-protein forward
 pass. So we compute LLR on the full canonical and isoform proteins, then
 slice to unique/shared regions per the diff_region coordinates.
 
-Activates F5 (pathogenic variant enrichment) once paired with the clinical
-module's variant positions in a follow-up; for now, F5 needs the
+Activates M1 (pathogenic variant enrichment) once paired with the clinical
+module's variant positions in a follow-up; for now, M1 needs the
 constraint-enrichment column emitted here as input.
 """
 

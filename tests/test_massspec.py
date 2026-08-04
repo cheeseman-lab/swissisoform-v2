@@ -227,7 +227,7 @@ class TestMassSpecModule:
 
         Pre-fix, ``_regroup_by_gene`` skipped genes with no validated peptides,
         so MassSpecModule couldn't tell "queried + no MS evidence" from "never
-        queried" — and E6 returned None instead of False for TRNT1 / CDC34 /
+        queried" — and D3 returned None instead of False for TRNT1 / CDC34 /
         SRSF2.
         """
         from swissisoform.evidence.d3_mass_spec.massspec import _regroup_by_gene

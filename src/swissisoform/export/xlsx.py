@@ -42,7 +42,7 @@ MODULE = {
     "structure": "Boltz-2 predicted structure metrics",
     "variant": "genomic variant ↔ ORF-region intersection",
     "varianteffect": "per-variant effect on identified mutants (ESM-C ΔLLR + AlphaMissense)",
-    "scoring": "dual-axis evidence score (E1–E7 existence / F1–F6 functional)",
+    "scoring": "dual-axis evidence score (existence C+D / functional L+M+P+S)",
     "len": "protein length (aa)",
     "transcript": "transcript identifier",
 }

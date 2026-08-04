@@ -5,8 +5,8 @@ SiteModule that looks up cached Boltz-2 / Chai-1 fold results for both
 and (when ``tmtools`` + ``biotite`` are available) computes TM-score,
 shared-region RMSD, and extension-to-canonical-body contact count.
 
-Activates F1 (structured extension) when ``plddt_diffregion_mean`` exceeds
-``ScoringConfig.f1_plddt_threshold`` (default 0.70 on Boltz-2's 0-1 scale;
+Activates P1 (structured extension) when ``plddt_diffregion_mean`` exceeds
+``ScoringConfig.p1_plddt_threshold`` (default 0.70 on Boltz-2's 0-1 scale;
 AlphaFold-style backends emit 0-100 and would use 70.0). Pure lookup + numpy
 at pipeline runtime; GPU folding happens out-of-band via
 ``scripts/slurm/run_fold.sbatch``.
@@ -177,7 +177,7 @@ class StructureModule:
         # Surface the worst non-ok status if either side failed; otherwise "ok".
         # Order: too_long > failed > uniform_plddt > ok > partial.
         # uniform_plddt = backend only produced complex_plddt (uniform fill),
-        # not per-residue. Downstream criteria (F1) should opt out rather
+        # not per-residue. Downstream criteria (P1) should opt out rather
         # than score against the planted scalar.
         if can_status == "too_long" or iso_status == "too_long":
             status = "too_long"

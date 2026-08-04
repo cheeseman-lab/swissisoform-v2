@@ -325,7 +325,7 @@ class MassSpecModule:
         # pepquery_run is True only when a validated-peptide cache was
         # provided at init *and* contains an entry for this gene.  An
         # empty cache means PepQuery2 was never precomputed — downstream
-        # consumers (scoring E6) should treat ``validated_peptides == 0``
+        # consumers (scoring D3) should treat ``validated_peptides == 0``
         # as "cannot evaluate" rather than "no evidence".
         pepquery_run = gene_known and gene_name in self.validated_peptides
 

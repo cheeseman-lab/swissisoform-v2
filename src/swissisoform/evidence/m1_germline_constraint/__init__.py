@@ -1,4 +1,4 @@
-"""F5 — germline constraint. Plumbing: swissisoform.varianteffect + clinical."""
+"""M1 — germline constraint. Plumbing: swissisoform.varianteffect + clinical."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from swissisoform.models import TranslationInitiationSite
 
 
 def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResult:
-    """F5: germline tolerance / constraint over the isoform-unique region.
+    """M1: germline tolerance / constraint over the isoform-unique region.
 
     Two complementary, independent signals that the unique region is under
     selective constraint in healthy humans:
@@ -20,8 +20,8 @@ def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResul
       per-nt density of common variation unique/shared) — germline variation
       AVOIDS the unique region (a depletion ratio below 1 means constraint).
 
-    ``True`` when EITHER ``constraint_enrichment >= cfg.f5_constraint_enrichment_min``
-    OR ``gnomad_depletion_ratio < cfg.f5_depletion_ratio_max``. ``None`` only
+    ``True`` when EITHER ``constraint_enrichment >= cfg.m1_constraint_enrichment_min``
+    OR ``gnomad_depletion_ratio < cfg.m1_depletion_ratio_max``. ``None`` only
     when BOTH inputs are missing/unevaluable; otherwise ``False`` when neither
     branch fires. This is germline tolerance/constraint — NOT a count of
     "damaging" variants.
@@ -49,8 +49,8 @@ def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResul
             "no plm_vep constraint_enrichment or gnomad_depletion_ratio",
         )
 
-    constrained = constraint is not None and constraint >= cfg.f5_constraint_enrichment_min
-    depleted = depletion is not None and depletion < cfg.f5_depletion_ratio_max
+    constrained = constraint is not None and constraint >= cfg.m1_constraint_enrichment_min
+    depleted = depletion is not None and depletion < cfg.m1_depletion_ratio_max
     passed = constrained or depleted
 
     constraint_str = f"{constraint:.2f}" if constraint is not None else "n/a"
@@ -60,8 +60,8 @@ def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResul
         passed,
         (
             f"constraint_enrichment={constraint_str} "
-            f"(≥{cfg.f5_constraint_enrichment_min}); "
+            f"(≥{cfg.m1_constraint_enrichment_min}); "
             f"gnomad_depletion_ratio={depletion_str} "
-            f"(<{cfg.f5_depletion_ratio_max})"
+            f"(<{cfg.m1_depletion_ratio_max})"
         ),
     )

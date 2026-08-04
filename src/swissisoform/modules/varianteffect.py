@@ -19,7 +19,7 @@ already attached to a TIS, then aggregates over the isoform-unique region:
 Runs as a SiteModule **after** ``ClinicalModule`` and
 ``VariantIntersectionModule`` so it can read the genomic-membership flags
 (``in_isoform_unique``) the latter writes. Emits a per-variant table plus
-unique-region aggregates that feed evidence-scoring criterion F5.
+unique-region aggregates that feed evidence-scoring criterion M1.
 
 Two independent damaging branches (mirrors v1):
 1. **Loss-of-function** — a frameshift / stop-gained / splice / start-lost
@@ -105,15 +105,15 @@ class VariantEffectModule:
         "varianteffect_hits",
         "varianteffect_n_scored_plm",
         "varianteffect_n_scored_am",
-        # Blended (all sources) per region. The shared twins back F5's
+        # Blended (all sources) per region. The shared twins back M1's
         # differential-vs-shared enrichment (§2).
         *_ve_metric_cols("unique"),
         "varianteffect_max_am_pathogenicity_unique",
         *_ve_metric_cols("shared"),
         "varianteffect_max_am_pathogenicity_shared",
         # Source-separated (§4): the predictors are source-independent, so each
-        # region splits into gnomad (germline → F5) and disease (ClinVar+COSMIC
-        # → F6). Blended = gnomad + disease.
+        # region splits into gnomad (germline → M1) and disease (ClinVar+COSMIC
+        # → M2). Blended = gnomad + disease.
         *_ve_metric_cols("unique_gnomad"),
         *_ve_metric_cols("unique_disease"),
         *_ve_metric_cols("shared_gnomad"),
@@ -156,7 +156,7 @@ class VariantEffectModule:
         if llr_damaging_threshold is not None:
             self.llr_damaging_threshold = llr_damaging_threshold
         elif scoring is not None:
-            self.llr_damaging_threshold = scoring.f5_llr_damaging_threshold
+            self.llr_damaging_threshold = scoring.m1_llr_damaging_threshold
         else:
             self.llr_damaging_threshold = DEFAULT_LLR_DAMAGING_THRESHOLD
         self.gnomad_tolerated_af = DEFAULT_GNOMAD_TOLERATED_AF
@@ -290,8 +290,8 @@ class VariantEffectModule:
         # Predictor aggregates keyed by (region, source): region ∈ {unique,
         # shared}, source ∈ {gnomad, disease}. The predictors are
         # source-independent (they score a substitution's effect), so we apply
-        # them to both pools and surface the gnomad slice in F5 (germline
-        # tolerance) and the disease slice in F6 (clinical). The blended
+        # them to both pools and surface the gnomad slice in M1 (germline
+        # tolerance) and the disease slice in M2 (clinical). The blended
         # region-only columns are derived as gnomad+disease (§4).
         def _bucket() -> dict[str, Any]:
             return {

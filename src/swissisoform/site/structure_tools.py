@@ -66,7 +66,7 @@ _SIDES = ("isoform", "canonical")
 
 # pLDDT scale of the cached confidence.json. Stated in every result because the
 # aggregate columns the model also sees are on this scale, as is
-# ScoringConfig.f1_plddt_threshold (0.70) — while the exported CIF B-factors are
+# ScoringConfig.p1_plddt_threshold (0.70) — while the exported CIF B-factors are
 # 0-100. A result that did not say which would invite the wrong comparison.
 PLDDT_SCALE = "0-1"
 
@@ -214,7 +214,7 @@ def plddt_profile(
     Answers what a single mean cannot: is low confidence spread evenly across the
     segment, or is it one disordered stretch beside a well-formed element? Values
     are on the 0-1 scale of the cached ``confidence.json`` — the same scale as
-    the aggregate columns and the F1 threshold.
+    the aggregate columns and the P1 threshold.
     """
     side = side or _default_side(raw)
     entry, status = _resolve(raw, side, cache_dir, backend)

@@ -311,7 +311,7 @@ def fold_one(
                     # any per-region statistic computed from it (e.g. mean
                     # over diff region) will just be the scalar itself. We
                     # mark status="uniform_plddt" so downstream criteria
-                    # (e.g. F1 structured-extension) can opt out rather than
+                    # (e.g. P1 structured-extension) can opt out rather than
                     # score against the planted value.
                     with open(conf_files[0]) as _cfh:
                         _cdata = json.load(_cfh)

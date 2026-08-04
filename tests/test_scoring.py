@@ -57,7 +57,7 @@ class TestE1PrimateConservation:
             "primate_frac_intact": 0.8,
             "summary": {"status": "ok"},
         }
-        res = _c1_primate_conservation(site, ScoringConfig(e1_pident_min=0.8))
+        res = _c1_primate_conservation(site, ScoringConfig(c1_pident_min=0.8))
         assert res.value is True
 
     def test_fails_below_threshold(self):
@@ -67,7 +67,7 @@ class TestE1PrimateConservation:
             "primate_frac_intact": 0.2,
             "summary": {"status": "ok"},
         }
-        res = _c1_primate_conservation(site, ScoringConfig(e1_pident_min=0.8))
+        res = _c1_primate_conservation(site, ScoringConfig(c1_pident_min=0.8))
         assert res.value is False
 
     def test_not_run(self):
@@ -103,7 +103,7 @@ class TestE2MammalianConservation:
             "mammalian_frac_intact": 0.4,
             "summary": {"status": "ok"},
         }
-        res = _c2_mammalian_conservation(site, ScoringConfig(e2_pident_min=0.5))
+        res = _c2_mammalian_conservation(site, ScoringConfig(c2_pident_min=0.5))
         assert res.value is True
 
     def test_fails_below_threshold(self):
@@ -113,7 +113,7 @@ class TestE2MammalianConservation:
             "mammalian_frac_intact": 0.4,
             "summary": {"status": "ok"},
         }
-        res = _c2_mammalian_conservation(site, ScoringConfig(e2_pident_min=0.5))
+        res = _c2_mammalian_conservation(site, ScoringConfig(c2_pident_min=0.5))
         assert res.value is False
 
 
@@ -124,7 +124,7 @@ class TestE3Phylop:
             "phylop_unique_region_mean": 2.5,
             "summary": {"region_status": "ok"},
         }
-        # Default e3_phylop_min is 2.0 (absolute purifying-selection anchor).
+        # Default c3_phylop_min is 2.0 (absolute purifying-selection anchor).
         res = _c3_phylop_coding_selection(site, ScoringConfig())
         assert res.value is True
 
@@ -557,7 +557,7 @@ class TestF5GermlineToleranceConstraint:
             "status": "ok",
         }
         assert _m1_pathogenic_variant_enrichment(site, ScoringConfig()).value is True
-        strict = ScoringConfig(f5_constraint_enrichment_min=3.0)
+        strict = ScoringConfig(m1_constraint_enrichment_min=3.0)
         assert _m1_pathogenic_variant_enrichment(site, strict).value is False
 
 
@@ -607,18 +607,18 @@ class TestModuleIntegration:
         mod = EvidenceScoringModule(PipelineConfig(scoring=ScoringConfig()))
         site = _site()  # no upstream data
         out = mod.annotate_site(site)
-        # E4 always evaluates (reads site.expression), others None
+        # D1 always evaluates (reads site.expression), others None
         assert out["existence_evaluable"] == 1
         assert out["existence_score"] == 0
         # All functional criteria correctly return None on empty input:
-        # F1 (structure), F3 (IPS), F5 (vi+plm) check status fields;
-        # F2/F4/F6 need comparator/variant data not present here.
+        # P1 (structure), S1 (IPS), M1 (vi+plm) check status fields;
+        # L1/L2/M2 need comparator/variant data not present here.
         assert out["functional_evaluable"] == 0
 
     def test_score_counts_only_true(self):
         cfg = ScoringConfig(
-            e1_pident_min=0.8,
-            e2_pident_min=0.5,
+            c1_pident_min=0.8,
+            c2_pident_min=0.5,
             min_cell_lines=1,
             existence_high_threshold=3,
             functional_high_threshold=1,
@@ -641,12 +641,12 @@ class TestModuleIntegration:
         site.expression["HeLa"] = CellLineExpression(raw_count=10, cpm=1.0, p_value=0.01)
         out = mod.annotate_site(site)
 
-        # E1, E2, E4 True → existence_score = 3
+        # C1, C2, D1 True → existence_score = 3
         assert out["existence_score"] == 3
         assert out["existence_high_confidence"] is True
-        # F5 (gnomAD depletion present? no — only disease ratio) and F6.
+        # M1 (gnomAD depletion present? no — only disease ratio) and M2.
         # variant_intersection carries no gnomad_depletion_ratio and no plm_vep,
-        # so F5 → None; F6 True → functional_score = 1.
+        # so M1 → None; M2 True → functional_score = 1.
         assert out["functional_score"] == 1
         assert out["functional_high_confidence"] is True
         assert out["criteria"]["C1_primate_conservation"] is True

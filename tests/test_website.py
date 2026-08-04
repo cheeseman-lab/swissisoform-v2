@@ -390,7 +390,7 @@ def test_isoform_page_has_evidence_tiles(client):
     # Grouping headers are gone; the flat grid remains.
     assert b"tile-row-h" not in body
     # Biophysics is its own card, keyed by the CDLMPS criterion id (was the
-    # pre-rename lowercase "biophysics" when it lived inside the F1 modal).
+    # pre-rename lowercase "biophysics" when it lived inside the P1 modal).
     assert b'data-criterion="S2_biophysics"' in body
     # Both axis classes still present (E + F border colors).
     assert b"axis-E" in body
@@ -535,7 +535,7 @@ def test_criterion_evidence_folds_into_score_popups(client):
 
 
 def test_domains_massspec_are_canonical_vs_isoform(client):
-    """F3 domains and E6 mass-spec compare the whole canonical vs isoform protein."""
+    """S1 domains and D3 mass-spec compare the whole canonical vs isoform protein."""
     from swissisoform_site.data import criterion_evidence_for, load_all
 
     iso = load_all()["CBX1"].isoforms[0]
@@ -556,7 +556,7 @@ def test_domains_massspec_are_canonical_vs_isoform(client):
 
 def test_comparison_tables_use_two_standard_flavors(client):
     """Every comparison table is one of two flavors — Canonical|Isoform or
-    Differential|Shared — so the modals read consistently. E1/E2 frame is the
+    Differential|Shared — so the modals read consistently. C1/C2 frame is the
     one documented exception (its differential side flips with diff_space).
     """
     from swissisoform_site.data import criterion_evidence_for, load_all
@@ -600,7 +600,7 @@ def test_details_boxes_are_qualitative_lists_only(client):
 
 
 def test_f6_clinical_burden_is_length_normalized(client):
-    """F6 reports a per-residue enrichment ratio, not just raw counts."""
+    """M2 reports a per-residue enrichment ratio, not just raw counts."""
     from swissisoform_site.data import criterion_evidence_for, load_all
 
     iso = load_all()["CBX1"].isoforms[0]

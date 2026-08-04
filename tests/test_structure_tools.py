@@ -169,7 +169,7 @@ def test_unknown_side_raises(cache):
 
 
 def test_plddt_profile_reports_the_scale(cache):
-    """0-1, matching the aggregate columns and the F1 threshold — not 0-100."""
+    """0-1, matching the aggregate columns and the P1 threshold — not 0-100."""
     out = st.plddt_profile(_raw(), side="isoform", cache_dir=cache)
     assert out["scale"] == "0-1"
     assert 0.0 <= out["max"] <= 1.0
@@ -375,8 +375,11 @@ def test_emit_verdict_is_strict_and_schema_stays_strict_compatible():
 
 
 def test_only_emit_verdict_is_strict():
-    """pae_block's two-element range params are not strict-expressible (minItems:2),
+    """Only the persisted verdict is strict.
+
+    pae_block's two-element range params are not strict-expressible (minItems:2),
     and a reader's bad argument is already answered with an error the model can
-    recover from — so strict is deliberately scoped to the persisted verdict."""
+    recover from.
+    """
     strict = {t["name"] for t in st.P_TOOLS if t.get("strict")}
     assert strict == {st.EMIT_VERDICT}

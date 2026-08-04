@@ -2,7 +2,7 @@
 
 The Annotated (canonical) start's per-cell-line expression is attached to each
 alt-TIS so the viewer can compare canonical-start vs alt-start initiation
-efficiency (E4/E5).
+efficiency (D1/D2).
 """
 
 from __future__ import annotations

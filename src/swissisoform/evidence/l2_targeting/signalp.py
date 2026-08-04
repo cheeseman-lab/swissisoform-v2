@@ -10,7 +10,7 @@ Five signal peptide types are supported by SignalP 6.0:
 ``SP`` (classical), ``LIPO`` (Sec/SPII lipoprotein), ``TAT`` (Tat/SPI),
 ``TATLIPO`` (Tat/SPII lipoprotein), and ``PILIN`` (Sec/SPIII). For
 isoform biology, the distinction between canonical and isoform SP call
-is what scores F4 (targeting/signal change).
+is what scores L2 (targeting/signal change).
 
 SignalP 6.0 is distributed as a pip-installable academic-license
 tarball from DTU, installed into a dedicated ``swissisoform-v2-signalp``

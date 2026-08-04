@@ -220,7 +220,7 @@ class TestPositionalSubset:
         assert cmp["hits_source_pane"] == "canonical"
 
     def test_truncation_massspec_does_not_credit_canonical_peptides(self):
-        """E6 fix: canonical lost-region peptides are NOT isoform existence evidence.
+        """D3 fix: canonical lost-region peptides are NOT isoform existence evidence.
 
         On a truncation, massspec (an isoform-existence module) must return an
         empty diff-region subset with source_pane='isoform' — a canonical
@@ -259,7 +259,7 @@ class TestPositionalSubset:
 
 
 # ---------------------------------------------------------------------------
-# F3 — real InterPro domain gain/loss in the diff region
+# S1 — real InterPro domain gain/loss in the diff region
 # ---------------------------------------------------------------------------
 
 

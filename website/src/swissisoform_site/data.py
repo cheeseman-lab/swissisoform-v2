@@ -871,7 +871,7 @@ def sae_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
         isoform-unique residues.
 
     Scoring and LLM surfacing are intentionally out of scope for this card — it
-    is descriptive over data already in the parquet. (The scored F7 criterion is
+    is descriptive over data already in the parquet. (The scored P2 criterion is
     the separate "Core Fold Perturbation" RMSD tile.)
     """
     raw = iso.raw or {}
@@ -919,7 +919,7 @@ def sae_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
 
 
 # Biophysical properties shown in the standalone Biophysics card (differential vs
-# shared region) — mirrors the table formerly nested in the F1 structure modal.
+# shared region) — mirrors the table formerly nested in the P1 structure modal.
 _BIOPHYSICS_FEATURES = [
     ("Isoelectric point (pI)", "pI"),
     ("Hydropathy (GRAVY)", "gravy"),
@@ -939,7 +939,7 @@ _BIOPHYSICS_COL_CLASSES = ["", "dm-shared", "dm-ratio"]  # differential | shared
 
 
 def biophysics_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
-    """Standalone Biophysics card data (was a sub-section of the F1 modal).
+    """Standalone Biophysics card data (was a sub-section of the P1 modal).
 
     Descriptive, not scored — reads the ``cmp_biophysics_*`` columns already on
     ``iso.raw`` (differential/shared/ratio + enriched flag per property) and returns
@@ -969,7 +969,7 @@ def biophysics_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
         return None
 
     # Directional headline: how the differential region compares to the shared
-    # core for the three properties F1 keys off. Number = (differential − core);
+    # core for the three properties P1 keys off. Number = (differential − core);
     # the sign gives the direction word. Region-vs-core (not the whole-protein
     # isoform−canonical delta) so small regions aren't diluted and truncations
     # read the same way as extensions.
@@ -1010,7 +1010,7 @@ def biophysics_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
             "about": (
                 "Biophysical character of the isoform-differential region versus the "
                 "shared canonical core — pI, hydropathy, charge, disorder and related "
-                "properties. Descriptive; the folding (F1) score keys off the GRAVY / "
+                "properties. Descriptive; the folding (P1) score keys off the GRAVY / "
                 "charge / disorder deltas."
             ),
             "sections": [
@@ -1254,7 +1254,7 @@ METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
     "Normalized complexity": ("m-biophysics", "Compositional complexity normalized to length."),
     # Clinical burden
     "All variants": ("m-clinical", "ClinVar / gnomAD / COSMIC variants intersecting each region."),
-    "Disease variants": ("m-clinical", "ClinVar + COSMIC (disease/cancer) variants in each region — gnomAD (population/tolerance) is excluded; it feeds F5's constraint, not disease burden."),
+    "Disease variants": ("m-clinical", "ClinVar + COSMIC (disease/cancer) variants in each region — gnomAD (population/tolerance) is excluded; it feeds M1's constraint, not disease burden."),
     "gnomAD variants": ("m-clinical", "gnomAD (healthy-population/germline) variants per nucleotide per region. Depletion in the differential region (depletion ratio <1×) = it resists germline variation = constrained."),
     "Pathogenic": ("m-clinical", "Pathogenic / likely-pathogenic variants in each region."),
     "Clinical/observed variants": ("m-clinical", "ClinVar / gnomAD / COSMIC variants intersecting the region."),
@@ -1277,7 +1277,7 @@ def _term(label: str) -> dict[str, str]:
 
 
 def criterion_evidence_for(iso) -> dict:
-    """Per-criterion differential evidence for the score modals (E1–E6, F1–F7).
+    """Per-criterion differential evidence for the score modals (C1–D3, P1–P2).
 
     Pulls the conservation / structure / biophysics / localization / PLM-VEP /
     function / clinical evidence off the parquet row, sliced finer than a flat
@@ -1745,7 +1745,7 @@ def criterion_evidence_for(iso) -> dict:
         }
 
     def sec_shared_rmsd():
-        # F7 — strict shared-region Cα RMSD (Kabsch-superposed on the shared
+        # P2 — strict shared-region Cα RMSD (Kabsch-superposed on the shared
         # residues only). Global TM/RMSD ride in the caption; the shared-region
         # metrics are the score basis. When not evaluable, surface the status so
         # the modal explains itself rather than rendering blank.
@@ -1994,7 +1994,7 @@ def criterion_evidence_for(iso) -> dict:
         # gnomAD = germline population variation, a *tolerance* readout. Depletion
         # in the differential region vs the shared core = healthy human variation
         # avoids it = the region is constrained. Depletion ratio < 1× =
-        # constrained; > 1× = tolerated. (Disease variants live in F6.)
+        # constrained; > 1× = tolerated. (Disease variants live in M2.)
         # Density denominator is the nt length of each region (emitted by the
         # variant_intersection module), not AA length — fall back to the AA-len
         # ratio only when the nt columns predate this row.
@@ -2044,7 +2044,7 @@ def criterion_evidence_for(iso) -> dict:
             "subtitle": (
                 "gnomAD (population) variant density per nucleotide — depletion "
                 "ratio < 1× means healthy human variation avoids the region "
-                "(constrained), the F5 basis alongside ESM-C constraint"
+                "(constrained), the M1 basis alongside ESM-C constraint"
             ),
             "cmp_headers": ["Variant set", "Differential", "Shared", "Depletion ratio"],
             "col_classes": DIFF_SHARED_3,
@@ -2086,7 +2086,7 @@ def criterion_evidence_for(iso) -> dict:
 
     def sec_variant_burden(source, pool_label):
         # Predicted-damaging variant counts for one source pool (§4): gnomad
-        # (germline → F5) or disease (ClinVar+COSMIC → F6). The predictors are
+        # (germline → M1) or disease (ClinVar+COSMIC → M2). The predictors are
         # source-independent; this counts their calls over the chosen pool,
         # differential vs shared, length-normalized enrichment.
         unique_len = getattr(iso, "diff_end", None) or len(
@@ -2222,7 +2222,7 @@ def criterion_evidence_for(iso) -> dict:
             if nu is None and ns is None:
                 continue
             # Prefer the module's disease enrichment ratio for the disease row
-            # (it is the F6 basis); fall back to the locally-computed density.
+            # (it is the M2 basis); fall back to the locally-computed density.
             if label == "Disease variants" and disease_ratio is not None:
                 r = disease_ratio
             else:
@@ -2246,7 +2246,7 @@ def criterion_evidence_for(iso) -> dict:
             "subtitle": (
                 "counts per region; ratio is density-normalized (variants per "
                 "nucleotide, differential ÷ shared — ≥1× = disease variants "
-                "concentrate in the differential region, the F6 basis)"
+                "concentrate in the differential region, the M2 basis)"
             ),
             "cmp_headers": ["Variant set", "Differential", "Shared", "Enrichment"],
             "col_classes": DIFF_SHARED_3,
@@ -2338,7 +2338,7 @@ def llm_for_isoform(gene: GeneRecord, tis_id: str) -> dict[str, Any] | None:
     return None
 
 
-# Drives the evidence-tile UI grid on the isoform page (E1..E6, F1..F7).
+# Drives the evidence-tile UI grid on the isoform page (C1..D3, P1..P2).
 CRITERIA_FOR_PAGE = [
     {
         "id": "C1_primate_conservation",

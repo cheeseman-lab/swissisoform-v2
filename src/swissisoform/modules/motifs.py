@@ -37,7 +37,7 @@ MOTIF_DEFS: list[tuple[str, str, str]] = [
     (
         "RING_finger",
         r"C.{2}C.{9,39}C.{1,3}H.{2,3}C.{2}C.{4,48}C.{2}C",
-        "RING finger E3 ligase",
+        "RING finger C3 ligase",
     ),
 ]
 

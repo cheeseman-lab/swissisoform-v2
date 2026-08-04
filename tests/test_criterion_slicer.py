@@ -117,7 +117,7 @@ def test_slice_extracts_all_evidence_cols() -> None:
 
 
 def test_real_trnt1_record_e1_e2_e3() -> None:
-    """End-to-end: refresh TRNT1 record, slice E1/E2/E3, sanity-check values."""
+    """End-to-end: refresh TRNT1 record, slice C1/C2/C3, sanity-check values."""
     p = Path("data/output/cheeseman_13gene/llm_evidence/TRNT1.json")
     if not p.exists():
         pytest.skip("real TRNT1 record not present")
@@ -135,7 +135,7 @@ def test_real_trnt1_record_e1_e2_e3() -> None:
 
 
 def test_f5_extracts_variants_as_hits() -> None:
-    """F5 has evidence_hits_col — must populate hits list; headline is the
+    """M1 has evidence_hits_col — must populate hits list; headline is the
     gnomAD depletion ratio (germline tolerance/constraint), not a damaging count.
     """
     iso = {

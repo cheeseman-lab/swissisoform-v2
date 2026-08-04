@@ -292,7 +292,7 @@ class TestSharedRegionAggregates:
 
 
 class TestSourceSeparatedAggregates:
-    """§4 — predictors split into gnomad (germline → F5) and disease (→ F6)."""
+    """§4 — predictors split into gnomad (germline → M1) and disease (→ M2)."""
 
     def test_gnomad_vs_disease_damaging_split(self, tmp_path):
         _seed_aa_logprobs(tmp_path, CANON, {(3, "A"): -1.0, (3, "V"): -9.0})  # ΔLLR -8 → damaging

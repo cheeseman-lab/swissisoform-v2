@@ -1,4 +1,4 @@
-"""F6 — disease enrichment. Plumbing: swissisoform.varianteffect + clinical."""
+"""M2 — disease enrichment. Plumbing: swissisoform.varianteffect + clinical."""
 
 from __future__ import annotations
 
@@ -8,12 +8,12 @@ from swissisoform.models import TranslationInitiationSite
 
 
 def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResult:
-    """F6: disease variants concentrate in the isoform-unique region.
+    """M2: disease variants concentrate in the isoform-unique region.
 
     Scored on the per-nt density enrichment of disease variants (ClinVar +
     COSMIC) in the unique region vs the shared core
     (``variant_intersection.disease_enrichment_ratio``). ``True`` when the
-    ratio is >= ``cfg.f6_disease_enrichment_min`` (1.0 — disease variation is
+    ratio is >= ``cfg.m2_disease_enrichment_min`` (1.0 — disease variation is
     at least as dense in the unique region as the shared core). This replaces
     the old mere-presence test, which fired on a single variant regardless of
     the shared-core background. ``None`` when the ratio is missing (e.g. zero
@@ -34,8 +34,8 @@ def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResul
     n_shared = ann.get("n_disease_in_shared_region")
     return CriterionResult(
         "M2_clinical_variant_overlap",
-        ratio >= cfg.f6_disease_enrichment_min,
+        ratio >= cfg.m2_disease_enrichment_min,
         f"disease_enrichment_ratio={ratio:.2f} "
-        f"(≥{cfg.f6_disease_enrichment_min}); "
+        f"(≥{cfg.m2_disease_enrichment_min}); "
         f"disease unique={n_unique}, shared={n_shared}",
     )

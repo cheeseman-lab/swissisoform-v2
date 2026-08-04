@@ -1,4 +1,4 @@
-"""F4 — targeting change. Plumbing: swissisoform.signalp / swissisoform.targetp."""
+"""L2 — targeting change. Plumbing: swissisoform.signalp / swissisoform.targetp."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ __all__ = [
 def score(
     site: TranslationInitiationSite, cfg: ScoringConfig  # noqa: ARG001
 ) -> CriterionResult:
-    """F4: targeting change — SignalP/TargetP disagree on canonical vs. isoform.
+    """L2: targeting change — SignalP/TargetP disagree on canonical vs. isoform.
 
     Reads from ``site.comparison['signalp']`` / ``site.comparison['targetp']``
     written by the comparator (Scope A).  Returns ``None`` when neither
