@@ -54,10 +54,9 @@
             {% for c in [p.left, p.right] %}
             <td class="{{ 'dm-shared' if loop.index0 else '' }}">
               {% if c %}
-                <span class="diff-hit-kind diff-hit-{{ c.kind }}">{{ c.kind }}</span>
+                <span class="diff-hit-kind diff-hit-{{ c.kind }}">{{ c.label or c.kind }}</span>
                 <span class="sse-span">{{ c.span }}</span>
                 <span class="sse-detail">{{ c.detail }}</span>
-                {% if c.note %}<span class="sse-note">{{ c.note }}</span>{% endif %}
               {% else %}<span class="sse-empty">—</span>{% endif %}
             </td>
             {% endfor %}

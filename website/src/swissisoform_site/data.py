@@ -1263,6 +1263,10 @@ METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
 }
 
 
+# P-SEA reports bare "helix"/"strand"; the UI names the actual structure types.
+_SSE_LABEL = {"helix": "alpha helix", "strand": "beta strand", "coil": "coil"}
+
+
 def _term(label: str) -> dict[str, str]:
     """Glossary tip + about-page anchor for a metric label (empty if unknown)."""
     ent = METRIC_GLOSSARY.get(label)
@@ -1608,16 +1612,23 @@ def criterion_evidence_for(iso) -> dict:
 
         Reads ``isoform_structure_sse_all_elements``, where each element is
         tagged ``unique`` / ``shared`` / ``spans`` by the pipeline. A ``spans``
-        element crosses the boundary and is listed on the unique side — the
-        differential region is what the card is about, and a helix that starts
-        there and continues into the core is the interesting case, not a
-        shared-core element that happens to poke out.
+        element crosses the boundary and counts for the isoform: it has
+        secondary structure in the unique region, which is what the card asks.
+        Its full span is shown, so the extent into the shared core is visible
+        without spending a line of the tile saying so.
         """
         raw_all = g("isoform_structure_sse_all_elements")
         els = [e for e in (raw_all if raw_all is not None else []) if isinstance(e, dict)]
         unique = [e for e in els if e.get("region") in ("unique", "spans")]
         shared = [e for e in els if e.get("region") == "shared"]
         return unique, shared
+
+    def _sse_qualifies(e):
+        """The P3 test: long enough AND confident enough. Mirrors ScoringConfig
+        p3_min_sse_length / p3_min_sse_plddt, restated here because the modal
+        renders without a config object (same duplication as the tile headline).
+        """
+        return (e.get("length") or 0) >= 6 and (e.get("plddt_mean") or 0) >= 0.70
 
     def _sse_stat(els, kind):
         return sum(1 for e in els if e.get("type") == kind)
@@ -1641,6 +1652,14 @@ def criterion_evidence_for(iso) -> dict:
         unique, shared = _sse_split()
         if not unique and not shared:
             return None
+        # Counts describe the elements that COUNT — the same qualifying set the
+        # tile headline and the P3 verdict use. Counting every element here
+        # instead put two different answers to "how many" on one card (TRIP13:
+        # headline 1, table 1 helix + 1 strand, because its 14 aa helix sits at
+        # pLDDT 0.63). The sub-threshold ones are listed in their own section
+        # below rather than dropped.
+        unique = [e for e in unique if _sse_qualifies(e)]
+        shared = [e for e in shared if _sse_qualifies(e)]
 
         def row(label, fn, fmt=str):
             u, s = fn(unique), fn(shared)
@@ -1652,24 +1671,36 @@ def criterion_evidence_for(iso) -> dict:
             }
 
         rows = [
-            row("Helices", lambda e: _sse_stat(e, "helix")),
-            row("Strands", lambda e: _sse_stat(e, "strand")),
+            row("Alpha helices", lambda e: _sse_stat(e, "helix")),
+            row("Beta strands", lambda e: _sse_stat(e, "strand")),
             row("Longest element (aa)", _sse_longest),
             row("Mean pLDDT", _sse_mean_plddt, lambda v: f"{v:.2f}"),
         ]
         return {
             "title": "Secondary structure · differential vs shared region",
             "subtitle": "helices and strands assigned from the predicted coordinates (P-SEA)",
-            "cmp_headers": ["Metric", _sse_unique_label(), "Shared core"],
+            # Differential | Shared is one of the two house header flavors every
+            # comparison table uses (test_comparison_tables_use_two_standard_flavors);
+            # the ORF-type-aware wording lives on the paired listing below, which
+            # is a different kind of table and not bound by that convention.
+            "cmp_headers": ["Metric", "Differential", "Shared"],
             "col_classes": DIFF_SHARED_2,
             "compare_rows": rows,
         }
 
-    def sec_sse_list():
-        """Every element with its coordinates, in two columns."""
+    def sec_sse_list(qualifying=True):
+        """Elements with their coordinates, in two columns.
+
+        Split into two sections so every count on the card agrees: the first
+        lists what the headline and P3 count, the second the ones that fall
+        short. Both keep the differential | shared layout.
+        """
         if g("isoform_structure_sse_status") != "ok":
             return None
         unique, shared = _sse_split()
+        keep = _sse_qualifies if qualifying else (lambda e: not _sse_qualifies(e))
+        unique = [e for e in unique if keep(e)]
+        shared = [e for e in shared if keep(e)]
         if not unique and not shared:
             return None
 
@@ -1680,25 +1711,35 @@ def criterion_evidence_for(iso) -> dict:
             bits = [f"{e.get('length')} aa"]
             if e.get("plddt_mean") is not None:
                 bits.append(f"pLDDT {e['plddt_mean']:.2f}")
+            kind = e.get("type") or ""
             return {
-                "kind": e.get("type") or "",
+                # `kind` keys the CSS class and stays the bare P-SEA type name;
+                # `label` is what the badge reads.
+                "kind": kind,
+                "label": _SSE_LABEL.get(kind, kind),
                 "span": span,
                 "detail": " · ".join(bits),
-                # Flagged so a reader is not misled into thinking a spanning
-                # element sits wholly inside the differential region.
-                "note": "crosses into shared core" if e.get("region") == "spans" else "",
             }
 
         pairs = [
             {"left": cell(u), "right": cell(s)}
             for u, s in zip_longest(unique, shared, fillvalue=None)
         ]
+        counts = (
+            f"{len(unique)} in the differential region, {len(shared)} in the shared core"
+        )
+        if qualifying:
+            title = "Elements and coordinates"
+            subtitle = f"{counts} — residue numbering is 1-based on the protein holding the region"
+        else:
+            title = "Below threshold"
+            # Named for both reasons: across cheeseman_test 62 of 69 sub-threshold
+            # elements are short rather than low-confidence, so calling the
+            # section "low confidence" would mislabel most of it.
+            subtitle = f"{counts} — shorter than 6 aa or below pLDDT 0.70, so not counted above"
         return {
-            "title": "Elements and coordinates",
-            "subtitle": (
-                f"{len(unique)} in the differential region, {len(shared)} in the shared core "
-                "— residue numbering is 1-based on the protein containing the region"
-            ),
+            "title": title,
+            "subtitle": subtitle,
             "pair_headers": [_sse_unique_label(), "Shared core"],
             "pairs": pairs,
         }
@@ -2221,7 +2262,11 @@ def criterion_evidence_for(iso) -> dict:
         "D2_initiation_efficiency": [sec_efficiency()],
         "D3_mass_spec": [sec_massspec()],
         "P1_structured_extension": [sec_structure(), sec_structure_region()],
-        "P3_secondary_structure": [sec_sse_summary(), sec_sse_list()],
+        "P3_secondary_structure": [
+            sec_sse_summary(),
+            sec_sse_list(qualifying=True),
+            sec_sse_list(qualifying=False),
+        ],
         "L1_localization_change": [sec_deeploc()],
         "S1_domain_change": [sec_domains_motifs()],
         "L2_targeting_change": [sec_targeting()],

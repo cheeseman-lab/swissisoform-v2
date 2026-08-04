@@ -129,15 +129,18 @@ def _p3(iso):
 
 
 def test_p3_modal_splits_unique_and_shared() -> None:
+    # All three qualify (>=6 aa, pLDDT >=0.70) so this test is about the
+    # unique/shared split, not the threshold — that is covered separately.
     ce = _p3(_Iso(_sse_raw(
         _el("helix", 16, 32, "unique"),
-        _el("strand", 40, 44, "shared"),
+        _el("strand", 40, 46, "shared"),
         _el("helix", 60, 75, "shared"),
     )))
-    summary, listing = ce["sections"]
-    assert summary["cmp_headers"] == ["Metric", "Isoform-unique", "Shared core"]
+    summary, listing = ce["sections"][0], ce["sections"][1]
+    assert summary["cmp_headers"] == ["Metric", "Differential", "Shared"]
     # helices: 1 unique / 1 shared;  strands: 0 unique / 1 shared
     assert [r["cols"] for r in summary["compare_rows"]][:2] == [["1", "1"], ["0", "1"]]
+    assert [r["label"] for r in summary["compare_rows"]][:2] == ["Alpha helices", "Beta strands"]
     # One row per element, padded to the longer side.
     assert len(listing["pairs"]) == 2
     assert listing["pairs"][0]["left"]["span"] == "16–32"
@@ -150,17 +153,24 @@ def test_p3_modal_relabels_the_unique_column_for_truncations() -> None:
     """
     ce = _p3(_Iso(_sse_raw(_el("helix", 13, 31, "unique")),
                   orf_type="truncated", diff_space="canonical"))
-    assert ce["sections"][0]["cmp_headers"][1] == "Removed (canonical)"
+    # The compare table follows the house Differential|Shared convention; the
+    # ORF-aware wording is on the paired listing.
+    assert ce["sections"][0]["cmp_headers"][1] == "Differential"
     assert ce["sections"][1]["pair_headers"][0] == "Removed (canonical)"
 
 
-def test_p3_modal_flags_a_boundary_spanning_element() -> None:
-    """A spanning element lists on the unique side, marked — a reader must not
-    read it as sitting wholly inside the differential region.
+def test_p3_modal_counts_a_boundary_spanning_element_for_the_isoform() -> None:
+    """A spanning element has secondary structure in the unique region, so it
+    counts for the isoform and lists on the unique side at its full span — no
+    separate annotation about where it ends.
     """
     ce = _p3(_Iso(_sse_raw(_el("helix", 13, 35, "spans"))))
-    cell = ce["sections"][1]["pairs"][0]["left"]
-    assert cell["span"] == "13–35" and "shared core" in cell["note"]
+    summary, listing = ce["sections"][0], ce["sections"][1]
+    assert [r["cols"] for r in summary["compare_rows"]][0] == ["1", "0"]  # alpha helices
+    cell = listing["pairs"][0]["left"]
+    assert cell["span"] == "13–35"
+    assert "note" not in cell
+    assert listing["pairs"][0]["right"] is None
 
 
 def test_p3_modal_absent_when_sse_did_not_run() -> None:
@@ -180,3 +190,43 @@ def test_p3_modal_survives_a_numpy_element_array() -> None:
         "isoform_structure_sse_all_elements": arr,
     }))
     assert ce["sections"][1]["pairs"][0]["left"]["span"] == "16–32"
+
+
+def test_p3_modal_badges_name_the_structure_type() -> None:
+    """The badge reads "alpha helix" / "beta strand", but `kind` stays the bare
+    P-SEA name because it keys the CSS class (a space would break it).
+    """
+    ce = _p3(_Iso(_sse_raw(_el("helix", 16, 32, "unique"), _el("strand", 40, 47, "shared"))))
+    left = ce["sections"][1]["pairs"][0]["left"]
+    right = ce["sections"][1]["pairs"][0]["right"]
+    assert (left["kind"], left["label"]) == ("helix", "alpha helix")
+    assert (right["kind"], right["label"]) == ("strand", "beta strand")
+
+
+def test_p3_modal_moves_sub_threshold_elements_to_their_own_section() -> None:
+    """Every count on the card must agree, so the summary and the first listing
+    hold only what P3 counts; the rest gets its own heading rather than being
+    dropped. TRIP13 is the live case: a 14 aa helix at pLDDT 0.63 made the table
+    read 2 elements while the headline read 1.
+    """
+    ce = _p3(_Iso(_sse_raw(
+        _el("strand", 7, 12, "unique", plddt=0.78),       # qualifies
+        _el("helix", 21, 34, "spans", plddt=0.63),        # long, but not confident
+        _el("strand", 40, 42, "shared", plddt=0.95),      # confident, but short
+    )))
+    summary, good, weak = ce["sections"]
+    # Summary counts the qualifying set only: 0 helices / 1 strand on the unique side.
+    assert [r["cols"] for r in summary["compare_rows"]][:2] == [["0", "0"], ["1", "0"]]
+    assert good["title"] == "Elements and coordinates"
+    assert good["pairs"][0]["left"]["span"] == "7–12"
+    assert weak["title"] == "Below threshold"
+    assert weak["pairs"][0]["left"]["span"] == "21–34"       # low pLDDT
+    assert weak["pairs"][0]["right"]["span"] == "40–42"      # too short
+
+
+def test_p3_modal_omits_the_below_threshold_section_when_empty() -> None:
+    ce = _p3(_Iso(_sse_raw(_el("helix", 16, 32, "unique"))))
+    assert [s["title"] for s in ce["sections"]] == [
+        "Secondary structure · differential vs shared region",
+        "Elements and coordinates",
+    ]
