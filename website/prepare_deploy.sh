@@ -8,7 +8,10 @@
 #   2. The viewer imports swissisoform.site.evidence (a light presentation
 #      module — numpy + pandas only) from the main package — copy just it + the
 #      package __init__s into the build context so the image has it on
-#      PYTHONPATH=/app/src (set in the Dockerfile).
+#      PYTHONPATH=/app/src (set in the Dockerfile). config.py rides along
+#      because evidence.py reads its scoring thresholds (e.g. the P3 SSE
+#      cutoffs the viewer renders against) from ScoringConfig rather than
+#      restating them; it is dataclasses + pathlib only, so it costs nothing.
 #
 # Both targets are gitignored build artifacts (see website/.gitignore); rerun
 # this before every `railway up` so the deploy reflects the latest pipeline run
@@ -34,6 +37,7 @@ rm -rf src/swissisoform scripts
 mkdir -p src/swissisoform/site scripts
 touch scripts/__init__.py                # keep scripts/ a package so COPY scripts/ resolves
 cp ../src/swissisoform/__init__.py        src/swissisoform/__init__.py
+cp ../src/swissisoform/config.py          src/swissisoform/config.py
 cp ../src/swissisoform/site/__init__.py   src/swissisoform/site/__init__.py
 cp ../src/swissisoform/site/evidence.py   src/swissisoform/site/evidence.py
 

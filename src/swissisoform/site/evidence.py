@@ -19,6 +19,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from swissisoform.config import ScoringConfig
+
+# Threshold defaults, read once. This module is staged into the website's deploy
+# context (website/prepare_deploy.sh), which is why config.py is staged with it.
+_SCORING_DEFAULTS = ScoringConfig()
+
 PATHOGENIC_CLINSIG_TOKENS = ("pathogenic", "likely_pathogenic", "likely pathogenic")
 
 # Sentinel headline_col for criteria whose headline is computed, not a column.
@@ -38,11 +44,14 @@ _GNOMAD_FOLD = "__gnomad_fold__"
 _DISEASE_FOLD = "__disease_fold__"
 _DIVERGING_DOMAINS = "__diverging_domains__"
 _SSE_HEADLINE = "__sse_headline__"
-# Mirror of ScoringConfig.p3_min_sse_length / p3_min_sse_plddt. The tile is
-# rendered without a config object, so the thresholds are restated here; the
-# test suite asserts the headline never disagrees with the P3 verdict.
-_P3_MIN_LEN = 6
-_P3_MIN_PLDDT = 0.70
+# The P3 thresholds, from the same ScoringConfig the scorer reads. Every
+# consumer of "does this element qualify" must agree with the verdict, or the
+# headline, the modal counts and the hit ranking drift the moment it is retuned.
+# Public because the website's _sse_qualifies imports them from here.
+P3_MIN_SSE_LENGTH: int = _SCORING_DEFAULTS.p3_min_sse_length
+P3_MIN_SSE_PLDDT: float = _SCORING_DEFAULTS.p3_min_sse_plddt
+_P3_MIN_LEN = P3_MIN_SSE_LENGTH
+_P3_MIN_PLDDT = P3_MIN_SSE_PLDDT
 # Fold-change variant-density headlines (M1/M2): "{noun} {fold}x more/less in
 # unique region — {call}". low/high = call word for ratio <1 / >1.
 _VARIANT_FOLD_HEADLINES = {

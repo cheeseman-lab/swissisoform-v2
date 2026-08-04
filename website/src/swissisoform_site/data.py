@@ -37,6 +37,8 @@ from markupsafe import escape
 # backend evidence module (which the LLM per-category pass also consumes) and is
 # copied into the site package by prepare_deploy.sh, so UI and LLM never drift.
 from swissisoform.site.evidence import CATEGORIES as _CATEGORIES
+from swissisoform.site.evidence import P3_MIN_SSE_LENGTH as _P3_MIN_SSE_LENGTH
+from swissisoform.site.evidence import P3_MIN_SSE_PLDDT as _P3_MIN_SSE_PLDDT
 
 logger = logging.getLogger(__name__)
 
@@ -1624,11 +1626,15 @@ def criterion_evidence_for(iso) -> dict:
         return unique, shared
 
     def _sse_qualifies(e):
-        """The P3 test: long enough AND confident enough. Mirrors ScoringConfig
-        p3_min_sse_length / p3_min_sse_plddt, restated here because the modal
-        renders without a config object (same duplication as the tile headline).
+        """The P3 test: long enough AND confident enough.
+
+        Thresholds come from ScoringConfig via site.evidence — the same values
+        the scorer uses — so retuning the config moves this modal, the tile
+        headline and the verdict together instead of leaving them disagreeing.
         """
-        return (e.get("length") or 0) >= 6 and (e.get("plddt_mean") or 0) >= 0.70
+        return (e.get("length") or 0) >= _P3_MIN_SSE_LENGTH and (
+            e.get("plddt_mean") or 0
+        ) >= _P3_MIN_SSE_PLDDT
 
     def _sse_stat(els, kind):
         return sum(1 for e in els if e.get("type") == kind)

@@ -267,6 +267,65 @@ def test_ube2m_pldd_confident_window_is_coil_and_has_no_core_contacts(ube2m):
 # ── Tile headline must agree with the P3 verdict ──────────────────────────
 
 
+def test_p3_thresholds_have_one_source():
+    """Every consumer of "does this SSE element qualify" reads ScoringConfig.
+
+    The headline, the modal counts, the hit ranking and the scorer used to hold
+    three separate copies of 6 / 0.70, so retuning moved only the verdict.
+
+    Does NOT cover non-default configs: these constants are read from the
+    DEFAULTS at import, so passing a custom config to the scorer still diverges.
+    Threading one through slice_criterion and the viewer is a separate change.
+    """
+    from swissisoform.site import evidence as ev
+
+    assert ev.P3_MIN_SSE_LENGTH == ScoringConfig().p3_min_sse_length
+    assert ev.P3_MIN_SSE_PLDDT == ScoringConfig().p3_min_sse_plddt
+    # The private aliases the headline and hit ranking use are the same objects.
+    assert ev._P3_MIN_LEN is ev.P3_MIN_SSE_LENGTH
+    assert ev._P3_MIN_PLDDT is ev.P3_MIN_SSE_PLDDT
+
+
+def test_website_sse_qualifier_matches_the_scorer():
+    """The modal's qualifier and the criterion agree element-for-element.
+
+    ``_sse_qualifies`` is nested in the page builder, so this exercises the
+    thresholds it closes over — the drift is in the numbers, not the comparison.
+    """
+    pytest.importorskip("swissisoform_site")
+    from swissisoform_site import data as site_data
+
+    assert site_data._P3_MIN_SSE_LENGTH == ScoringConfig().p3_min_sse_length
+    assert site_data._P3_MIN_SSE_PLDDT == ScoringConfig().p3_min_sse_plddt
+
+    cfg = ScoringConfig()
+    def _element(length: int, plddt: float) -> dict:
+        return {"type": "helix", "start": 1, "end": length, "length": length, "plddt_mean": plddt}
+
+    borderline = [
+        _element(cfg.p3_min_sse_length, cfg.p3_min_sse_plddt),  # exactly on both floors
+        _element(cfg.p3_min_sse_length - 1, 0.99),  # confident but too short
+        _element(30, cfg.p3_min_sse_plddt - 0.01),  # long but just under confidence
+    ]
+    for element in borderline:
+        scored = p3_score(
+            SimpleNamespace(
+                isoform_annotations={
+                    "structure": {
+                        "status": "ok",
+                        "sse_status": "ok",
+                        "sse_all_elements": [{**element, "region": "unique"}],
+                    }
+                }
+            ),
+            cfg,
+        )
+        rendered = (element["length"] >= site_data._P3_MIN_SSE_LENGTH) and (
+            element["plddt_mean"] >= site_data._P3_MIN_SSE_PLDDT
+        )
+        assert bool(scored.value) is rendered, element
+
+
 def _headline_is_positive(headline: str | None) -> bool:
     """The tile reads as a finding (named element), not a near-miss or absence."""
     if not headline:
@@ -276,10 +335,12 @@ def _headline_is_positive(headline: str | None) -> bool:
 
 @_real
 def test_headline_never_disagrees_with_the_score():
-    """Guards a real duplication: site/evidence.py restates P3's thresholds
-    because the tile renders without a ScoringConfig. If the two drift, a tile
-    can name an element as a finding while the criterion scores False — which
-    is exactly what a 2-residue "helix" at pLDDT 0.98 used to do.
+    """The tile must never name an element as a finding the criterion scores
+    False — which is exactly what a 2-residue "helix" at pLDDT 0.98 used to do.
+
+    The thresholds now come from one place (see
+    ``test_p3_thresholds_have_one_source``), so this guards the logic rather
+    than the constants.
     """
     import pandas as pd
 
