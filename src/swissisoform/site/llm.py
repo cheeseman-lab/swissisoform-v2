@@ -5,8 +5,9 @@ prompt from ``system.txt`` + the evidence JSON + ``output_schema.json``, calls
 the Anthropic API, validates + writes the structured output to ``{out}/{gene}.json``.
 
 Single-threaded; idempotent (skips genes whose output already exists unless
-``force``). ``dry_run`` prints the assembled prompt and exits without any
-network calls.
+``force``). ``dry_run`` prints prompt-size diagnostics and exits without any
+network calls; ``save_prompts`` writes each assembled prompt in full to
+``data/llm/{run}/`` and composes with ``dry_run``.
 
 The prompts directory is parameterized: ``main`` accepts ``prompts_dir`` (the
 thin CLI supplies ``scripts/site/prompts/``). When not given, the module-level
@@ -373,6 +374,126 @@ def _write_usage_report(
     print(line + f"  -> {out_dir / f'_usage_{pass_name}.json'}")
 
 
+# ── Prompt capture ────────────────────────────────────────────────────────
+
+# Opt-in, write-only dump of every assembled prompt, one .txt per API call,
+# under its own top-level data/ folder with one subdir per run. Single-threaded,
+# like _USAGE_EVENTS above.
+#
+# Deliberately NOT under data/cache/: nothing ever reads these files back and no
+# step is skipped because one exists, so they are an audit artifact rather than a
+# results cache and do not bend the "Execution Contract — fresh reruns" rule in
+# CLAUDE.md. Every run rewrites them from scratch.
+DEFAULT_PROMPT_DIR = ROOT / "data" / "llm"
+
+_PROMPT_DIR: Path | None = None
+_PROMPT_PASS: str = "prompts"
+_PROMPT_INDEX: list[dict[str, Any]] = []
+
+
+def _default_prompt_dir(out: Path) -> Path:
+    """Where captured prompts go when ``--save-prompts-dir`` is not given.
+
+    ``data/llm/{run}/``, where ``run`` comes from ``--out``: the standard layout
+    is ``data/output/{run}/llm``, so the run name is the parent directory's. A
+    non-standard ``--out`` falls back to its own basename rather than guessing.
+
+    The per-run subdir is load-bearing, not cosmetic: ``index_{pass}.json`` sits
+    at the root of the prompt dir, so two presets sharing one directory would
+    clobber each other's index while their .txt files merged silently.
+    """
+    run = out.parent.name if out.name == "llm" else out.name
+    return DEFAULT_PROMPT_DIR / (run or "unnamed")
+
+
+def enable_prompt_capture(directory: Path, pass_name: str = "prompts") -> None:
+    """Start capturing assembled prompts under ``directory``.
+
+    ``pass_name`` scopes the index file, because each pass runs as its own
+    process against the same directory — a single ``index.json`` would be
+    truncated to whichever pass ran last while its ``.txt`` files remained.
+    Mirrors the ``_usage_{pass}.json`` naming next door.
+    """
+    global _PROMPT_DIR, _PROMPT_PASS
+    _PROMPT_DIR = directory
+    _PROMPT_PASS = pass_name
+    _PROMPT_INDEX.clear()
+    directory.mkdir(parents=True, exist_ok=True)
+
+
+def record_prompt(
+    rel: str,
+    prompt: Prompt,
+    params: dict[str, Any],
+    *,
+    meta: dict[str, Any],
+    tools: list[dict[str, Any]] | None = None,
+) -> None:
+    """Write one call's fully assembled prompt to ``{dir}/{rel}.txt``.
+
+    No-op unless :func:`enable_prompt_capture` has run, so the normal path pays
+    one ``if``.
+
+    ``prompt`` supplies the system and user text verbatim — both are already
+    rendered strings by this point, so nothing is re-serialised. ``params``
+    (from :func:`_build_request_params` or :func:`_build_tool_request_params`)
+    supplies the model and the sampling/thinking gate, so the header cannot
+    drift from what is actually sent. ``meta`` becomes the leading header lines,
+    in the order given.
+
+    The header is strict ``# key: value``, one key per line, so the exact call
+    is reconstructible from the file alone and a diff between two runs points at
+    the single field that changed.
+    """
+    if _PROMPT_DIR is None:
+        return
+
+    fields: dict[str, Any] = {k: v for k, v in meta.items() if v is not None}
+    fields["model"] = params.get("model")
+    fields["max_tokens"] = params.get("max_tokens")
+    # Exactly one of these is present — see _NO_SAMPLING_MODELS.
+    if "thinking" in params:
+        fields["thinking"] = (params["thinking"] or {}).get("type")
+    if "temperature" in params:
+        fields["temperature"] = params["temperature"]
+    fields["system_chars"] = len(prompt.system)
+    fields["user_chars"] = len(prompt.user)
+    fields["est_input_tokens"] = prompt.estimated_input_tokens
+
+    body = [
+        "\n".join(f"# {k}: {v}" for k, v in fields.items()),
+        "",
+        "=== SYSTEM ===",
+        prompt.system,
+        "",
+        "=== USER ===",
+        prompt.user,
+    ]
+    if tools:
+        body += ["", "=== TOOLS ===", json.dumps(tools, indent=2, ensure_ascii=False)]
+
+    path = _PROMPT_DIR / f"{rel}.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(body) + "\n", encoding="utf-8")
+    _PROMPT_INDEX.append({"rel": f"{rel}.txt", **fields})
+
+
+def flush_prompt_index() -> None:
+    """Write ``index_{pass}.json`` listing this pass's prompts. No-op when empty.
+
+    Every field it carries also sits in the corresponding ``.txt`` header, so
+    the index is a convenience for sorting/filtering the corpus, not the record.
+    """
+    if _PROMPT_DIR is None or not _PROMPT_INDEX:
+        return
+    out = _PROMPT_DIR / f"index_{_PROMPT_PASS}.json"
+    out.write_text(
+        json.dumps(_PROMPT_INDEX, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    print(f"[prompts] captured {len(_PROMPT_INDEX)} prompts -> {_PROMPT_DIR}")
+
+
 def _extract_text(content: Any) -> str | None:
     """Return the first ``text`` block's text from an SDK content list, or None.
 
@@ -389,6 +510,7 @@ def _build_request_params(
     temperature: float,
     system: str,
     user: str,
+    warn: bool = True,
 ) -> dict[str, Any]:
     """Assemble Messages-API request params, gating sampling/thinking by model.
 
@@ -396,6 +518,10 @@ def _build_request_params(
     batch (:func:`call_llm_batch`) paths stay in sync. For models in
     :data:`_NO_SAMPLING_MODELS`, ``temperature`` is omitted and thinking is
     disabled (see that constant's rationale); other models are unchanged.
+
+    ``warn=False`` suppresses the ignored-temperature notice. Prompt capture
+    calls this a second time purely to read the gate back out, and would
+    otherwise print the same warning twice per call.
     """
     params: dict[str, Any] = {
         "model": model,
@@ -405,7 +531,7 @@ def _build_request_params(
     }
     if model in _NO_SAMPLING_MODELS:
         params["thinking"] = {"type": "disabled"}
-        if temperature != DEFAULT_TEMPERATURE:
+        if warn and temperature != DEFAULT_TEMPERATURE:
             print(
                 f"[warn] {model} rejects non-default sampling params; "
                 f"ignoring temperature={temperature}",
@@ -414,6 +540,39 @@ def _build_request_params(
     else:
         params["temperature"] = temperature
     return params
+
+
+def _capture_single_shot(
+    rel: str,
+    prompt: Prompt,
+    *,
+    model: str,
+    max_tokens: int,
+    temperature: float,
+    meta: dict[str, Any],
+) -> None:
+    """Capture a single-shot prompt alongside the params its call will use.
+
+    Rebuilds the params rather than threading them out of :func:`call_llm`:
+    :func:`_build_request_params` is pure, so the second call is byte-identical
+    to the one that goes on the wire, and capture stays at the runner level
+    where the gene/isoform/category identity is in scope.
+    """
+    if _PROMPT_DIR is None:
+        return
+    record_prompt(
+        rel,
+        prompt,
+        _build_request_params(
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            system=prompt.system,
+            user=prompt.user,
+            warn=False,
+        ),
+        meta=meta,
+    )
 
 
 def call_llm(
@@ -933,6 +1092,14 @@ def run_one_gene(
         )
 
     prompt = build_prompt(record, system_prompt, output_schema)
+    _capture_single_shot(
+        f"default/{gene}",
+        prompt,
+        model=model,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        meta={"pass": "default", "gene": gene},
+    )
     t0 = time.time()
     try:
         response_text = call_llm(
@@ -1045,6 +1212,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MAX_TOOL_TURNS,
         help="API round-trip cap per tool-loop category (default: %(default)s).",
     )
+    parser.add_argument(
+        "--save-prompts",
+        action="store_true",
+        help="Write every assembled prompt to data/llm/{run}/ as one .txt per "
+        "call (system + user verbatim, plus a header with the model and sampling "
+        "gate), so a prompt can be read or diffed without reassembling it from "
+        "the evidence record, the prompt file and the schema. Combines with "
+        "--dry-run to dump the whole corpus, M/P tool-loop openings included, "
+        "at zero API cost.",
+    )
+    parser.add_argument(
+        "--save-prompts-dir",
+        type=Path,
+        default=None,
+        help="Override where --save-prompts writes "
+        "(default: data/llm/{run}/, run taken from --out).",
+    )
     return parser
 
 
@@ -1087,6 +1271,11 @@ def main(argv: list[str] | None = None, *, prompts_dir: Path | None = None) -> i
     args = build_parser().parse_args(argv)
     spec = PASS_REGISTRY[args.pass_name]
 
+    if getattr(args, "save_prompts", False):
+        enable_prompt_capture(
+            args.save_prompts_dir or _default_prompt_dir(args.out), pass_name=spec.name
+        )
+
     # V1 default-pass reads SYSTEM_PROMPT_PATH / OUTPUT_SCHEMA_PATH directly so tests
     # that monkeypatch those constants keep working bit-identically. Other passes
     # resolve their files relative to the prompts dir.
@@ -1111,16 +1300,21 @@ def main(argv: list[str] | None = None, *, prompts_dir: Path | None = None) -> i
             )
             return 2
 
-    if spec.iterates_categories:
-        return _run_category_pass(
-            records, spec, args, system_prompt, output_schema, prompts_root=prompts_root
-        )
+    # finally, not a trailing call: the index must be written even when a pass
+    # raises partway through, since a partial corpus is still worth having.
+    try:
+        if spec.iterates_categories:
+            return _run_category_pass(
+                records, spec, args, system_prompt, output_schema, prompts_root=prompts_root
+            )
 
-    if spec.name == "synthesis":
-        return _run_synthesis_pass(records, spec, args, system_prompt, output_schema)
+        if spec.name == "synthesis":
+            return _run_synthesis_pass(records, spec, args, system_prompt, output_schema)
 
-    # spec.name == "default" — V1 single-pass behavior
-    return _run_default_pass(records, spec, args, system_prompt, output_schema)
+        # spec.name == "default" — V1 single-pass behavior
+        return _run_default_pass(records, spec, args, system_prompt, output_schema)
+    finally:
+        flush_prompt_index()
 
 
 def _run_default_pass(records, spec, args, system_prompt, output_schema) -> int:
@@ -1128,6 +1322,14 @@ def _run_default_pass(records, spec, args, system_prompt, output_schema) -> int:
     if args.dry_run:
         for gene_name, record in records.items():
             prompt = build_prompt(record, system_prompt, output_schema)
+            _capture_single_shot(
+                f"default/{gene_name}",
+                prompt,
+                model=args.model,
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+                meta={"pass": "default", "gene": gene_name},
+            )
             _print_dry_run(gene_name, prompt, args.model)
         return 0
 
@@ -1195,6 +1397,25 @@ def _first_isoform(records) -> dict[str, Any]:
     return {}
 
 
+def _tool_schemas(letter: str) -> list[dict[str, Any]]:
+    """Tool definitions for one category, with no data preconditions.
+
+    Split out of :func:`_tool_setup` because the schemas are static constants
+    while the dispatch needs the variants parquet / fold cache. Capturing a tool
+    loop's opening request needs the schemas only — the dispatch is what *runs*
+    the loop, and a dry run never does.
+    """
+    if letter == "M":
+        from swissisoform.site import tools as m_tools
+
+        return m_tools.M_TOOLS
+    if letter == "P":
+        from swissisoform.site import structure_tools as p_tools
+
+        return p_tools.P_TOOLS
+    raise KeyError(f"no tool schemas registered for category {letter!r}")
+
+
 def _tool_setup(letter: str, args, records) -> tuple[list[dict[str, Any]], Any]:
     """Validate one tool category's data precondition and build its factory.
 
@@ -1233,10 +1454,23 @@ def _tool_categories(args, prompts_root: Path, records=None) -> dict[str, dict[s
     """Per-letter tool config for categories that run as a loop, or ``{}``.
 
     Returns an empty mapping — meaning every category takes the single-shot path
-    — for ``--no-tools`` and for ``--dry-run`` (which makes no API calls, so there
-    is nothing to loop).
+    — for ``--no-tools``, and for a plain ``--dry-run`` (which makes no API
+    calls, so there is nothing to loop).
+
+    ``--dry-run --save-prompts`` is the exception: it builds a *capture-only*
+    config carrying the system prompt and the tool schemas but no dispatch. A
+    tool loop's opening request is fully determined client-side — system prompt,
+    stripped record, static tool schemas — so it can be captured verbatim
+    without an API call. Only turns 2+ depend on model responses. The data
+    preconditions in :func:`_tool_setup` are skipped along with the dispatch,
+    since the opening context is derived from the evidence record, not from the
+    variants parquet or the fold cache.
     """
-    if getattr(args, "no_tools", False) or getattr(args, "dry_run", False):
+    if getattr(args, "no_tools", False):
+        return {}
+    dry_run = getattr(args, "dry_run", False)
+    capture_only = dry_run and getattr(args, "save_prompts", False)
+    if dry_run and not capture_only:
         return {}
 
     out: dict[str, dict[str, Any]] = {}
@@ -1247,7 +1481,10 @@ def _tool_categories(args, prompts_root: Path, records=None) -> dict[str, dict[s
                 f"Tool-loop system prompt for category {letter} not found at "
                 f"{prompt_path}. Restore it, or pass --no-tools."
             )
-        tools, dispatch_for = _tool_setup(letter, args, records)
+        if capture_only:
+            tools, dispatch_for = _tool_schemas(letter), None
+        else:
+            tools, dispatch_for = _tool_setup(letter, args, records)
         out[letter] = {
             "system": prompt_path.read_text(encoding="utf-8").strip(),
             "tools": tools,
@@ -1335,6 +1572,43 @@ def _strip_hits_for_tools(category_record: dict[str, Any]) -> dict[str, Any]:
     return {**category_record, "members": members}
 
 
+def _capture_tool_opening(*, config, iso, category_record, args, letter: str) -> str:
+    """Build a tool loop's opening user message, capturing it when enabled.
+
+    The opening request is fully determined client-side — system prompt,
+    stripped record, static tool schemas — so this runs identically whether or
+    not the loop is about to be executed, and a dry run can capture it for free.
+
+    Worth capturing because ``{letter}_trace.json`` records only
+    ``opening_context_chars``: never the system prompt, the opening text, or the
+    tool schemas. The trace is what the model *did*; this is what it was *told*.
+    """
+    opening = _strip_superseded_evidence(_strip_hits_for_tools(category_record), letter)
+    prompt_user = json.dumps(opening, indent=2, ensure_ascii=False)
+    if _PROMPT_DIR is not None:
+        record_prompt(
+            f"category/{_tis_slug(iso.get('tis_id'))}/{letter}_tools",
+            Prompt(system=config["system"], user=prompt_user),
+            _build_tool_request_params(
+                model=args.model,
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+                system=config["system"],
+                tools=config["tools"],
+            ),
+            meta={
+                "pass": "category",
+                "gene": (iso.get("gene") or {}).get("name"),
+                "tis_id": iso.get("tis_id"),
+                "category": letter,
+                "mode": "tool_loop",
+                "max_tool_turns": getattr(args, "max_tool_turns", DEFAULT_MAX_TOOL_TURNS),
+            },
+            tools=config["tools"],
+        )
+    return prompt_user
+
+
 def _run_tool_category(
     *, config, iso, category_record, args, api_key, out_dir: Path, letter: str
 ) -> dict[str, Any]:
@@ -1345,8 +1619,9 @@ def _run_tool_category(
     or re-raises so the caller's per-category error handling applies.
     """
     dispatch = config["dispatch_for"](iso)
-    opening = _strip_superseded_evidence(_strip_hits_for_tools(category_record), letter)
-    prompt_user = json.dumps(opening, indent=2, ensure_ascii=False)
+    prompt_user = _capture_tool_opening(
+        config=config, iso=iso, category_record=category_record, args=args, letter=letter
+    )
     trace_path = out_dir / f"{letter}_trace.json"
 
     def _persist(trace: dict[str, Any]) -> None:
@@ -1452,6 +1727,32 @@ def _run_category_pass(
                 tool_config = tool_configs.get(letter)
                 category_record = slice_category(iso_with_gene, category)
                 prompt = build_prompt(category_record, system_prompt, output_schema)
+                # Tool-loop categories send their own opening context, not this
+                # single-shot prompt, so recording it would put a counterfactual
+                # in the corpus. Capture the real opening instead — it needs no
+                # API call, so a dry run gets it for free.
+                if tool_config is not None and args.dry_run:
+                    _capture_tool_opening(
+                        config=tool_config,
+                        iso=iso_with_gene,
+                        category_record=category_record,
+                        args=args,
+                        letter=letter,
+                    )
+                if tool_config is None:
+                    _capture_single_shot(
+                        f"category/{tis_slug_val}/{letter}",
+                        prompt,
+                        model=args.model,
+                        max_tokens=args.max_tokens,
+                        temperature=args.temperature,
+                        meta={
+                            "pass": "category",
+                            "gene": gene_name,
+                            "tis_id": iso.get("tis_id"),
+                            "category": f"{letter} ({category['name']})",
+                        },
+                    )
                 n_calls += 1
                 if args.dry_run:
                     print(
@@ -1558,7 +1859,23 @@ def _run_category_pass_batch(
                     entry[1].append((category, record))
                     continue
                 cid = f"c{len(items)}"
-                items.append((cid, build_prompt(record, system_prompt, output_schema)))
+                prompt = build_prompt(record, system_prompt, output_schema)
+                _capture_single_shot(
+                    f"category/{tis_slug_val}/{category['letter']}",
+                    prompt,
+                    model=args.model,
+                    max_tokens=args.max_tokens,
+                    temperature=args.temperature,
+                    meta={
+                        "pass": "category",
+                        "gene": gene_name,
+                        "tis_id": iso.get("tis_id"),
+                        "category": f"{category['letter']} ({category['name']})",
+                        "mode": "batch",
+                        "custom_id": cid,
+                    },
+                )
+                items.append((cid, prompt))
                 meta[cid] = (tis_slug_val, category["name"])
 
     if not items and not tool_work:
@@ -1756,6 +2073,18 @@ def _run_synthesis_pass(records, spec, args, system_prompt, output_schema) -> in
                 iso, gene_name, iso_dir, gene_record.get("gene")
             )
             prompt = build_prompt(synthesis_record, system_prompt, output_schema)
+            _capture_single_shot(
+                f"synthesis/{tis_slug}",
+                prompt,
+                model=args.model,
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+                meta={
+                    "pass": "synthesis",
+                    "gene": gene_name,
+                    "tis_id": iso.get("tis_id"),
+                },
+            )
             n_calls += 1
             if args.dry_run:
                 print(
@@ -1815,7 +2144,22 @@ def _run_synthesis_pass_batch(records, spec, args, system_prompt, output_schema)
                 iso, gene_name, iso_dir, gene_record.get("gene")
             )
             cid = f"s{len(items)}"
-            items.append((cid, build_prompt(record, system_prompt, output_schema)))
+            prompt = build_prompt(record, system_prompt, output_schema)
+            _capture_single_shot(
+                f"synthesis/{tis_slug}",
+                prompt,
+                model=args.model,
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+                meta={
+                    "pass": "synthesis",
+                    "gene": gene_name,
+                    "tis_id": iso.get("tis_id"),
+                    "mode": "batch",
+                    "custom_id": cid,
+                },
+            )
+            items.append((cid, prompt))
             meta[cid] = tis_slug
             out_by_slug[tis_slug] = out_path
 

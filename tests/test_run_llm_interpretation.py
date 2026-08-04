@@ -1367,3 +1367,335 @@ def test_p_dispatch_is_bound_to_the_isoforms_own_raw_row(mod, tmp_path, category
     out = dispatch("plddt_profile", {})
     assert out["status"] == "no_cache"
     assert out["scale"] == "0-1"
+
+
+
+# ── Prompt capture (--save-prompts) ───────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _reset_prompt_capture(mod):
+    """Capture state is a module global; never let it leak between tests."""
+    yield
+    mod._PROMPT_DIR = None
+    mod._PROMPT_INDEX.clear()
+
+
+@pytest.fixture
+def capture_dir(tmp_path: Path) -> Path:
+    """Where capture tests write.
+
+    Every test pins --save-prompts-dir here. The default resolves into the real
+    data/llm/, so a test that omitted it would litter the repo;
+    _default_prompt_dir is covered separately without running a pass.
+    """
+    return tmp_path / "captured"
+
+
+def _capture_flags(capture_dir: Path) -> list[str]:
+    return ["--dry-run", "--save-prompts", "--save-prompts-dir", str(capture_dir)]
+
+
+def _split_capture(text: str) -> tuple[dict[str, str], str, str]:
+    """Split a captured .txt into (header fields, system, user)."""
+    head, rest = text.split("\n=== SYSTEM ===\n", 1)
+    system, user = rest.split("\n\n=== USER ===\n", 1)
+    fields = dict(line[2:].split(": ", 1) for line in head.splitlines())
+    return fields, system, user.rstrip("\n")
+
+
+def test_prompt_capture_is_off_by_default(tmp_path, category_records, mod, capture_dir):
+    """No flag, no artifacts — the normal path is untouched.
+
+    Also asserts the real data/llm/ default is not created, since an accidental
+    write there would land in the repo rather than in tmp_path.
+    """
+    out_dir = tmp_path / "out"
+    assert mod.main(_category_run_args(category_records, out_dir, ["--dry-run"])) == 0
+    assert not capture_dir.exists()
+    assert not mod._default_prompt_dir(out_dir).exists()
+
+
+def test_default_prompt_dir_is_data_llm_keyed_by_run(mod):
+    """Default is data/llm/{run}, with run read off --out, not --out itself."""
+    resolved = mod._default_prompt_dir(Path("data/output/cheeseman_test/llm"))
+    assert resolved == mod.DEFAULT_PROMPT_DIR / "cheeseman_test"
+    assert mod.DEFAULT_PROMPT_DIR == ROOT / "data" / "llm"
+    # Per-run subdir keeps two presets from clobbering each other's index.
+    other = mod._default_prompt_dir(Path("data/output/cheeseman_13gene/llm"))
+    assert other != resolved
+    # A non-standard --out falls back to its own basename rather than guessing.
+    assert mod._default_prompt_dir(Path("/scratch/adhoc")) == mod.DEFAULT_PROMPT_DIR / "adhoc"
+
+
+def test_save_prompts_writes_one_txt_per_category(tmp_path, category_records, mod, capture_dir):
+    """6 CDLMPS categories × 1 isoform, plus an index listing all of them.
+
+    M and P land as ``*_tools.txt``: a dry run captures their real tool-loop
+    opening rather than the single-shot prompt they never send.
+    """
+    out_dir = tmp_path / "out"
+    run_args = _category_run_args(category_records, out_dir, _capture_flags(capture_dir))
+    assert mod.main(run_args) == 0
+
+    prompts = capture_dir
+    files = sorted(p.name for p in (prompts / "category" / mod._tis_slug(TIS_ID)).glob("*.txt"))
+    assert files == ["C.txt", "D.txt", "L.txt", "M_tools.txt", "P_tools.txt", "S.txt"]
+
+    index = json.loads((prompts / "index_category.json").read_text())
+    assert len(index) == 6
+    assert {e["gene"] for e in index} == {"GENE_A"}
+    assert {e["pass"] for e in index} == {"category"}
+
+
+def test_save_prompts_dir_overrides_the_default_location(tmp_path, category_records, mod):
+    out_dir = tmp_path / "out"
+    elsewhere = tmp_path / "elsewhere"
+    rc = mod.main(
+        _category_run_args(
+            category_records,
+            out_dir,
+            ["--dry-run", "--save-prompts", "--save-prompts-dir", str(elsewhere)],
+        )
+    )
+    assert rc == 0
+    assert (elsewhere / "index_category.json").exists()
+    assert not mod._default_prompt_dir(out_dir).exists()
+
+
+def test_dry_run_captures_tool_openings_without_any_api_call(
+    tmp_path, category_records, mod, monkeypatch
+, capture_dir):
+    """The tool-loop opening is computable client-side, so a dry run gets it free.
+
+    Nothing is stubbed here: no API key, no fake SDK, and the M/P data
+    preconditions (variants parquet, fold cache) are never checked, because the
+    opening comes from the evidence record and the static tool schemas. Any
+    attempt to reach the network or run a loop would fail this test.
+    """
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(
+        mod, "_try_import_anthropic",
+        lambda: pytest.fail("dry-run capture must not touch the anthropic SDK"),
+    )
+    monkeypatch.setattr(
+        mod, "call_llm", lambda *a, **kw: pytest.fail("dry-run capture must not call the API")
+    )
+
+    out_dir = tmp_path / "out"
+    run_args = _category_run_args(category_records, out_dir, _capture_flags(capture_dir))
+    assert mod.main(run_args) == 0
+
+    captured = capture_dir / "category" / mod._tis_slug(TIS_ID) / "M_tools.txt"
+    fields, system, rest = _split_capture(captured.read_text(encoding="utf-8"))
+    assert fields["mode"] == "tool_loop"
+    assert system
+    user, tools_json = rest.split("\n\n=== TOOLS ===\n", 1)
+    assert json.loads(user)["category"] == "M"
+    assert {t["name"] for t in json.loads(tools_json)} >= {"query_variants", "emit_verdict"}
+
+
+def test_two_passes_into_one_dir_keep_separate_indexes(
+    tmp_path, category_records, mod, capture_dir
+):
+    """Each pass runs as its own process; a shared index.json would be truncated.
+
+    Regression: category then synthesis into the same --out left an index
+    listing only synthesis's isoforms while the category .txt files sat beside
+    it, so the index under-reported the corpus with no error.
+    """
+    out_dir = tmp_path / "out"
+    tis_slug = mod._tis_slug(TIS_ID)
+    run_args = _category_run_args(category_records, out_dir, _capture_flags(capture_dir))
+    assert mod.main(run_args) == 0
+
+    # Satisfy the synthesis prereq, then run it into the same directory.
+    (out_dir / tis_slug).mkdir(parents=True, exist_ok=True)
+    (out_dir / tis_slug / "categories.json").write_text(json.dumps({"Conservation": {}}))
+    rc = mod.main(
+        [
+            "--records", str(category_records), "--out", str(out_dir),
+            "--pass", "synthesis", *_capture_flags(capture_dir),
+        ]
+    )
+    assert rc == 0
+
+    prompts = capture_dir
+    category_index = json.loads((prompts / "index_category.json").read_text())
+    synthesis_index = json.loads((prompts / "index_synthesis.json").read_text())
+    assert len(category_index) == 6
+    assert len(synthesis_index) == 1
+    # Together the indexes account for every .txt actually written.
+    assert len(category_index) + len(synthesis_index) == len(list(prompts.rglob("*.txt")))
+
+
+def test_dry_run_without_save_prompts_leaves_tool_categories_alone(
+    tmp_path, category_records, mod
+):
+    """Capture-only tool configs are built for --save-prompts, nothing else.
+
+    Guards the branch added to _tool_categories: a plain dry run must keep
+    returning {} so every category stays on the single-shot print path.
+    """
+    from swissisoform.site import llm as rli
+
+    args = rli.build_parser().parse_args(
+        _category_run_args(category_records, tmp_path / "out", ["--dry-run"])
+    )
+    assert rli._tool_categories(args, rli.SYSTEM_PROMPT_PATH.parent, None) == {}
+
+
+def test_captured_prompt_is_byte_identical_to_the_assembled_prompt(
+    tmp_path, category_records, mod
+, capture_dir):
+    """The whole point: the file IS the prompt, not a summary of it."""
+    from swissisoform.site.evidence import CATEGORIES, slice_category
+
+    out_dir = tmp_path / "out"
+    run_args = _category_run_args(category_records, out_dir, _capture_flags(capture_dir))
+    assert mod.main(run_args) == 0
+
+    prompts_root = mod.SYSTEM_PROMPT_PATH.parent
+    spec = mod.PASS_REGISTRY["category"]
+    expected = mod.build_prompt(
+        slice_category(
+            {**_ISO_FIXTURE_RECORD()["isoforms"][0], "gene": {"name": "GENE_A"}},
+            next(c for c in CATEGORIES if c["letter"] == "C"),
+        ),
+        mod.load_system_prompt(prompts_root / spec.system_prompt_filename),
+        mod.load_output_schema(prompts_root / spec.output_schema_filename),
+    )
+
+    path = capture_dir / "category" / mod._tis_slug(TIS_ID) / "C.txt"
+    fields, system, user = _split_capture(path.read_text(encoding="utf-8"))
+    assert system == expected.system
+    assert user == expected.user
+    # Header self-consistency, so a truncation can't hide behind a stale count.
+    assert int(fields["system_chars"]) == len(expected.system)
+    assert int(fields["user_chars"]) == len(expected.user)
+
+
+def test_capture_header_is_machine_parseable(tmp_path, category_records, mod, capture_dir):
+    """Every header line splits cleanly, so the call stays reconstructible."""
+    out_dir = tmp_path / "out"
+    run_args = _category_run_args(category_records, out_dir, _capture_flags(capture_dir))
+    assert mod.main(run_args) == 0
+    text = (capture_dir / "category" / mod._tis_slug(TIS_ID) / "C.txt").read_text()
+    head = text.split("\n=== SYSTEM ===\n", 1)[0]
+    for line in head.splitlines():
+        assert line.startswith("# ")
+        assert len(line[2:].split(": ", 1)) == 2
+
+
+def test_capture_header_records_the_no_sampling_gate(tmp_path, category_records, mod, capture_dir):
+    """claude-sonnet-5 sends thinking=disabled and no temperature."""
+    out_dir = tmp_path / "out"
+    rc = mod.main(
+        _category_run_args(
+            category_records,
+            out_dir,
+            [*_capture_flags(capture_dir), "--model", "claude-sonnet-5"],
+        )
+    )
+    assert rc == 0
+    fields, _, _ = _split_capture(
+        (capture_dir / "category" / mod._tis_slug(TIS_ID) / "C.txt").read_text()
+    )
+    assert fields["model"] == "claude-sonnet-5"
+    assert fields["thinking"] == "disabled"
+    assert "temperature" not in fields
+
+
+def test_capture_header_records_temperature_for_sampling_models(
+    tmp_path, category_records, mod
+, capture_dir):
+    """An older model keeps the temperature knob — the header follows the gate."""
+    out_dir = tmp_path / "out"
+    rc = mod.main(
+        _category_run_args(
+            category_records,
+            out_dir,
+            [*_capture_flags(capture_dir), "--model", "claude-sonnet-4-6"],
+        )
+    )
+    assert rc == 0
+    fields, _, _ = _split_capture(
+        (capture_dir / "category" / mod._tis_slug(TIS_ID) / "C.txt").read_text()
+    )
+    assert fields["temperature"] == "0.0"
+    assert "thinking" not in fields
+
+
+def test_synthesis_capture_writes_one_txt_per_isoform(tmp_path, category_records, mod, capture_dir):
+    out_dir = tmp_path / "out"
+    tis_slug = mod._tis_slug(TIS_ID)
+    # Satisfy the category prereq without running it.
+    (out_dir / tis_slug).mkdir(parents=True)
+    (out_dir / tis_slug / "categories.json").write_text(json.dumps({"Conservation": {}}))
+
+    rc = mod.main(
+        [
+            "--records", str(category_records), "--out", str(out_dir),
+            "--pass", "synthesis", *_capture_flags(capture_dir),
+        ]
+    )
+    assert rc == 0
+    captured = capture_dir / "synthesis" / f"{tis_slug}.txt"
+    assert captured.exists()
+    fields, _, _ = _split_capture(captured.read_text(encoding="utf-8"))
+    assert fields["pass"] == "synthesis"
+    assert fields["tis_id"] == TIS_ID
+
+
+def test_tool_loop_capture_records_the_opening_and_the_tool_schemas(
+    mod, monkeypatch, tmp_path, category_records, variants_long, only_m
+, capture_dir):
+    """M_trace.json holds what the model DID; M_tools.txt holds what it was TOLD.
+
+    The trace stores only ``opening_context_chars`` and never the system prompt
+    or the tool definitions, so this is the only record of the loop's input.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    monkeypatch.setattr(
+        mod, "call_llm",
+        lambda *a, **kw: json.dumps({"verdict": "neutral", "reasoning": "single shot."}),
+    )
+    script = [
+        _Response([_tool_use("variant_position_histogram", {}, "t1")]),
+        _Response([_tool_use("query_variants", {}, "t2")]),
+        _Response([_tool_use("emit_verdict", VERDICT, "t3")]),
+    ]
+    monkeypatch.setattr(mod, "_try_import_anthropic", lambda: _fake_anthropic(script, []))
+
+    out_dir = tmp_path / "out"
+    rc = mod.main(
+        _category_run_args(
+            category_records,
+            out_dir,
+            [
+                "--variants-long", str(variants_long),
+                "--save-prompts", "--save-prompts-dir", str(capture_dir),
+            ],
+        )
+    )
+    assert rc == 0
+
+    tis_slug = mod._tis_slug(TIS_ID)
+    cat_dir = capture_dir / "category" / tis_slug
+    text = (cat_dir / "M_tools.txt").read_text(encoding="utf-8")
+
+    # The single-shot prompt for M is assembled but never sent, so it must not
+    # appear in the corpus as though it were.
+    assert not (cat_dir / "M.txt").exists()
+    assert (cat_dir / "C.txt").exists()
+
+    fields, system, rest = _split_capture(text)
+    assert fields["mode"] == "tool_loop"
+    assert system  # the category-pass-M.txt system prompt, absent from the trace
+    user, tools_json = rest.split("\n\n=== TOOLS ===\n", 1)
+    assert json.loads(user)["category"] == "M"
+    tools = json.loads(tools_json)
+    assert {t["name"] for t in tools} >= {"query_variants", "emit_verdict"}
+    # The trace only ever recorded the length of this text.
+    trace = json.loads((out_dir / tis_slug / "M_trace.json").read_text())
+    assert trace["opening_context_chars"] == len(user)
