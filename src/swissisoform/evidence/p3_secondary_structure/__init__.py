@@ -55,7 +55,20 @@ def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResul
 
     min_len = cfg.p3_min_sse_length
     min_plddt = cfg.p3_min_sse_plddt
-    elements = ann.get("sse_diff_elements") or []
+    # Elements TOUCHING the differential region, at their true length — the
+    # whole-protein scan tagged unique/shared/spans, not the window-clipped
+    # ``sse_diff_elements``. Clipping measures only the portion inside the
+    # region, which is an artifact for short regions: CBX1's 4-residue
+    # extension clips a real 7 aa strand (pLDDT 0.79) to 3 aa, and EIF2B1's
+    # truncation clips a 14 aa helix at pLDDT 0.97 down past the per-type
+    # emission floor so it disappears entirely and the region reads as
+    # structureless. An element that begins in the unique region is structure
+    # the isoform gains or loses, regardless of where it ends.
+    elements = [
+        e
+        for e in (ann.get("sse_all_elements") or [])
+        if isinstance(e, dict) and e.get("region") in ("unique", "spans")
+    ]
     qualifying = [
         e
         for e in elements
