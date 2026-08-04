@@ -7,8 +7,9 @@ disordered linker. These readers query those arrays directly: exposed as
 :data:`P_TOOLS`, executed by :func:`make_p_dispatch`, driven by
 ``swissisoform.site.llm.run_tool_loop``.
 
-Unlike M, the P slice carries no hit rows, so nothing needs stripping and all the
-bulk sits behind the readers — which makes what a reader RETURNS the constraint.
+Unlike M, the P slice's hit rows are KEPT in the opening context — see
+``STRIP_HITS_FOR_TOOLS`` in ``site.llm``. The bulk therefore sits behind the
+readers, which makes what a reader RETURNS the constraint.
 Complexity in L decides: O(L) may return raw values (:func:`plddt_profile`);
 O(L²) must aggregate (:func:`pae_block` returns mean/min/max, never the
 sub-matrix — a full PAE is ~332k JSON chars at L=239, re-sent every turn);
@@ -175,6 +176,12 @@ def _window(
     Bounds are 1-based inclusive on the wire (residue numbering as a biologist
     reads it) and clamped to the structure. The differential-region default only
     applies on the side that actually contains it, per ``diff_space``.
+
+    A window overlapping the protein is clamped to it; one entirely outside
+    raises. ``ValueError`` reaches the model as ``{"error": ...}`` through
+    ``make_p_dispatch`` — the channel a bad ``side`` already uses — so it can
+    correct the numbers, rather than reading an empty ``status="ok"`` as a
+    confident negative.
     """
     if start is None and end is None:
         d_start, d_end, space = _diff_bounds(raw)
@@ -182,7 +189,18 @@ def _window(
             start, end = d_start + 1, d_end  # 0-based half-open -> 1-based inclusive
         else:
             start, end = 1, length
-    s = 1 if start is None else max(1, int(start))
+    if start is not None and int(start) > length:
+        raise ValueError(
+            f"start={int(start)} is past the end of the {side} structure "
+            f"({length} residues). Residue numbering is 1-based and each side has "
+            f"its own length."
+        )
+    if end is not None and int(end) < 1:
+        raise ValueError(
+            f"end={int(end)} is before the start of the {side} structure. "
+            f"Residue numbering is 1-based."
+        )
+    s = 1 if start is None else min(length, max(1, int(start)))
     e = length if end is None else min(length, int(end))
     return s, max(s, e)
 
@@ -341,14 +359,27 @@ def secondary_structure(
     is not the pre-computed-answer anti-pattern that motivated stripping the PAE
     block means: the stored value is the FULL per-residue assignment, not a lossy
     summary, so reading it loses nothing.
-    """
-    from swissisoform.structure.sse import sse_elements, summarise_elements
 
+    Scanned ONCE, whole; the window SELECTS which elements are returned rather
+    than clipping them, so each is reported at its true extent and may run past
+    ``region``. Clipping instead is the defect ``StructureModule._sse`` documents.
+
+    ``region`` is membership in the DIFFERENTIAL region, never in the queried
+    window, so it matches ``isoform_structure_sse_all_elements``, the P3 card and
+    the P3 scorer. It is absent when the queried side does not hold that region
+    (``side="isoform"`` on a truncation), since the bounds are in the other
+    protein's numbering; ``region_is_differential`` says which you got.
+    """
+    from swissisoform.config import ScoringConfig
+    from swissisoform.structure.sse import classify_elements, sse_elements, summarise_elements
+
+    min_plddt = ScoringConfig().p3_min_sse_plddt
     side = side or _default_side(raw)
     entry, status = _resolve(raw, side, cache_dir, backend)
-    empty = {"side": side, "region": None, "sse_string": None, "elements": [],
-             "n_helix": 0, "n_strand": 0, "longest_helix": 0, "longest_strand": 0,
-             "status": status}
+    empty = {"side": side, "region": None, "region_is_differential": False,
+             "sse_string": None, "elements": [], "n_helix": 0, "n_strand": 0,
+             "longest_helix": 0, "longest_strand": 0, "longest_confident": 0,
+             "confident_min_plddt": min_plddt, "status": status}
     if status != "ok":
         return empty
 
@@ -358,14 +389,27 @@ def secondary_structure(
 
     plddt = list(entry["confidence"]["plddt"])
     s, e = _window(start, end, len(sse), raw, side)
-    elements = sse_elements(sse, plddt, start=s, end=e)
+
+    all_elements = sse_elements(sse, plddt)
+    d_start, d_end, space = _diff_bounds(raw)
+    tagged = space == side and d_start is not None and d_end is not None
+    if tagged:
+        # diff bounds are 0-based half-open; classify_elements is 1-based inclusive.
+        classify_elements(all_elements, diff_start=d_start + 1, diff_end=d_end)
+    elements = [el for el in all_elements if el["end"] >= s and el["start"] <= e]
+
     return {
         "side": side,
         "region": [s, e],
+        "region_is_differential": tagged,
         "protein_length": len(sse),
         "sse_string": sse[s - 1 : e],
         "elements": elements,
-        **summarise_elements(elements),
+        # min_plddt is the P3 threshold, so longest_confident is the length P3
+        # scores on. Without it the field silently reported the longest element of
+        # ANY confidence under a name asserting the opposite.
+        **summarise_elements(elements, min_plddt=min_plddt),
+        "confident_min_plddt": min_plddt,
         "status": "ok",
     }
 
@@ -511,7 +555,15 @@ P_TOOLS: list[dict[str, Any]] = [
             "their residue ranges, lengths and per-element mean pLDDT. Use this to "
             "LOCATE structure — pLDDT tells you how confident a region is, NOT "
             "whether it is a helix, and the two frequently disagree. Omit start/end "
-            "to cover the differential region."
+            "to cover the differential region. Elements are returned at their FULL "
+            "extent, so one that begins inside your window and continues past it is "
+            "reported at its true length and its end may exceed the window — that "
+            "is a real element crossing the boundary, not an error. Each carries "
+            "region=unique/shared/spans, meaning membership in the DIFFERENTIAL "
+            "region (not in your window); unique+spans is the set the secondary-"
+            "structure criterion scores. When region_is_differential is false you "
+            "asked for the side that does not contain the differential region, so "
+            "no membership can be computed and the tags are absent."
         ),
         "input_schema": {
             "type": "object",

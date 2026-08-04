@@ -924,6 +924,55 @@ def test_strip_hits_removes_rows_but_keeps_the_aggregate(mod):
     assert len(record["members"][0]["hits"]) == 30
 
 
+def test_hit_stripping_is_scoped_to_m(mod):
+    """P keeps its hits; only M's are superseded by a reader.
+
+    M's are a 30-row sample of a table ``query_variants`` reads in full; P3's are
+    the complete scan its verdict was computed from. The strip was written for M
+    when P had no ``evidence_hits_col``; P3 later gave it one and silently
+    inherited the behaviour.
+    """
+    import types as _types
+
+    def _record(criterion: str) -> dict:
+        return {
+            "members": [
+                {
+                    "criterion_id": criterion,
+                    "evidence": {},
+                    "hits": [{"x": i} for i in range(3)],
+                    "n_hits_total": 3,
+                    "n_hits_shown": 3,
+                }
+            ]
+        }
+
+    def _opening(letter: str, criterion: str) -> dict:
+        return json.loads(
+            mod._capture_tool_opening(
+                config={"system": "sys", "tools": []},
+                iso={"tis_id": TIS_ID},
+                category_record=_record(criterion),
+                args=_types.SimpleNamespace(model="m", max_tokens=1, temperature=0.0),
+                letter=letter,
+            )
+        )
+
+    m = _opening("M", "M1_pathogenic_variant_enrichment")["members"][0]
+    assert m["hits"] == []
+    assert m["n_hits_shown"] == 0
+    assert "hits_note" in m
+
+    p = _opening("P", "P3_secondary_structure")["members"][0]
+    assert p["hits"] == [{"x": 0}, {"x": 1}, {"x": 2}]
+    assert p["n_hits_shown"] == 3
+    # No note either: its wording ("variant records") would be wrong for SSE
+    # elements, and there is nothing to point the model at the readers for.
+    assert "hits_note" not in p
+
+    assert mod.STRIP_HITS_FOR_TOOLS == frozenset({"M"})
+
+
 def test_strip_hits_shrinks_a_real_m_slice(mod):
     """Regression on the number that motivated this: rows are ~93% of the payload."""
     import json as _json

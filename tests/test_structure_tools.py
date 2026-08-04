@@ -191,6 +191,53 @@ def test_plddt_profile_window_is_clamped(cache):
     assert out["n_residues"] == 130
 
 
+def test_window_past_the_c_terminus_is_an_error_not_an_empty_answer(cache):
+    """``end`` was clamped and ``start`` was not, so a window past the protein
+    became ``[start, start]`` — answered with ``status="ok"`` and nothing in it,
+    or an IndexError.
+    """
+    dispatch = st.make_p_dispatch(_raw(), cache_dir=cache)  # isoform is 130 residues
+
+    # contacts and secondary_structure need a CIF this fixture does not write, so
+    # they stop at no_structure first. _window itself is pinned below.
+    for name, kwargs in [
+        ("plddt_profile", {"side": "isoform", "start": 200}),
+        ("pae_block", {"side": "isoform", "rows": [200, 210]}),
+    ]:
+        result = dispatch(name, kwargs)
+        assert "error" in result, f"{name} returned {result!r} instead of an error"
+        assert "200" in result["error"] and "130" in result["error"], result["error"]
+        # Never a plausible-looking negative.
+        assert result.get("status") != "ok"
+
+
+def test_window_rejects_a_range_entirely_outside_the_protein():
+    """The shared helper behind all four readers."""
+    raw = _raw()
+    with pytest.raises(ValueError, match="past the end"):
+        st._window(200, 210, 130, raw, "isoform")
+    with pytest.raises(ValueError, match="before the start"):
+        st._window(None, 0, 130, raw, "isoform")
+    # Overlapping and default windows are unaffected.
+    assert st._window(120, 9999, 130, raw, "isoform") == (120, 130)
+    assert st._window(None, None, 130, raw, "isoform") == (1, 30)
+
+
+def test_window_ending_before_the_n_terminus_is_an_error(cache):
+    dispatch = st.make_p_dispatch(_raw(), cache_dir=cache)
+    result = dispatch("plddt_profile", {"side": "isoform", "end": 0})
+    assert "error" in result and "end=0" in result["error"]
+
+
+def test_a_window_that_merely_overhangs_is_still_clamped(cache):
+    """Only a window ENTIRELY outside the protein is an error; partial overlap
+    stays clamped, which is what makes `start=1, end=9999` usable as "whole".
+    """
+    out = st.plddt_profile(_raw(), side="isoform", start=120, end=9999, cache_dir=cache)
+    assert out["status"] == "ok"
+    assert out["region"] == [120, 130]
+
+
 def test_plddt_profile_truncates_a_long_array_but_keeps_stats_exact(tmp_path):
     st._ca_coords.cache_clear()
     n = st.MAX_PROFILE_RESIDUES + 200
@@ -383,3 +430,118 @@ def test_only_emit_verdict_is_strict():
     """
     strict = {t["name"] for t in st.P_TOOLS if t.get("strict")}
     assert strict == {st.EMIT_VERDICT}
+
+
+# ── secondary_structure: whole-protein scan, window selects ───────────────
+#
+# The reader used to scan only INSIDE its window, and sse_elements applies its
+# length floors AFTER clipping — so a boundary-crossing element was truncated,
+# and one whose remainder fell below the floor vanished. It contradicted the P3
+# verdict on 5 of 18 cheeseman_test isoforms.
+
+
+def _sse_raw(sse_iso: str, **kw) -> dict:
+    """A raw mirror with a synthetic SSE string — the reader prefers the stored
+    assignment over the CIF, so no coordinates are needed.
+    """
+    return {**_raw(**kw), "isoform_structure_sse_isoform": sse_iso}
+
+
+def test_element_crossing_the_window_is_returned_at_full_extent(cache):
+    """Clipping reported this 16 aa helix as the 6 aa that fit inside [1, 30]."""
+    sse = "c" * 24 + "a" * 16 + "c" * 90  # helix 25-40
+    out = st.secondary_structure(_sse_raw(sse), cache_dir=cache)
+
+    assert out["region"] == [1, 30]  # default window is the differential region
+    (helix,) = [e for e in out["elements"] if e["type"] == "helix"]
+    assert (helix["start"], helix["end"], helix["length"]) == (25, 40, 16)
+    assert helix["region"] == "spans"
+    assert out["longest_helix"] == 16
+
+
+def test_element_is_not_lost_to_the_length_floor_after_clipping(cache):
+    """The TRIP13 / TRNT1 shape.
+
+    Clipped to 3 aa it fell under MIN_LENGTH and disappeared, so the reader
+    reported no structure where P3 scored an element.
+    """
+    sse = "c" * 27 + "a" * 5 + "c" * 98  # helix 28-32, clipped to 28-30 = 3 aa
+    out = st.secondary_structure(_sse_raw(sse), cache_dir=cache)
+
+    (helix,) = [e for e in out["elements"] if e["type"] == "helix"]
+    assert (helix["start"], helix["end"], helix["length"]) == (28, 32, 5)
+    assert helix["region"] == "spans"
+
+
+def test_window_selects_rather_than_clips(cache):
+    """The window still filters — it just stops truncating what it admits."""
+    sse = "c" * 59 + "a" * 10 + "c" * 61  # helix 60-69, wholly outside [1, 30]
+    raw = _sse_raw(sse)
+    assert st.secondary_structure(raw, cache_dir=cache)["elements"] == []
+
+    wide = st.secondary_structure(raw, start=1, end=130, cache_dir=cache)
+    assert [(e["start"], e["end"]) for e in wide["elements"]] == [(60, 69)]
+    assert wide["elements"][0]["region"] == "shared"
+
+
+def test_region_tags_track_the_differential_region_not_the_window(cache):
+    """A wide window must not turn every element `unique`.
+
+    region is membership in the DIFFERENTIAL region, so it means the same here as
+    in the parquet, on the P3 card and in the scorer.
+    """
+    sse = (
+        "a" * 10 + "c" * 14  # helix 1-10   inside [1, 30]
+        + "a" * 10 + "c" * 25  # helix 25-34  crosses 30
+        + "a" * 10 + "c" * 61  # helix 60-69  beyond it
+    )
+    out = st.secondary_structure(_sse_raw(sse), start=1, end=130, cache_dir=cache)
+
+    assert out["region_is_differential"] is True
+    assert [(e["start"], e["region"]) for e in out["elements"]] == [
+        (1, "unique"),
+        (25, "spans"),
+        (60, "shared"),
+    ]
+
+
+def test_untaggable_side_returns_elements_without_a_region(cache):
+    """Asking for the side that does NOT hold the differential region.
+
+    The bounds are in canonical numbering, so applying them would label the
+    retained core as the removed segment — the tag-level twin of the hazard
+    test_diff_default_does_not_leak_across_sides pins for coordinates.
+    """
+    raw = _sse_raw(
+        "c" * 24 + "a" * 16 + "c" * 90, diff_space="canonical", diff_start=0, diff_end=20
+    )
+    out = st.secondary_structure(raw, side="isoform", cache_dir=cache)
+
+    assert out["region_is_differential"] is False
+    assert out["region"] == [1, 130]  # whole isoform, per _window's fallback
+    assert out["elements"]
+    assert all("region" not in e for e in out["elements"])
+
+
+def test_longest_confident_applies_the_p3_threshold(cache):
+    """Without min_plddt, summarise_elements treats every element as confident,
+    so the field reported the longest element of ANY confidence.
+    """
+    from swissisoform.config import ScoringConfig
+
+    # cache fixture: isoform pLDDT is 0.90 over residues 1-30, 0.60 beyond.
+    sse = "c" * 4 + "a" * 10 + "c" * 26 + "a" * 20 + "c" * 70  # 5-14 conf; 41-60 not
+    out = st.secondary_structure(_sse_raw(sse), start=1, end=130, cache_dir=cache)
+
+    assert out["confident_min_plddt"] == ScoringConfig().p3_min_sse_plddt
+    assert out["longest_helix"] == 20  # the low-confidence helix is the longest
+    assert out["longest_confident"] == 10  # but only the confident one counts
+
+
+def test_every_status_path_returns_the_same_keys(cache):
+    """A degraded read must not be missing fields a successful one has."""
+    ok = st.secondary_structure(_sse_raw("a" * 10 + "c" * 120), cache_dir=cache)
+    missing = st.secondary_structure({})
+    assert set(missing) == set(ok) - {"protein_length"}
+    assert missing["region_is_differential"] is False
+    assert missing["longest_confident"] == 0

@@ -10,7 +10,7 @@ The three members:
 ## Tools
 
 - `plddt_profile(side, start, end)` — per-residue confidence over a window, with mean/min/max. Omit start/end to profile the differential region.
-- `secondary_structure(side, start, end)` — WHERE the helices and strands are, as a list of elements with residue ranges, lengths and per-element mean pLDDT.
+- `secondary_structure(side, start, end)` — WHERE the helices and strands are, as a list of elements with residue ranges, lengths and per-element mean pLDDT. Elements come back at their FULL extent, so one that starts inside your window and continues past it is reported at its true length and its end may exceed the window — a boundary-crossing element, not an error. Each carries `region` = unique/shared/spans, which is membership in the DIFFERENTIAL region, not in the window you asked for.
 - `pae_block(side, rows, cols)` — mean predicted aligned error between two residue ranges: how confidently one region is positioned RELATIVE to another.
 - `contacts(side, start, end, cutoff)` — which residues a window packs against.
 

@@ -1539,6 +1539,17 @@ def _strip_superseded_evidence(
     return {**category_record, "members": members}
 
 
+# Categories whose hit rows the readers SUPERSEDE, dropped from that category's
+# opening context. Keyed by letter like SUPERSEDED_BY_TOOLS, and for the same
+# reason: what a reader replaces is a property of that category's data.
+#
+# M only — its hits are a pre-filtered 2% sample of a table the readers query in
+# full, and ~93% of the payload. P's are P3's complete SSE scan and the exact
+# list its verdict was computed from, so nothing supersedes them. Same
+# lossy-vs-full line _strip_superseded_evidence draws for pae_status.
+STRIP_HITS_FOR_TOOLS: frozenset[str] = frozenset({"M"})
+
+
 def _strip_hits_for_tools(category_record: dict[str, Any]) -> dict[str, Any]:
     """Drop the truncated hit rows from a tool-loop category's opening context.
 
@@ -1552,6 +1563,9 @@ def _strip_hits_for_tools(category_record: dict[str, Any]) -> dict[str, Any]:
     Scalars, reasons and hints stay — that is the intended starting context. Each
     member keeps ``n_hits_total`` plus a note pointing at the tools. Returns a
     copy; the input is not mutated.
+
+    Applied only to the categories in :data:`STRIP_HITS_FOR_TOOLS`, so the note's
+    "variant records" wording describes every record it can reach.
     """
     members = []
     for member in category_record.get("members") or []:
@@ -1583,7 +1597,9 @@ def _capture_tool_opening(*, config, iso, category_record, args, letter: str) ->
     ``opening_context_chars``: never the system prompt, the opening text, or the
     tool schemas. The trace is what the model *did*; this is what it was *told*.
     """
-    opening = _strip_superseded_evidence(_strip_hits_for_tools(category_record), letter)
+    opening = _strip_superseded_evidence(category_record, letter)
+    if letter in STRIP_HITS_FOR_TOOLS:
+        opening = _strip_hits_for_tools(opening)
     prompt_user = json.dumps(opening, indent=2, ensure_ascii=False)
     if _PROMPT_DIR is not None:
         record_prompt(
