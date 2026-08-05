@@ -547,20 +547,20 @@ def test_headline_segments_bold_only_the_count():
     assert segs[1]["t"].startswith(" secondary structures")
 
 
-# ── MAX_HITS truncation must keep the scored elements ─────────────────────
+# ── The scored elements must survive shared-core filler ───────────────────
 
 
-def test_p3_hits_truncation_keeps_qualifying_unique_elements():
+def test_p3_scored_elements_survive_shared_filler():
     """A >30-element protein must not lose the elements P3 scored on.
 
-    ~1 SSE element per 18 residues, so the 30-hit cap bites above ~545 aa —
-    39% of full_catalog isoforms. Without a P3-aware rule every element ties in
-    the sort and the survivors are simply the first 30 by position.
+    ~1 SSE element per 18 residues, so a flat 30-element cap bites above ~545 aa
+    (39% of full_catalog isoforms) and the survivors would be the first 30 by
+    position. Splitting scored from shared removes the competition entirely.
     """
     from swissisoform.site.evidence import slice_criterion
 
     els = []
-    # One qualifying unique element, buried past the cap by C-terminal filler.
+    # One qualifying unique element, buried past any cap by C-terminal filler.
     els.append({"type": "helix", "start": 500, "end": 520, "length": 21,
                 "plddt_mean": 0.95, "region": "unique"})
     # A sub-threshold one in the same region.
@@ -570,24 +570,96 @@ def test_p3_hits_truncation_keeps_qualifying_unique_elements():
         s = 1 + i * 8
         els.append({"type": "strand", "start": s, "end": s + 6, "length": 7,
                     "plddt_mean": 0.9, "region": "shared"})
-    raw = {"isoform_structure_sse_status": "ok", "isoform_structure_sse_all_elements": els}
+    raw = {"isoform_structure_sse_status": "ok", "orf_type": "extended",
+           "diff_space": "isoform", "diff_start": 499, "diff_end": 540,
+           "isoform_structure_sse_all_elements": els}
     sl = slice_criterion({"_raw": raw, "scoring": {"criteria": {}}}, "P3_secondary_structure")
 
+    kept = sl["elements_gained"]
+    assert [(k["start"], k["qualifies"]) for k in kept] == [(500, True), (530, False)]
+    assert "hits" not in sl, "P3 ships the reframed lists, not the flat dump"
+
+    # All 60 shared elements are counted, not just those that fit a cap.
+    assert sl["shared_elements_summary"] == {"n_helix": 0, "n_strand": 60, "longest": 7}
     assert sl["n_hits_total"] == 62
-    assert sl["n_hits_shown"] == 30
-    kept = sl["hits"]
-    # The scored element leads; the sub-threshold same-region one follows.
-    assert kept[0]["start"] == 500 and kept[0]["length"] == 21
-    assert kept[1]["start"] == 530
-    # Shared-core filler fills the rest, never displacing the two above.
-    assert all(h["region"] == "shared" for h in kept[2:])
 
 
-def test_p3_hits_untouched_when_under_the_cap():
+def test_p3_shared_only_protein_reports_an_empty_scored_list():
+    """CBX1's shape: nothing in the differential region. The count still lands."""
     from swissisoform.site.evidence import slice_criterion
 
     els = [{"type": "helix", "start": 10, "end": 30, "length": 21,
             "plddt_mean": 0.9, "region": "shared"} for _ in range(5)]
-    raw = {"isoform_structure_sse_status": "ok", "isoform_structure_sse_all_elements": els}
+    raw = {"isoform_structure_sse_status": "ok", "orf_type": "truncated",
+           "diff_space": "canonical", "diff_start": 0, "diff_end": 9,
+           "isoform_structure_sse_all_elements": els}
     sl = slice_criterion({"_raw": raw, "scoring": {"criteria": {}}}, "P3_secondary_structure")
-    assert sl["n_hits_shown"] == 5 and sl["n_hits_total"] == 5
+    assert sl["elements_lost"] == []
+    assert sl["shared_elements_summary"]["n_helix"] == 5
+    assert sl["n_hits_total"] == 5 and sl["n_hits_shown"] == 0
+
+
+def test_p3_frames_each_orf_family():
+    """lost / gained / separate-ORF. The third has no instance in cheeseman_test,
+    so real data never exercises it.
+    """
+    from swissisoform.site.evidence import slice_criterion
+
+    el = {"type": "helix", "start": 3, "end": 20, "length": 18,
+          "plddt_mean": 0.9, "region": "unique"}
+
+    def _slice(orf, space):
+        raw = {"isoform_structure_sse_status": "ok", "orf_type": orf, "diff_space": space,
+               "diff_start": 0, "diff_end": 30, "isoform_structure_sse_all_elements": [el]}
+        return slice_criterion({"_raw": raw, "scoring": {"criteria": {}}},
+                               "P3_secondary_structure")
+
+    trunc = _slice("truncated", "canonical")
+    assert trunc["residue_space"] == "canonical"
+    assert "canonical residues 1-30" in trunc["frame"] and "LOST" in trunc["frame"]
+    assert trunc["elements_lost"][0]["status"] == "lost"
+
+    ext = _slice("extended", "isoform")
+    assert ext["residue_space"] == "isoform"
+    assert "isoform residues 1-30" in ext["frame"] and "GAINED" in ext["frame"]
+    assert ext["elements_gained"][0]["status"] == "gained"
+
+    for orf in ("uorf", "uoorf", "internal_oof", "3utr_orf", "alt_orf"):
+        sep = _slice(orf, "isoform")
+        assert "no shared region" in sep["frame"], orf
+        assert sep["elements_gained"][0]["status"] == "gained", orf
+
+
+def test_p3_keeps_region_alongside_status():
+    """`spans` must stay visible — it is the vocabulary the card and scorer use,
+    and it means the element continues into retained sequence.
+    """
+    from swissisoform.site.evidence import slice_criterion
+
+    els = [{"type": "strand", "start": 28, "end": 33, "length": 6,
+            "plddt_mean": 0.85, "region": "spans"}]
+    raw = {"isoform_structure_sse_status": "ok", "orf_type": "truncated",
+           "diff_space": "canonical", "diff_start": 0, "diff_end": 29,
+           "isoform_structure_sse_all_elements": els}
+    sl = slice_criterion({"_raw": raw, "scoring": {"criteria": {}}}, "P3_secondary_structure")
+    (e,) = sl["elements_lost"]
+    assert e["region"] == "spans" and e["status"] == "lost"
+
+
+def test_p3_qualifies_uses_the_config_thresholds():
+    from swissisoform.config import ScoringConfig
+    from swissisoform.site.evidence import slice_criterion
+
+    cfg = ScoringConfig()
+    els = [
+        {"type": "helix", "start": 1, "end": cfg.p3_min_sse_length, "region": "unique",
+         "length": cfg.p3_min_sse_length, "plddt_mean": cfg.p3_min_sse_plddt},
+        {"type": "helix", "start": 40, "end": 60, "length": 21, "region": "unique",
+         "plddt_mean": cfg.p3_min_sse_plddt - 0.01},
+    ]
+    raw = {"isoform_structure_sse_status": "ok", "orf_type": "extended",
+           "diff_space": "isoform", "diff_start": 0, "diff_end": 60,
+           "isoform_structure_sse_all_elements": els}
+    sl = slice_criterion({"_raw": raw, "scoring": {"criteria": {}}}, "P3_secondary_structure")
+    assert [e["qualifies"] for e in sl["elements_gained"]] == [True, False]
+    assert str(cfg.p3_min_sse_length) in sl["qualifies_when"]

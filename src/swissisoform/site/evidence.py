@@ -900,25 +900,18 @@ CRITERIA: dict[str, dict[str, Any]] = {
         # below the per-type emission floor, not at all.
         "evidence_hits_col": "isoform_structure_sse_all_elements",
         "headline_col": _SSE_HEADLINE,
+        # The gain/loss asymmetry and the residue space are stated as data by
+        # _shape_p3_hits, so the hint only carries what the payload cannot.
         "interpretation_hint": (
             "Does the differential region contain actual secondary structure — a "
-            "helix or strand — as opposed to coil? Assigned from the predicted "
-            "coordinates (P-SEA), so each element carries its own mean pLDDT and "
-            "BOTH length and confidence are required to score: a geometrically "
-            "clean helix running through a disordered stretch is geometry fitted "
-            "to a guess, not a structural finding. "
-            "Symmetric across ORF types, opposite narrative — on an EXTENSION the "
-            "isoform GAINS the element (a candidate functional addition); on a "
-            "TRUNCATION it LOSES one, and the element is read off the CANONICAL "
-            "structure because the removed segment exists only there, so a hit "
-            "means the truncation deletes real structure rather than a "
-            "disordered tail. "
-            "This says nothing about whether the element is INTEGRATED with the "
-            "rest of the fold — whether a gained helix packs against the core, or "
-            "a lost one was load-bearing. Read the contact and PAE evidence in "
-            "this same category for that; do not infer it from the presence of an "
-            "element alone. pLDDT is not a proxy for secondary structure and the "
-            "two often disagree: the highest-confidence stretch of a region is "
+            "helix or strand — as opposed to coil? Assigned from predicted "
+            "coordinates (P-SEA), so BOTH length and confidence are required: a "
+            "geometrically clean helix through a disordered stretch is geometry "
+            "fitted to a guess, not a finding. "
+            "It says nothing about whether the element is INTEGRATED with the rest "
+            "of the fold — read the contact and PAE evidence in this category for "
+            "that, never infer it from an element's presence. pLDDT is not a proxy "
+            "for secondary structure; the highest-confidence stretch of a region is "
             "frequently coil."
         ),
     },
@@ -2052,7 +2045,7 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
             except TypeError:
                 hits = []
 
-    return {
+    sliced = {
         "criterion_id": criterion_id,
         "axis": cfg["axis"],
         "label": cfg["label"],
@@ -2069,6 +2062,92 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         "n_hits_total": n_hits_total,
         "n_hits_shown": len(hits),
     }
+    if criterion_id == "P3_secondary_structure":
+        return _shape_p3_hits(sliced, raw)
+    return sliced
+
+
+# ORF types with no shared region — the whole isoform is the differential.
+_SEPARATE_ORFS = frozenset({"uorf", "uoorf", "internal_oof", "3utr_orf", "alt_orf"})
+# P3 scores these regions; everything else is retained core.
+_P3_SCORED_REGIONS = ("unique", "spans")
+# Bound the scored list too — small in practice (max 5 on cheeseman_test).
+_P3_MAX_ELEMENTS = 30
+
+
+def _shape_p3_hits(sliced: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
+    """Re-frame P3's element list as what the isoform gains or loses.
+
+    The flat list left three things to infer: which protein the coordinates index
+    (canonical for truncations, under an ``isoform_``-prefixed column), that
+    ``unique``/``spans`` is the scored set, and that it means "lost" on a
+    truncation. Shared elements are ~90% of the payload and are never scored, so
+    they collapse to a summary; the full list stays reachable through
+    ``secondary_structure`` with explicit bounds.
+    """
+    orf = str(raw.get("orf_type") or "")
+    # Read the FULL element list, not sliced["hits"] — that is capped at MAX_HITS,
+    # which would undercount the shared summary on long proteins.
+    raw_els = raw.get("isoform_structure_sse_all_elements")
+    every = [] if raw_els is None else [e for e in raw_els if isinstance(e, dict)]
+    scored = [h for h in every if h.get("region") in _P3_SCORED_REGIONS][:_P3_MAX_ELEMENTS]
+    shared = [h for h in every if h.get("region") == "shared"]
+
+    def _bound(key: str) -> int | None:
+        v = raw.get(key)
+        try:
+            return None if v is None else int(v)
+        except (TypeError, ValueError):
+            return None
+
+    lo, hi = _bound("diff_start"), _bound("diff_end")
+    span = f"{lo + 1}-{hi}" if lo is not None and hi is not None else "unknown range"
+
+    if orf == "truncated":
+        status, key = "lost", "elements_lost"
+        frame = (
+            f"This truncation removes canonical residues {span}. The elements below are "
+            f"read off the CANONICAL structure and are LOST in the isoform."
+        )
+    elif orf == "extended":
+        status, key = "gained", "elements_gained"
+        frame = (
+            f"This extension adds isoform residues {span}. The elements below are read "
+            f"off the ISOFORM structure and are GAINED relative to the canonical protein."
+        )
+    elif orf in _SEPARATE_ORFS:
+        status, key = "gained", "elements_gained"
+        frame = (
+            "This is a separate ORF: the entire isoform is the differential region and "
+            "there is no shared region. The elements below are read off the ISOFORM "
+            "structure."
+        )
+    else:
+        status, key = "present", "elements_in_differential_region"
+        frame = f"ORF type {orf!r} has no gain/loss framing; elements are reported as-is."
+
+    out = {k: v for k, v in sliced.items() if k != "hits"}
+    out["residue_space"] = raw.get("diff_space")
+    out["frame"] = frame
+    out["qualifies_when"] = (
+        f"length >= {P3_MIN_SSE_LENGTH} aa AND plddt_mean >= {P3_MIN_SSE_PLDDT}"
+    )
+    out[key] = [
+        {
+            **h,
+            "status": status,
+            "qualifies": (h.get("length") or 0) >= P3_MIN_SSE_LENGTH
+            and (h.get("plddt_mean") or 0) >= P3_MIN_SSE_PLDDT,
+        }
+        for h in scored
+    ]
+    out["shared_elements_summary"] = {
+        "n_helix": sum(1 for h in shared if h.get("type") == "helix"),
+        "n_strand": sum(1 for h in shared if h.get("type") == "strand"),
+        "longest": max((h.get("length") or 0 for h in shared), default=0),
+    }
+    out["n_hits_shown"] = len(out[key])
+    return out
 
 
 def _diff_region_location(orf_type: Any) -> str | None:
