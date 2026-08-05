@@ -7,7 +7,7 @@ the Anthropic API, validates + writes the structured output to ``{out}/{gene}.js
 Single-threaded; idempotent (skips genes whose output already exists unless
 ``force``). ``dry_run`` prints prompt-size diagnostics and exits without any
 network calls; ``save_prompts`` writes each assembled prompt in full to
-``data/llm/{run}/`` and composes with ``dry_run``.
+``data/llm_inputs/{run}/`` and composes with ``dry_run``.
 
 The prompts directory is parameterized: ``main`` accepts ``prompts_dir`` (the
 thin CLI supplies ``scripts/site/prompts/``). When not given, the module-level
@@ -177,6 +177,34 @@ def load_output_schema(path: Path | None = None) -> dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         raise ValueError(f"Output schema at {path} is not valid JSON: {e}") from e
+
+
+# Keywords the structured-output decoder 400s on. `minLength`/`maxLength` are
+# accepted and silently ignored, so they stay — which is also why the reasoning
+# cap still needs checking after the fact.
+_UNSUPPORTED_SCHEMA_KEYWORDS = frozenset(
+    {"uniqueItems", "minItems", "maxItems", "minimum", "maximum", "multipleOf"}
+)
+
+
+def _output_format_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Copy of ``schema`` safe to send as ``output_config.format``.
+
+    Wire copy only — ``build_prompt`` and ``_emit_schema_warnings`` keep the full
+    schema, which is the only thing communicating the constraints the decoder
+    ignores.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    out = {
+        k: _output_format_schema(v) if isinstance(v, dict) else v
+        for k, v in schema.items()
+        if k not in _UNSUPPORTED_SCHEMA_KEYWORDS
+    }
+    props = out.get("properties")
+    if isinstance(props, dict):
+        out["properties"] = {k: _output_format_schema(v) for k, v in props.items()}
+    return out
 
 
 def build_prompt(
@@ -384,7 +412,7 @@ def _write_usage_report(
 # step is skipped because one exists, so they are an audit artifact rather than a
 # results cache and do not bend the "Execution Contract — fresh reruns" rule in
 # CLAUDE.md. Every run rewrites them from scratch.
-DEFAULT_PROMPT_DIR = ROOT / "data" / "llm"
+DEFAULT_PROMPT_DIR = ROOT / "data" / "llm_inputs"
 
 _PROMPT_DIR: Path | None = None
 _PROMPT_PASS: str = "prompts"
@@ -394,7 +422,7 @@ _PROMPT_INDEX: list[dict[str, Any]] = []
 def _default_prompt_dir(out: Path) -> Path:
     """Where captured prompts go when ``--save-prompts-dir`` is not given.
 
-    ``data/llm/{run}/``, where ``run`` comes from ``--out``: the standard layout
+    ``data/llm_inputs/{run}/``, where ``run`` comes from ``--out``: the standard layout
     is ``data/output/{run}/llm``, so the run name is the parent directory's. A
     non-standard ``--out`` falls back to its own basename rather than guessing.
 
@@ -511,6 +539,7 @@ def _build_request_params(
     system: str,
     user: str,
     warn: bool = True,
+    output_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble Messages-API request params, gating sampling/thinking by model.
 
@@ -518,6 +547,10 @@ def _build_request_params(
     batch (:func:`call_llm_batch`) paths stay in sync. For models in
     :data:`_NO_SAMPLING_MODELS`, ``temperature`` is omitted and thinking is
     disabled (see that constant's rationale); other models are unchanged.
+
+    ``output_schema`` turns on structured outputs, constraining decoding so the
+    response parses by construction. It does not cover a response cut short by
+    ``max_tokens`` or stopped by ``refusal`` — see :func:`_raise_on_incomplete`.
 
     ``warn=False`` suppresses the ignored-temperature notice. Prompt capture
     calls this a second time purely to read the gate back out, and would
@@ -529,6 +562,10 @@ def _build_request_params(
         "system": system,
         "messages": [{"role": "user", "content": [{"type": "text", "text": user}]}],
     }
+    if output_schema is not None:
+        params["output_config"] = {
+            "format": {"type": "json_schema", "schema": _output_format_schema(output_schema)}
+        }
     if model in _NO_SAMPLING_MODELS:
         params["thinking"] = {"type": "disabled"}
         if warn and temperature != DEFAULT_TEMPERATURE:
@@ -582,6 +619,7 @@ def call_llm(
     temperature: float,
     max_tokens: int,
     api_key: str,
+    output_schema: dict[str, Any] | None = None,
 ) -> str:
     """Call the Anthropic API and return the response text.
 
@@ -593,9 +631,12 @@ def call_llm(
     :data:`_NO_SAMPLING_MODELS` model rejects with a 400, so for those models we
     skip mozzarellm and use the raw SDK (where :func:`_build_request_params` omits
     temperature).
+
+    ``output_schema`` also forces the raw SDK — mozzarellm's ``query()`` has
+    nowhere to put ``output_config``, so it would drop the guarantee silently.
     """
     mozz = _try_import_mozzarellm()
-    if mozz is not None and model not in _NO_SAMPLING_MODELS:
+    if mozz is not None and model not in _NO_SAMPLING_MODELS and output_schema is None:
         client = mozz(
             model=model,
             temperature=temperature,
@@ -618,7 +659,8 @@ def call_llm(
         if mozz is not None:
             raise RuntimeError(
                 f"{model} requires the official `anthropic` SDK (it rejects "
-                "mozzarellm's unconditional temperature); install `anthropic`."
+                "mozzarellm's unconditional temperature, or structured outputs are "
+                "in use); install `anthropic`."
             )
         raise RuntimeError(
             "Neither mozzarellm nor anthropic SDK is importable. "
@@ -633,8 +675,10 @@ def call_llm(
             temperature=temperature,
             system=prompt.system,
             user=prompt.user,
+            output_schema=output_schema,
         )
     )
+    _raise_on_incomplete(getattr(response, "stop_reason", None))
     if not response.content:
         raise RuntimeError("anthropic SDK returned empty content list")
     _record_usage(getattr(response, "usage", None))
@@ -756,6 +800,7 @@ def run_tool_loop(
     terminal_tool: str = "emit_verdict",
     min_data_calls: int = MIN_DATA_TOOL_CALLS,
     max_turns: int = DEFAULT_MAX_TOOL_TURNS,
+    verdict_schema: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Drive a multi-turn tool conversation to a terminal verdict.
 
@@ -783,6 +828,9 @@ def run_tool_loop(
             continues. Stops the model from restating the aggregate it was handed
             without ever looking at the underlying rows.
         max_turns: Backstop on API round trips.
+        verdict_schema: Validated against the terminal tool's input before it is
+            accepted; a failing payload is rejected with an error ``tool_result``
+            and the loop continues. Omit to accept whatever the model emits.
 
     Returns:
         ``(verdict, trace)``. ``verdict`` is the terminal tool's input dict;
@@ -816,6 +864,7 @@ def run_tool_loop(
     }
     n_data_calls = 0
     nudged = False
+    bad_verdicts: list[dict[str, Any]] = []
 
     for turn in range(1, max_turns + 1):
         response = client.messages.create(**params, messages=messages)
@@ -883,15 +932,32 @@ def run_tool_loop(
                     )
                     turn_record["tool_results"].append({"name": name, "rejected": msg})
                     continue
-                # Taken verbatim. The terminal tool declares strict:true, so the
-                # API constrains sampling to its schema and the input arrives with
-                # the declared keys and types or not at all — no client-side
-                # coercion, which would only hide a contract the model broke.
-                # A payload that is still wrong surfaces downstream through
-                # _emit_schema_warnings against output_schemas/category_read.json.
-                trace["outcome"] = "emit_verdict"
-                trace["n_data_calls"] = n_data_calls
-                return tool_input, trace
+                # strict:true guarantees the keys and types, not what is inside a
+                # string — so validate before accepting. A turn may carry several
+                # terminal calls (the model correcting itself); take the first
+                # that passes rather than the first that appears.
+                violations = (
+                    _verdict_violations(tool_input, verdict_schema) if verdict_schema else []
+                )
+                if not violations:
+                    trace["outcome"] = "emit_verdict"
+                    trace["n_data_calls"] = n_data_calls
+                    return tool_input, trace
+                bad_verdicts.append(tool_input)
+                msg = (
+                    "Rejected: " + "; ".join(violations) + f". Re-emit {terminal_tool} "
+                    "with plain-text reasoning only."
+                )
+                results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": getattr(block, "id", None),
+                        "is_error": True,
+                        "content": msg,
+                    }
+                )
+                turn_record["tool_results"].append({"name": name, "rejected": msg})
+                continue
 
             result = dispatch(name, tool_input)
             # Only a call that returned data counts toward min_data_calls —
@@ -914,6 +980,18 @@ def run_tool_loop(
 
         messages.append({"role": "user", "content": results})
 
+    # Salvage: a rejected verdict is still mostly good prose (the markup lands at
+    # the tail), so ship it truncated rather than lose the turn's work entirely.
+    if bad_verdicts:
+        trace["outcome"] = "emit_verdict_salvaged"
+        trace["n_data_calls"] = n_data_calls
+        print(
+            f"    [salvage] {terminal_tool} never validated in {max_turns} turns; "
+            "truncating the last payload at the markup marker",
+            file=sys.stderr,
+        )
+        return _strip_verdict_markup(bad_verdicts[-1]), trace
+
     trace["outcome"] = "max_turns_exhausted"
     trace["n_data_calls"] = n_data_calls
     raise ToolLoopError(
@@ -929,6 +1007,7 @@ def call_llm_batch(
     max_tokens: int,
     api_key: str,
     poll_interval: int = 15,
+    output_schema: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Run ``items`` through the Anthropic Message Batches API (50% token price).
 
@@ -938,6 +1017,9 @@ def call_llm_batch(
     Results arrive in any order — keyed by ``custom_id`` (must be ``[A-Za-z0-9_-]``,
     ≤64 chars; callers pass index-based ids like ``c0``/``s3``). Same tokens as
     direct calls; the saving is the batch price discount, applied at report time.
+
+    ``output_schema`` enables structured outputs on every request in the batch;
+    the Batches API supports them, so the discount is unaffected.
     """
     anthropic = _try_import_anthropic()
     if anthropic is None:
@@ -956,6 +1038,7 @@ def call_llm_batch(
                     temperature=temperature,
                     system=p.system,
                     user=p.user,
+                    output_schema=output_schema,
                 )
             ),
         )
@@ -986,6 +1069,12 @@ def call_llm_batch(
                 if u is not None
                 else _empty_usage()
             )
+            # "succeeded" means the HTTP call worked, not that generation did.
+            try:
+                _raise_on_incomplete(getattr(msg, "stop_reason", None))
+            except IncompleteResponse as e:
+                out[cid] = {"text": text, "usage": usage, "error": str(e)}
+                continue
             out[cid] = {"text": text, "usage": usage, "error": None if text else "empty response"}
         else:
             err = getattr(r.result, "error", None)
@@ -994,6 +1083,49 @@ def call_llm_batch(
 
 
 # ── Output validation ────────────────────────────────────────────────────
+
+
+class IncompleteResponse(RuntimeError):
+    """The model stopped before finishing — the text is not a failed generation."""
+
+
+def _raise_on_incomplete(stop_reason: Any) -> None:
+    """Raise when the model stopped before finishing.
+
+    Structured outputs guarantee parseable JSON only if generation completed;
+    otherwise both cases surface as a generic ``JSONDecodeError`` and look like a
+    malformed response.
+    """
+    if stop_reason == "max_tokens":
+        raise IncompleteResponse(
+            "response hit max_tokens before completing; the JSON is truncated. "
+            "Raise --max-tokens rather than treating this as a bad response."
+        )
+    if stop_reason == "refusal":
+        raise IncompleteResponse(
+            "model declined the request (stop_reason=refusal); output does not "
+            "follow the schema."
+        )
+
+
+def _save_failed_response(
+    out_dir: Path, tis_slug: str, label: str, text: str | None, err: Exception
+) -> None:
+    """Persist a response that would not parse, before it is lost.
+
+    Best-effort — a failure here must never mask the original error.
+    """
+    if not text:
+        return
+    try:
+        d = out_dir / "_failures"
+        d.mkdir(parents=True, exist_ok=True)
+        safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"{tis_slug}__{label}")
+        (d / f"{safe}.txt").write_text(
+            f"# {type(err).__name__}: {err}\n\n{text}", encoding="utf-8"
+        )
+    except Exception:  # noqa: BLE001 - diagnostics must never break the run
+        pass
 
 
 def parse_response(response_text: str) -> dict[str, Any]:
@@ -1028,6 +1160,51 @@ def validate_against_schema(payload: dict[str, Any], schema: dict[str, Any]) -> 
         ]
     except Exception as e:
         return [f"validator init failed: {e}"]
+
+
+# Tool-call syntax the model sometimes writes as prose. `strict: true` cannot
+# catch it: inside a string value the only rules are escaping and termination.
+_VERDICT_MARKUP = re.compile(r"</reasoning>|<parameter\s+name=|<invoke|<antml")
+
+
+def _tidy_violation(msg: str, limit: int = 140) -> str:
+    """Make a violation safe to send back to the model.
+
+    jsonschema embeds the offending value, so a too-long ``reasoning`` echoes
+    itself — markup included — into the rejection. Feeding that back would
+    re-inject the syntax we are asking it to stop writing.
+    """
+    msg = _VERDICT_MARKUP.sub("<markup>", msg)
+    if len(msg) <= limit:
+        return msg
+    return f"{msg[: limit - 60]}… {msg[-50:]}"
+
+
+def _verdict_violations(payload: Any, schema: dict[str, Any]) -> list[str]:
+    """Why this verdict payload is unusable, or ``[]`` if it is fine.
+
+    jsonschema honours ``maxLength`` even though the decoder ignores it, so the
+    reasoning cap is enforced here rather than at generation time.
+    """
+    if not isinstance(payload, dict):
+        return [f"payload is {type(payload).__name__}, expected object"]
+    out = [_tidy_violation(v) for v in validate_against_schema(payload, schema)]
+    for field, value in payload.items():
+        text = value if isinstance(value, str) else json.dumps(value, default=str)
+        if _VERDICT_MARKUP.search(text):
+            out.append(f"{field}: contains tool-call markup, expected plain text")
+    return out
+
+
+def _strip_verdict_markup(payload: dict[str, Any]) -> dict[str, Any]:
+    """Salvage: cut each string field at the first markup marker. Last resort."""
+    out = dict(payload)
+    for field, value in payload.items():
+        if isinstance(value, str):
+            m = _VERDICT_MARKUP.search(value)
+            if m:
+                out[field] = value[: m.start()].rstrip()
+    return out
 
 
 def _emit_schema_warnings(
@@ -1215,7 +1392,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--save-prompts",
         action="store_true",
-        help="Write every assembled prompt to data/llm/{run}/ as one .txt per "
+        help="Write every assembled prompt to data/llm_inputs/{run}/ as one .txt per "
         "call (system + user verbatim, plus a header with the model and sampling "
         "gate), so a prompt can be read or diffed without reassembling it from "
         "the evidence record, the prompt file and the schema. Combines with "
@@ -1227,7 +1404,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Override where --save-prompts writes "
-        "(default: data/llm/{run}/, run taken from --out).",
+        "(default: data/llm_inputs/{run}/, run taken from --out).",
     )
     return parser
 
@@ -1626,7 +1803,8 @@ def _capture_tool_opening(*, config, iso, category_record, args, letter: str) ->
 
 
 def _run_tool_category(
-    *, config, iso, category_record, args, api_key, out_dir: Path, letter: str
+    *, config, iso, category_record, args, api_key, out_dir: Path, letter: str,
+    output_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run one category as a tool loop and persist its transcript.
 
@@ -1658,6 +1836,7 @@ def _run_tool_category(
             api_key=api_key,
             temperature=args.temperature,
             max_turns=getattr(args, "max_tool_turns", DEFAULT_MAX_TOOL_TURNS),
+            verdict_schema=output_schema,
         )
     except ToolLoopError as e:
         _persist(e.trace)
@@ -1776,6 +1955,7 @@ def _run_category_pass(
                         f"{letter} ({category['name']}) input chars: {len(prompt.user)}"
                     )
                     continue
+                response_text: str | None = None
                 try:
                     if tool_config is not None:
                         payload = _run_tool_category(
@@ -1786,6 +1966,7 @@ def _run_category_pass(
                             api_key=api_key,
                             out_dir=out_dir,
                             letter=letter,
+                            output_schema=output_schema,
                         )
                         # One usage event per turn, so drain them all.
                         _tool_usage, _tool_turns = _drain_all_usage()
@@ -1797,6 +1978,7 @@ def _run_category_pass(
                             temperature=args.temperature,
                             max_tokens=args.max_tokens,
                             api_key=api_key,
+                            output_schema=output_schema,
                         )
                         _add_usage(usage_by_slug, tis_slug_val, _drain_usage())
                         payload = parse_response(response_text)
@@ -1813,6 +1995,11 @@ def _run_category_pass(
                         _add_usage(tool_usage_by_slug, tis_slug_val, _tool_usage, calls=_tool_turns)
                     print(f"[{n_calls}] {letter} FAIL: {e}", file=sys.stderr)
                     results[category["name"]] = {"error": str(e)}
+                    # None for a tool-loop failure (no single-shot text) and for a
+                    # call that raised before returning; _save_failed_response no-ops.
+                    _save_failed_response(
+                        args.out, tis_slug_val, category["name"], response_text, e
+                    )
 
             if args.dry_run:
                 continue
@@ -1905,6 +2092,7 @@ def _run_category_pass_batch(
             temperature=args.temperature,
             max_tokens=args.max_tokens,
             api_key=api_key,
+            output_schema=output_schema,
         )
         if items
         else {}
@@ -1930,6 +2118,7 @@ def _run_category_pass_batch(
         except Exception as e:
             print(f"[{cid}] {cat_name} parse FAIL: {e}", file=sys.stderr)
             iso_results[tis_slug_val][cat_name] = {"error": str(e)}
+            _save_failed_response(args.out, tis_slug_val, cat_name, r["text"], e)
 
     # Tool categories, interactively, merged into the same categories.json.
     tool_usage_by_slug: dict[str, dict[str, int]] = {}
@@ -1950,6 +2139,7 @@ def _run_category_pass_batch(
                     api_key=api_key,
                     out_dir=out_dir,
                     letter=letter,
+                    output_schema=output_schema,
                 )
                 _tool_usage, _tool_turns = _drain_all_usage()
                 _add_usage(tool_usage_by_slug, tis_slug_val, _tool_usage, calls=_tool_turns)
@@ -2107,6 +2297,7 @@ def _run_synthesis_pass(records, spec, args, system_prompt, output_schema) -> in
                     f"[{n_calls}] {gene_name} {tis_slug} synthesis input chars: {len(prompt.user)}"
                 )
                 continue
+            response_text: str | None = None
             try:
                 response_text = call_llm(
                     prompt,
@@ -2114,6 +2305,7 @@ def _run_synthesis_pass(records, spec, args, system_prompt, output_schema) -> in
                     temperature=args.temperature,
                     max_tokens=args.max_tokens,
                     api_key=api_key,
+                    output_schema=output_schema,
                 )
                 _add_usage(usage_by_slug, tis_slug, _drain_usage())
                 payload = parse_response(response_text)
@@ -2127,6 +2319,7 @@ def _run_synthesis_pass(records, spec, args, system_prompt, output_schema) -> in
                 print(f"[{n_calls}] {tis_slug} OK")
             except Exception as e:
                 print(f"[{n_calls}] {tis_slug} FAIL: {e}", file=sys.stderr)
+                _save_failed_response(args.out, tis_slug, "synthesis", response_text, e)
 
     if args.dry_run:
         return 0
@@ -2186,6 +2379,7 @@ def _run_synthesis_pass_batch(records, spec, args, system_prompt, output_schema)
     responses = call_llm_batch(
         items, model=args.model, temperature=args.temperature,
         max_tokens=args.max_tokens, api_key=api_key,
+        output_schema=output_schema,
     )
 
     usage_by_slug: dict[str, dict[str, int]] = {}
@@ -2200,6 +2394,7 @@ def _run_synthesis_pass_batch(records, spec, args, system_prompt, output_schema)
             payload = parse_response(r["text"])
         except Exception as e:
             print(f"[{cid}] {tis_slug} parse FAIL: {e}", file=sys.stderr)
+            _save_failed_response(args.out, tis_slug, "synthesis", r["text"], e)
             continue
         _emit_schema_warnings(
             payload, output_schema, f"{tis_slug}/synthesis",

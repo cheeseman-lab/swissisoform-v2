@@ -1435,7 +1435,7 @@ def capture_dir(tmp_path: Path) -> Path:
     """Where capture tests write.
 
     Every test pins --save-prompts-dir here. The default resolves into the real
-    data/llm/, so a test that omitted it would litter the repo;
+    data/llm_inputs/, so a test that omitted it would litter the repo;
     _default_prompt_dir is covered separately without running a pass.
     """
     return tmp_path / "captured"
@@ -1456,7 +1456,7 @@ def _split_capture(text: str) -> tuple[dict[str, str], str, str]:
 def test_prompt_capture_is_off_by_default(tmp_path, category_records, mod, capture_dir):
     """No flag, no artifacts — the normal path is untouched.
 
-    Also asserts the real data/llm/ default is not created, since an accidental
+    Also asserts the real data/llm_inputs/ default is not created, since an accidental
     write there would land in the repo rather than in tmp_path.
     """
     out_dir = tmp_path / "out"
@@ -1466,10 +1466,10 @@ def test_prompt_capture_is_off_by_default(tmp_path, category_records, mod, captu
 
 
 def test_default_prompt_dir_is_data_llm_keyed_by_run(mod):
-    """Default is data/llm/{run}, with run read off --out, not --out itself."""
+    """Default is data/llm_inputs/{run}, with run read off --out, not --out itself."""
     resolved = mod._default_prompt_dir(Path("data/output/cheeseman_test/llm"))
     assert resolved == mod.DEFAULT_PROMPT_DIR / "cheeseman_test"
-    assert mod.DEFAULT_PROMPT_DIR == ROOT / "data" / "llm"
+    assert mod.DEFAULT_PROMPT_DIR == ROOT / "data" / "llm_inputs"
     # Per-run subdir keeps two presets from clobbering each other's index.
     other = mod._default_prompt_dir(Path("data/output/cheeseman_13gene/llm"))
     assert other != resolved
@@ -1748,3 +1748,243 @@ def test_tool_loop_capture_records_the_opening_and_the_tool_schemas(
     # The trace only ever recorded the length of this text.
     trace = json.loads((out_dir / tis_slug / "M_trace.json").read_text())
     assert trace["opening_context_chars"] == len(user)
+
+
+# ── Structured outputs (output_config.format) ─────────────────────────────
+#
+# A batched category once lost its verdict to `Invalid control character at
+# char 1252`: the model wrote a literal newline inside its `reasoning` string.
+# Nothing constrained the format — the schema was prose in the prompt and a
+# linter after the fact. output_config makes it a decoding constraint.
+#
+# Subset behaviour below was probed against claude-sonnet-5, not assumed: the
+# API accepts (and ignores) minLength/maxLength but hard-400s on uniqueItems.
+
+
+def test_output_format_schema_drops_only_the_rejected_keywords(mod):
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["verdict"],
+        "properties": {
+            "verdict": {"enum": ["a", "b"]},
+            "reasoning": {"type": "string", "minLength": 1, "maxLength": 1500},
+            "tags": {"type": "array", "uniqueItems": True, "items": {"enum": ["x"]}},
+        },
+    }
+    out = mod._output_format_schema(schema)
+
+    assert "uniqueItems" not in json.dumps(out)  # hard 400 from the API
+    # Accepted-but-ignored: kept so the prompt copy and the wire copy agree on
+    # everything the API tolerates.
+    assert out["properties"]["reasoning"]["maxLength"] == 1500
+    assert out["properties"]["verdict"]["enum"] == ["a", "b"]
+    assert out["properties"]["tags"]["items"]["enum"] == ["x"]
+    assert out["additionalProperties"] is False
+    assert out["required"] == ["verdict"]
+    assert schema["properties"]["tags"]["uniqueItems"] is True, "input must not be mutated"
+
+
+def test_real_schemas_are_wire_safe(mod):
+    """The two live schemas survive the subset filter."""
+    root = ROOT / "scripts/site/prompts/output_schemas"
+    for name in ("category_read.json", "synthesis.json"):
+        out = mod._output_format_schema(json.loads((root / name).read_text()))
+        assert "uniqueItems" not in json.dumps(out), name
+        assert out["additionalProperties"] is False, name
+
+
+def test_request_params_gate_output_config_on_the_schema(mod):
+    """No schema, no output_config — so the tool-loop and legacy paths are
+    provably unchanged by this feature.
+    """
+    kw = dict(model="claude-sonnet-5", max_tokens=10, temperature=0.0, system="s", user="u")
+
+    assert "output_config" not in mod._build_request_params(**kw)
+
+    params = mod._build_request_params(**kw, output_schema={"type": "object"})
+    assert params["output_config"] == {
+        "format": {"type": "json_schema", "schema": {"type": "object"}}
+    }
+
+
+def test_incomplete_response_names_truncation_and_refusal(mod):
+    """Structured outputs guarantee parseable JSON only if the model FINISHED.
+
+    Both remaining failure modes otherwise surface as a generic JSONDecodeError,
+    indistinguishable from a malformed generation.
+    """
+    with pytest.raises(mod.IncompleteResponse, match="max_tokens"):
+        mod._raise_on_incomplete("max_tokens")
+    with pytest.raises(mod.IncompleteResponse, match="refusal"):
+        mod._raise_on_incomplete("refusal")
+    mod._raise_on_incomplete("end_turn")  # does not raise
+    mod._raise_on_incomplete(None)
+
+
+def test_failed_response_is_saved_for_diagnosis(mod, tmp_path):
+    """The bug that motivated this was undiagnosable: the raw text was replaced
+    by {"error": ...} and lost.
+    """
+    bad = '{"verdict": "neutral", "reasoning": "line one\nline two"}'
+    with pytest.raises(json.JSONDecodeError) as excinfo:
+        mod.parse_response(bad)
+    assert "control character" in str(excinfo.value)
+
+    mod._save_failed_response(
+        tmp_path, "chr1-1-+-ATG-ENST1-1", "Structural Characteristics", bad, excinfo.value
+    )
+    (written,) = list((tmp_path / "_failures").glob("*.txt"))
+    body = written.read_text()
+    assert "line one\nline two" in body
+    assert "JSONDecodeError" in body
+
+
+def test_save_failed_response_never_masks_the_original_error(mod, tmp_path):
+    """Diagnostics are best-effort; a write failure must not replace the real one."""
+    mod._save_failed_response(tmp_path, "slug", "cat", None, ValueError("x"))  # no text
+    assert not (tmp_path / "_failures").exists()
+
+    blocked = tmp_path / "blocked"
+    blocked.write_text("not a directory")
+    mod._save_failed_response(blocked, "slug", "cat", "text", ValueError("x"))  # no raise
+
+
+# ── Verdict validation (strict:true does not police string contents) ──────
+#
+# Two P verdicts were persisted containing tool-call markup written as prose
+# inside the `reasoning` string. On one, the model noticed and re-emitted a clean
+# call in the same turn — which the loop discarded by taking the first block.
+
+_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["verdict", "reasoning"],
+    "properties": {
+        "verdict": {"type": "string", "enum": ["interesting", "neutral", "not_interesting"]},
+        "reasoning": {"type": "string", "minLength": 1, "maxLength": 60},
+        "evidence_used": {"type": "array", "items": {"type": "string"}},
+    },
+}
+_DIRTY = {"verdict": "neutral",
+          "reasoning": 'Fold is modest.</reasoning>\n<parameter name="evidence_used">'}
+_CLEAN = {"verdict": "neutral", "reasoning": "Fold is modest and not integrated."}
+
+
+def test_verdict_violations_flags_markup_and_length(mod):
+    assert mod._verdict_violations(_CLEAN, _SCHEMA) == []
+
+    (markup,) = mod._verdict_violations(_DIRTY, _SCHEMA)
+    assert "tool-call markup" in markup
+
+    long = {"verdict": "neutral", "reasoning": "x" * 61}
+    assert any("too long" in v for v in mod._verdict_violations(long, _SCHEMA))
+
+    assert mod._verdict_violations("not a dict", _SCHEMA) == ["payload is str, expected object"]
+
+
+def test_strip_verdict_markup_keeps_the_prose(mod):
+    out = mod._strip_verdict_markup(_DIRTY)
+    assert out["reasoning"] == "Fold is modest."
+    assert out["verdict"] == "neutral"
+    assert mod._verdict_violations(out, _SCHEMA) == []
+
+
+def test_tool_loop_prefers_the_valid_terminal_block(mod, monkeypatch):
+    """The CBX1 shape: the model self-corrects within one turn.
+
+    Its correction carried the better payload and we returned the first block.
+    """
+    calls: list = []
+    script = [
+        _Response([_tool_use("query_variants", {}, "t1")]),
+        _Response([_tool_use("query_variants", {}, "t2")]),
+        _Response([
+            _tool_use("emit_verdict", _DIRTY, "t3a"),
+            _tool_use("emit_verdict", _CLEAN, "t3b"),
+        ]),
+    ]
+    monkeypatch.setattr(mod, "_try_import_anthropic", lambda: _fake_anthropic(script, calls))
+
+    verdict, trace = mod.run_tool_loop(
+        system="S", user="U", tools=[], dispatch=_dispatch_ok,
+        model="claude-sonnet-5", max_tokens=1000, api_key="k",
+        verdict_schema=_SCHEMA,
+    )
+    assert verdict == _CLEAN
+    assert trace["outcome"] == "emit_verdict"
+    assert len(calls) == 3, "the correction is used in-turn, costing no extra round trip"
+
+
+def test_tool_loop_rejects_and_retries_a_lone_bad_verdict(mod, monkeypatch):
+    """The CDC34 shape: one corrupt call, nothing to fall back to."""
+    calls: list = []
+    script = [
+        _Response([_tool_use("query_variants", {}, "t1")]),
+        _Response([_tool_use("query_variants", {}, "t2")]),
+        _Response([_tool_use("emit_verdict", _DIRTY, "t3")]),
+        _Response([_tool_use("emit_verdict", _CLEAN, "t4")]),
+    ]
+    monkeypatch.setattr(mod, "_try_import_anthropic", lambda: _fake_anthropic(script, calls))
+
+    verdict, trace = mod.run_tool_loop(
+        system="S", user="U", tools=[], dispatch=_dispatch_ok,
+        model="claude-sonnet-5", max_tokens=1000, api_key="k",
+        verdict_schema=_SCHEMA,
+    )
+    assert verdict == _CLEAN
+    # The rejection is fed back as an error tool_result naming the problem.
+    rejected = [r for t in trace["turns"] for r in (t.get("tool_results") or [])
+                if "rejected" in r]
+    assert len(rejected) == 1
+    assert "tool-call markup" in rejected[0]["rejected"]
+
+
+def test_tool_loop_salvages_when_the_verdict_never_validates(mod, monkeypatch):
+    calls: list = []
+    script = [
+        _Response([_tool_use("query_variants", {}, "t1")]),
+        _Response([_tool_use("query_variants", {}, "t2")]),
+        _Response([_tool_use("emit_verdict", _DIRTY, "t3")]),
+    ]
+    monkeypatch.setattr(mod, "_try_import_anthropic", lambda: _fake_anthropic(script, calls))
+
+    verdict, trace = mod.run_tool_loop(
+        system="S", user="U", tools=[], dispatch=_dispatch_ok,
+        model="claude-sonnet-5", max_tokens=1000, api_key="k",
+        max_turns=4,
+        verdict_schema=_SCHEMA,
+    )
+    assert trace["outcome"] == "emit_verdict_salvaged"
+    assert verdict["reasoning"] == "Fold is modest."
+
+
+def test_tool_loop_without_a_schema_is_unchanged(mod, monkeypatch):
+    """No schema, no validation — the tool-loop path is untouched by default."""
+    calls: list = []
+    script = [
+        _Response([_tool_use("query_variants", {}, "t1")]),
+        _Response([_tool_use("query_variants", {}, "t2")]),
+        _Response([_tool_use("emit_verdict", _DIRTY, "t3")]),
+    ]
+    monkeypatch.setattr(mod, "_try_import_anthropic", lambda: _fake_anthropic(script, calls))
+
+    verdict, trace = mod.run_tool_loop(
+        system="S", user="U", tools=[], dispatch=_dispatch_ok,
+        model="claude-sonnet-5", max_tokens=1000, api_key="k",
+    )
+    assert verdict == _DIRTY and trace["outcome"] == "emit_verdict"
+
+
+def test_rejection_message_does_not_echo_the_markup_back(mod):
+    """The rejection is fed to the model; jsonschema embeds the offending value,
+    so an untidied message would re-inject the syntax we are correcting.
+    """
+    dirty = {"verdict": "neutral",
+             "reasoning": "prose " * 40 + '</reasoning><parameter name="x">'}
+    violations = mod._verdict_violations(dirty, _SCHEMA)
+    msg = "Rejected: " + "; ".join(violations)
+
+    assert not mod._VERDICT_MARKUP.search(msg), "markup must not survive into the reply"
+    assert len(msg) < 400, f"rejection ballooned to {len(msg)} chars"
+    assert "too long" in msg and "tool-call markup" in msg

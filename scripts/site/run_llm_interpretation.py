@@ -9,7 +9,7 @@ validates + writes the structured output to `llm/{gene}.json`.
 Single-threaded; idempotent (skips genes whose output already exists unless
 ``--force``). ``--dry-run`` prints prompt-size diagnostics and exits without any
 network calls; ``--save-prompts`` writes every assembled prompt in full to
-``data/llm/{run}/`` as one ``.txt`` per call, and composes with ``--dry-run``.
+``data/llm_inputs/{run}/`` as one ``.txt`` per call, and composes with ``--dry-run``.
 
 Usage:
     python scripts/site/run_llm_interpretation.py \
