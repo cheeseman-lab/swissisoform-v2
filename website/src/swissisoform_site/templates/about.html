@@ -66,7 +66,7 @@
     </ul>
     <p>
       Open a gene to see every isoform in full: the differential region and where it
-      sits, all fifteen criteria with <strong>✓</strong> / <strong>✗</strong> /
+      sits, all sixteen criteria with <strong>✓</strong> / <strong>✗</strong> /
       <strong>–</strong>, the underlying numbers, and the model's written reasoning for
       each category.
     </p>
@@ -76,7 +76,7 @@
   <section class="about-sec" id="cdlmps">
     <h2>Six evidence categories (CDLMPS)</h2>
     <p>
-      Fifteen criteria are grouped into six categories, one per letter of
+      Sixteen criteria are grouped into six categories, one per letter of
       <strong>CDLMPS</strong>. Each criterion returns <strong>✓ (true)</strong>,
       <strong>✗ (false)</strong>, or <strong>– (not evaluable)</strong> — a criterion
       whose underlying data could not be computed reports "not evaluable" rather than
@@ -542,7 +542,7 @@
 
       <dt id="m-evidence-scoring">Evidence scoring (CDLMPS categories)</dt>
       <dd>
-        <p><b>What it measures.</b> A per-TIS summary that condenses every annotation above into fifteen criteria grouped under six categories — <span class="about-code">C</span>onservation, <span class="about-code">D</span>etection, <span class="about-code">L</span>ocalization, <span class="about-code">M</span>utation landscape, <span class="about-code">P</span>redicted structure, and <span class="about-code">S</span>tructural characteristics. Broadly, C and D speak to whether the isoform is <em>real</em>; L, M, P and S to whether it <em>changes function</em> — but they are read as one panel, not two decoupled scores.</p>
+        <p><b>What it measures.</b> A per-TIS summary that condenses every annotation above into sixteen criteria grouped under six categories — <span class="about-code">C</span>onservation, <span class="about-code">D</span>etection, <span class="about-code">L</span>ocalization, <span class="about-code">M</span>utation landscape, <span class="about-code">P</span>redicted structure, and <span class="about-code">S</span>tructural characteristics. Broadly, C and D speak to whether the isoform is <em>real</em>; L, M, P and S to whether it <em>changes function</em> — but they are read as one panel, not two decoupled scores.</p>
         <p><b>How it's calculated.</b> The framework runs <em>after</em> the comparator, because most criteria read a canonical-versus-isoform (or, for genomic criteria, an isoform-unique-versus-canonical-shared-region) comparison rather than a raw annotation value. Each criterion is evaluated independently against a fixed threshold and returns True / False / not-evaluable; there is no weighting (§"Evidence scoring").</p>
         <p class="about-cite">Refs: SwissIsoform methods §Evidence scoring</p>
       </dd>
@@ -589,7 +589,7 @@
     <h2>How a criterion is decided</h2>
     <p>
       Every criterion follows the same four-step shape, so the table reads
-      consistently across all fifteen:
+      consistently across all sixteen:
     </p>
     <ol class="about-list">
       <li>

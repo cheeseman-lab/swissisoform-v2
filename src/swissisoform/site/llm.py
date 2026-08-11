@@ -2183,7 +2183,7 @@ def _build_synthesis_record(
     / localization, the baseline the isoform diverges from), the digested per-category
     reads (``category_reads`` — the ``{verdict, reasoning}`` per CDLMPS category), and
     the raw underlying evidence (``criteria_evidence``, one ``slice_criterion`` payload
-    per criterion, all 15 incl. S2/S3) so the model can weigh actual numbers.
+    per criterion, all 16 incl. S2/S3) so the model can weigh actual numbers.
 
     ``gene`` is the gene block from the evidence record (``build_gene_record``); when
     absent, only ``{name}`` is carried (older records / dry-run stubs).

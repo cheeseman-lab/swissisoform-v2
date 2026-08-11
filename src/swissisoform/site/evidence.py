@@ -1020,7 +1020,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
 #
 # ``members`` are all keys in ``CRITERIA`` — every member (including S2 biophysics
 # and S3 SAE) is a first-class scored criterion sliced through ``slice_criterion``.
-# All 15 criteria — including P2 — are covered exactly once; there is no
+# All 16 criteria — including P2 — are covered exactly once; there is no
 # LLM-excluded criterion.
 CATEGORIES: list[dict[str, Any]] = [
     {

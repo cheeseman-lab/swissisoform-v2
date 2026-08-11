@@ -1,6 +1,6 @@
 """Module: Evidence Scoring — CDLMPS categories, dual-axis roll-up.
 
-Fifteen criteria per TIS, grouped into the six CDLMPS categories and derived
+Sixteen criteria per TIS, grouped into the six CDLMPS categories and derived
 from the annotations other modules have already attached. The two-axis
 roll-up is kept for back-compat: existence = Conservation + Detection,
 functional = Localization + Mutation + Predicted-structure + Structural.
@@ -19,7 +19,7 @@ Criteria that depend on modules whose caches are not yet populated
 (structure, PLM VEP) return ``None`` at evaluation time based on the
 annotation status.
 
-The 15 criterion ``score`` functions and their shared types/helpers live in
+The 16 criterion ``score`` functions and their shared types/helpers live in
 the ``swissisoform.evidence`` package — one folder per bucket, registered by
 category in ``CATEGORY_CRITERIA``. They are imported here so
 ``EvidenceScoringModule`` keeps its public home in
@@ -58,6 +58,9 @@ Predicted Structure (P):
        (``structure``); folding only.
     P2 Shared-region structural change — retained region folds differently
        (``structure`` shared-region Cα RMSD, pLDDT-gated)
+    P3 Confident secondary-structure element in the differential region —
+       helix or strand clearing both a length and a per-element pLDDT floor
+       (``structure`` P-SEA scan)
 
 Structural Characteristics (S):
     S1 Real InterPro domain gained / lost in the diff region
@@ -180,7 +183,7 @@ class EvidenceScoringModule:
         scoring_mod.run([s for g in genes for s in g.tis_sites])
 
     Reads from ``site.isoform_annotations`` and ``site.comparison``,
-    evaluates 15 criteria (6 existence [C+D] + 9 functional [L+M+P+S]) and
+    evaluates 16 criteria (6 existence [C+D] + 10 functional [L+M+P+S]) and
     writes them onto ``site.isoform_annotations["scoring"]``.
 
     Attributes:
