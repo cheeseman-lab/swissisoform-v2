@@ -163,7 +163,7 @@ def create_app() -> Flask:
 
     @app.get("/about")
     def about() -> Any:
-        """Static glossary — the 15 CDLMPS evidence criteria + the metrics behind them."""
+        """Static glossary — the 16 CDLMPS evidence criteria + the metrics behind them."""
         return render_template(
             "about.html",
             criteria_by_id=CRITERIA_BY_ID,

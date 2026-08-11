@@ -19,7 +19,7 @@ Criteria that depend on modules whose caches are not yet populated
 (structure, PLM VEP) return ``None`` at evaluation time based on the
 annotation status.
 
-The 15 criterion ``score`` functions and their shared types/helpers live in
+The 16 criterion ``score`` functions and their shared types/helpers live in
 the ``swissisoform.evidence`` package — one folder per bucket, registered by
 category in ``CATEGORY_CRITERIA``. They are imported here so
 ``EvidenceScoringModule`` keeps its public home in
@@ -58,6 +58,9 @@ Predicted Structure (P):
        (``structure``); folding only.
     P2 Shared-region structural change — retained region folds differently
        (``structure`` shared-region Cα RMSD, pLDDT-gated)
+    P3 Confident secondary-structure element in the differential region —
+       helix or strand clearing both a length and a per-element pLDDT floor
+       (``structure`` P-SEA scan)
 
 Structural Characteristics (S):
     S1 Real InterPro domain gained / lost in the diff region
