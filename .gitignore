@@ -34,6 +34,9 @@ tmp_signalp/
 # Nextflow + Singularity caches (InterProScan 6): tens of GB, regenerable
 .nextflow/
 .singularity_cache/
+# Per-shard NXF_HOME, one per annotate array task (annotate_array.sbatch).
+# Same content as .nextflow/ (framework jar + pipeline assets), ~40 MB each.
+.nextflow_shards/
 # Internal docs are untracked — ONLY docs/methods/ (the paper source) is tracked.
 # Ignore everything else under docs/ (reviews, plans, architecture, analysis,
 # handoffs, superpowers); the "Scope Before Plan" docs live here locally.
