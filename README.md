@@ -210,9 +210,12 @@ scripts/                       # thin CLI drivers over src
   site/                        # build_evidence_records, build_transcript_skeletons,
                                #   run_llm_interpretation (+ prompts/)
   setup/                       # download_references.sh, download_zoonomia_*,
-                               #   setup_databases.py, fetch_generef.py, *.sbatch
-  slurm/                       # run.sbatch (orchestrator) + run_plm_embed / run_fold /
-                               #   run_small_e2e
+                               #   setup_databases.py, fetch_generef.py, fetch_sae_atlas.py,
+                               #   create_envs.sh, *.sbatch (provisioning run via Slurm)
+  slurm/                       # run.sbatch (orchestrator) + run_plm_embed / run_fold
+    full_run/                  # genome-wide campaign harness: submit_all.sh -> 00_prepare
+                               #   -> GPU arrays -> annotate array -> merge. Every stage is
+                               #   idempotent, so resume = resubmit the array (see 00_prepare)
 
 presets/                       # named runs (auto-discovered *.toml): cheeseman13
 website/                       # standalone Flask viewer (see below)
@@ -308,6 +311,13 @@ python scripts/setup/setup_databases.py cosmic       # ~30 min (requires .env cr
 python scripts/setup/setup_databases.py deeploc      # ~10 min (conda env + weights)
 python scripts/setup/setup_databases.py gnomad       # ~4-6 h  (heavy — ~90 M variants)
 # Conservation tracks (Zoonomia 241-mammal): scripts/setup/download_zoonomia_*.sh
+
+# Large provisioning — submit to Slurm rather than running on the head node:
+sbatch scripts/setup/setup_interproscan.sbatch       # InterPro member DBs (~50 GB)
+sbatch scripts/setup/setup_pepquery_spectra.sbatch   # PepQueryDB spectra mirror (~196 GiB);
+                                                     #   lets massspec search via -ms instead of
+                                                     #   re-downloading from S3 on every search
+sbatch scripts/setup/setup_envs.sbatch               # build the -plm / -fold GPU conda envs
 
 # 4. Run the canonical cheeseman13 pipeline (all cell lines, writes paired parquet)
 python scripts/run.py --preset cheeseman13
