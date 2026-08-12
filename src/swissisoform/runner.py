@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from swissisoform.assembly import assemble_genes
 from swissisoform.clinical.module import ClinicalModule
@@ -728,9 +730,14 @@ def run(spec: RunSpec) -> int:
     all_path = out_dir / "all_paired.parquet"
     paired.to_parquet(all_path, index=False)
     print(f"\nwrote {all_path} ({len(paired)} rows, {len(paired.columns)} cols)")
+    # Write the per-gene slices against the full frame's schema. Inferring it per
+    # slice breaks on a gene whose every row holds an empty struct (a gene with no
+    # clinical hits has clinical_summary.by_source == {}), which Parquet cannot
+    # represent; one shared schema also keeps these consistent with all_paired.
+    schema = pa.Table.from_pandas(paired, preserve_index=False).schema
     for gene_name, sub in paired.groupby("gene_name"):
         gpath = out_dir / f"{gene_name}_paired.parquet"
-        sub.to_parquet(gpath, index=False)
+        pq.write_table(pa.Table.from_pandas(sub, schema=schema, preserve_index=False), gpath)
         if len(prepared.genes) <= 50:
             print(f"  {gene_name}: {len(sub)} rows -> {gpath.name}")
     if len(prepared.genes) > 50:
