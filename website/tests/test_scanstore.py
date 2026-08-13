@@ -255,3 +255,33 @@ def test_digest_is_written_atomically() -> None:
     blob = scanstore.blob_dir(saved.key)
     assert not list(blob.glob("*.tmp"))
     assert json.loads(scanstore.digest_path(saved.key).read_text())["counts"]["hits"] == 7
+
+
+def test_a_token_minted_under_an_older_schema_reads_as_expired() -> None:
+    """The key alone does not retire old tokens — they keep pointing at old blobs.
+
+    Harmless while a redeploy wipes /tmp, but a live bug the moment the store
+    outlives a deploy. So the token carries the schema and a mismatch is expired.
+    """
+    saved = _save()
+    scanstore.write_digest(saved.key, {"counts": {}})
+    assert scanstore.load(saved.token).ok
+
+    pointer = scanstore.scan_dir() / "tokens" / f"{saved.token}.json"
+    stale = json.loads(pointer.read_text())
+    stale["schema"] = "d1"
+    pointer.write_text(json.dumps(stale))
+
+    loaded = scanstore.load(saved.token)
+    assert loaded.expired is True
+    assert not loaded.ok
+
+
+def test_a_token_with_no_schema_field_reads_as_expired() -> None:
+    """Tokens written before the field existed are also retired, not trusted."""
+    saved = _save()
+    scanstore.write_digest(saved.key, {"counts": {}})
+    pointer = scanstore.scan_dir() / "tokens" / f"{saved.token}.json"
+    without = {k: v for k, v in json.loads(pointer.read_text()).items() if k != "schema"}
+    pointer.write_text(json.dumps(without))
+    assert scanstore.load(saved.token).expired is True

@@ -8,6 +8,7 @@ which lives outside the repository.
 from __future__ import annotations
 
 import io
+import json
 import re
 import shutil
 from pathlib import Path
@@ -468,3 +469,98 @@ def test_debug_flag_logs_the_full_payload(client, caplog, monkeypatch) -> None:
     logged = "\n".join(r.getMessage() for r in caplog.records)
     assert "SWISSISOFORM_SCAN_DEBUG=1" in logged
     assert '"redirect"' in logged
+
+
+# ----------------------------------------------------------------------
+# Uploaded variants on the gene figure
+# ----------------------------------------------------------------------
+
+
+def gene_figure(client, path: str) -> dict:
+    """The Plotly figure dict the gene page inlines for the combined view."""
+    body = client.get(path).data.decode()
+    match = re.search(r"GENE_PROTEIN_FIG\s*=\s*(\{.*?\});", body, re.S)
+    assert match, "no GENE_PROTEIN_FIG on the page"
+    return json.loads(match.group(1))
+
+
+def uploaded_traces(figure: dict) -> list[dict]:
+    return [t for t in figure["data"] if t.get("marker", {}).get("symbol") == "diamond"]
+
+
+def test_no_uploaded_marks_without_a_scan(client) -> None:
+    figure = gene_figure(client, "/genes/CBX1")
+    assert uploaded_traces(figure) == []
+    assert not [t for t in figure["data"] if t.get("name") == "uploaded VCF"]
+
+
+def test_uploaded_marks_appear_with_a_scan(client, scan_token) -> None:
+    traces = uploaded_traces(gene_figure(client, f"/genes/CBX1?vcf={scan_token}"))
+    assert traces
+    assert sum(len(t["x"]) for t in traces) >= 2
+
+
+def test_uploaded_marks_are_visually_distinct(client, scan_token) -> None:
+    """Diamond plus a dark outline — the fill still encodes the consequence."""
+    trace = uploaded_traces(gene_figure(client, f"/genes/CBX1?vcf={scan_token}"))[0]
+    marker = trace["marker"]
+    assert marker["symbol"] == "diamond"
+    assert marker["line"]["width"] >= 1
+    assert marker["opacity"] == 1.0
+    assert marker["size"] > 9, "must outsize the ClinVar circles"
+
+
+def test_exactly_one_legend_entry_however_many_rows(client, scan_token) -> None:
+    """CDC34's hits span three consequence rows; the key must appear once."""
+    figure = gene_figure(client, f"/genes/CDC34?vcf={scan_token}")
+    traces = uploaded_traces(figure)
+    assert len(traces) >= 3, "expected marks on several consequence rows"
+    named = [t for t in figure["data"] if t.get("showlegend") and t.get("name") == "uploaded VCF"]
+    assert len(named) == 1
+
+
+def test_marks_land_on_the_row_matching_their_consequence(client, scan_token) -> None:
+    """The point of shipping the CDS: EIF2B1's unique-region SNV is silent.
+
+    It must sit on the synonymous row (grey #94a3b8), not missense (amber #d97706).
+    A "SNV means missense" guess would have drawn it as a missense hit inside a
+    differential region.
+    """
+    traces = uploaded_traces(gene_figure(client, f"/genes/EIF2B1?vcf={scan_token}"))
+    assert traces
+    colours = {t["marker"]["color"] for t in traces}
+    assert "#94a3b8" in colours, colours
+    assert "#d97706" not in colours, "a silent variant must not be drawn as missense"
+
+
+def test_hover_names_the_source_and_the_vcf_line(client, scan_token) -> None:
+    traces = uploaded_traces(gene_figure(client, f"/genes/CBX1?vcf={scan_token}"))
+    hovers = [h for t in traces for h in t["hovertext"]]
+    assert hovers
+    assert all("From your VCF" in h for h in hovers)
+    assert any(re.search(r"line \d+", h) for h in hovers)
+    assert any("p." in h for h in hovers)
+
+
+def test_one_variant_in_several_isoforms_is_a_single_mark(client, scan_token) -> None:
+    """Shared-region hits map to the SAME canonical x in every isoform.
+
+    Without merging they stack into one visible diamond with only one reachable
+    hover, so the count is stated in the tooltip instead.
+    """
+    traces = uploaded_traces(gene_figure(client, f"/genes/CBX1?vcf={scan_token}"))
+    hovers = [h for t in traces for h in t["hovertext"]]
+    assert any("in 5 isoforms" in h for h in hovers), hovers
+    for trace in traces:
+        counts = {}
+        for x, hover in zip(trace["x"], trace["hovertext"]):
+            counts.setdefault(x, set()).add(hover)
+        for x, variants in counts.items():
+            # More than one mark at an x is only allowed for genuinely different
+            # variants (the fixture's multi-allelic row is two distinct alleles).
+            assert len(variants) == len([1 for v in trace["x"] if v == x]), x
+
+
+def test_a_stale_token_draws_nothing(client) -> None:
+    figure = gene_figure(client, "/genes/CBX1?vcf=doesnotexist")
+    assert uploaded_traces(figure) == []

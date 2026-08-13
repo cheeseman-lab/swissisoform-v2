@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from swissisoform.variantquery.consequence import OTHER, classify, classify_without_sequence
 from swissisoform.variantquery.frame import region_for, resolve_residue
 from swissisoform.variantquery.index import OrfIndex
 from swissisoform.variantquery.spec import Rejection, VariantSpec, parse_line
@@ -28,7 +29,10 @@ class VariantHit:
     """One (variant, ORF) pair. A position in N isoforms yields N hits.
 
     ``residue`` is **0-based**, matching ``protein_pos`` elsewhere in the
-    pipeline — so TP53 p.R248 reports ``residue=247``.
+    pipeline — so TP53 p.R248 reports ``residue=247``. ``hgvsp`` is 1-based, as the
+    notation requires, and is numbered against the protein named by ``frame``: the
+    same nucleotide is a different residue in every ORF containing it, so the two
+    fields have to travel together.
     """
 
     line_no: int
@@ -44,6 +48,15 @@ class VariantHit:
     frame: str
     residue: int | None
     region: str
+    #: One of the figure's consequence terms; ``other`` when unclassifiable.
+    consequence: str = OTHER
+    #: Reference and alternate amino acids. More than one letter when a multi-base
+    #: substitution straddles a codon boundary.
+    aa_ref: str = ""
+    aa_alt: str = ""
+    hgvsp: str = ""
+    #: Why the notation is absent, when it is (e.g. an indel crossing an intron).
+    consequence_note: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serialisable form for the scan digest."""
@@ -63,6 +76,9 @@ class ScanCounts:
     genes_hit: int = 0
     truncated: bool = False
     rejected: dict[str, int] = field(default_factory=dict)
+    #: Hit records per consequence term — the figure's row breakdown, and the
+    #: quickest way to see from the logs whether classification ran at all.
+    consequences: dict[str, int] = field(default_factory=dict)
 
     def reject(self, reason: str) -> None:
         """Tally one rejected allele under ``reason``."""
@@ -178,6 +194,26 @@ def scan(
             for record in records:
                 residue, frame, _gpos = resolve_residue(record, start, end)
                 region = region_for(record, start, end)
+                # The frame decides which of the two CDSs and exon sets to use — a
+                # truncation's lost N-terminus is numbered against the canonical.
+                cds = record.cds_for(frame)
+                if cds:
+                    consequence = classify(
+                        exons=record.exons_for(frame),
+                        strand=record.strand,
+                        cds=cds,
+                        pos=spec.pos,
+                        ref=spec.ref,
+                        alt=spec.alt,
+                        start_codon=record.start_codon_for(frame),
+                    )
+                else:
+                    # Index built without a genome: length still gives the class,
+                    # but missense/synonymous/stop_gained are indistinguishable.
+                    consequence = classify_without_sequence(spec.ref, spec.alt)
+                counts.consequences[consequence.term] = (
+                    counts.consequences.get(consequence.term, 0) + 1
+                )
                 counts.hits += 1
                 summary = genes.setdefault(record.gene_name, GeneSummary(record.gene_name))
                 summary.n_hits += 1
@@ -203,6 +239,11 @@ def scan(
                             frame=frame,
                             residue=residue,
                             region=region,
+                            consequence=consequence.term,
+                            aa_ref=consequence.aa_ref,
+                            aa_alt=consequence.aa_alt,
+                            hgvsp=consequence.hgvsp,
+                            consequence_note=consequence.note,
                         )
                     )
                 else:

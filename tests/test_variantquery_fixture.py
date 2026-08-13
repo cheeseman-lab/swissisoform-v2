@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from swissisoform.variantquery.frame import plotly_x
-from swissisoform.variantquery.load import load_index_from_paired
+from swissisoform.variantquery.load import load_index
 from swissisoform.variantquery.scan import scan
 from swissisoform.variantquery.spec import SV_BREAKEND
 
@@ -29,6 +29,7 @@ VCF = FIXTURE_DIR / "test.vcf"
 EXPECTATIONS = FIXTURE_DIR / "test_expectations.tsv"
 RUN_DIR = Path(__file__).resolve().parents[1] / "data" / "output" / "cheeseman_test"
 PAIRED = RUN_DIR / "all_paired.parquet"
+ORF_INDEX = RUN_DIR / "orf_index.parquet"
 
 pytestmark = pytest.mark.skipif(
     not (VCF.is_file() and EXPECTATIONS.is_file() and PAIRED.is_file()),
@@ -38,7 +39,18 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def index():
-    return load_index_from_paired(PAIRED)
+    """The built index, which is what production loads.
+
+    ``all_paired.parquet`` carries no coding sequence — that is derived from the
+    genome by ``build_orf_index.py`` — so building from it would exercise the
+    sequence-free fallback rather than the real path.
+    """
+    if not ORF_INDEX.is_file():
+        pytest.skip(
+            "needs orf_index.parquet — "
+            "python scripts/export/build_orf_index.py --run cheeseman_test"
+        )
+    return load_index(ORF_INDEX)
 
 
 @pytest.fixture(scope="module")
@@ -299,4 +311,77 @@ def test_hit_records_expose_only_the_expected_fields(result) -> None:
             "frame",
             "residue",
             "region",
+            # Added deliberately with DIGEST_SCHEMA d3. None of these carries
+            # anything from the VCF's sample columns — they are derived from the
+            # ORF's own reference sequence.
+            "consequence",
+            "aa_ref",
+            "aa_alt",
+            "hgvsp",
+            "consequence_note",
         }
+
+
+# ----------------------------------------------------------------------
+# Consequence, on real ORFs
+# ----------------------------------------------------------------------
+
+
+def test_every_hit_carries_a_consequence_term(result) -> None:
+    """The figure groups rows by term, so a blank one would be undrawable."""
+    assert result.hits
+    assert all(h.consequence for h in result.hits)
+
+
+def test_synonymous_hits_exist_and_are_not_guessed_as_missense(result) -> None:
+    """The case that justifies shipping the CDS.
+
+    EIF2B1's unique-region SNV is silent (GAC->GAT). A "SNV means missense" guess
+    would draw it as a missense hit inside a differential region — the exact false
+    positive someone would act on. SRSF2's extension SNV is silent too.
+    """
+    by_gene = {}
+    for hit in result.hits:
+        by_gene.setdefault(hit.gene, set()).add((hit.consequence, hit.hgvsp))
+
+    assert ("synonymous_variant", "p.D2D") in by_gene["EIF2B1"]
+    assert ("synonymous_variant", "p.R18R") in by_gene["SRSF2"]
+    n_syn = sum(1 for h in result.hits if h.consequence == "synonymous_variant")
+    assert n_syn >= 6, f"expected the silent hits to survive, got {n_syn}"
+
+
+def test_indels_are_classified_by_length(result) -> None:
+    trnt1 = [h for h in result.hits if h.gene == "TRNT1"]
+    assert any(h.consequence == "frameshift_variant" for h in trnt1), trnt1
+    ube2d2 = [h for h in result.hits if h.gene == "UBE2D2"]
+    assert any(h.consequence == "inframe_insertion" for h in ube2d2), ube2d2
+
+
+def test_multi_codon_mnv_reports_both_residues(result) -> None:
+    """A 3-base substitution straddling a codon boundary changes two residues."""
+    ube2m = [h for h in result.hits if h.gene == "UBE2M" and h.ref == "CAA"]
+    assert ube2m
+    hit = ube2m[0]
+    assert hit.hgvsp == "p.F225_E226delinsSK", hit
+    assert (hit.aa_ref, hit.aa_alt) == ("FE", "SK")
+
+
+def test_the_first_orf_base_is_a_start_loss_with_the_real_start_codon(result) -> None:
+    """CDC34's TIS is CTG, so residue 1 is Leu — not an assumed Met."""
+    first_base = [h for h in result.hits if h.pos == 531767]
+    assert first_base
+    hit = first_base[0]
+    assert hit.consequence == "start_lost"
+    assert hit.hgvsp == "p.L1?", hit
+
+
+def test_hgvsp_numbering_differs_per_orf_for_one_nucleotide(result) -> None:
+    """Same substitution, different residue number in each ORF containing it.
+
+    This is why hgvsp travels with ``frame`` — the notation is meaningless without
+    knowing which protein it counts against.
+    """
+    same_pos = [h for h in result.hits if h.pos == 541549 and h.hgvsp]
+    notations = {h.hgvsp for h in same_pos}
+    assert len(notations) > 1, f"expected per-ORF numbering, got {notations}"
+    assert all(h.consequence == "synonymous_variant" for h in same_pos)

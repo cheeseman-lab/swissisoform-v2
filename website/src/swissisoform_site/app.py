@@ -160,8 +160,8 @@ def resolve_scan() -> tuple[str, dict[str, Any]]:
     return cached
 
 
-def scan_context(hits_key: str, hits_value: str) -> tuple[str, int | None]:
-    """Active scan token plus how many of its hits match one field.
+def scan_hits(hits_key: str, hits_value: str) -> tuple[str, list[dict[str, Any]]]:
+    """Active scan token plus the hits matching one field.
 
     Shared by the gene and isoform pages so their graceful-degradation behaviour
     cannot drift apart.
@@ -171,13 +171,19 @@ def scan_context(hits_key: str, hits_value: str) -> tuple[str, int | None]:
         hits_value: Value it must equal.
 
     Returns:
-        ``(token, n_hits)``; ``("", None)`` when there is no usable scan.
+        ``(token, hits)``; ``("", [])`` when there is no usable scan.
     """
     token, digest = resolve_scan()
     if not token:
-        return "", None
+        return "", []
     hits = digest.get("hits", []) or []
-    return token, sum(1 for h in hits if h.get(hits_key) == hits_value)
+    return token, [h for h in hits if h.get(hits_key) == hits_value]
+
+
+def scan_context(hits_key: str, hits_value: str) -> tuple[str, int | None]:
+    """As :func:`scan_hits`, but only the count — for the breadcrumb chips."""
+    token, hits = scan_hits(hits_key, hits_value)
+    return token, (len(hits) if token else None)
 
 
 def _scan_debug_enabled() -> bool:
@@ -347,7 +353,8 @@ def create_app() -> Flask:
         if gene is None or not gene.isoforms:
             abort(404)
 
-        view = _make_gene_protein_view(gene)
+        scan_token, gene_scan_hits = scan_hits("gene", gene.name)
+        view = _make_gene_protein_view(gene, uploaded=gene_scan_hits)
         gene_fig = build_gene_protein_figure(view)
         gene_fig_collapsed = build_gene_protein_figure(view, collapse_domains=True)
 
@@ -356,7 +363,7 @@ def create_app() -> Flask:
         truncations = [i for i in gene.isoforms if i.orf_type == "truncated"]
         others = [i for i in gene.isoforms if i.orf_type not in ("extended", "truncated")]
 
-        scan_token, scan_gene_hits = scan_context("gene", gene.name)
+        scan_gene_hits = len(gene_scan_hits) if scan_token else None
 
         return render_template(
             "gene.html",
@@ -990,7 +997,77 @@ def _frame_domain_clusters(occurrences: list[dict[str, Any]]) -> list[dict[str, 
     return out
 
 
-def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
+def _uploaded_variant_records(hits: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Scan hits → figure records, in the same shape the ClinVar variants use.
+
+    Sharing the shape means they land on the same consequence rows, so an uploaded
+    variant can be read against where the known pathogenics cluster. ``source`` is
+    what the figure keys the distinct marker off.
+
+    ``x`` comes from ``frame.plotly_x``, the same conversion the fixture's
+    ``expect_x`` column pins — the residue is meaningless without the frame, since
+    a truncation's lost region is numbered against the canonical protein.
+    """
+    if not hits:
+        return []
+
+    from swissisoform.variantquery.frame import plotly_x
+
+    index = load_orf_index()
+    # Keyed by (variant, x, consequence): one variant inside N isoforms yields N
+    # hits, and shared-region hits all map to the SAME canonical x — so without this
+    # they stack into one visible diamond with only one reachable hover. Distinct
+    # variants that happen to collide at an x stay separate.
+    merged: dict[tuple[str, int, str], dict[str, Any]] = {}
+    isoform_counts: dict[tuple[str, int, str], set[str]] = {}
+
+    for hit in hits:
+        residue = hit.get("residue")
+        if residue is None:
+            # Classified but unplaceable (e.g. an indel crossing an intron). It has
+            # no residue, so it has nowhere to sit on a protein axis.
+            continue
+        record = index.by_tis_id(hit.get("tis_id", "")) if index else None
+        if record is None:
+            continue
+        x = plotly_x(record, int(residue), hit.get("frame", ""))
+        if x is None:
+            continue
+
+        change = f"{hit.get('ref', '')}>{hit.get('alt', '')}"
+        # Namespaced so it can never collide with a ClinVar/gnomAD id.
+        variant_id = f"vcf:{hit.get('chrom')}:{hit.get('pos')}:{change}"
+        consequence = hit.get("consequence") or "other"
+        key = (variant_id, x, consequence)
+        isoform_counts.setdefault(key, set()).add(hit.get("tis_id", ""))
+
+        if key in merged:
+            # A hit in the unique region of ANY isoform makes the mark prominent.
+            merged[key]["in_unique"] |= hit.get("region") == "unique"
+            continue
+        merged[key] = {
+            "variant_id": variant_id,
+            "pos": x + 1,  # the caller applies the global -1 shift
+            "consequence": consequence,
+            "significance": None,
+            "hgvsp": hit.get("hgvsp") or "",
+            "source": "uploaded",
+            "in_unique": hit.get("region") == "unique",
+            "uploaded_detail": (
+                f"{hit.get('chrom')}:{hit.get('pos'):,} {change} · line {hit.get('line_no')}"
+            ),
+        }
+
+    for key, record in merged.items():
+        n = len(isoform_counts[key])
+        if n > 1:
+            record["uploaded_detail"] += f" · in {n} isoforms"
+    return list(merged.values())
+
+
+def _make_gene_protein_view(
+    gene: Any, uploaded: list[dict[str, Any]] | None = None
+) -> types.SimpleNamespace:
     """Residue-frame combined view consumed by ``build_gene_protein_figure``.
 
     One canonical bar (residues ``1..canonical_len``) plus one bar per isoform,
@@ -1188,6 +1265,10 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
         for s in _depth_segments([{"start": d["x0"], "end": d["x1"]} for d in domains])
     ]
     variants = list(var_by_id.values())
+    # Uploaded VCF hits are appended AFTER the dedupe, never through it: var_by_id
+    # merges by variant_id with pathogenic-wins, which would absorb an uploaded hit
+    # into a ClinVar record (or be absorbed by one) and lose its provenance.
+    variants.extend(_uploaded_variant_records(uploaded))
     motif_list = list(motifs.values())
 
     # Anchor the canonical start at x=0 (residue 1 → 0) so extensions read as

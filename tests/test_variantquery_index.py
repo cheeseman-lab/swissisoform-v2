@@ -199,3 +199,37 @@ def test_plotly_x_shifts_isoform_frame_only() -> None:
     record = replace(PLUS, canonical_len=185, isoform_len=239)
     assert plotly_x(record, 21, FRAME_ISOFORM) == -33
     assert plotly_x(record, 21, FRAME_CANONICAL) == 21
+
+
+# ----------------------------------------------------------------------
+# CDS columns: optional, and frame-matched
+# ----------------------------------------------------------------------
+
+
+def test_cds_defaults_to_empty_so_an_older_index_still_loads() -> None:
+    """The CDS columns only exist when the builder was given a genome."""
+    record = OrfRecord.from_mapping(
+        {"gene_name": "G", "tis_id": "t", "chrom": "chr1", "strand": "+"}
+    )
+    assert record.orf_cds == ""
+    assert record.canonical_cds == ""
+    assert record.cds_for("isoform") == ""
+
+
+def test_frame_accessors_never_mix_a_cds_with_the_wrong_exons() -> None:
+    """Pairing the isoform CDS with canonical exons would shift every residue."""
+    record = replace(
+        PLUS,
+        orf_cds="ATGAAA",
+        canonical_cds="ATG",
+        canonical_orf_exons=((100, 103),),
+        start_codon="GTG",
+        canonical_start_codon="ATG",
+    )
+    assert record.cds_for("isoform") == "ATGAAA"
+    assert record.exons_for("isoform") == PLUS.orf_exons
+    assert record.start_codon_for("isoform") == "GTG"
+
+    assert record.cds_for("canonical") == "ATG"
+    assert record.exons_for("canonical") == ((100, 103),)
+    assert record.start_codon_for("canonical") == "ATG"

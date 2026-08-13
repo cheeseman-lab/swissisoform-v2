@@ -106,8 +106,11 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                 "annotations": [
                     {
                         "text": "No protein length available for this gene.",
-                        "showarrow": False, "x": 0.5, "y": 0.5,
-                        "xref": "paper", "yref": "paper",
+                        "showarrow": False,
+                        "x": 0.5,
+                        "y": 0.5,
+                        "xref": "paper",
+                        "yref": "paper",
                         "font": {"size": 14, "color": "#666"},
                     }
                 ],
@@ -129,9 +132,15 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
     def _left_label(text: str, y: float, size: int = 10) -> None:
         annotations.append(
             {
-                "x": x_left, "y": y, "xref": "x", "yref": "y",
-                "xanchor": "right", "xshift": -6, "text": text,
-                "showarrow": False, "font": {"size": size, "color": "#475569"},
+                "x": x_left,
+                "y": y,
+                "xref": "x",
+                "yref": "y",
+                "xanchor": "right",
+                "xshift": -6,
+                "text": text,
+                "showarrow": False,
+                "font": {"size": size, "color": "#475569"},
             }
         )
 
@@ -199,10 +208,23 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
     conseqs = sorted(
         by_conseq, key=lambda c: (_CONSEQ_ORDER.index(c) if c in _CONSEQ_ORDER else 99, c)
     )
+    uploaded_drawn = False
     for i, c in enumerate(conseqs):
         ty = mut_base + i * 0.26
         xs, cols, sizes, opac, hover = [], [], [], [], []
+        # Uploaded VCF hits share the consequence row — so a user's variant reads
+        # against where the known pathogenics cluster — but get their own trace so
+        # they can carry a distinct symbol and a single legend entry.
+        up_xs, up_hover = [], []
         for v in by_conseq[c]:
+            if (v.get("source") or "") == "uploaded":
+                up_xs.append(v["pos"])
+                up_hover.append(
+                    f"<b>From your VCF</b><br>{v.get('uploaded_detail') or ''}<br>"
+                    f"{v.get('hgvsp') or ''}<br>"
+                    f"{c} · {'unique' if v.get('in_unique') else 'shared'} region"
+                )
+                continue
             is_path = "pathogenic" in (v.get("significance") or "").lower()
             in_unique = bool(v.get("in_unique"))
             xs.append(v["pos"])
@@ -214,13 +236,45 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                 f"{c} · {'unique' if in_unique else 'shared'} region<br>"
                 f"{v.get('significance') or '—'} · {v.get('source') or ''}"
             )
-        traces.append(
-            {
-                "type": "scatter", "mode": "markers", "x": xs, "y": [ty] * len(xs),
-                "marker": {"size": sizes, "color": cols, "opacity": opac, "symbol": "circle"},
-                "hovertext": hover, "hoverinfo": "text", "showlegend": False,
-            }
-        )
+        if xs:
+            traces.append(
+                {
+                    "type": "scatter",
+                    "mode": "markers",
+                    "x": xs,
+                    "y": [ty] * len(xs),
+                    "marker": {"size": sizes, "color": cols, "opacity": opac, "symbol": "circle"},
+                    "hovertext": hover,
+                    "hoverinfo": "text",
+                    "showlegend": False,
+                }
+            )
+        if up_xs:
+            traces.append(
+                {
+                    "type": "scatter",
+                    "mode": "markers",
+                    "x": up_xs,
+                    "y": [ty] * len(up_xs),
+                    "marker": {
+                        "size": 11,
+                        "color": _CONSEQ_COLOR.get(c, "#94a3b8"),
+                        "opacity": 1.0,
+                        "symbol": "diamond",
+                        # A dark outline is what separates these from the circles at
+                        # a glance, since the fill still encodes the consequence.
+                        "line": {"width": 1.6, "color": "#0f172a"},
+                    },
+                    "hovertext": up_hover,
+                    "hoverinfo": "text",
+                    # Exactly one legend entry across all rows: a novel symbol with
+                    # no key leaves the reader guessing.
+                    "name": "uploaded VCF",
+                    "showlegend": not uploaded_drawn,
+                    "legendgroup": "uploaded",
+                }
+            )
+            uploaded_drawn = True
         _left_label(_CONSEQ_SHORT.get(c, c)[:14], ty, size=9)
     if conseqs:
         mut_top = mut_base + (len(conseqs) - 1) * 0.26 + 0.22
@@ -247,8 +301,17 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                 f"<br>frame residues {int(s['x0'])}–{int(s['x1'])}"
             )
             traces.append(
-                _feature_box(s["x0"], s["x1"], top, bot, fill,
-                             "Domain (InterPro)", "domain", hover, not legend_shown)
+                _feature_box(
+                    s["x0"],
+                    s["x1"],
+                    top,
+                    bot,
+                    fill,
+                    "Domain (InterPro)",
+                    "domain",
+                    hover,
+                    not legend_shown,
+                )
             )
             legend_shown = True
         _left_label("domains (InterPro)", (top + bot) / 2)
@@ -276,8 +339,17 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                 n_iso = len(d["isoforms"])
                 hover += f"<br>in {n_iso} isoform" + ("" if n_iso == 1 else "s")
             traces.append(
-                _feature_box(d["x0"], d["x1"], top, bot, _DOMAIN_FILL,
-                             "Domain (InterPro)", "domain", hover, not legend_shown)
+                _feature_box(
+                    d["x0"],
+                    d["x1"],
+                    top,
+                    bot,
+                    _DOMAIN_FILL,
+                    "Domain (InterPro)",
+                    "domain",
+                    hover,
+                    not legend_shown,
+                )
             )
             legend_shown = True
             name = d.get("name") or ""
@@ -286,8 +358,13 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                 label = name if len(name) <= chars_fit else name[: max(1, chars_fit - 1)] + "…"
                 annotations.append(
                     {
-                        "x": d["x0"], "y": top - row_h / 2, "xanchor": "left", "xshift": 3,
-                        "text": label, "showarrow": False, "font": {"size": 9, "color": "#14532d"},
+                        "x": d["x0"],
+                        "y": top - row_h / 2,
+                        "xanchor": "left",
+                        "xshift": 3,
+                        "text": label,
+                        "showarrow": False,
+                        "font": {"size": 9, "color": "#14532d"},
                     }
                 )
         band_bottom = y_cur - (n_rows - 1) * (row_h + row_gap) - row_h
@@ -301,8 +378,17 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
         for seg in disorder:
             hover = f"<b>Disordered region</b><br>frame residues {int(seg['x0'])}–{int(seg['x1'])}"
             traces.append(
-                _feature_box(seg["x0"], seg["x1"], top, bot, _DISORDER_FILL,
-                             "Disordered (MobiDB)", "disorder", hover, not legend_shown)
+                _feature_box(
+                    seg["x0"],
+                    seg["x1"],
+                    top,
+                    bot,
+                    _DISORDER_FILL,
+                    "Disordered (MobiDB)",
+                    "disorder",
+                    hover,
+                    not legend_shown,
+                )
             )
             legend_shown = True
         _left_label("disorder (MobiDB-lite)", (top + bot) / 2)
@@ -317,11 +403,16 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
             chov = f"<b>Coiled-coil</b><br>frame residues {int(seg['x0'])}–{int(seg['x1'])}"
             traces.append(
                 {
-                    "type": "scatter", "name": "Coiled-coil", "mode": "lines",
-                    "x": cxs, "y": [cy] * len(cxs),
-                    "line": {"color": _COIL_COLOR, "width": 8}, "legendgroup": "coil",
+                    "type": "scatter",
+                    "name": "Coiled-coil",
+                    "mode": "lines",
+                    "x": cxs,
+                    "y": [cy] * len(cxs),
+                    "line": {"color": _COIL_COLOR, "width": 8},
+                    "legendgroup": "coil",
                     "hovertext": [chov] * len(cxs),
-                    "hoverinfo": "text", "showlegend": not legend_shown,
+                    "hoverinfo": "text",
+                    "showlegend": not legend_shown,
                 }
             )
             legend_shown = True
@@ -336,11 +427,16 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
             mxs = _bar_samples(int(m["x0"]), int(m["x1"]))
             traces.append(
                 {
-                    "type": "scatter", "name": "Motif", "mode": "lines",
-                    "x": mxs, "y": [motif_y] * len(mxs),
-                    "line": {"color": _MOTIF_COLOR, "width": 6}, "legendgroup": "motif",
+                    "type": "scatter",
+                    "name": "Motif",
+                    "mode": "lines",
+                    "x": mxs,
+                    "y": [motif_y] * len(mxs),
+                    "line": {"color": _MOTIF_COLOR, "width": 6},
+                    "legendgroup": "motif",
                     "hovertext": [f"{m.get('name', '?')}"] * len(mxs),
-                    "hoverinfo": "text", "showlegend": not legend_shown,
+                    "hoverinfo": "text",
+                    "showlegend": not legend_shown,
                 }
             )
             legend_shown = True
@@ -375,10 +471,19 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                 hover.append(f"<b>{t['sample']}</b><br>{m.get('label', '')}<br>IE {ie}")
             traces.append(
                 {
-                    "type": "scatter", "mode": "markers", "x": xs, "y": [ly] * len(xs),
-                    "marker": {"size": sizes, "color": colors, "opacity": 0.85,
-                               "line": {"width": 1, "color": "#fff"}},
-                    "hovertext": hover, "hoverinfo": "text", "showlegend": False,
+                    "type": "scatter",
+                    "mode": "markers",
+                    "x": xs,
+                    "y": [ly] * len(xs),
+                    "marker": {
+                        "size": sizes,
+                        "color": colors,
+                        "opacity": 0.85,
+                        "line": {"width": 1, "color": "#fff"},
+                    },
+                    "hovertext": hover,
+                    "hoverinfo": "text",
+                    "showlegend": False,
                 }
             )
             _left_label(t["sample"].replace("_", " "), ly)
@@ -395,7 +500,11 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
         x_guide = max(trunc_ends)  # largest x0 = fewest residues retained = shortest protein
         shapes.append(
             {
-                "type": "line", "x0": x_guide, "x1": x_guide, "y0": y_bottom, "y1": guide_top,
+                "type": "line",
+                "x0": x_guide,
+                "x1": x_guide,
+                "y0": y_bottom,
+                "y1": guide_top,
                 "line": {"color": "#111827", "width": 1, "dash": "dot"},
             }
         )
@@ -408,13 +517,21 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
             "font": {"family": _FONT_FAMILY, "size": 13, "color": "#1f2937"},
             "hoverlabel": {"font": {"family": _HOVER_FONT_FAMILY, "size": 12}},
             "showlegend": True,
-            "legend": {"orientation": "h", "yanchor": "bottom", "y": 1.02,
-                       "xanchor": "left", "x": 0, "font": {"size": 11}},
+            "legend": {
+                "orientation": "h",
+                "yanchor": "bottom",
+                "y": 1.02,
+                "xanchor": "left",
+                "x": 0,
+                "font": {"size": 11},
+            },
             "shapes": shapes,
             "annotations": annotations,
             "xaxis": {
-                "title": {"text": "Protein residue (0 = canonical start)",
-                          "font": {"size": 12, "color": "#4b5563"}},
+                "title": {
+                    "text": "Protein residue (0 = canonical start)",
+                    "font": {"size": 12, "color": "#4b5563"},
+                },
                 "tickfont": {"size": 11, "color": "#6b7280"},
                 "range": [x_left, axis_len + 5],
                 "zeroline": True,  # solid line at x=0 marks the canonical start
@@ -427,8 +544,15 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
 
 
 def _feature_box(
-    x0: float, x1: float, top: float, bot: float, fill: str, name: str, group: str,
-    hover: str, show_legend: bool,
+    x0: float,
+    x1: float,
+    top: float,
+    bot: float,
+    fill: str,
+    name: str,
+    group: str,
+    hover: str,
+    show_legend: bool,
 ) -> dict[str, Any]:
     """A filled rectangle trace (domain / disorder box) with a hoverable interior."""
     return {
@@ -491,9 +615,7 @@ def _diff_overlay(x0: int, x1: int, y: float, color: str) -> dict[str, Any]:
     xs = _bar_samples(x0, x1)
     length = int(abs(x1 - x0)) + 1
     base = min(x0, x1)
-    hover = [
-        f"<b>Differential region</b><br>residue {int(x - base) + 1} / {length} aa" for x in xs
-    ]
+    hover = [f"<b>Differential region</b><br>residue {int(x - base) + 1} / {length} aa" for x in xs]
     return {
         "type": "scatter",
         "name": "Differential region",

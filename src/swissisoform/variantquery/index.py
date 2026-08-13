@@ -21,7 +21,7 @@ from typing import Any
 
 Interval = tuple[int, int]
 
-#: Columns an index record needs. ``build_orf_index.py`` projects exactly these.
+#: Columns projected out of ``all_paired.parquet`` by ``build_orf_index.py``.
 INDEX_COLUMNS = (
     "gene_name",
     "tis_id",
@@ -36,7 +36,14 @@ INDEX_COLUMNS = (
     "isoform_len",
     "diff_space",
     "orf_type",
+    "start_codon",
+    "canonical_start_codon",
 )
+
+#: Coding sequences the builder *derives* from the genome rather than projecting.
+#: Optional so an index built before they existed still loads — consequence
+#: classification then degrades to length-based classes only.
+CDS_COLUMNS = ("orf_cds", "canonical_cds")
 
 
 def _as_intervals(raw: Any) -> tuple[Interval, ...]:
@@ -85,6 +92,24 @@ class OrfRecord:
     isoform_len: int | None
     diff_space: str
     orf_type: str
+    start_codon: str = ""
+    canonical_start_codon: str = ""
+    #: Coding sequence in mRNA order, no trailing stop. Empty when the index was
+    #: built without a genome — consequence then falls back to length-based classes.
+    orf_cds: str = ""
+    canonical_cds: str = ""
+
+    def cds_for(self, frame: str) -> str:
+        """The CDS matching a frame from ``resolve_residue`` (isoform/canonical)."""
+        return self.canonical_cds if frame == "canonical" else self.orf_cds
+
+    def exons_for(self, frame: str) -> tuple[Interval, ...]:
+        """The exons matching a frame, so callers cannot pair them mismatched."""
+        return self.canonical_orf_exons if frame == "canonical" else self.orf_exons
+
+    def start_codon_for(self, frame: str) -> str:
+        """The start codon matching a frame."""
+        return self.canonical_start_codon if frame == "canonical" else self.start_codon
 
     @classmethod
     def from_mapping(cls, row: Mapping[str, Any]) -> OrfRecord:
@@ -103,6 +128,10 @@ class OrfRecord:
             isoform_len=_int_or_none(row.get("isoform_len")),
             diff_space=str(row.get("diff_space") or ""),
             orf_type=str(row.get("orf_type") or ""),
+            start_codon=str(row.get("start_codon") or ""),
+            canonical_start_codon=str(row.get("canonical_start_codon") or ""),
+            orf_cds=str(row.get("orf_cds") or ""),
+            canonical_cds=str(row.get("canonical_cds") or ""),
         )
 
 
@@ -128,7 +157,7 @@ class OrfIndex:
     position) or :meth:`lookup_span` (an inclusive 1-based range, for indels).
     """
 
-    __slots__ = ("_by_chrom", "_records", "version")
+    __slots__ = ("_by_chrom", "_records", "_tis_index", "version")
 
     def __init__(
         self,
@@ -139,6 +168,7 @@ class OrfIndex:
         """Store the records and their prebuilt per-chromosome interval arrays."""
         self._records = list(records)
         self._by_chrom = by_chrom
+        self._tis_index: dict[str, OrfRecord] | None = None
         self.version = version
 
     # ------------------------------------------------------------------
@@ -228,6 +258,17 @@ class OrfIndex:
 
         # Stable, run-independent order so digests are reproducible.
         return sorted((self._records[o] for o in owners), key=lambda r: r.tis_id)
+
+    def by_tis_id(self, tis_id: str) -> OrfRecord | None:
+        """The record for one ``tis_id``, or None.
+
+        Built lazily on first use: the gene figure needs each hit's ORF to convert a
+        residue into a plot coordinate (it needs ``canonical_len``/``isoform_len``),
+        and scanning ``records`` per hit would be quadratic on a busy gene.
+        """
+        if self._tis_index is None:
+            self._tis_index = {r.tis_id: r for r in self._records}
+        return self._tis_index.get(tis_id)
 
     def has_chrom(self, chrom: str) -> bool:
         """True when the index carries any ORF on ``chrom``.

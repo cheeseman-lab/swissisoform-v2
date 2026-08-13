@@ -76,8 +76,16 @@ _SWEEP_MARKER = ".last_sweep"
 #: count left cached digests in place, so the results page rendered the old
 #: field under the new label — plausible numbers, silently wrong.
 #:
-#: History: d1 initial · d2 per-gene n_hits split from n_variants.
-DIGEST_SCHEMA = "d2"
+#: It is written into the **token** as well as the blob key. The key alone only
+#: stops new uploads from reusing a stale blob; an existing token keeps pointing at
+#: the old blob and would serve its old shape. That is harmless while a redeploy
+#: wipes /tmp — but the moment the store outlives a deploy (a volume, a bucket) it
+#: becomes a live bug, so the token carries the schema and a mismatch reads as
+#: expired.
+#:
+#: History: d1 initial · d2 per-gene n_hits split from n_variants ·
+#: d3 per-hit consequence / aa_ref / aa_alt / hgvsp.
+DIGEST_SCHEMA = "d3"
 
 
 class ScanStoreError(RuntimeError):
@@ -269,6 +277,7 @@ def save(stream: BinaryIO, *, index_version: str, filename: str = "") -> SavedUp
             "filename": filename,
             "vcf_sha256": vcf_sha256,
             "created_at": _now_iso(),
+            "schema": DIGEST_SCHEMA,
         },
     )
     logger.info("scan upload stored token=%s key=%s cached=%s", token, key, was_cached)
@@ -301,6 +310,18 @@ def load(token: str) -> LoadedScan:
         return LoadedScan(missing=True, token=token)
 
     if _age_seconds(pointer.get("created_at")) > ttl_hours() * 3600:
+        return LoadedScan(expired=True, token=token)
+
+    # A token minted against an older digest shape points at a blob whose fields the
+    # current templates no longer match. Treat it as expired — "upload again" is
+    # correct and honest, where rendering the old shape would be quietly wrong.
+    if pointer.get("schema", "") != DIGEST_SCHEMA:
+        logger.info(
+            "scan token=%s was minted under schema %r, current is %r — treating as expired",
+            token,
+            pointer.get("schema", ""),
+            DIGEST_SCHEMA,
+        )
         return LoadedScan(expired=True, token=token)
 
     key = str(pointer.get("key") or "")
