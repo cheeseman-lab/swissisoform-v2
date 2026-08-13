@@ -86,7 +86,9 @@
       {% for g in genes %}
       <div class="vq-gene">
         {% if g.gene in known_genes %}
-        <a class="vq-gene-name" href="{{ url_for('gene_page', gene_name=g.gene) }}?vcf={{ token }}">{{ g.gene }}</a>
+        {# No manual ?vcf here: app.py's url_defaults hook injects it, and appending
+           a second one would produce ...?vcf=TOK?vcf=TOK. #}
+        <a class="vq-gene-name" href="{{ url_for('gene_page', gene_name=g.gene) }}">{{ g.gene }}</a>
         {% else %}
         <span class="vq-gene-name">{{ g.gene }}</span>
         {% endif %}

@@ -27,10 +27,13 @@ from typing import Any
 from flask import (
     Flask,
     abort,
+    g,
+    has_request_context,
     jsonify,
     render_template,
     request,
     send_from_directory,
+    url_for,
 )
 from markupsafe import Markup, escape
 
@@ -112,6 +115,71 @@ def _log_llm_coverage(genes: dict, llm_dir: Path) -> None:
     )
 
 
+#: Endpoints that participate in the variant-scan breadcrumb, and so should keep
+#: ``?vcf=`` alive when one is active. Deliberately a whitelist: appending the token
+#: to ``static`` or the structure-file routes would bust asset caching and write the
+#: token into asset request logs for no benefit.
+_SCAN_AWARE_ENDPOINTS = frozenset({"index", "gene_page", "isoform_page", "variants_page"})
+
+
+def resolve_scan() -> tuple[str, dict[str, Any]]:
+    """The request's active scan as ``(token, digest)``, resolved **once**.
+
+    Memoised on ``g`` for two reasons. It is consulted by both the view and the URL
+    injector, and the injector fires for every ``url_for`` — 17+ per page — so an
+    un-cached lookup would mean that many disk reads per render.
+
+    A token naming a scan that has expired or been swept resolves to ``("", {})``,
+    which is what keeps a dead token from following the user around the site and lets
+    every page render normally minus the breadcrumb. Scan context is always
+    supplementary; it never fails a page.
+    """
+    if not has_request_context():
+        return "", {}
+
+    cached = getattr(g, "_swiss_scan", None)
+    if cached is not None:
+        return cached
+
+    token = request.args.get("vcf") or ""
+    # On the results page the token is a path segment, not a query arg — without
+    # this that page's own outbound links would go out bare.
+    if not token and request.endpoint == "variants_page":
+        token = (request.view_args or {}).get("token") or ""
+
+    digest: dict[str, Any] = {}
+    if token:
+        loaded = scanstore.load(token)
+        if loaded.ok:
+            digest = loaded.digest or {}
+        else:
+            token = ""
+
+    cached = (token, digest)
+    g._swiss_scan = cached
+    return cached
+
+
+def scan_context(hits_key: str, hits_value: str) -> tuple[str, int | None]:
+    """Active scan token plus how many of its hits match one field.
+
+    Shared by the gene and isoform pages so their graceful-degradation behaviour
+    cannot drift apart.
+
+    Args:
+        hits_key: Field of each hit to match on (``"gene"`` or ``"tis_id"``).
+        hits_value: Value it must equal.
+
+    Returns:
+        ``(token, n_hits)``; ``("", None)`` when there is no usable scan.
+    """
+    token, digest = resolve_scan()
+    if not token:
+        return "", None
+    hits = digest.get("hits", []) or []
+    return token, sum(1 for h in hits if h.get(hits_key) == hits_value)
+
+
 def _scan_debug_enabled() -> bool:
     """True when the full scan payload may be logged.
 
@@ -179,6 +247,29 @@ def create_app() -> Flask:
     @app.template_filter("slugify")
     def slugify(value: Any) -> str:
         return _slug_re.sub("-", str(value or "unknown"))
+
+    @app.url_defaults
+    def _keep_scan_token(endpoint: str, values: dict[str, Any]) -> None:
+        """Carry ``?vcf=`` through every navigation link automatically.
+
+        Without this, the token has to be threaded by hand through 17 ``url_for``
+        calls across 15 templates, and the breadcrumb breaks the moment one is
+        missed. ``url_for`` puts any key absent from the URL rule into the query
+        string, so this needs no route changes.
+
+        Only a token that actually resolves is propagated — see ``resolve_scan``.
+        Forwarding a dead one would make a stale ``?vcf=`` trail the user around the
+        whole site, decorating every link with a scan that no longer exists.
+        """
+        if endpoint not in _SCAN_AWARE_ENDPOINTS:
+            return
+        # Never override an explicit value: a call site may pass vcf=None precisely
+        # to drop the token, which gene.html does for its JS base.
+        if "vcf" in values:
+            return
+        token, _digest = resolve_scan()
+        if token:
+            values["vcf"] = token
 
     # Linkify ``PMID:NNN`` citations in the gene mechanistic narrative. Match each
     # PMID token (not the enclosing bracket) so multi-PMID brackets like
@@ -265,23 +356,16 @@ def create_app() -> Flask:
         truncations = [i for i in gene.isoforms if i.orf_type == "truncated"]
         others = [i for i in gene.isoforms if i.orf_type not in ("extended", "truncated")]
 
-        # ?vcf keeps an active scan reachable across the hop into a gene page. A
-        # stale or expired token degrades to no breadcrumb rather than an error —
-        # the gene page must render on its own regardless.
-        scan_token = request.args.get("vcf") or ""
-        scan_gene_hits = None
-        if scan_token:
-            loaded = scanstore.load(scan_token)
-            if loaded.ok:
-                hits = (loaded.digest or {}).get("hits", []) or []
-                scan_gene_hits = sum(1 for h in hits if h.get("gene") == gene.name)
-            else:
-                scan_token = ""
+        scan_token, scan_gene_hits = scan_context("gene", gene.name)
 
         return render_template(
             "gene.html",
             scan_token=scan_token,
             scan_gene_hits=scan_gene_hits,
+            # The click handler concatenates a path onto the base, so the query
+            # string has to be kept separate — see gene.html.
+            gene_path=url_for("gene_page", gene_name=gene.name, vcf=None),
+            scan_qs=f"?vcf={scan_token}" if scan_token else "",
             gene=gene,
             extensions=extensions,
             truncations=truncations,
@@ -362,9 +446,15 @@ def create_app() -> Flask:
         sae = sae_card_for_isoform(iso)
         bio = biophysics_card_for_isoform(iso)
 
+        # Same helper the gene page uses, keyed on this isoform rather than the
+        # gene, so the breadcrumb survives one level deeper.
+        scan_token, scan_isoform_hits = scan_context("tis_id", iso.tis_id)
+
         return render_template(
             "isoform.html",
             isoform=_isoform_view(iso, gene),
+            scan_token=scan_token,
+            scan_isoform_hits=scan_isoform_hits,
             sae=sae,
             bio=bio,
             criterion_evidence=criterion_evidence_for(iso),
@@ -400,18 +490,19 @@ def create_app() -> Flask:
         """
         genes = load_all()
         payload: dict[str, Any] = {}
-        for name, g in genes.items():
+        # Named `record`, not `g` — `g` is Flask's request-global, imported above.
+        for name, record in genes.items():
             payload[name] = {
-                "name": g.name,
-                "uniprot_id": g.uniprot_id,
-                "uniprot_url": g.uniprot_url,
-                "function": g.function,
-                "location": g.location,
-                "keywords": g.keywords,
-                "canonical_len": g.canonical_len,
-                "canonical_cif": g.canonical_cif,
-                "llm": g.llm,
-                "isoforms": [_isoform_to_dict(i) for i in g.isoforms],
+                "name": record.name,
+                "uniprot_id": record.uniprot_id,
+                "uniprot_url": record.uniprot_url,
+                "function": record.function,
+                "location": record.location,
+                "keywords": record.keywords,
+                "canonical_len": record.canonical_len,
+                "canonical_cif": record.canonical_cif,
+                "llm": record.llm,
+                "isoforms": [_isoform_to_dict(i) for i in record.isoforms],
             }
         return jsonify(_clean(payload))
 

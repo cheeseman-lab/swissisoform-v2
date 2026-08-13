@@ -229,6 +229,118 @@ def test_gene_page_ignores_a_stale_token_rather_than_failing(client) -> None:
 
 
 # ----------------------------------------------------------------------
+# The breadcrumb trail: index / [variant scan] / gene / isoform
+# ----------------------------------------------------------------------
+
+CBX1_ISOFORM = "/genes/CBX1/isoforms/chr17-48101392---GTG-ENST00000225603-9"
+
+
+def crumbs(client, path: str) -> tuple[str, str]:
+    """Return the page body and its breadcrumb as flattened text."""
+    body = client.get(path).data.decode()
+    match = re.search(r'<nav class="crumbs">(.*?)</nav>', body, re.S)
+    trail = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", match.group(1))).strip() if match else ""
+    return body, trail
+
+
+def test_isoform_crumb_links_its_gene_even_without_a_scan(client) -> None:
+    """Pre-existing gap: the gene level used to be plain text, so an isoform page
+    had no way back to its gene at all."""
+    body, trail = crumbs(client, CBX1_ISOFORM)
+    assert 'href="/genes/CBX1"' in body
+    assert trail.startswith("Index / CBX1 /")
+    assert "Variant scan" not in trail
+
+
+def test_isoform_crumb_shows_all_four_levels_with_a_scan(client, scan_token) -> None:
+    body, trail = crumbs(client, f"{CBX1_ISOFORM}?vcf={scan_token}")
+    assert re.match(r"Index / Variant scan / CBX1 / chr17:48101392", trail), trail
+    assert f"/variants/{scan_token}" in body, "no link back to the scan"
+    assert f'href="/genes/CBX1?vcf={scan_token}"' in body, "no link back to the gene"
+
+
+def test_isoform_page_counts_hits_on_this_isoform(client, scan_token) -> None:
+    """Per-isoform, not per-gene: CBX1 has 7 gene hits spread over 5 isoforms."""
+    _, trail = crumbs(client, f"{CBX1_ISOFORM}?vcf={scan_token}")
+    match = re.search(r"(\d+) variants? from the uploaded VCF hit this isoform", trail)
+    assert match, trail
+    assert 1 <= int(match.group(1)) < 7
+
+
+def test_isoform_page_ignores_a_stale_token(client) -> None:
+    body, trail = crumbs(client, f"{CBX1_ISOFORM}?vcf=doesnotexist")
+    assert "Variant scan" not in trail
+    assert 'href="/genes/CBX1"' in body, "the gene link must survive a dead token"
+
+
+def test_gene_page_isoform_cards_carry_the_token(client, scan_token) -> None:
+    """Five cards; missing the token on any one silently ends the trail."""
+    body = client.get(f"/genes/CBX1?vcf={scan_token}").data.decode()
+    cards = set(re.findall(r'href="(/genes/CBX1/isoforms/[^"]+)"', body))
+    assert len(cards) == 5
+    assert all(f"vcf={scan_token}" in c for c in cards)
+
+
+def test_figure_click_handler_keeps_path_and_query_separate(client, scan_token) -> None:
+    """The handler concatenates a path onto its base, so the base must stay bare.
+
+    A base already carrying "?vcf=..." would yield
+    /genes/CBX1?vcf=TOK/isoforms/<slug> — the gene page with junk in the query.
+    """
+    body = client.get(f"/genes/CBX1?vcf={scan_token}").data.decode()
+    gene_path = re.search(r'const GENE_PATH = "([^"]*)"', body).group(1)
+    scan_qs = re.search(r'const SCAN_QS = "([^"]*)"', body).group(1)
+    assert gene_path == "/genes/CBX1", gene_path
+    assert scan_qs == f"?vcf={scan_token}"
+    assert "encodeURIComponent(slug) + SCAN_QS" in body
+
+
+def test_results_page_gene_links_are_not_doubly_parameterised(client, scan_token) -> None:
+    """The template used to append ?vcf by hand; with the injector that doubled it."""
+    body = client.get(f"/variants/{scan_token}").data.decode()
+    links = set(re.findall(r'href="(/genes/[^"]+)"', body))
+    assert links
+    for link in links:
+        assert link.count("?") <= 1, f"malformed URL: {link}"
+        assert f"vcf={scan_token}" in link
+
+
+def test_asset_urls_never_gain_the_token(client, scan_token) -> None:
+    """Injecting into static/structure URLs would bust caching and log the token."""
+    body = client.get(f"/genes/CBX1?vcf={scan_token}").data.decode()
+    assets = re.findall(r'(?:href|src)="(/(?:static|structures|structure-[a-z]+)/[^"]*)"', body)
+    assert assets, "expected some asset URLs on the gene page"
+    assert not [a for a in assets if "vcf=" in a]
+
+
+def test_index_links_keep_the_scan_alive(client, scan_token) -> None:
+    """Index is in the trail: its gene cards must not silently drop the token."""
+    body = client.get(f"/?vcf={scan_token}").data.decode()
+    cards = set(re.findall(r'href="(/genes/[^"/]+\?[^"]*)"', body))
+    assert cards
+    assert all(f"vcf={scan_token}" in c for c in cards)
+
+
+def test_untokenised_pages_stay_clean(client) -> None:
+    """The injector must be a no-op with no scan — no ?vcf= on any generated URL.
+
+    Checks href/src attributes rather than the raw body: the page legitimately
+    contains the literal text "?vcf=" inside a JS comment explaining the split.
+    """
+    for path in ("/", "/genes/CBX1", CBX1_ISOFORM):
+        body = client.get(path).data.decode()
+        urls = re.findall(r'(?:href|src)="([^"]*)"', body)
+        assert not [u for u in urls if "vcf=" in u], f"{path}: {urls}"
+
+
+def test_a_dead_token_is_not_propagated(client) -> None:
+    """A stale ?vcf must not be forwarded, or it trails the user around the site."""
+    body = client.get("/genes/CBX1?vcf=doesnotexist").data.decode()
+    urls = re.findall(r'(?:href|src)="([^"]*)"', body)
+    assert not [u for u in urls if "vcf=" in u], "a dead token leaked into links"
+
+
+# ----------------------------------------------------------------------
 # Status endpoint — the Railway debugging surface
 # ----------------------------------------------------------------------
 
