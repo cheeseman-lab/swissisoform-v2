@@ -148,11 +148,20 @@ def test_results_page_explains_hits_versus_variants(client, scan_token) -> None:
 
 
 def test_hits_table_is_labelled_hits_not_variants(client, scan_token) -> None:
-    """23 rows for 13 variants — calling the table "Variants" contradicted the funnel."""
-    page = client.get(f"/variants/{scan_token}").data.decode()
-    assert "<h2>Hits (23)</h2>" in page
-    # Collapse whitespace — the template wraps this sentence across lines.
-    assert "13 variants, one row per isoform" in re.sub(r"\s+", " ", page)
+    """More rows than variants — calling the table "Variants" contradicted the funnel.
+
+    Both numbers are read back from the digest rather than hardcoded, so extending
+    the fixture does not break this; what is asserted is that they differ and that
+    each is labelled with the right noun.
+    """
+    digest = client.get(f"/api/variants/{scan_token}.json").get_json()
+    n_hits = digest["counts"]["hits"]
+    n_variants = sum(g["n_variants"] for g in digest["genes"])
+    assert n_hits > n_variants, "the fixture must exercise the one-to-many case"
+
+    page = re.sub(r"\s+", " ", client.get(f"/variants/{scan_token}").data.decode())
+    assert f"<h2>Hits ({n_hits})</h2>" in page
+    assert f"{n_variants} variants, one row per isoform" in page
 
 
 def test_gene_rows_show_both_counts(client, scan_token) -> None:
@@ -448,7 +457,7 @@ def test_default_log_line_carries_counts_but_no_variant_positions(client, caplog
                 content_type="multipart/form-data",
             )
     logged = "\n".join(r.getMessage() for r in caplog.records)
-    assert "hits=23" in logged
+    assert re.search(r"hits=\d+", logged), logged
     assert "CBX1" in logged, "gene names are useful and not identifying"
     for leak in ("48101329", "residue", "test.vcf", "0/1:"):
         assert leak not in logged, f"{leak!r} reached the log by default"
@@ -564,3 +573,29 @@ def test_one_variant_in_several_isoforms_is_a_single_mark(client, scan_token) ->
 def test_a_stale_token_draws_nothing(client) -> None:
     figure = gene_figure(client, "/genes/CBX1?vcf=doesnotexist")
     assert uploaded_traces(figure) == []
+
+
+def test_a_withheld_notation_explains_itself_in_the_hover(client, scan_token) -> None:
+    """An absent p. string is deliberate, so the tooltip must say why.
+
+    The fixture's exon-spanning deletion keeps its class (from the length delta) but
+    cannot be named, because splicing intronic bases into the CDS would be wrong.
+    Leaving the field blank would read as a rendering bug.
+    """
+    traces = uploaded_traces(gene_figure(client, f"/genes/CDC34?vcf={scan_token}"))
+    hovers = [h for t in traces for h in t["hovertext"]]
+    withheld = [h for h in hovers if "not determined" in h]
+    assert withheld, hovers
+    assert "coding sequence" in withheld[0]
+    assert "| |" not in withheld[0].replace("<br>", " | "), "no empty tooltip field"
+
+
+def test_stop_gained_and_inframe_deletion_reach_the_figure(client, scan_token) -> None:
+    """Both rows were unreachable before the fixture gained these cases."""
+    cdc34 = uploaded_traces(gene_figure(client, f"/genes/CDC34?vcf={scan_token}"))
+    hovers = [h for t in cdc34 for h in t["hovertext"]]
+    assert any("inframe_deletion" in h and "p.E2del" in h for h in hovers), hovers
+
+    cbx1 = uploaded_traces(gene_figure(client, f"/genes/CBX1?vcf={scan_token}"))
+    cbx1_hovers = [h for t in cbx1 for h in t["hovertext"]]
+    assert any("stop_gained" in h for h in cbx1_hovers), cbx1_hovers

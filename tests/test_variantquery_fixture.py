@@ -91,8 +91,9 @@ def test_every_expected_hit_is_present(result, expectations) -> None:
     (gene, orf_type). Extra hits on sibling isoforms are correct behaviour.
     """
     rows = _positive_rows(expectations)
-    # 11 single-allele positional rows + the multi-allelic row.
-    assert len(rows) == 12, "fixture shape changed — 12 positional PASS rows expected"
+    # A floor rather than an exact count: adding fixture coverage should not break
+    # this test, but losing rows silently should.
+    assert len(rows) >= 12, f"positional PASS rows dropped to {len(rows)}"
 
     actual = {(h.gene, h.frame, h.residue, h.region, h.pos) for h in result.hits}
     for row in rows:
@@ -220,7 +221,7 @@ def test_breakend_row_is_rejected_with_its_own_reason(result) -> None:
 # ----------------------------------------------------------------------
 
 
-def test_funnel_accounts_for_every_allele(result) -> None:
+def test_funnel_accounts_for_every_allele(result, expectations) -> None:
     """Nothing may vanish: every parsed allele is filtered, missed, or hit.
 
     Alleles are counted as ``(line_no, alt)`` rather than ``(chrom, pos, ref,
@@ -229,7 +230,9 @@ def test_funnel_accounts_for_every_allele(result) -> None:
     two distinct records into one.
     """
     counts = result.counts
-    assert counts.lines == 17
+    # Derived, not hardcoded: one VCF record per expectation row. This also catches
+    # the two fixture files drifting apart, which a literal count would not.
+    assert counts.lines == len(expectations)
     alleles_with_hits = len({(h.line_no, h.alt) for h in result.hits})
     assert (
         counts.alleles
@@ -385,3 +388,54 @@ def test_hgvsp_numbering_differs_per_orf_for_one_nucleotide(result) -> None:
     notations = {h.hgvsp for h in same_pos}
     assert len(notations) > 1, f"expected per-ORF numbering, got {notations}"
     assert all(h.consequence == "synonymous_variant" for h in same_pos)
+
+
+def test_stop_gained_is_reached_on_real_data(result) -> None:
+    """The most clinically loaded row on the figure; previously untested.
+
+    CBX1 is minus-strand, so a plus-strand G>A transition is C>T in mRNA sense,
+    turning CGA into TGA.
+    """
+    hits = [h for h in result.hits if h.pos == 48101323]
+    assert hits, "the stop_gained fixture row produced no hit"
+    assert all(h.consequence == "stop_gained" for h in hits), hits
+    assert all(h.hgvsp.endswith("*") for h in hits), [h.hgvsp for h in hits]
+    assert all(h.region == "unique" for h in hits), "a nonsense in the extension"
+
+
+def test_inframe_deletion_names_the_removed_codon(result) -> None:
+    hits = [h for h in result.hits if h.pos == 531771]
+    assert hits
+    hit = hits[0]
+    assert hit.consequence == "inframe_deletion"
+    assert hit.hgvsp == "p.E2del", hit
+
+
+def test_a_span_leaving_the_exon_keeps_its_class_but_withholds_the_notation(result) -> None:
+    """Splicing intronic bases into the CDS would be wrong, so no p. string.
+
+    The class still comes from the length delta, which needs no sequence — so the
+    variant is still drawn on the right row, just without a protein change.
+    """
+    hits = [h for h in result.hits if h.pos == 532107]
+    assert hits
+    hit = hits[0]
+    assert hit.consequence == "frameshift_variant", hit
+    assert hit.hgvsp == "", "must not invent a notation across an intron"
+    assert "coding sequence" in hit.consequence_note
+    assert hit.residue is not None, "still placeable — pos itself is in the exon"
+
+
+def test_the_vocabulary_the_figure_draws_is_actually_exercised(result) -> None:
+    """Guards the fixture's purpose: each figure row needs a real example."""
+    seen = set(result.counts.consequences)
+    for term in (
+        "missense_variant",
+        "synonymous_variant",
+        "stop_gained",
+        "start_lost",
+        "frameshift_variant",
+        "inframe_insertion",
+        "inframe_deletion",
+    ):
+        assert term in seen, f"no fixture row produces {term}"

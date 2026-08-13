@@ -79,10 +79,28 @@ cp ../src/swissisoform/__init__.py        src/swissisoform/__init__.py
 cp ../src/swissisoform/config.py          src/swissisoform/config.py
 cp ../src/swissisoform/site/__init__.py   src/swissisoform/site/__init__.py
 cp ../src/swissisoform/site/evidence.py   src/swissisoform/site/evidence.py
-# variantquery: __main__.py is a CLI and is deliberately not staged.
-for m in __init__ spec vcf index frame scan load; do
-  cp "../src/swissisoform/variantquery/$m.py" "src/swissisoform/variantquery/$m.py"
+# variantquery: copy the whole package rather than a hand-listed set of modules.
+# A hardcoded list silently omits any module added later — adding consequence.py
+# without updating the list shipped an image whose scan.py could not import, so
+# gunicorn had no workers and the deploy died on the healthcheck. __main__.py is
+# excluded because it is a CLI with no place in a web image.
+for f in ../src/swissisoform/variantquery/*.py; do
+  [[ "$(basename "$f")" == "__main__.py" ]] && continue
+  cp "$f" "src/swissisoform/variantquery/$(basename "$f")"
 done
+
+# Import the staged tree the way the container will: ONLY ./src on the path, so a
+# module that exists in the repo but was never copied fails here instead of in
+# production. Without this check a missing vendored module produces a green build,
+# a dead gunicorn, and a healthcheck failure with no hint as to why.
+echo "[prepare_deploy] verifying the staged tree imports on its own"
+if ! (cd "$PWD" && env -u PYTHONPATH PYTHONPATH="$PWD/src" SWISSISOFORM_DATA_DIR="$PWD/data" \
+      python -c "import swissisoform_site.app" >/dev/null 2>/tmp/prepare_deploy_import.log); then
+  echo "[prepare_deploy] ERROR: the staged build context does not import." >&2
+  echo "  Usually a module added under src/swissisoform/ that this script does not copy." >&2
+  tail -20 /tmp/prepare_deploy_import.log >&2
+  exit 1
+fi
 
 # Purge bytecode from the whole build context. --no-gitignore (needed to
 # upload the gitignored data/ + scripts/) also uploads __pycache__, and stale

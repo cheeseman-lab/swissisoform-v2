@@ -869,7 +869,9 @@ def _classify_interproscan_hits(ips_hits: Any) -> dict[str, list[dict[str, Any]]
             members = reg["members"]
             mapped = [m for m in members if m.get("interpro_id")]
             best = mapped[0] if mapped else members[0]
-            name = best.get("interpro_description") or best.get("name") or best.get("db") or "domain"
+            name = (
+                best.get("interpro_description") or best.get("name") or best.get("db") or "domain"
+            )
             if name in ("-", "—"):
                 name = best.get("name") or best.get("db") or "domain"
             domains.append(
@@ -1045,12 +1047,21 @@ def _uploaded_variant_records(hits: list[dict[str, Any]] | None) -> list[dict[st
             # A hit in the unique region of ANY isoform makes the mark prominent.
             merged[key]["in_unique"] |= hit.get("region") == "unique"
             continue
+        # An absent notation is deliberate (e.g. an indel crossing an intron), so say
+        # so rather than leaving a blank line in the tooltip that reads as a bug.
+        hgvsp = hit.get("hgvsp") or ""
+        if not hgvsp:
+            hgvsp = "protein change not determined"
+            note = hit.get("consequence_note") or ""
+            if note:
+                hgvsp += f" — {note}"
+
         merged[key] = {
             "variant_id": variant_id,
             "pos": x + 1,  # the caller applies the global -1 shift
             "consequence": consequence,
             "significance": None,
-            "hgvsp": hit.get("hgvsp") or "",
+            "hgvsp": hgvsp,
             "source": "uploaded",
             "in_unique": hit.get("region") == "unique",
             "uploaded_detail": (
@@ -1132,9 +1143,15 @@ def _make_gene_protein_view(
         label = f"{iso.orf_type} · {iso.start_codon}"
         bars.append(
             {
-                "label": label, "x0": x0, "x1": x1, "orf_type": iso.orf_type,
-                "is_trunc": is_trunc, "diff_x0": diff_x0, "diff_x1": diff_x1,
-                "diff_on_canonical": diff_on_canon, "slug": tis_slug(iso.tis_id),
+                "label": label,
+                "x0": x0,
+                "x1": x1,
+                "orf_type": iso.orf_type,
+                "is_trunc": is_trunc,
+                "diff_x0": diff_x0,
+                "diff_x1": diff_x1,
+                "diff_on_canonical": diff_on_canon,
+                "slug": tis_slug(iso.tis_id),
             }
         )
         x_left = min(x_left, float(x0))
@@ -1162,7 +1179,7 @@ def _make_gene_protein_view(
             coil_iv.append((int(seg["start"]) + offset, int(seg["end"]) + offset))
         # Motifs come straight off the raw hit column (0-based pos/end → 1-based).
         motif_hits = raw.get("isoform_motifs_hits")
-        for m in (list(motif_hits)[:30] if motif_hits is not None else []):
+        for m in list(motif_hits)[:30] if motif_hits is not None else []:
             if not isinstance(m, dict):
                 continue
             ms = m.get("start", m.get("pos"))
@@ -1174,7 +1191,9 @@ def _make_gene_protein_view(
             except (TypeError, ValueError):
                 continue
             motifs[(m.get("name"), mx0, mx1)] = {
-                "name": m.get("name", "motif"), "x0": mx0, "x1": mx1,
+                "name": m.get("name", "motif"),
+                "x0": mx0,
+                "x1": mx1,
             }
 
         # Variants → canonical frame, deduped by variant_id (pathogenic wins).
@@ -1200,10 +1219,13 @@ def _make_gene_protein_view(
                 f"{v.get('chrom')}-{v.get('genomic_pos')}-{v.get('ref')}-{v.get('alt')}"
             )
             rec = {
-                "variant_id": vid, "pos": fr,
+                "variant_id": vid,
+                "pos": fr,
                 "consequence": v.get("isoform_consequence") or v.get("consequence") or "other",
-                "significance": v.get("clinical_significance"), "hgvsp": v.get("hgvsp"),
-                "source": v.get("source"), "in_unique": bool(v.get("in_isoform_unique")),
+                "significance": v.get("clinical_significance"),
+                "hgvsp": v.get("hgvsp"),
+                "source": v.get("source"),
+                "in_unique": bool(v.get("in_isoform_unique")),
             }
             prev = var_by_id.get(vid)
             if prev is None:
@@ -1246,8 +1268,12 @@ def _make_gene_protein_view(
     # x=0 after the global shift below), sized by the canonical IE.
     for sample, cval in canon_ie_by_sample.items():
         cell_by_sample.setdefault(sample, []).append(
-            {"residue": 1, "log2_ie": math.log2(cval), "label": "canonical start",
-             "canonical": True}
+            {
+                "residue": 1,
+                "log2_ie": math.log2(cval),
+                "label": "canonical start",
+                "canonical": True,
+            }
         )
 
     disorder = [{"x0": s, "x1": e} for s, e in _union_intervals([disorder_iv])]
