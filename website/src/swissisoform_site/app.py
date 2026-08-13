@@ -1,7 +1,15 @@
 """Flask routes for the SwissIsoform v2 viewer.
 
-Read-only — every payload comes from ``data.load_all()`` which is cached at
-the first request. There is no DB.
+Almost entirely read-only — the gene/isoform payloads come from
+``data.load_all()``, cached per worker at the first request. There is no DB.
+
+The exception is the variant query: ``POST /api/variants/scan`` stores an uploaded
+VCF under ``scanstore``'s temp directory, resolves it against the ORF index and
+writes a digest beside the blob — the app's only write path. ``GET
+/variants/<token>`` renders that digest, ``GET /api/variants/<token>.json`` returns
+it raw, and ``GET /api/variants/status`` reports whether the scan path is
+functional in this deployment (the index staged, the disk writable) since there is
+no shell into the container.
 """
 
 from __future__ import annotations
@@ -11,6 +19,7 @@ import logging
 import math
 import os
 import re
+import secrets
 import types
 from pathlib import Path
 from typing import Any
@@ -20,6 +29,7 @@ from flask import (
     abort,
     jsonify,
     render_template,
+    request,
     send_from_directory,
 )
 from markupsafe import Markup, escape
@@ -29,6 +39,8 @@ from swissisoform.site.evidence import (
     format_metric,
     slice_criterion,
 )
+from swissisoform.variantquery.scan import scan
+from swissisoform_site import scanstore
 from swissisoform_site.data import (
     CARD_BADGES,
     CARD_GROUPS,
@@ -45,6 +57,7 @@ from swissisoform_site.data import (
     data_dir,
     llm_synthesis_for_isoform,
     load_all,
+    load_orf_index,
     sae_card_for_isoform,
     tis_slug,
     variant_rows_for_isoform,
@@ -52,9 +65,15 @@ from swissisoform_site.data import (
 )
 from swissisoform_site.genomics import interval_intersection
 from swissisoform_site.plots import build_gene_protein_figure
+from swissisoform_site.scanstore import ScanStoreError
 
 # Cell line samples used by the transcript figure's bottom panel.
 _CELL_LINE_SAMPLES = ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen")
+
+#: Upload ceiling. The real somatic VCFs are ~13 MB gzipped; 100 MB accepts
+#: exome/somatic files while rejecting germline WGS, which has no business being
+#: parsed synchronously inside a request.
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -93,9 +112,61 @@ def _log_llm_coverage(genes: dict, llm_dir: Path) -> None:
     )
 
 
+def _scan_debug_enabled() -> bool:
+    """True when the full scan payload may be logged.
+
+    Off by default on purpose. The digest carries variant positions and residues,
+    and container logs are retained by the platform outside our control — the same
+    reason coordinates never appear in a URL. Set
+    ``SWISSISOFORM_SCAN_DEBUG=1`` only while testing with a synthetic VCF.
+    """
+    return os.environ.get("SWISSISOFORM_SCAN_DEBUG", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def _log_scan(body: dict[str, Any], saved: Any) -> None:
+    """Log a scan to stdout — i.e. to the platform's log console.
+
+    The default line is deliberately redacted: counts, gene *names*, and ids, but
+    no positions, no residues and no filename. That is enough to confirm from the
+    logs that a scan ran and roughly what it found, without persisting variant
+    coordinates anywhere we do not control.
+    """
+    counts = body.get("counts", {}) or {}
+    logger.info(
+        "scan token=%s key=%s cached=%s lines=%s alleles=%s non_pass=%s "
+        "no_orf=%s off_contig=%s hits=%s genes=%s index=%s rejected=%s genes_hit=%s",
+        body.get("vcf_id"),
+        saved.key,
+        saved.was_cached,
+        counts.get("lines"),
+        counts.get("alleles"),
+        counts.get("skipped_non_pass"),
+        counts.get("no_orf"),
+        counts.get("off_catalog_contig"),
+        counts.get("hits"),
+        counts.get("genes_hit"),
+        (body.get("provenance", {}) or {}).get("index_version"),
+        counts.get("rejected"),
+        [g.get("gene") for g in body.get("genes", []) or []],
+    )
+    if _scan_debug_enabled():
+        logger.info(
+            "scan response payload (SWISSISOFORM_SCAN_DEBUG=1)\n%s",
+            json.dumps(body, indent=2, sort_keys=True, default=str),
+        )
+
+
 def create_app() -> Flask:
     """Build the Flask app. Factory pattern so tests can re-create cleanly."""
     app = Flask(__name__)
+
+    # Werkzeug rejects a larger body before reading it, so an oversized upload
+    # costs nothing but the 413.
+    app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
     # Slugify filter — must match data.py::tis_slug and the LLM dispatcher's
     # _tis_slug so that landing-page dropdown links resolve to the right
@@ -194,8 +265,23 @@ def create_app() -> Flask:
         truncations = [i for i in gene.isoforms if i.orf_type == "truncated"]
         others = [i for i in gene.isoforms if i.orf_type not in ("extended", "truncated")]
 
+        # ?vcf keeps an active scan reachable across the hop into a gene page. A
+        # stale or expired token degrades to no breadcrumb rather than an error —
+        # the gene page must render on its own regardless.
+        scan_token = request.args.get("vcf") or ""
+        scan_gene_hits = None
+        if scan_token:
+            loaded = scanstore.load(scan_token)
+            if loaded.ok:
+                hits = (loaded.digest or {}).get("hits", []) or []
+                scan_gene_hits = sum(1 for h in hits if h.get("gene") == gene.name)
+            else:
+                scan_token = ""
+
         return render_template(
             "gene.html",
+            scan_token=scan_token,
+            scan_gene_hits=scan_gene_hits,
             gene=gene,
             extensions=extensions,
             truncations=truncations,
@@ -362,6 +448,218 @@ def create_app() -> Flask:
         if not (root / filename).is_file():
             abort(404)
         return send_from_directory(root, filename, mimetype="application/json")
+
+    # ---------- Variant query ----------
+    # The app's only write path. An uploaded VCF is stored under scanstore's temp
+    # directory, resolved against the ORF index, and its digest written beside the
+    # blob. The token returned here is what threads through the results and gene
+    # pages so a scan survives navigation.
+
+    @app.post("/api/variants/scan")
+    def variants_scan() -> Any:
+        """Accept a VCF upload, resolve it against the ORF index, return a token."""
+        index = load_orf_index()
+        if index is None:
+            return jsonify(
+                {
+                    "error": "index_unavailable",
+                    "message": (
+                        "orf_index.parquet is not staged in this deployment; "
+                        "run scripts/export/build_orf_index.py and re-stage."
+                    ),
+                }
+            ), 503
+
+        # Optional shared secret. Unset (the default, and every local dev run)
+        # leaves the endpoint open; setting SWISSISOFORM_SCAN_TOKEN on a public
+        # deployment closes it, since this is an unauthenticated upload path on a
+        # world-reachable URL.
+        required_token = os.environ.get("SWISSISOFORM_SCAN_TOKEN", "")
+        if required_token:
+            offered = request.headers.get("X-Scan-Token") or request.form.get("scan_token", "")
+            if not secrets.compare_digest(offered, required_token):
+                return jsonify(
+                    {"error": "forbidden", "message": "missing or wrong scan token"}
+                ), 403
+
+        upload = request.files.get("vcf")
+        if upload is None or not upload.filename:
+            return jsonify(
+                {"error": "no_file", "message": "attach a VCF as the 'vcf' form field"}
+            ), 400
+
+        # Sweeping here (rather than on a timer) keeps expiry enforcement off the
+        # read path and out of background threads; it is rate-limited internally.
+        scanstore.sweep()
+
+        try:
+            saved = scanstore.save(
+                upload.stream, index_version=index.version, filename=upload.filename
+            )
+        except ScanStoreError as exc:
+            logger.exception("scan upload failed")
+            return jsonify({"error": "storage_failed", "message": str(exc)}), 507
+
+        if saved.was_cached:
+            # Same file, same index version — the finished digest is already on
+            # disk, so the parse is skipped entirely.
+            logger.info("scan reused cached digest key=%s", saved.key)
+        else:
+            result = scan(scanstore.source_path(saved.key), index)
+            digest = result.to_dict()
+            digest["provenance"] = {
+                "vcf_sha256": saved.vcf_sha256,
+                "index_version": index.version,
+                "catalog_genes": index.n_genes,
+                "catalog_isoforms": index.n_isoforms,
+            }
+            digest["filename"] = upload.filename
+            scanstore.write_digest(saved.key, digest)
+
+        loaded = scanstore.load(saved.token)
+        if not loaded.ok:
+            # Only reachable if the blob vanished between write and read.
+            return jsonify({"error": "storage_failed", "message": "digest disappeared"}), 507
+
+        payload = loaded.digest or {}
+        response_body = {
+            "vcf_id": saved.token,
+            "redirect": f"/variants/{saved.token}",
+            "was_cached": saved.was_cached,
+            "counts": payload.get("counts", {}),
+            "genes": payload.get("genes", []),
+            "provenance": payload.get("provenance", {}),
+            "expires_at": payload.get("expires_at", ""),
+        }
+        _log_scan(response_body, saved)
+        return jsonify(response_body)
+
+    @app.get("/variants/<token>")
+    def variants_page(token: str) -> Any:
+        """Render one scan's results: the funnel, the genes hit, and every hit."""
+        loaded = scanstore.load(token)
+        if loaded.expired:
+            return render_template(
+                "variants_gone.html",
+                heading="Scan expired",
+                message=(
+                    "Uploaded VCFs are deleted after 24 hours. Upload the file "
+                    "again to run a fresh scan."
+                ),
+            ), 410
+        if not loaded.ok:
+            return render_template(
+                "variants_gone.html",
+                heading="Scan not found",
+                message=(
+                    "That scan id is unknown — it may have expired, or the "
+                    "deployment may have restarted since the upload."
+                ),
+            ), 404
+
+        digest = _clean(loaded.digest) or {}
+        counts = digest.get("counts", {}) or {}
+        # Only genes the *displayed* catalogue knows about can be linked. The scan
+        # index deliberately covers the whole catalogue, so a hit in a gene this
+        # build has no page for is expected, not an error.
+        known_genes = set(load_all().keys())
+        return render_template(
+            "variants.html",
+            token=token,
+            digest=digest,
+            counts=counts,
+            provenance=digest.get("provenance", {}) or {},
+            genes=digest.get("genes", []) or [],
+            hits=digest.get("hits", []) or [],
+            known_genes=known_genes,
+            was_cached=False,
+            passing=max((counts.get("alleles") or 0) - (counts.get("skipped_non_pass") or 0), 0),
+            # Alleles that landed in an ORF, derived by subtraction so the funnel
+            # stays monotonic. counts["hits"] is NOT usable here: it counts
+            # (variant, isoform) pairs, so one allele in three isoforms is 3 hits
+            # and the last step would appear to grow. Subtraction is also
+            # independent of the hit-list cap.
+            in_orf_alleles=max(
+                (counts.get("alleles") or 0)
+                - (counts.get("skipped_non_pass") or 0)
+                - (counts.get("off_catalog_contig") or 0)
+                - (counts.get("no_orf") or 0),
+                0,
+            ),
+            raw_json=json.dumps(digest, indent=2, sort_keys=True),
+        )
+
+    @app.get("/api/variants/status")
+    def variants_status() -> Any:
+        """Report whether the scan path is actually functional in this deployment.
+
+        Exists because the two things most likely to differ between local and the
+        Railway container — was ``orf_index.parquet`` staged, and is the ephemeral
+        disk writable — cannot be told apart from a failed upload, and there is no
+        shell into the container.
+        """
+        index = load_orf_index()
+        probe_dir = scanstore.scan_dir()
+        writable = False
+        write_error = ""
+        try:
+            probe_dir.mkdir(parents=True, exist_ok=True)
+            probe = probe_dir / f".writeprobe-{os.getpid()}"
+            probe.write_text("ok")
+            writable = probe.read_text() == "ok"
+            probe.unlink(missing_ok=True)
+        except OSError as exc:
+            write_error = str(exc)
+
+        return jsonify(
+            {
+                "index_loaded": index is not None,
+                "index_version": index.version if index else "",
+                "catalog_genes": index.n_genes if index else 0,
+                "catalog_isoforms": index.n_isoforms if index else 0,
+                "catalog_intervals": index.n_intervals if index else 0,
+                "displayed_genes": len(load_all()),
+                "scan_dir": str(probe_dir),
+                "scan_dir_writable": writable,
+                "scan_dir_error": write_error,
+                "ttl_hours": scanstore.ttl_hours(),
+                "budget_bytes": scanstore.budget_bytes(),
+                "max_upload_bytes": app.config.get("MAX_CONTENT_LENGTH"),
+                "scan_token_required": bool(os.environ.get("SWISSISOFORM_SCAN_TOKEN")),
+                "debug_logging": _scan_debug_enabled(),
+            }
+        )
+
+    @app.get("/api/variants/<token>.json")
+    def variants_digest(token: str) -> Any:
+        """Return one scan's digest: 200, 404 if unknown, 410 if past its TTL."""
+        loaded = scanstore.load(token)
+        if loaded.expired:
+            return jsonify(
+                {
+                    "error": "expired",
+                    "message": "this scan has expired; upload the VCF again",
+                }
+            ), 410
+        if not loaded.ok:
+            return jsonify({"error": "not_found", "message": "unknown scan id"}), 404
+        response = jsonify(_clean(loaded.digest))
+        # Uploaded variant data must never be indexed.
+        response.headers["X-Robots-Tag"] = "noindex, nofollow"
+        return response
+
+    @app.errorhandler(413)
+    def upload_too_large(e: Any) -> tuple[Any, int]:
+        """JSON rather than HTML — the only client for this is the uploader."""
+        # Read the live config, not the module constant, so the message stays
+        # truthful if the limit is overridden.
+        limit_mb = (app.config.get("MAX_CONTENT_LENGTH") or MAX_UPLOAD_BYTES) // (1024 * 1024)
+        return jsonify(
+            {
+                "error": "too_large",
+                "message": f"VCF exceeds the {limit_mb} MB upload limit",
+            }
+        ), 413
 
     @app.errorhandler(404)
     def not_found(e: Any) -> tuple[Any, int]:

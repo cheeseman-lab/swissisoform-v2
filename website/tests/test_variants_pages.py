@@ -1,0 +1,358 @@
+"""The HTML side of the variant query: drop zone, results page, breadcrumb.
+
+Complements ``test_variants_routes.py`` (which covers the JSON API) by asserting
+what a browser actually receives. Skipped without the ``cheeseman_test`` run,
+which lives outside the repository.
+"""
+
+from __future__ import annotations
+
+import io
+import re
+import shutil
+from pathlib import Path
+
+import pytest
+
+WEBSITE_ROOT = Path(__file__).resolve().parents[1]
+RUN_DIR = WEBSITE_ROOT.parent / "data" / "output" / "cheeseman_test"
+FIXTURE_VCF = Path("/lab/barcheese01/ating/ecf_data/test.vcf")
+STAGED_FILES = ("all_paired.parquet", "variants_long.parquet", "orf_index.parquet")
+
+pytestmark = pytest.mark.skipif(
+    not (FIXTURE_VCF.is_file() and all((RUN_DIR / f).is_file() for f in STAGED_FILES)),
+    reason="needs the cheeseman_test run with orf_index.parquet built, plus ecf_data/test.vcf",
+)
+
+
+@pytest.fixture(scope="module")
+def data_dir(tmp_path_factory) -> Path:
+    staged = tmp_path_factory.mktemp("sitedata")
+    for name in STAGED_FILES:
+        shutil.copy(RUN_DIR / name, staged / name)
+    (staged / "llm").mkdir()
+    return staged
+
+
+@pytest.fixture
+def client(data_dir, tmp_path, monkeypatch):
+    monkeypatch.setenv("SWISSISOFORM_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("SWISSISOFORM_SCAN_DIR", str(tmp_path / "scans"))
+    monkeypatch.delenv("SWISSISOFORM_SCAN_TTL_HOURS", raising=False)
+    monkeypatch.delenv("SWISSISOFORM_SCAN_TOKEN", raising=False)
+    monkeypatch.delenv("SWISSISOFORM_SCAN_DEBUG", raising=False)
+
+    from swissisoform_site import data as site_data
+    from swissisoform_site.app import create_app
+
+    site_data.load_all.cache_clear()
+    site_data.load_orf_index.cache_clear()
+    app = create_app()
+    app.config["TESTING"] = True
+    with app.test_client() as test_client:
+        yield test_client
+    site_data.load_all.cache_clear()
+    site_data.load_orf_index.cache_clear()
+
+
+@pytest.fixture
+def scan_token(client) -> str:
+    with FIXTURE_VCF.open("rb") as handle:
+        payload = client.post(
+            "/api/variants/scan",
+            data={"vcf": (handle, "test.vcf")},
+            content_type="multipart/form-data",
+        ).get_json()
+    return payload["vcf_id"]
+
+
+# ----------------------------------------------------------------------
+# Landing page: the restructure must not break the existing controls
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "hook",
+    [
+        'id="gene-search"',
+        'id="kw-input"',
+        'id="tag-input"',
+        'id="cat-toggles"',
+        'id="sort-mode"',
+        'id="result-count"',
+    ],
+)
+def test_existing_filter_hooks_survive_the_layout_change(client, hook: str) -> None:
+    """The controls moved into a wrapper div; every JS id hook must still be there.
+
+    All landing-page filtering is client-side JS bound to these ids, so losing one
+    silently breaks a facet with no server-side error.
+    """
+    assert hook in client.get("/").data.decode()
+
+
+def test_controls_and_drop_zone_are_siblings_in_one_row(client) -> None:
+    """Drop zone to the right of the controls, both inside .search-and-refine."""
+    body = client.get("/").data.decode()
+    row = body.split('class="search-and-refine"', 1)[1]
+    controls = row.index('class="vq-controls"')
+    drop = row.index('class="vq-drop"')
+    assert controls < drop, "the drop zone should follow the controls column"
+
+
+def test_drop_zone_is_wired_to_its_script(client) -> None:
+    body = client.get("/").data.decode()
+    assert 'id="vq-drop"' in body
+    assert 'id="vq-file"' in body
+    assert "js/vcf_drop.js" in body
+
+
+def test_drop_zone_states_the_retention_policy(client) -> None:
+    """Users uploading variant data should be told it is deleted, on the widget."""
+    assert "24" in client.get("/").data.decode()
+
+
+# ----------------------------------------------------------------------
+# Results page
+# ----------------------------------------------------------------------
+
+
+def test_results_page_renders_the_funnel_and_the_genes(client, scan_token) -> None:
+    page = client.get(f"/variants/{scan_token}").data.decode()
+    assert "Variant scan" in page
+    assert "Genes hit" in page
+    for gene in ("CBX1", "CDC34", "MAD2L1"):
+        assert gene in page
+
+
+def test_funnel_is_monotonic(client, scan_token) -> None:
+    """Each step must be <= the one before it.
+
+    ``counts["hits"]`` counts (variant, isoform) pairs, so using it as the last
+    step made the funnel appear to grow (16 alleles -> 23 "hits"). The page derives
+    in-ORF *alleles* by subtraction instead.
+    """
+    page = client.get(f"/variants/{scan_token}").data.decode()
+    steps = [int(n.replace(",", "")) for n in re.findall(r'vq-step-num">([\d,]+)<', page)]
+    assert len(steps) == 5
+    # The last step is a gene count, not an allele count, so exclude it.
+    alleles = steps[:4]
+    assert alleles == sorted(alleles, reverse=True), f"funnel not monotonic: {steps}"
+
+
+def test_results_page_explains_hits_versus_variants(client, scan_token) -> None:
+    """The two numbers differ for a good reason; the page has to say so."""
+    page = client.get(f"/variants/{scan_token}").data.decode()
+    assert "one per (variant, isoform) pair" in page
+
+
+def test_hits_table_is_labelled_hits_not_variants(client, scan_token) -> None:
+    """23 rows for 13 variants — calling the table "Variants" contradicted the funnel."""
+    page = client.get(f"/variants/{scan_token}").data.decode()
+    assert "<h2>Hits (23)</h2>" in page
+    # Collapse whitespace — the template wraps this sentence across lines.
+    assert "13 variants, one row per isoform" in re.sub(r"\s+", " ", page)
+
+
+def test_gene_rows_show_both_counts(client, scan_token) -> None:
+    """The list has to distinguish variants from hits, or 7 vs 4 looks like a bug."""
+    page = client.get(f"/variants/{scan_token}").data.decode()
+    row = re.search(r'>CBX1</a>\s*<span class="vq-gene-meta">(.*?)</span>', page, re.S)
+    assert row, "CBX1 row not found"
+    text = re.sub(r"\s+", " ", row.group(1))
+    assert re.search(r"\d+ variants? · \d+ hits? across \d+ isoforms?", text), text
+
+
+def test_hits_table_names_the_isoform(client, scan_token) -> None:
+    """Sibling rows for one variant differ only by isoform, so it must be a column."""
+    page = client.get(f"/variants/{scan_token}").data.decode()
+    assert "<th>Isoform TIS</th>" in page
+    # Every row links to its isoform page.
+    assert page.count("/isoforms/") >= 23
+
+
+def test_results_page_names_the_catalogue_it_searched(client, scan_token) -> None:
+    """Without this, zero hits is indistinguishable from a misconfigured index."""
+    page = client.get(f"/variants/{scan_token}").data.decode()
+    assert "isoforms" in page
+    assert "index" in page
+
+
+def test_gene_links_carry_the_scan_token(client, scan_token) -> None:
+    page = client.get(f"/variants/{scan_token}").data.decode()
+    assert re.search(rf'href="/genes/CBX1\?vcf={re.escape(scan_token)}"', page)
+
+
+def test_results_page_exposes_the_raw_digest(client, scan_token) -> None:
+    """The digest verbatim, so the backend's output is inspectable in-browser."""
+    page = client.get(f"/variants/{scan_token}").data.decode()
+    assert "Raw scan JSON" in page
+    assert "&#34;counts&#34;" in page or '"counts"' in page
+
+
+def test_unknown_scan_renders_a_page_not_a_traceback(client) -> None:
+    response = client.get("/variants/neverminted")
+    assert response.status_code == 404
+    assert "Scan not found" in response.data.decode()
+
+
+def test_expired_scan_renders_410_with_an_explanation(client, scan_token, monkeypatch) -> None:
+    monkeypatch.setenv("SWISSISOFORM_SCAN_TTL_HOURS", "0")
+    response = client.get(f"/variants/{scan_token}")
+    assert response.status_code == 410
+    body = response.data.decode()
+    assert "Scan expired" in body
+    assert "24 hours" in body
+
+
+# ----------------------------------------------------------------------
+# Gene page breadcrumb
+# ----------------------------------------------------------------------
+
+
+def test_gene_page_links_back_to_the_scan(client, scan_token) -> None:
+    body = client.get(f"/genes/CBX1?vcf={scan_token}").data.decode()
+    assert f"/variants/{scan_token}" in body
+    assert re.search(r"\d+ variants? from the uploaded VCF", body)
+
+
+def test_gene_page_without_a_token_has_no_breadcrumb(client) -> None:
+    body = client.get("/genes/CBX1").data.decode()
+    assert "from the uploaded VCF" not in body
+
+
+def test_gene_page_ignores_a_stale_token_rather_than_failing(client) -> None:
+    """A gene page must render on its own; an expired scan only loses the crumb."""
+    response = client.get("/genes/CBX1?vcf=doesnotexist")
+    assert response.status_code == 200
+    assert "from the uploaded VCF" not in response.data.decode()
+
+
+# ----------------------------------------------------------------------
+# Status endpoint — the Railway debugging surface
+# ----------------------------------------------------------------------
+
+
+def test_status_reports_the_index_and_a_real_write_probe(client) -> None:
+    status = client.get("/api/variants/status").get_json()
+    assert status["index_loaded"] is True
+    assert len(status["index_version"]) == 16
+    assert status["catalog_genes"] == 9
+    assert status["catalog_isoforms"] == 18
+    # An actual write-and-delete, not a stat: this is the thing most likely to
+    # differ between a laptop and a container.
+    assert status["scan_dir_writable"] is True
+    assert status["scan_dir_error"] == ""
+    assert status["ttl_hours"] == 24.0
+
+
+def test_status_reports_an_unwritable_scan_dir(client, monkeypatch, tmp_path) -> None:
+    """The failure this endpoint exists to diagnose must actually be detected."""
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    blocked.chmod(0o500)
+    monkeypatch.setenv("SWISSISOFORM_SCAN_DIR", str(blocked / "scans"))
+    try:
+        status = client.get("/api/variants/status").get_json()
+        assert status["scan_dir_writable"] is False
+        assert status["scan_dir_error"]
+    finally:
+        blocked.chmod(0o700)
+
+
+def test_status_reports_a_missing_index(client, monkeypatch) -> None:
+    monkeypatch.setattr("swissisoform_site.app.load_orf_index", lambda: None)
+    status = client.get("/api/variants/status").get_json()
+    assert status["index_loaded"] is False
+    assert status["catalog_genes"] == 0
+
+
+def test_status_reflects_the_flags(client, monkeypatch) -> None:
+    assert client.get("/api/variants/status").get_json()["scan_token_required"] is False
+    monkeypatch.setenv("SWISSISOFORM_SCAN_TOKEN", "s3cret")
+    monkeypatch.setenv("SWISSISOFORM_SCAN_DEBUG", "1")
+    status = client.get("/api/variants/status").get_json()
+    assert status["scan_token_required"] is True
+    assert status["debug_logging"] is True
+
+
+# ----------------------------------------------------------------------
+# Optional upload gate
+# ----------------------------------------------------------------------
+
+
+def test_upload_is_open_when_no_token_is_configured(client) -> None:
+    """Unset must stay open, or every local dev run breaks."""
+    response = client.post(
+        "/api/variants/scan",
+        data={"vcf": (io.BytesIO(FIXTURE_VCF.read_bytes()), "test.vcf")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200
+
+
+def test_configured_token_is_required(client, monkeypatch) -> None:
+    monkeypatch.setenv("SWISSISOFORM_SCAN_TOKEN", "s3cret")
+    body = {"vcf": (io.BytesIO(FIXTURE_VCF.read_bytes()), "test.vcf")}
+    denied = client.post("/api/variants/scan", data=body, content_type="multipart/form-data")
+    assert denied.status_code == 403
+    assert denied.get_json()["error"] == "forbidden"
+
+    allowed = client.post(
+        "/api/variants/scan",
+        data={"vcf": (io.BytesIO(FIXTURE_VCF.read_bytes()), "test.vcf")},
+        content_type="multipart/form-data",
+        headers={"X-Scan-Token": "s3cret"},
+    )
+    assert allowed.status_code == 200
+
+
+def test_wrong_token_is_refused(client, monkeypatch) -> None:
+    monkeypatch.setenv("SWISSISOFORM_SCAN_TOKEN", "s3cret")
+    response = client.post(
+        "/api/variants/scan",
+        data={"vcf": (io.BytesIO(FIXTURE_VCF.read_bytes()), "test.vcf")},
+        content_type="multipart/form-data",
+        headers={"X-Scan-Token": "wrong"},
+    )
+    assert response.status_code == 403
+
+
+# ----------------------------------------------------------------------
+# Logging: what reaches the platform's console
+# ----------------------------------------------------------------------
+
+
+def test_default_log_line_carries_counts_but_no_variant_positions(client, caplog) -> None:
+    """Container logs are retained by the platform, so positions must stay out."""
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="swissisoform_site.app"):
+        with FIXTURE_VCF.open("rb") as handle:
+            client.post(
+                "/api/variants/scan",
+                data={"vcf": (handle, "test.vcf")},
+                content_type="multipart/form-data",
+            )
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "hits=23" in logged
+    assert "CBX1" in logged, "gene names are useful and not identifying"
+    for leak in ("48101329", "residue", "test.vcf", "0/1:"):
+        assert leak not in logged, f"{leak!r} reached the log by default"
+
+
+def test_debug_flag_logs_the_full_payload(client, caplog, monkeypatch) -> None:
+    """Opt-in, for verifying the response on the platform console during testing."""
+    import logging
+
+    monkeypatch.setenv("SWISSISOFORM_SCAN_DEBUG", "1")
+    with caplog.at_level(logging.INFO, logger="swissisoform_site.app"):
+        with FIXTURE_VCF.open("rb") as handle:
+            client.post(
+                "/api/variants/scan",
+                data={"vcf": (handle, "test.vcf")},
+                content_type="multipart/form-data",
+            )
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "SWISSISOFORM_SCAN_DEBUG=1" in logged
+    assert '"redirect"' in logged

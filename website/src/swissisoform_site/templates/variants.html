@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+{% block title %}Variant scan · SwissIsoform v2{% endblock %}
+
+{% block content %}
+<div class="about-shell vq-shell">
+  <header class="about-head vq-head">
+    <h1>Variant scan</h1>
+    {% if digest.filename %}
+    <p class="vq-sub">{{ digest.filename }}</p>
+    {% endif %}
+    {# Naming the catalogue is what makes zero hits interpretable: without it,
+       "nothing found" is indistinguishable from "wrong index staged". #}
+    <p class="vq-sub">
+      Resolved against
+      <strong>{{ provenance.catalog_genes or "?" }}</strong> genes /
+      <strong>{{ provenance.catalog_isoforms or "?" }}</strong> isoforms
+      · index <code>{{ provenance.index_version or "unversioned" }}</code>
+    </p>
+    <p class="vq-sub">
+      {% if digest.expires_at %}Deleted after {{ digest.expires_at }}.{% endif %}
+      {% if was_cached %} Reused an existing scan of the same file.{% endif %}
+    </p>
+  </header>
+
+  <section class="about-sec">
+    <h2>What was read</h2>
+    <div class="vq-funnel">
+      <div class="vq-step">
+        <span class="vq-step-num">{{ "{:,}".format(counts.lines or 0) }}</span>
+        <span class="vq-step-lbl">records</span>
+      </div>
+      <div class="vq-step">
+        <span class="vq-step-num">{{ "{:,}".format(counts.alleles or 0) }}</span>
+        <span class="vq-step-lbl">alleles</span>
+      </div>
+      <div class="vq-step">
+        <span class="vq-step-num">{{ "{:,}".format(passing) }}</span>
+        <span class="vq-step-lbl">passed filter</span>
+      </div>
+      <div class="vq-step is-hit">
+        <span class="vq-step-num">{{ "{:,}".format(in_orf_alleles) }}</span>
+        <span class="vq-step-lbl">in an ORF</span>
+      </div>
+      <div class="vq-step">
+        <span class="vq-step-num">{{ counts.genes_hit or 0 }}</span>
+        <span class="vq-step-lbl">genes hit</span>
+      </div>
+    </div>
+    {# Losses first — they account for the narrowing above — then the one place
+       the count grows again. #}
+    <p class="vq-drops">
+      Dropped:
+      {{ "{:,}".format(counts.skipped_non_pass or 0) }} failed the caller's FILTER
+      · {{ "{:,}".format(counts.no_orf or 0) }} outside every annotated ORF
+      · {{ "{:,}".format(counts.off_catalog_contig or 0) }} on a contig the catalogue doesn't cover
+      {%- for reason, n in (counts.rejected or {}).items() %}
+      · {{ "{:,}".format(n) }} {{ reason.replace("_", " ") }}
+      {%- endfor %}
+      {%- if counts.truncated %} · hit list truncated at the cap{% endif %}
+    </p>
+    {% if in_orf_alleles and counts.hits and counts.hits != in_orf_alleles %}
+    {# A position can sit inside several isoforms of one gene, so hit records
+       outnumber variants. Said explicitly, because the two numbers otherwise look
+       like a contradiction against the funnel. #}
+    <p class="vq-drops">
+      Those {{ in_orf_alleles }} variant{{ "" if in_orf_alleles == 1 else "s" }} produce
+      {{ counts.hits }} hit records — one per (variant, isoform) pair.
+    </p>
+    {% endif %}
+    {% if not genes %}
+    {# The expected outcome for a real somatic VCF, so it gets an explanation
+       rather than a blank panel. #}
+    <p class="empty">
+      No variant fell inside an annotated ORF. That is the usual result — most
+      somatic variants are intronic, UTR or intergenic, and the catalogue covers
+      only the coding regions of TIS-supported ORFs on transcripts that survived
+      filtering.
+    </p>
+    {% endif %}
+  </section>
+
+  {% if genes %}
+  <section class="about-sec">
+    <h2>Genes hit</h2>
+    <div class="vq-genes">
+      {% for g in genes %}
+      <div class="vq-gene">
+        {% if g.gene in known_genes %}
+        <a class="vq-gene-name" href="{{ url_for('gene_page', gene_name=g.gene) }}?vcf={{ token }}">{{ g.gene }}</a>
+        {% else %}
+        <span class="vq-gene-name">{{ g.gene }}</span>
+        {% endif %}
+        <span class="vq-gene-meta">
+          {# Both counts: one variant inside three isoforms is 1 variant, 3 hits.
+             No fallback needed — scanstore.DIGEST_SCHEMA is part of the blob key,
+             so a digest missing n_hits can never be served under this template. #}
+          {{ g.n_variants }} variant{{ "" if g.n_variants == 1 else "s" }}
+          · {{ g.n_hits }} hit{{ "" if g.n_hits == 1 else "s" }}
+          across {{ g.n_isoforms }} isoform{{ "" if g.n_isoforms == 1 else "s" }}
+          · {{ g.n_unique }} unique-region
+          · {{ g.n_shared }} shared
+        </span>
+        {% if g.gene not in known_genes %}
+        {# The visible cost of scanning the whole catalogue while displaying one
+           small run — the gene is real, this build just has no page for it. #}
+        <span class="vq-gene-nopage">no detail page in this build</span>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="about-sec">
+    {# "Hits", not "Variants": there is one row per (variant, isoform) pair, so the
+       count here exceeds the number of variants whenever a position falls inside
+       more than one ORF. Labelling it "Variants" made the table look inconsistent
+       with the funnel. #}
+    <h2>Hits ({{ hits|length }})</h2>
+    <p class="vq-sub">
+      {{ in_orf_alleles }} variant{{ "" if in_orf_alleles == 1 else "s" }}, one row per
+      isoform each falls inside — the same nucleotide is a different residue in each
+      ORF, because each starts at a different TIS.
+    </p>
+    <div class="variants-scroll">
+      <table class="variants-table js-sortable">
+        <thead>
+          <tr>
+            <th>Position</th>
+            <th>Change</th>
+            <th>Gene</th>
+            <th>Isoform TIS</th>
+            <th>ORF type</th>
+            <th>Residue</th>
+            <th>Region</th>
+            <th>VCF line</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for h in hits %}
+          <tr>
+            <td class="var-mono">{{ h.chrom }}:{{ "{:,}".format(h.pos) }}</td>
+            <td class="var-mono">{{ h.ref }}&rarr;{{ h.alt }}</td>
+            <td>{{ h.gene }}</td>
+            <td class="var-mono">
+              {# tis_id is chrom:pos:strand:codon:transcript. Show the start position
+                 and codon only — that is what distinguishes the sibling rows for one
+                 variant, and the full id is in the raw JSON below. #}
+              {% set parts = h.tis_id.split(":") %}
+              {% if h.gene in known_genes %}
+              <a href="{{ url_for('isoform_page', gene_name=h.gene, tis_slug_str=h.tis_id|slugify) }}">{{ parts[1] }} {{ parts[3] }}</a>
+              {% else %}
+              {{ parts[1] }} {{ parts[3] }}
+              {% endif %}
+            </td>
+            <td><span class="orf-chip orf-{{ h.orf_type }}">{{ h.orf_type }}</span></td>
+            <td class="var-num">
+              {# 0-based internally; +1 for display so it reads as p.N. #}
+              {% if h.residue is not none %}{{ h.residue + 1 }} <span class="vq-gene-meta">({{ h.frame }})</span>{% else %}&mdash;{% endif %}
+            </td>
+            <td>{{ h.region }}</td>
+            <td class="var-num">{{ h.line_no }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% endif %}
+
+  {# The digest exactly as the backend produced it. Nothing new is exposed —
+     reaching this page already requires the token. #}
+  <details class="vq-raw">
+    <summary>Raw scan JSON</summary>
+    <pre>{{ raw_json }}</pre>
+  </details>
+
+  <p class="vq-sub" style="margin-top:16px;">
+    <a href="{{ url_for('index') }}">&larr; Back to gene index</a>
+  </p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/isoform_page.js') }}" defer></script>
+{% endblock %}

@@ -1300,3 +1300,111 @@
   font-size: 11px; font-weight: 600; color: #64748b;
   text-transform: uppercase; letter-spacing: 0.03em; margin: 12px 0 2px;
 }
+
+/* ===== Variant query (vq-) ============================================
+   Landing-page drop zone + scan results. Lives here rather than in Tailwind
+   utilities because tailwind.css is a committed, purged subset with no build
+   step — a class not already in that file silently does nothing.
+   ---------------------------------------------------------------------- */
+
+/* ----- Landing layout: all grid filters left, drop zone right ---------- */
+.vq-controls {
+  flex: 0 1 520px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+/* .search-and-refine sets `flex: 0 1 520px` on the search block. Inside a
+   COLUMN parent that basis becomes a height, which collapses the facets — so
+   neutralise it. Three classes to outrank `.search-and-refine .landing-search`. */
+.search-and-refine .vq-controls .landing-search {
+  flex: 0 0 auto;
+  width: 100%;
+}
+/* Category + Sort side by side now that they sit under the search rather than
+   beside it; stacked they made this column tall and unbalanced. */
+.vq-controls .refine-col {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 20px;
+  padding-top: 0;
+}
+
+/* ----- Drop zone -------------------------------------------------------
+   Dashed-at-rest, solid-when-active, echoing .cat-flag-pending. No spinner:
+   the codebase has no animation anywhere, and a ~0.5 s scan doesn't need one. */
+.vq-drop {
+  flex: 1 1 300px;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  background: #fafbfc;
+  transition: border-color 0.15s, background 0.15s;
+}
+.vq-drop.is-over,
+.vq-drop.is-busy { border-style: solid; border-color: #6366f1; background: #eef2ff; }
+.vq-drop.is-error { border-style: solid; border-color: #fca5a5; background: #fef2f2; }
+.vq-drop-title {
+  font-size: 13px; font-weight: 600; color: #334155;
+  text-transform: uppercase; letter-spacing: 0.03em;
+}
+.vq-drop-hint { font-size: 12.5px; color: #64748b; margin: 0; }
+.vq-drop-hint code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+.vq-drop-btn {
+  display: inline-block;
+  font-size: 12.5px;
+  padding: 4px 10px;
+  border: 1px solid #c7d2fe;
+  border-radius: 4px;
+  background: #eef2ff;
+  color: #3730a3;
+  cursor: pointer;
+}
+.vq-drop-btn:hover { background: #e0e7ff; }
+.vq-drop-status { font-size: 12.5px; color: #475569; margin: 0; min-height: 1.2em; }
+.vq-drop.is-error .vq-drop-status { color: #b91c1c; }
+.vq-drop-note { font-size: 11px; color: #94a3b8; margin: 0; }
+
+/* ----- Results page ---------------------------------------------------- */
+.vq-shell { max-width: 980px; }
+.vq-head h1 { font-size: 1.6rem; font-weight: 700; margin: 0 0 4px; }
+.vq-sub { font-size: 12.5px; color: #64748b; margin: 0 0 2px; }
+.vq-sub code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* The funnel is the point of the page when there are no hits: 0.08% of real
+   somatic variants land in an ORF, so "nothing found" is the normal answer and
+   has to show its working. */
+.vq-funnel { display: flex; flex-wrap: wrap; gap: 0; margin: 14px 0 4px; }
+.vq-step {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 8px 16px 8px 0; margin-right: 16px;
+  border-right: 1px solid #e2e8f0;
+}
+.vq-step:last-child { border-right: 0; margin-right: 0; }
+.vq-step-num { font-size: 1.15rem; font-weight: 700; color: #1e293b; }
+.vq-step-lbl { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.03em; }
+.vq-step.is-hit .vq-step-num { color: #3730a3; }
+.vq-drops { font-size: 12px; color: #94a3b8; margin: 2px 0 0; }
+
+.vq-genes { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 0; }
+.vq-gene {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid #e2e8f0; border-radius: 6px; background: #fff;
+}
+.vq-gene-name { font-weight: 600; font-size: 14px; }
+.vq-gene-meta { font-size: 12px; color: #64748b; }
+.vq-gene-nopage { font-size: 11.5px; color: #94a3b8; font-style: italic; }
+.vq-raw { margin-top: 20px; font-size: 12px; }
+.vq-raw summary { cursor: pointer; color: #64748b; }
+.vq-raw pre {
+  margin: 8px 0 0; padding: 10px 12px; overflow: auto; max-height: 420px;
+  background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+}

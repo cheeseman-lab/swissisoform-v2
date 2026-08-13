@@ -24,6 +24,11 @@
   </div>
 
   <div class="search-and-refine">
+    {# All gene-filtering controls live in one column so the variant drop zone can
+       own the right-hand side. The drop zone is deliberately NOT part of this
+       group: everything in .vq-controls filters the grid client-side, whereas
+       dropping a VCF posts to the server and navigates away. #}
+    <div class="vq-controls">
     <div class="landing-search">
       <input type="search" id="gene-search" placeholder="Search a gene… (e.g. CBX1, TRIP13)"
              autocomplete="off" spellcheck="false" aria-label="Search genes">
@@ -90,6 +95,26 @@
           <option value="firing" title="Net CDLMPS score: +1 per green (interesting) category, −1 per red (not interesting)">interesting index</option>
         </select>
       </label>
+    </div>
+    </div>{# /.vq-controls #}
+
+    {# Variant query. Unlike everything to the left, this posts to the server and
+       navigates to a results page. Progressive-enhancement note: the whole thing
+       is driven by vcf_drop.js, so the input is a plain file field that does
+       nothing without JS — acceptable because resolving a VCF needs the ORF index
+       server-side and cannot degrade to a client-only path. #}
+    <div class="vq-drop" id="vq-drop">
+      <span class="vq-drop-title">Query a VCF</span>
+      <p class="vq-drop-hint">
+        Drop a <code>.vcf</code> or <code>.vcf.gz</code> here to find which genes
+        its variants hit.
+      </p>
+      <label class="vq-drop-btn">
+        <input type="file" id="vq-file" accept=".vcf,.vcf.gz,.gz,text/plain" class="sr-only">
+        Choose a file
+      </label>
+      <p class="vq-drop-status" id="vq-status" role="status" aria-live="polite"></p>
+      <p class="vq-drop-note">Deleted after 24&nbsp;h. Don't upload data you aren't permitted to.</p>
     </div>
   </div>
 
@@ -191,6 +216,9 @@
 {% endblock %}
 
 {% block scripts %}
+{# Variant drop zone — separate file because it is the only thing on this page
+   that talks to the server; the IIFE below is purely client-side grid filtering. #}
+<script src="{{ url_for('static', filename='js/vcf_drop.js') }}" defer></script>
 <script>
   (function () {
     var nameInput = document.getElementById("gene-search");
