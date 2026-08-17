@@ -6,16 +6,19 @@
 # Stages (each timed):
 #   skeletons   transcript exon skeletons for the IGV-style transcript view
 #   evidence    per-gene LLM evidence JSON + flat variants_long parquet
-#   llm         Anthropic per-category interpretation + synthesis — always
-#               regenerated (--force), since the evidence records it reads are
-#               rebuilt from the parquet one stage earlier (SKIP with --skip-llm)
+#   llm         Anthropic per-category interpretation + synthesis — REUSED per
+#               isoform when its output already exists (~$0.53/isoform to
+#               regenerate). The evidence records it reads are rebuilt from the
+#               parquet one stage earlier, so after a pipeline change the reuse
+#               is stale: run run_llm_interpretation.py --force directly. Each
+#               stage prints how many isoforms it reused. (SKIP with --skip-llm)
 #   structures  re-assemble folded CIFs from the structure cache
 #   stage       website/prepare_deploy.sh — copy artifacts into website/data/
 #
 # CPU/network only (no GPU). The LLM stage needs ANTHROPIC_API_KEY (read from .env).
 #
 # Usage (from repo root):
-#   bash scripts/build_website.sh                 # full rebuild incl. LLM
+#   bash scripts/build_website.sh                 # full rebuild; LLM reused where present
 #   bash scripts/build_website.sh --skip-llm      # reuse existing llm/, no API calls
 #   bash scripts/build_website.sh --batch         # LLM via Batches API (50% token price)
 #   RUN=cheeseman_13gene bash scripts/build_website.sh

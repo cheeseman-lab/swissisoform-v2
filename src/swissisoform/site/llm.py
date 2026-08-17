@@ -1128,6 +1128,37 @@ def _save_failed_response(
         pass
 
 
+def _write_category_results(out_path: Path, tis_slug: str, results: dict[str, Any]) -> bool:
+    """Write ``categories.json`` only when every category produced a verdict.
+
+    The skip check downstream is bare file existence, so a file carrying an
+    ``{"error": ...}`` entry would block its own retry: the rerun skips the
+    isoform, reports ``0/0 successful`` and exits 0 with the errored verdict
+    staged. Holding the write back leaves the isoform genuinely absent, so the
+    next run regenerates it. Partial results land in ``categories.partial.json``
+    — nothing reads that name — so the good verdicts stay auditable.
+
+    Returns True when the real file was written.
+    """
+    errored = sorted(k for k, v in results.items() if isinstance(v, dict) and "error" in v)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    partial = out_path.with_suffix(".partial.json")
+    if errored:
+        partial.write_text(json.dumps(results, indent=2, ensure_ascii=False))
+        # Under --force the previous, complete file is still there; not overwriting
+        # it with a partial one is the point, but say so — it is now stale.
+        kept = " previous output KEPT (now stale)," if out_path.exists() else ""
+        print(
+            f"[hold] {tis_slug}: {', '.join(errored)} errored — {out_path.name} not written,"
+            f"{kept} partial in {partial.name}; rerun to retry this isoform",
+            file=sys.stderr,
+        )
+        return False
+    out_path.write_text(json.dumps(results, indent=2, ensure_ascii=False))
+    partial.unlink(missing_ok=True)  # a retry succeeded; don't leave the old partial behind
+    return True
+
+
 def parse_response(response_text: str) -> dict[str, Any]:
     """Parse the response text as JSON. May raise ``json.JSONDecodeError``.
 
@@ -1871,7 +1902,8 @@ def _run_category_pass(
     criteria, including S2 biophysics + S3 SAE) into one slice and asks the model
     for a single ``{verdict, reasoning}``. Writes ``{tis_slug}/categories.json`` as
     a dict keyed by category name (the shape ``category_verdicts_for_isoform``
-    consumes).
+    consumes) — but only once every category produced a verdict; a run with any
+    errored category holds the file back (:func:`_write_category_results`).
 
     Categories in :data:`TOOL_CATEGORY_PROMPTS` instead run a multi-turn tool
     loop, reading their own underlying data before emitting the same
@@ -1895,6 +1927,7 @@ def _run_category_pass(
     args.out.mkdir(parents=True, exist_ok=True)
     n_calls = 0
     n_ok = 0
+    n_reused = 0
     usage_by_slug: dict[str, dict[str, int]] = {}
     tool_usage_by_slug: dict[str, dict[str, int]] = {}
 
@@ -1909,6 +1942,7 @@ def _run_category_pass(
             if out_path.exists() and not args.force:
                 if args.dry_run:
                     print(f"[skip] {gene_name} {tis_slug_val}: {out_path.name} exists")
+                n_reused += 1
                 continue
 
             out_dir = args.out / tis_slug_val
@@ -2003,8 +2037,7 @@ def _run_category_pass(
 
             if args.dry_run:
                 continue
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(json.dumps(results, indent=2, ensure_ascii=False))
+            _write_category_results(out_path, tis_slug_val, results)
 
     if args.dry_run:
         return 0
@@ -2013,7 +2046,12 @@ def _run_category_pass(
         # Separate report: tool categories are multi-turn and never batched, so
         # folding them into the batch-priced total would misstate both.
         _write_usage_report(args.out, "category_tools", args.model, tool_usage_by_slug)
-    print(f"{spec.name}: {n_ok}/{n_calls} successful")
+    # Reuse is silent otherwise, so a run that regenerated nothing reads as a
+    # clean 0/0 — say what was reused and how to override it.
+    print(
+        f"{spec.name}: {n_ok}/{n_calls} successful"
+        + (f", {n_reused} isoform(s) reused (--force to regenerate)" if n_reused else "")
+    )
     return 0 if n_ok == n_calls else 1
 
 
@@ -2046,11 +2084,13 @@ def _run_category_pass_batch(
     # tis_slug -> (iso_with_gene, [(category, sliced_record), ...]) for the
     # interactive tool pass below.
     tool_work: dict[str, tuple[dict[str, Any], list[tuple[dict[str, Any], dict[str, Any]]]]] = {}
+    n_reused = 0
     for gene_name, gene_record in records.items():
         for iso in gene_record.get("isoforms", []) or []:
             tis_slug_val = _tis_slug(iso.get("tis_id"))
             out_path = args.out / spec.output_filename_template.format(tis_slug=tis_slug_val)
             if out_path.exists() and not args.force:
+                n_reused += 1
                 continue
             iso_with_gene = {**iso, "gene": {"name": gene_name}}
             iso_results.setdefault(tis_slug_val, {})
@@ -2158,9 +2198,7 @@ def _run_category_pass_batch(
                 iso_results[tis_slug_val][category["name"]] = {"error": str(e)}
 
     for tis_slug_val, results in iso_results.items():
-        out_path = iso_out[tis_slug_val]
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps(results, indent=2, ensure_ascii=False))
+        _write_category_results(iso_out[tis_slug_val], tis_slug_val, results)
 
     if items:
         _write_usage_report(args.out, "category", args.model, usage_by_slug, batch=True)
@@ -2170,6 +2208,7 @@ def _run_category_pass_batch(
     print(
         f"category: {n_ok}/{len(items)} successful (batch)"
         + (f" + {n_tool_ok}/{n_tool_calls} tool-loop (direct)" if n_tool_calls else "")
+        + (f", {n_reused} isoform(s) reused (--force to regenerate)" if n_reused else "")
     )
     return 0 if (n_ok + n_tool_ok) == total else 1
 
@@ -2263,6 +2302,7 @@ def _run_synthesis_pass(records, spec, args, system_prompt, output_schema) -> in
     args.out.mkdir(parents=True, exist_ok=True)
     n_ok = 0
     n_calls = 0
+    n_reused = 0
     usage_by_slug: dict[str, dict[str, int]] = {}
     for gene_name, gene_record in records.items():
         for iso in gene_record.get("isoforms", []) or []:
@@ -2274,6 +2314,7 @@ def _run_synthesis_pass(records, spec, args, system_prompt, output_schema) -> in
             if out_path.exists() and not args.force:
                 if args.dry_run:
                     print(f"[skip] {gene_name} {tis_slug}: synthesis.json exists")
+                n_reused += 1
                 continue
             synthesis_record = _build_synthesis_record(
                 iso, gene_name, iso_dir, gene_record.get("gene")
@@ -2324,7 +2365,10 @@ def _run_synthesis_pass(records, spec, args, system_prompt, output_schema) -> in
     if args.dry_run:
         return 0
     _write_usage_report(args.out, "synthesis", args.model, usage_by_slug)
-    print(f"synthesis: {n_ok}/{n_calls} successful")
+    print(
+        f"synthesis: {n_ok}/{n_calls} successful"
+        + (f", {n_reused} isoform(s) reused (--force to regenerate)" if n_reused else "")
+    )
     return 0 if n_ok == n_calls else 1
 
 
@@ -2342,12 +2386,14 @@ def _run_synthesis_pass_batch(records, spec, args, system_prompt, output_schema)
     items: list[tuple[str, Prompt]] = []  # (custom_id, prompt)
     meta: dict[str, str] = {}  # custom_id -> tis_slug
     out_by_slug: dict[str, Path] = {}  # tis_slug -> synthesis.json path
+    n_reused = 0
     for gene_name, gene_record in records.items():
         for iso in gene_record.get("isoforms", []) or []:
             tis_slug = _tis_slug(iso.get("tis_id"))
             iso_dir = args.out / tis_slug
             out_path = iso_dir / "synthesis.json"
             if out_path.exists() and not args.force:
+                n_reused += 1
                 continue
             record = _build_synthesis_record(
                 iso, gene_name, iso_dir, gene_record.get("gene")
@@ -2406,5 +2452,8 @@ def _run_synthesis_pass_batch(records, spec, args, system_prompt, output_schema)
         n_ok += 1
 
     _write_usage_report(args.out, "synthesis", args.model, usage_by_slug, batch=True)
-    print(f"synthesis: {n_ok}/{len(items)} successful (batch)")
+    print(
+        f"synthesis: {n_ok}/{len(items)} successful (batch)"
+        + (f", {n_reused} isoform(s) reused (--force to regenerate)" if n_reused else "")
+    )
     return 0 if n_ok == len(items) else 1

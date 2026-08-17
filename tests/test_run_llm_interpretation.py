@@ -1065,10 +1065,14 @@ def test_category_pass_writes_a_separate_tool_usage_report(
     assert report["total"]["calls"] == 3
 
 
-def test_category_pass_records_an_error_when_the_loop_fails(
+def test_category_pass_holds_back_the_file_when_the_loop_fails(
     mod, monkeypatch, tmp_path, category_records, variants_long, only_m
 ):
-    """A failed M loop must not sink the other five categories."""
+    """A failed M loop must not sink the other five categories, nor be staged.
+
+    categories.json is the isoform's own idempotency key, so writing one that
+    carries {"error": ...} would block its retry and let the rerun report success.
+    """
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
     monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: json.dumps({"verdict": "neutral",
                                                                      "reasoning": "x"}))
@@ -1076,6 +1080,7 @@ def test_category_pass_records_an_error_when_the_loop_fails(
     monkeypatch.setattr(mod, "_try_import_anthropic", lambda: _fake_anthropic(script, []))
 
     out_dir = tmp_path / "out"
+    iso_dir = out_dir / mod._tis_slug(TIS_ID)
     rc = mod.main(
         _category_run_args(
             category_records, out_dir,
@@ -1083,12 +1088,55 @@ def test_category_pass_records_an_error_when_the_loop_fails(
         )
     )
     assert rc == 1  # the run reports the failure
-    payload = json.loads((out_dir / mod._tis_slug(TIS_ID) / "categories.json").read_text())
+    assert not (iso_dir / "categories.json").exists()
+    # The five good verdicts and the error are kept, under a name nothing reads.
+    payload = json.loads((iso_dir / "categories.partial.json").read_text())
     assert "error" in payload["Mutation Landscape"]
     assert payload["Conservation"]["verdict"] == "neutral"
     # The partial transcript is still written — a failed loop is the one worth reading.
-    trace = json.loads((out_dir / mod._tis_slug(TIS_ID) / "M_trace.json").read_text())
+    trace = json.loads((iso_dir / "M_trace.json").read_text())
     assert trace["outcome"] == "max_turns_exhausted"
+
+
+def test_a_held_back_isoform_is_retried_and_clears_its_partial(
+    mod, monkeypatch, tmp_path, category_records, variants_long, only_m, capsys
+):
+    """The point of holding the write back: the rerun regenerates, without --force."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: json.dumps({"verdict": "neutral",
+                                                                     "reasoning": "x"}))
+    out_dir = tmp_path / "out"
+    iso_dir = out_dir / mod._tis_slug(TIS_ID)
+    argv = _category_run_args(category_records, out_dir, ["--variants-long", str(variants_long)])
+
+    monkeypatch.setattr(
+        mod, "_try_import_anthropic",
+        lambda: _fake_anthropic([_Response([_tool_use("query_variants", {}, "t1")])], []),
+    )
+    assert mod.main(argv + ["--max-tool-turns", "2"]) == 1
+
+    # Same records and out dir, no --force: the isoform is absent, so it runs again.
+    monkeypatch.setattr(
+        mod, "_try_import_anthropic",
+        lambda: _fake_anthropic(
+            [
+                _Response([_tool_use("query_variants", {}, "t1")]),
+                _Response([_tool_use("variant_effect_stats", {}, "t2")]),
+                _Response([_tool_use("emit_verdict", VERDICT, "t3")]),
+            ],
+            [],
+        ),
+    )
+    assert mod.main(argv) == 0
+    payload = json.loads((iso_dir / "categories.json").read_text())
+    assert payload["Mutation Landscape"]["verdict"] == VERDICT["verdict"]
+    assert not (iso_dir / "categories.partial.json").exists()
+
+    # A third run now genuinely has nothing to do — and says so, rather than
+    # reading as a clean "0/0 successful".
+    capsys.readouterr()
+    assert mod.main(argv) == 0
+    assert "1 isoform(s) reused" in capsys.readouterr().out
 
 
 def test_category_pass_fails_loudly_when_variants_long_is_missing(
