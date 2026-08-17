@@ -1072,7 +1072,6 @@
    .orf-extended) rather than inventing new colors. */
 .diff-hit-helix  { background: #fee2e2; color: #7f1d1d; }  /* alpha helix — light red */
 .diff-hit-strand { background: #dcfce7; color: #14532d; }  /* beta strand — light green */
-.diff-hit-coil   { background: #dbeafe; color: #1e40af; }  /* coil / loop  — light blue */
 .diff-hit-motif { background: #9467bd; }
 .diff-hit-peptide { background: #0891b2; }
 .diff-hit-gained { background: #16a34a; }

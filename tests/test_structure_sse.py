@@ -272,18 +272,11 @@ def test_p3_thresholds_have_one_source():
 
     The headline, the modal counts, the hit ranking and the scorer used to hold
     three separate copies of 6 / 0.70, so retuning moved only the verdict.
-
-    Does NOT cover non-default configs: these constants are read from the
-    DEFAULTS at import, so passing a custom config to the scorer still diverges.
-    Threading one through slice_criterion and the viewer is a separate change.
     """
     from swissisoform.site import evidence as ev
 
-    assert ev.P3_MIN_SSE_LENGTH == ScoringConfig().p3_min_sse_length
-    assert ev.P3_MIN_SSE_PLDDT == ScoringConfig().p3_min_sse_plddt
-    # The private aliases the headline and hit ranking use are the same objects.
-    assert ev._P3_MIN_LEN is ev.P3_MIN_SSE_LENGTH
-    assert ev._P3_MIN_PLDDT is ev.P3_MIN_SSE_PLDDT
+    assert ev.p3_min_sse_length() == ScoringConfig().p3_min_sse_length
+    assert ev.p3_min_sse_plddt() == ScoringConfig().p3_min_sse_plddt
 
 
 def test_website_sse_qualifier_matches_the_scorer():
@@ -295,8 +288,8 @@ def test_website_sse_qualifier_matches_the_scorer():
     pytest.importorskip("swissisoform_site")
     from swissisoform_site import data as site_data
 
-    assert site_data._P3_MIN_SSE_LENGTH == ScoringConfig().p3_min_sse_length
-    assert site_data._P3_MIN_SSE_PLDDT == ScoringConfig().p3_min_sse_plddt
+    assert site_data._p3_min_sse_length() == ScoringConfig().p3_min_sse_length
+    assert site_data._p3_min_sse_plddt() == ScoringConfig().p3_min_sse_plddt
 
     cfg = ScoringConfig()
     def _element(length: int, plddt: float) -> dict:
@@ -320,8 +313,8 @@ def test_website_sse_qualifier_matches_the_scorer():
             ),
             cfg,
         )
-        rendered = (element["length"] >= site_data._P3_MIN_SSE_LENGTH) and (
-            element["plddt_mean"] >= site_data._P3_MIN_SSE_PLDDT
+        rendered = (element["length"] >= site_data._p3_min_sse_length()) and (
+            element["plddt_mean"] >= site_data._p3_min_sse_plddt()
         )
         assert bool(scored.value) is rendered, element
 
@@ -663,3 +656,90 @@ def test_p3_qualifies_uses_the_config_thresholds():
     sl = slice_criterion({"_raw": raw, "scoring": {"criteria": {}}}, "P3_secondary_structure")
     assert [e["qualifies"] for e in sl["elements_gained"]] == [True, False]
     assert str(cfg.p3_min_sse_length) in sl["qualifies_when"]
+
+
+# ── Threshold provenance (scoring_config.json) ────────────────────────────
+#
+# The three readers of "does this element qualify" — the scorer, this module's
+# card/hit language, and structure_tools' tool result — used to construct their
+# own ScoringConfig(). They agreed only because nothing could override the
+# defaults; a per-run override would have made a card contradict its verdict.
+
+
+@pytest.fixture
+def _restore_scoring():
+    """Threshold state is a module global; never let it leak between tests."""
+    from swissisoform.site import evidence as ev
+
+    yield
+    ev.use_scoring_config(None)
+
+
+def _write_sidecar(run_dir: Path, **overrides) -> Path:
+    import dataclasses
+    import json
+
+    from swissisoform.config import SCORING_SIDECAR, ScoringConfig
+
+    run_dir.mkdir(parents=True, exist_ok=True)
+    path = run_dir / SCORING_SIDECAR
+    payload = {**dataclasses.asdict(ScoringConfig()), **overrides}
+    path.write_text(json.dumps({"run_name": "t", "scoring": payload}))
+    return path
+
+
+def test_a_runs_sidecar_moves_every_p3_reader(tmp_path, _restore_scoring):
+    """One override, and all three consumers follow it — the point of the sidecar."""
+    from swissisoform.site import evidence as ev
+
+    _write_sidecar(tmp_path, p3_min_sse_plddt=0.95, p3_min_sse_length=12)
+    ev.use_scoring_config(tmp_path)
+
+    assert ev.p3_min_sse_plddt() == 0.95
+    assert ev.p3_min_sse_length() == 12
+
+    # Reader 1 + 2: the qualifies_when string and the per-element flags.
+    els = [
+        {"type": "helix", "start": 1, "end": 20, "length": 20, "region": "unique",
+         "plddt_mean": 0.80},  # clears the default 0.70, not the run's 0.95
+    ]
+    raw = {"isoform_structure_sse_status": "ok", "orf_type": "extended",
+           "diff_space": "isoform", "diff_start": 0, "diff_end": 60,
+           "isoform_structure_sse_all_elements": els}
+    sl = ev.slice_criterion({"_raw": raw, "scoring": {"criteria": {}}}, "P3_secondary_structure")
+    assert [e["qualifies"] for e in sl["elements_gained"]] == [False]
+    assert "0.95" in sl["qualifies_when"] and "12 aa" in sl["qualifies_when"]
+
+    # Reader 3: the number the P model is handed by the structure tool.
+    from swissisoform.site import structure_tools as st
+
+    empty = st.secondary_structure({}, side="isoform", cache_dir=tmp_path)
+    assert empty["confident_min_plddt"] == 0.95
+
+
+def test_a_missing_sidecar_falls_back_to_defaults(tmp_path, caplog, _restore_scoring):
+    """Runs predating the sidecar must still render — loudly, not silently."""
+    import logging
+
+    from swissisoform.site import evidence as ev
+
+    with caplog.at_level(logging.WARNING):
+        ev.use_scoring_config(tmp_path / "no_such_run")
+    assert ev.p3_min_sse_plddt() == ScoringConfig().p3_min_sse_plddt
+    assert "falling back to ScoringConfig defaults" in caplog.text
+
+
+def test_the_runner_writes_a_sidecar_that_round_trips(tmp_path, _restore_scoring):
+    """What runner writes is what use_scoring_config reads back."""
+    from swissisoform.config import PipelineConfig
+    from swissisoform.runner import _write_scoring_sidecar
+    from swissisoform.site import evidence as ev
+
+    cfg = PipelineConfig()
+    cfg.scoring = ScoringConfig(p3_min_sse_plddt=0.55, m1_constraint_delta_min=1.5)
+    _write_scoring_sidecar(tmp_path, cfg, "test_run")
+
+    active = ev.use_scoring_config(tmp_path)
+    assert active.p3_min_sse_plddt == 0.55
+    assert active.m1_constraint_delta_min == 1.5
+    assert ev.p3_min_sse_plddt() == 0.55

@@ -37,8 +37,9 @@ from markupsafe import escape
 # backend evidence module (which the LLM per-category pass also consumes) and is
 # copied into the site package by prepare_deploy.sh, so UI and LLM never drift.
 from swissisoform.site.evidence import CATEGORIES as _CATEGORIES
-from swissisoform.site.evidence import P3_MIN_SSE_LENGTH as _P3_MIN_SSE_LENGTH
-from swissisoform.site.evidence import P3_MIN_SSE_PLDDT as _P3_MIN_SSE_PLDDT
+from swissisoform.site.evidence import p3_min_sse_length as _p3_min_sse_length
+from swissisoform.site.evidence import p3_min_sse_plddt as _p3_min_sse_plddt
+from swissisoform.site.evidence import use_scoring_config as _use_scoring_config
 
 logger = logging.getLogger(__name__)
 
@@ -560,6 +561,12 @@ def load_all() -> dict[str, GeneRecord]:
     if not parquet_path.is_file():
         logger.warning("parquet not found at %s — site will render empty.", parquet_path)
         return {}
+
+    # Adopt the thresholds this parquet was scored with before reading anything
+    # out of it: the P3 card's "qualifies" language has to match the verdicts
+    # baked into the file, including when an older parquet is rendered after a
+    # retune. Falls back to defaults (with a warning) for pre-sidecar runs.
+    _use_scoring_config(root)
 
     df = pd.read_parquet(parquet_path)
     struct_index = _structure_index(str(structures_dir))
@@ -1267,7 +1274,9 @@ METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
 
 
 # P-SEA reports bare "helix"/"strand"; the UI names the actual structure types.
-_SSE_LABEL = {"helix": "alpha helix", "strand": "beta strand", "coil": "coil"}
+# helix/strand only: sse_elements emits an element solely for _STRUCTURED runs,
+# so coil residues never reach here as elements (test_coil_is_never_an_element).
+_SSE_LABEL = {"helix": "alpha helix", "strand": "beta strand"}
 
 
 def _term(label: str) -> dict[str, str]:
@@ -1633,9 +1642,9 @@ def criterion_evidence_for(iso) -> dict:
         the scorer uses — so retuning the config moves this modal, the tile
         headline and the verdict together instead of leaving them disagreeing.
         """
-        return (e.get("length") or 0) >= _P3_MIN_SSE_LENGTH and (
+        return (e.get("length") or 0) >= _p3_min_sse_length() and (
             e.get("plddt_mean") or 0
-        ) >= _P3_MIN_SSE_PLDDT
+        ) >= _p3_min_sse_plddt()
 
     def _sse_stat(els, kind):
         return sum(1 for e in els if e.get("type") == kind)
@@ -1743,7 +1752,12 @@ def criterion_evidence_for(iso) -> dict:
             # Named for both reasons: across cheeseman_test 62 of 69 sub-threshold
             # elements are short rather than low-confidence, so calling the
             # section "low confidence" would mislabel most of it.
-            subtitle = f"{counts} — shorter than 6 aa or below pLDDT 0.70, so not counted above"
+            # Interpolated, not written out: this sentence states the same rule
+            # _sse_qualifies applies, so a retune must move both together.
+            subtitle = (
+                f"{counts} — shorter than {_p3_min_sse_length()} aa or below "
+                f"pLDDT {_p3_min_sse_plddt():.2f}, so not counted above"
+            )
         return {
             "title": title,
             "subtitle": subtitle,

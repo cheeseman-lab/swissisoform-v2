@@ -1740,6 +1740,13 @@ def main(argv: list[str] | None = None, *, prompts_dir: Path | None = None) -> i
     spec = PASS_REGISTRY[args.pass_name]
     _begin_run(dry_run=getattr(args, "dry_run", False))
 
+    # The evidence slices this pass builds carry threshold language ("qualifies
+    # when length >= 6 aa AND plddt_mean >= 0.70") that must match the run whose
+    # records it is reading — same sibling-of-records trick as --variants-long.
+    from swissisoform.site.evidence import use_scoring_config
+
+    use_scoring_config(Path(args.records).parent)
+
     if getattr(args, "save_prompts", False):
         enable_prompt_capture(
             args.save_prompts_dir or _default_prompt_dir(args.out),

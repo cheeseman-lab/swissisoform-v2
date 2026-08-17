@@ -11,7 +11,9 @@ This is pure DataFrame → dict conversion: no LLM calls, no network.
 
 from __future__ import annotations
 
+import dataclasses
 import json
+import logging
 import math
 from pathlib import Path
 from typing import Any
@@ -19,11 +21,85 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from swissisoform.config import ScoringConfig
+from swissisoform.config import SCORING_SIDECAR, ScoringConfig
 
-# Threshold defaults, read once. This module is staged into the website's deploy
-# context (website/prepare_deploy.sh), which is why config.py is staged with it.
-_SCORING_DEFAULTS = ScoringConfig()
+logger = logging.getLogger(__name__)
+
+# The thresholds this process reads. Defaults until a caller points it at a run.
+#
+# A threshold like p3_min_sse_plddt decides "does this element qualify", and three
+# places answer that question: the scorer (writing the verdict into the parquet),
+# this module (headline, modal counts, hit ranking, the qualifies_when line the LLM
+# is shown) and structure_tools (the number the P model quotes). Reading it from a
+# fresh ScoringConfig() here meant those three could only ever agree by accident —
+# so a run scored with an override would render a card contradicting its own
+# verdict, silently. SCORING_SIDECAR travels with the parquet and settles it.
+#
+# This module is staged into the website's deploy context
+# (website/prepare_deploy.sh), which is why config.py is staged with it.
+_ACTIVE_SCORING = ScoringConfig()
+_WARNED_MISSING: set[str] = set()
+
+
+def use_scoring_config(source: Path | str | ScoringConfig | None) -> ScoringConfig:
+    """Point this process at the thresholds a particular run was scored with.
+
+    ``source`` may be a run directory, a path to its ``scoring_config.json``, a
+    ``ScoringConfig``, or None (reset to defaults). Returns what is now active.
+
+    A run produced before the sidecar existed has none: that keeps the defaults
+    and warns once for that path. It does not raise — old outputs must still
+    render — but it must not be silent either, since silence is the failure mode
+    this whole mechanism exists to remove.
+    """
+    global _ACTIVE_SCORING
+    if source is None:
+        _ACTIVE_SCORING = ScoringConfig()
+        return _ACTIVE_SCORING
+    if isinstance(source, ScoringConfig):
+        _ACTIVE_SCORING = source
+        return _ACTIVE_SCORING
+
+    path = Path(source)
+    if path.is_dir():
+        path = path / SCORING_SIDECAR
+    if not path.exists():
+        key = str(path)
+        if key not in _WARNED_MISSING:
+            _WARNED_MISSING.add(key)
+            logger.warning(
+                "no %s at %s; falling back to ScoringConfig defaults. Thresholds "
+                "shown may not be the ones this run was scored with.",
+                SCORING_SIDECAR,
+                path,
+            )
+        _ACTIVE_SCORING = ScoringConfig()
+        return _ACTIVE_SCORING
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    fields = {f.name for f in dataclasses.fields(ScoringConfig)}
+    # Only known fields: a sidecar from a newer/older version must not crash the
+    # render. JSON gives the pepquery mod tuples back as lists; nothing in the
+    # site layer reads them, so that drift is left alone rather than converted.
+    _ACTIVE_SCORING = ScoringConfig(
+        **{k: v for k, v in (payload.get("scoring") or payload).items() if k in fields}
+    )
+    return _ACTIVE_SCORING
+
+
+def active_scoring() -> ScoringConfig:
+    """The thresholds in force for this process."""
+    return _ACTIVE_SCORING
+
+
+def p3_min_sse_length() -> int:
+    """Minimum SSE length for P3, from the active config."""
+    return _ACTIVE_SCORING.p3_min_sse_length
+
+
+def p3_min_sse_plddt() -> float:
+    """Minimum per-element mean pLDDT for P3, from the active config."""
+    return _ACTIVE_SCORING.p3_min_sse_plddt
 
 PATHOGENIC_CLINSIG_TOKENS = ("pathogenic", "likely_pathogenic", "likely pathogenic")
 
@@ -44,14 +120,10 @@ _GNOMAD_FOLD = "__gnomad_fold__"
 _DISEASE_FOLD = "__disease_fold__"
 _DIVERGING_DOMAINS = "__diverging_domains__"
 _SSE_HEADLINE = "__sse_headline__"
-# The P3 thresholds, from the same ScoringConfig the scorer reads. Every
-# consumer of "does this element qualify" must agree with the verdict, or the
-# headline, the modal counts and the hit ranking drift the moment it is retuned.
-# Public because the website's _sse_qualifies imports them from here.
-P3_MIN_SSE_LENGTH: int = _SCORING_DEFAULTS.p3_min_sse_length
-P3_MIN_SSE_PLDDT: float = _SCORING_DEFAULTS.p3_min_sse_plddt
-_P3_MIN_LEN = P3_MIN_SSE_LENGTH
-_P3_MIN_PLDDT = P3_MIN_SSE_PLDDT
+# The P3 thresholds live in the active ScoringConfig — read them through
+# p3_min_sse_length() / p3_min_sse_plddt(), never by binding a value at import.
+# Every consumer of "does this element qualify" must agree with the verdict, and
+# a bound value cannot follow use_scoring_config().
 # Fold-change variant-density headlines (M1/M2): "{noun} {fold}x more/less in
 # unique region — {call}". low/high = call word for ratio <1 / >1.
 _VARIANT_FOLD_HEADLINES = {
@@ -1821,8 +1893,8 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
             # reader opposite things.
             ok = [
                 e for e in els
-                if (e.get("length") or 0) >= _P3_MIN_LEN
-                and (e.get("plddt_mean") or 0) >= _P3_MIN_PLDDT
+                if (e.get("length") or 0) >= p3_min_sse_length()
+                and (e.get("plddt_mean") or 0) >= p3_min_sse_plddt()
             ]
             if ok:
                 n = len(ok)
@@ -2117,14 +2189,14 @@ def _shape_p3_hits(sliced: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any
     out["residue_space"] = raw.get("diff_space")
     out["frame"] = frame
     out["qualifies_when"] = (
-        f"length >= {P3_MIN_SSE_LENGTH} aa AND plddt_mean >= {P3_MIN_SSE_PLDDT}"
+        f"length >= {p3_min_sse_length()} aa AND plddt_mean >= {p3_min_sse_plddt()}"
     )
     out[key] = [
         {
             **h,
             "status": status,
-            "qualifies": (h.get("length") or 0) >= P3_MIN_SSE_LENGTH
-            and (h.get("plddt_mean") or 0) >= P3_MIN_SSE_PLDDT,
+            "qualifies": (h.get("length") or 0) >= p3_min_sse_length()
+            and (h.get("plddt_mean") or 0) >= p3_min_sse_plddt(),
         }
         for h in scored
     ]

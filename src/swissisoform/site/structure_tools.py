@@ -370,10 +370,12 @@ def secondary_structure(
     (``side="isoform"`` on a truncation), since the bounds are in the other
     protein's numbering; ``region_is_differential`` says which you got.
     """
-    from swissisoform.config import ScoringConfig
+    from swissisoform.site.evidence import p3_min_sse_plddt
     from swissisoform.structure.sse import classify_elements, sse_elements, summarise_elements
 
-    min_plddt = ScoringConfig().p3_min_sse_plddt
+    # From the run's config, not a fresh default: this number is quoted back by
+    # the P model and must equal the one the P3 verdict was scored with.
+    min_plddt = p3_min_sse_plddt()
     side = side or _default_side(raw)
     entry, status = _resolve(raw, side, cache_dir, backend)
     empty = {"side": side, "region": None, "region_is_differential": False,

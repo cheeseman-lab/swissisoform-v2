@@ -26,6 +26,14 @@ rm -rf data/all_paired.parquet data/variants_long.parquet \
 cp -L "$SRC/all_paired.parquet"          data/all_paired.parquet
 cp -L "$SRC/variants_long.parquet"       data/variants_long.parquet
 cp -L "$SRC/transcript_skeletons.parquet" data/transcript_skeletons.parquet
+# Thresholds the parquet was scored with; without it the deployed site falls back
+# to library defaults and its P3 language can contradict the verdicts it renders.
+if [[ -f "$SRC/scoring_config.json" ]]; then
+    cp -L "$SRC/scoring_config.json"     data/scoring_config.json
+else
+    rm -f data/scoring_config.json
+    echo "  note: no scoring_config.json in $SRC (pre-sidecar run) — site uses defaults"
+fi
 # llm/ + structures/ are optional — the site degrades to placeholders without
 # them (e.g. a --skip-llm build, or before GPU folding). Stage an empty llm/ so
 # the app's data dir shape is consistent.

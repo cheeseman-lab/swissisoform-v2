@@ -15,9 +15,12 @@ plumbing changed from argparse Namespace to RunSpec fields.
 
 from __future__ import annotations
 
+import dataclasses
+import json
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -27,7 +30,7 @@ from swissisoform.clinical.module import ClinicalModule
 from swissisoform.clinical.validate import ConsequenceValidator
 from swissisoform.combine import combine_filtered_samples, dedupe_unique_proteins
 from swissisoform.compare.comparator import compare_genes
-from swissisoform.config import PipelineConfig, ScoringConfig
+from swissisoform.config import SCORING_SIDECAR, PipelineConfig, ScoringConfig
 from swissisoform.conservation_frame.module import ConservationFrameModule
 from swissisoform.evidence.d3_mass_spec import (
     MassSpecModule,
@@ -701,6 +704,35 @@ def annotate(prepared: PreparedRun, spec: RunSpec) -> pd.DataFrame:
     return paired_tis_dataframe(genes)
 
 
+def _write_scoring_sidecar(out_dir: Path, cfg: object, run_name: str) -> Path:
+    """Record the thresholds this run scored with, beside its parquet.
+
+    The verdict columns are only interpretable against the config that produced
+    them, and the site layer would otherwise import its own copy — three readers
+    of "does this element qualify", agreeing only by accident. Written here so a
+    parquet and its thresholds always travel together, including when an older
+    parquet is re-rendered after a retune. Read back by
+    ``site.evidence.use_scoring_config``.
+    """
+    scoring = getattr(cfg, "scoring", None) or ScoringConfig()
+    path = out_dir / SCORING_SIDECAR
+    path.write_text(
+        json.dumps(
+            {
+                "run_name": run_name,
+                "written_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "scoring": dataclasses.asdict(scoring),
+            },
+            indent=2,
+            default=str,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    print(f"wrote {path} (thresholds this run was scored with)")
+    return path
+
+
 def run(spec: RunSpec) -> int:
     """Full orchestration: Stages 1–7 + output writing.  Returns exit code."""
     t_start = time.perf_counter()
@@ -728,6 +760,7 @@ def run(spec: RunSpec) -> int:
     all_path = out_dir / "all_paired.parquet"
     paired.to_parquet(all_path, index=False)
     print(f"\nwrote {all_path} ({len(paired)} rows, {len(paired.columns)} cols)")
+    _write_scoring_sidecar(out_dir, prepared.cfg, spec.run_name)
     for gene_name, sub in paired.groupby("gene_name"):
         gpath = out_dir / f"{gene_name}_paired.parquet"
         sub.to_parquet(gpath, index=False)

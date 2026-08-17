@@ -142,6 +142,13 @@ class StructureConfig:
     batch_size: int = 4
 
 
+# Filename of the per-run sidecar recording the ScoringConfig a run was scored
+# with, written beside all_paired.parquet. Lives here rather than in either
+# writer or reader so runner (writer) and site.evidence (reader) share one name
+# without the core depending on the site layer.
+SCORING_SIDECAR = "scoring_config.json"
+
+
 @dataclass
 class ScoringConfig:
     """Configuration for evidence scoring (Module 10).
