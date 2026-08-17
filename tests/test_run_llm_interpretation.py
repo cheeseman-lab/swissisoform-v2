@@ -1475,6 +1475,7 @@ def _reset_prompt_capture(mod):
     """Capture state is a module global; never let it leak between tests."""
     yield
     mod._PROMPT_DIR = None
+    mod._PROMPT_OUT_DIR = None
     mod._PROMPT_INDEX.clear()
 
 
@@ -1796,6 +1797,181 @@ def test_tool_loop_capture_records_the_opening_and_the_tool_schemas(
     # The trace only ever recorded the length of this text.
     trace = json.loads((out_dir / tis_slug / "M_trace.json").read_text())
     assert trace["opening_context_chars"] == len(user)
+
+
+# ── Run identity (run_id on both sides, corpus drift) ─────────────────────
+#
+# The corpus is keyed by isoform and overwritten in place, and outputs are
+# reused across runs, so a .txt and a categories.json that look like a pair
+# routinely are not one. A shared run id is what makes that checkable.
+
+
+def _emit_verdict_script():
+    """A three-turn M loop that terminates properly."""
+    return [
+        _Response([_tool_use("query_variants", {}, "t1")]),
+        _Response([_tool_use("variant_effect_stats", {}, "t2")]),
+        _Response([_tool_use("emit_verdict", VERDICT, "t3")]),
+    ]
+
+
+def _live_capture_args(category_records, out_dir, variants_long, capture_dir):
+    return _category_run_args(
+        category_records,
+        out_dir,
+        [
+            "--variants-long", str(variants_long),
+            "--save-prompts", "--save-prompts-dir", str(capture_dir),
+        ],
+    )
+
+
+def test_one_invocation_stamps_prompt_and_output_with_the_same_run_id(
+    mod, monkeypatch, tmp_path, category_records, variants_long, only_m, capture_dir
+):
+    """The join between the corpus and the verdicts it produced."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: json.dumps({"verdict": "neutral",
+                                                                     "reasoning": "x"}))
+    monkeypatch.setattr(
+        mod, "_try_import_anthropic", lambda: _fake_anthropic(_emit_verdict_script(), [])
+    )
+    out_dir = tmp_path / "out"
+    assert mod.main(_live_capture_args(category_records, out_dir, variants_long, capture_dir)) == 0
+
+    tis_slug = mod._tis_slug(TIS_ID)
+    stamp = json.loads((out_dir / tis_slug / "categories.meta.json").read_text())
+    fields, _, _ = _split_capture(
+        (capture_dir / "category" / tis_slug / "C.txt").read_text(encoding="utf-8")
+    )
+    assert stamp["run_id"] and fields["run_id"] == stamp["run_id"]
+    assert fields["run_mode"] == "live" and stamp["run_mode"] == "live"
+    assert stamp["pass"] == "category" and stamp["prompts_captured"] is True
+    # The tool-loop opening is stamped by the same run, from the live path.
+    m_fields, _, _ = _split_capture(
+        (capture_dir / "category" / tis_slug / "M_tools.txt").read_text(encoding="utf-8")
+    )
+    assert m_fields["run_id"] == stamp["run_id"]
+
+
+def test_reused_output_keeps_its_old_run_id_and_the_capture_says_so(
+    mod, monkeypatch, tmp_path, category_records, variants_long, only_m, capture_dir, capsys
+):
+    """The drift that actually happens: the rerun skips, so the corpus goes stale."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: json.dumps({"verdict": "neutral",
+                                                                     "reasoning": "x"}))
+    monkeypatch.setattr(
+        mod, "_try_import_anthropic", lambda: _fake_anthropic(_emit_verdict_script(), [])
+    )
+    out_dir = tmp_path / "out"
+    argv = _live_capture_args(category_records, out_dir, variants_long, capture_dir)
+    assert mod.main(argv) == 0
+    first = json.loads((out_dir / mod._tis_slug(TIS_ID) / "categories.meta.json").read_text())
+
+    # Second invocation: the isoform already has output, so nothing is called and
+    # nothing is captured — but the corpus still sits there looking current.
+    capsys.readouterr()
+    monkeypatch.setattr(
+        mod, "_try_import_anthropic", lambda: _fake_anthropic(_emit_verdict_script(), [])
+    )
+    assert mod.main(argv) == 0
+    captured = capsys.readouterr()
+    unchanged = json.loads((out_dir / mod._tis_slug(TIS_ID) / "categories.meta.json").read_text())
+    assert unchanged["run_id"] == first["run_id"]  # reused, not rewritten
+    assert "captured 0 prompts" in captured.out
+    assert "1 isoform(s)" in captured.err and "from a different run" in captured.err
+    # And the leftover .txt files are named as leftovers.
+    assert "left over from earlier runs" in captured.err
+
+
+def test_dry_run_capture_says_it_describes_no_output(
+    mod, monkeypatch, tmp_path, category_records, variants_long, only_m, capture_dir, capsys
+):
+    """--dry-run --save-prompts makes no API call, so it can match nothing."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: json.dumps({"verdict": "neutral",
+                                                                     "reasoning": "x"}))
+    monkeypatch.setattr(
+        mod, "_try_import_anthropic", lambda: _fake_anthropic(_emit_verdict_script(), [])
+    )
+    out_dir = tmp_path / "out"
+    assert mod.main(_live_capture_args(category_records, out_dir, variants_long, capture_dir)) == 0
+
+    # --force so the dry run re-dumps the corpus rather than skipping the
+    # already-done isoform: this is how the corpus is normally refreshed, and it
+    # is exactly the invocation whose output looks like it belongs to the run.
+    capsys.readouterr()
+    dry_dir = tmp_path / "captured_dry"
+    assert mod.main(
+        _category_run_args(
+            category_records, out_dir,
+            ["--dry-run", "--force", "--save-prompts", "--save-prompts-dir", str(dry_dir)],
+        )
+    ) == 0
+    err = capsys.readouterr().err
+    assert "run_mode=dry_run" in err and "describes none of the 1" in err
+    fields, _, _ = _split_capture(
+        (dry_dir / "category" / mod._tis_slug(TIS_ID) / "C.txt").read_text(encoding="utf-8")
+    )
+    assert fields["run_mode"] == "dry_run"
+
+
+def test_output_without_a_run_stamp_is_reported_as_unknown(
+    mod, monkeypatch, tmp_path, category_records, variants_long, only_m, capture_dir, capsys
+):
+    """Outputs written before stamping existed must be flagged, not silently trusted."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    out_dir = tmp_path / "out"
+    iso_dir = out_dir / mod._tis_slug(TIS_ID)
+    iso_dir.mkdir(parents=True)
+    (iso_dir / "categories.json").write_text("{}")  # legacy artifact, no sidecar
+
+    assert mod.main(_live_capture_args(category_records, out_dir, variants_long, capture_dir)) == 0
+    err = capsys.readouterr().err
+    assert "no run stamp" in err and "1 isoform(s)" in err
+
+
+def test_capture_sends_the_same_output_schema_the_real_call_does(mod, tmp_path):
+    """The rebuilt params were missing output_config, so the header lied about it."""
+    schema = {"type": "object", "properties": {"verdict": {"enum": ["a"]}}}
+    prompt = mod.Prompt(system="sys", user="usr")
+    mod._begin_run(dry_run=False)
+    mod.enable_prompt_capture(tmp_path / "cap", pass_name="category", out_dir=None)
+
+    mod._capture_single_shot(
+        "category/x/C", prompt, model=mod.DEFAULT_MODEL, max_tokens=10,
+        temperature=0.0, meta={"pass": "category"}, output_schema=schema,
+    )
+    mod._capture_single_shot(
+        "category/x/D", prompt, model=mod.DEFAULT_MODEL, max_tokens=10,
+        temperature=0.0, meta={"pass": "category"},
+    )
+    with_schema, _, _ = _split_capture((tmp_path / "cap/category/x/C.txt").read_text())
+    without, _, _ = _split_capture((tmp_path / "cap/category/x/D.txt").read_text())
+    assert with_schema["structured"] == "True"
+    assert without["structured"] == "False"
+    # The header claim is derived from the params, which now carry the schema.
+    params = mod._build_request_params(
+        model=mod.DEFAULT_MODEL, max_tokens=10, temperature=0.0,
+        system="sys", user="usr", warn=False, output_schema=schema,
+    )
+    assert "output_config" in params
+
+
+def test_transport_for_matches_the_branch_call_llm_takes(mod, monkeypatch):
+    """One decision, two readers — capture must not restate call_llm's condition."""
+    plain = "claude-sonnet-4-6"  # not in _NO_SAMPLING_MODELS
+    assert mod.DEFAULT_MODEL in mod._NO_SAMPLING_MODELS
+
+    monkeypatch.setattr(mod, "_try_import_mozzarellm", lambda: object())
+    assert mod._transport_for(plain, structured=False) == "mozzarellm"
+    assert mod._transport_for(plain, structured=True) == "sdk"  # output_config has no home
+    assert mod._transport_for(plain, structured=False, tools=True) == "sdk"
+    assert mod._transport_for(mod.DEFAULT_MODEL, structured=False) == "sdk"  # rejects temperature
+
+    monkeypatch.setattr(mod, "_try_import_mozzarellm", lambda: None)
+    assert mod._transport_for(plain, structured=False) == "sdk"
 
 
 # ── Structured outputs (output_config.format) ─────────────────────────────

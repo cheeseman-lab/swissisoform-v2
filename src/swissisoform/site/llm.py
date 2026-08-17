@@ -9,6 +9,11 @@ Single-threaded; idempotent (skips genes whose output already exists unless
 network calls; ``save_prompts`` writes each assembled prompt in full to
 ``data/llm_inputs/{run}/`` and composes with ``dry_run``.
 
+Every invocation mints a run id (``_begin_run``) that is stamped into both the
+captured prompts and a ``.meta.json`` sidecar beside each output artifact, so a
+prompt can be tied to the verdict it produced — and a corpus that describes a
+different run is reported rather than silently trusted.
+
 The prompts directory is parameterized: ``main`` accepts ``prompts_dir`` (the
 thin CLI supplies ``scripts/site/prompts/``). When not given, the module-level
 ``SYSTEM_PROMPT_PATH`` / ``OUTPUT_SCHEMA_PATH`` defaults are used (tests
@@ -21,9 +26,11 @@ import argparse
 import json
 import os
 import re
+import secrets
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -382,6 +389,7 @@ def _write_usage_report(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     report = {
+        "run_id": _RUN_ID,
         "pass": pass_name,
         "model": model,
         "batch": batch,
@@ -402,6 +410,52 @@ def _write_usage_report(
     print(line + f"  -> {out_dir / f'_usage_{pass_name}.json'}")
 
 
+# ── Run identity ──────────────────────────────────────────────────────────
+
+# One id per invocation, stamped into BOTH the prompt corpus and a sidecar next
+# to every output artifact. Without it the two sides cannot be joined: the
+# corpus is keyed by isoform and overwritten in place, outputs are reused across
+# runs, and --dry-run --save-prompts captures prompts for calls that never
+# happened — so a .txt and a categories.json that look like a pair routinely are
+# not one. The id does not prevent that; it makes it checkable from the files.
+_RUN_ID: str = ""
+_RUN_MODE: str = "live"
+
+
+def _begin_run(dry_run: bool) -> str:
+    """Mint this invocation's run id. Called once, at the top of :func:`main`."""
+    global _RUN_ID, _RUN_MODE
+    _RUN_ID = f"{_utc_now().strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(3)}"
+    _RUN_MODE = "dry_run" if dry_run else "live"
+    return _RUN_ID
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _write_run_stamp(out_path: Path, *, pass_name: str, model: str, **extra: Any) -> None:
+    """Record which invocation wrote ``out_path``, in a sidecar beside it.
+
+    The artifact cannot carry this itself: ``categories.json`` is keyed by
+    category name and its consumers iterate those keys, so an extra entry would
+    read as a seventh category. A sidecar nothing reads keeps the shape intact —
+    the same move as ``categories.partial.json``.
+    """
+    stamp = {
+        "run_id": _RUN_ID,
+        "run_mode": _RUN_MODE,
+        "written_utc": _utc_now().isoformat(timespec="seconds"),
+        "pass": pass_name,
+        "model": model,
+        "prompts_captured": _PROMPT_DIR is not None,
+        **extra,
+    }
+    out_path.with_suffix(".meta.json").write_text(
+        json.dumps(stamp, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+
 # ── Prompt capture ────────────────────────────────────────────────────────
 
 # Opt-in, write-only dump of every assembled prompt, one .txt per API call,
@@ -417,6 +471,9 @@ DEFAULT_PROMPT_DIR = ROOT / "data" / "llm_inputs"
 _PROMPT_DIR: Path | None = None
 _PROMPT_PASS: str = "prompts"
 _PROMPT_INDEX: list[dict[str, Any]] = []
+# Where this run's outputs go — held so the flush can say whether the corpus
+# actually describes them (see _report_corpus_drift).
+_PROMPT_OUT_DIR: Path | None = None
 
 
 def _default_prompt_dir(out: Path) -> Path:
@@ -434,17 +491,23 @@ def _default_prompt_dir(out: Path) -> Path:
     return DEFAULT_PROMPT_DIR / (run or "unnamed")
 
 
-def enable_prompt_capture(directory: Path, pass_name: str = "prompts") -> None:
+def enable_prompt_capture(
+    directory: Path, pass_name: str = "prompts", *, out_dir: Path | None = None
+) -> None:
     """Start capturing assembled prompts under ``directory``.
 
     ``pass_name`` scopes the index file, because each pass runs as its own
     process against the same directory — a single ``index.json`` would be
     truncated to whichever pass ran last while its ``.txt`` files remained.
     Mirrors the ``_usage_{pass}.json`` naming next door.
+
+    ``out_dir`` is where the pass writes its outputs; kept so the flush can
+    compare their run stamps against this run's.
     """
-    global _PROMPT_DIR, _PROMPT_PASS
+    global _PROMPT_DIR, _PROMPT_PASS, _PROMPT_OUT_DIR
     _PROMPT_DIR = directory
     _PROMPT_PASS = pass_name
+    _PROMPT_OUT_DIR = out_dir
     _PROMPT_INDEX.clear()
     directory.mkdir(parents=True, exist_ok=True)
 
@@ -472,13 +535,27 @@ def record_prompt(
     The header is strict ``# key: value``, one key per line, so the exact call
     is reconstructible from the file alone and a diff between two runs points at
     the single field that changed.
+
+    ``run_id`` and ``run_mode`` lead the header: they are what ties this prompt
+    to the output it produced (via that output's ``.meta.json`` sidecar), and
+    what marks a ``--dry-run`` capture as describing no call at all. Distinct
+    from ``meta["mode"]``, which describes the call's shape (batch, tool_loop).
     """
     if _PROMPT_DIR is None:
         return
 
-    fields: dict[str, Any] = {k: v for k, v in meta.items() if v is not None}
+    fields: dict[str, Any] = {"run_id": _RUN_ID, "run_mode": _RUN_MODE}
+    fields.update({k: v for k, v in meta.items() if v is not None})
     fields["model"] = params.get("model")
     fields["max_tokens"] = params.get("max_tokens")
+    # Structured decoding and the transport it forces are part of the call, so a
+    # reader can tell a schema-constrained response from a free-form one.
+    fields["structured"] = "output_config" in params
+    fields["transport"] = _transport_for(
+        params.get("model") or "",
+        structured=fields["structured"],
+        tools=bool(tools),
+    )
     # Exactly one of these is present — see _NO_SAMPLING_MODELS.
     if "thinking" in params:
         fields["thinking"] = (params["thinking"] or {}).get("type")
@@ -507,19 +584,91 @@ def record_prompt(
 
 
 def flush_prompt_index() -> None:
-    """Write ``index_{pass}.json`` listing this pass's prompts. No-op when empty.
+    """Write ``index_{pass}.json`` listing this pass's prompts, then audit the corpus.
 
-    Every field it carries also sits in the corresponding ``.txt`` header, so
-    the index is a convenience for sorting/filtering the corpus, not the record.
+    Every field the index carries also sits in the corresponding ``.txt`` header,
+    so the index is a convenience for sorting/filtering the corpus, not the record.
+
+    The drift report runs even when this pass captured nothing — that is the case
+    worth hearing about, not a no-op: a rerun that skipped every isoform leaves
+    the whole corpus stale while writing no new file to hint at it.
     """
-    if _PROMPT_DIR is None or not _PROMPT_INDEX:
+    if _PROMPT_DIR is None:
         return
-    out = _PROMPT_DIR / f"index_{_PROMPT_PASS}.json"
-    out.write_text(
-        json.dumps(_PROMPT_INDEX, indent=2, ensure_ascii=False, default=str),
-        encoding="utf-8",
-    )
-    print(f"[prompts] captured {len(_PROMPT_INDEX)} prompts -> {_PROMPT_DIR}")
+    if _PROMPT_INDEX:
+        (_PROMPT_DIR / f"index_{_PROMPT_PASS}.json").write_text(
+            json.dumps(_PROMPT_INDEX, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+    print(f"[prompts] captured {len(_PROMPT_INDEX)} prompts (run {_RUN_ID}) -> {_PROMPT_DIR}")
+    _report_corpus_drift()
+
+
+def _read_run_id(stamp_path: Path) -> str | None:
+    """The run id recorded in a ``.meta.json`` sidecar, or None if unreadable."""
+    try:
+        return json.loads(stamp_path.read_text(encoding="utf-8")).get("run_id")
+    except Exception:  # noqa: BLE001 - an unreadable stamp is "unknown", not fatal
+        return None
+
+
+def _report_corpus_drift() -> None:
+    """Say whether this corpus describes the outputs sitting in ``--out``.
+
+    The prompt files are keyed by isoform and overwritten in place, so the corpus
+    is the union of the most recent capture per isoform rather than a snapshot of
+    one run. Comparing each output's run stamp against this run's is what turns
+    that from an invisible property into a printed line.
+    """
+    if _PROMPT_OUT_DIR is None:
+        return
+    spec = PASS_REGISTRY.get(_PROMPT_PASS)
+    if spec is None or "{tis_slug}" not in spec.output_filename_template:
+        return  # the per-gene default pass has no per-isoform layout to check
+    artifact = Path(spec.output_filename_template).name
+
+    outputs = sorted(_PROMPT_OUT_DIR.glob(f"*/{artifact}"))
+    if _RUN_MODE == "dry_run":
+        if outputs:
+            print(
+                f"[prompts] run_mode=dry_run: no API calls were made, so this corpus "
+                f"describes none of the {len(outputs)} {artifact} in {_PROMPT_OUT_DIR}",
+                file=sys.stderr,
+            )
+        return
+
+    foreign, unknown = [], []
+    for out_file in outputs:
+        stamp = out_file.with_suffix(".meta.json")
+        run_id = _read_run_id(stamp) if stamp.exists() else None
+        if run_id is None:
+            unknown.append(out_file.parent.name)
+        elif run_id != _RUN_ID:
+            foreign.append(out_file.parent.name)
+
+    def _warn(kind: str, slugs: list[str]) -> None:
+        if not slugs:
+            return
+        shown = ", ".join(slugs[:3]) + (f", +{len(slugs) - 3} more" if len(slugs) > 3 else "")
+        print(
+            f"[prompts] WARNING: {len(slugs)} isoform(s) in {_PROMPT_OUT_DIR} have "
+            f"{artifact} {kind} — the prompts here do not describe them: {shown}",
+            file=sys.stderr,
+        )
+
+    _warn("from a different run", foreign)
+    _warn("with no run stamp (written before stamping, or by hand)", unknown)
+
+    captured = {entry["rel"] for entry in _PROMPT_INDEX}
+    stale = [
+        p for p in _PROMPT_DIR.rglob("*.txt") if str(p.relative_to(_PROMPT_DIR)) not in captured
+    ]
+    if stale:
+        print(
+            f"[prompts] {len(stale)} prompt file(s) in {_PROMPT_DIR} are left over from "
+            "earlier runs and were not rewritten by this one",
+            file=sys.stderr,
+        )
 
 
 def _extract_text(content: Any) -> str | None:
@@ -579,6 +728,19 @@ def _build_request_params(
     return params
 
 
+def _transport_for(model: str, *, structured: bool, tools: bool = False) -> str:
+    """Which client a call will go through: ``mozzarellm`` or the raw ``sdk``.
+
+    The decision :func:`call_llm` makes at its head, lifted so prompt capture can
+    record it without restating (and drifting from) the condition. Structured
+    outputs and tool loops both force the raw SDK — mozzarellm's ``query()`` has
+    nowhere to put ``output_config`` or ``tools``.
+    """
+    if tools or structured or model in _NO_SAMPLING_MODELS:
+        return "sdk"
+    return "mozzarellm" if _try_import_mozzarellm() is not None else "sdk"
+
+
 def _capture_single_shot(
     rel: str,
     prompt: Prompt,
@@ -587,13 +749,16 @@ def _capture_single_shot(
     max_tokens: int,
     temperature: float,
     meta: dict[str, Any],
+    output_schema: dict[str, Any] | None = None,
 ) -> None:
     """Capture a single-shot prompt alongside the params its call will use.
 
     Rebuilds the params rather than threading them out of :func:`call_llm`:
     :func:`_build_request_params` is pure, so the second call is byte-identical
     to the one that goes on the wire, and capture stays at the runner level
-    where the gene/isoform/category identity is in scope.
+    where the gene/isoform/category identity is in scope. ``output_schema`` must
+    be passed for that to hold — it is what adds ``output_config`` to the wire
+    params, and the header reports it as ``structured``.
     """
     if _PROMPT_DIR is None:
         return
@@ -607,6 +772,7 @@ def _capture_single_shot(
             system=prompt.system,
             user=prompt.user,
             warn=False,
+            output_schema=output_schema,
         ),
         meta=meta,
     )
@@ -636,7 +802,7 @@ def call_llm(
     nowhere to put ``output_config``, so it would drop the guarantee silently.
     """
     mozz = _try_import_mozzarellm()
-    if mozz is not None and model not in _NO_SAMPLING_MODELS and output_schema is None:
+    if _transport_for(model, structured=output_schema is not None) == "mozzarellm":
         client = mozz(
             model=model,
             temperature=temperature,
@@ -1128,7 +1294,9 @@ def _save_failed_response(
         pass
 
 
-def _write_category_results(out_path: Path, tis_slug: str, results: dict[str, Any]) -> bool:
+def _write_category_results(
+    out_path: Path, tis_slug: str, results: dict[str, Any], *, model: str
+) -> bool:
     """Write ``categories.json`` only when every category produced a verdict.
 
     The skip check downstream is bare file existence, so a file carrying an
@@ -1156,6 +1324,9 @@ def _write_category_results(out_path: Path, tis_slug: str, results: dict[str, An
         return False
     out_path.write_text(json.dumps(results, indent=2, ensure_ascii=False))
     partial.unlink(missing_ok=True)  # a retry succeeded; don't leave the old partial behind
+    _write_run_stamp(
+        out_path, pass_name="category", model=model, categories=sorted(results)
+    )
     return True
 
 
@@ -1424,11 +1595,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--save-prompts",
         action="store_true",
         help="Write every assembled prompt to data/llm_inputs/{run}/ as one .txt per "
-        "call (system + user verbatim, plus a header with the model and sampling "
-        "gate), so a prompt can be read or diffed without reassembling it from "
-        "the evidence record, the prompt file and the schema. Combines with "
+        "call (system + user verbatim, plus a header with the run id, model and "
+        "sampling gate), so a prompt can be read or diffed without reassembling it "
+        "from the evidence record, the prompt file and the schema. Combines with "
         "--dry-run to dump the whole corpus, M/P tool-loop openings included, "
-        "at zero API cost.",
+        "at zero API cost. The header's run id matches the output's .meta.json "
+        "sidecar only when this run produced that output; mismatches are reported "
+        "at the end of the run.",
     )
     parser.add_argument(
         "--save-prompts-dir",
@@ -1478,10 +1651,13 @@ def main(argv: list[str] | None = None, *, prompts_dir: Path | None = None) -> i
     """
     args = build_parser().parse_args(argv)
     spec = PASS_REGISTRY[args.pass_name]
+    _begin_run(dry_run=getattr(args, "dry_run", False))
 
     if getattr(args, "save_prompts", False):
         enable_prompt_capture(
-            args.save_prompts_dir or _default_prompt_dir(args.out), pass_name=spec.name
+            args.save_prompts_dir or _default_prompt_dir(args.out),
+            pass_name=spec.name,
+            out_dir=args.out,
         )
 
     # V1 default-pass reads SYSTEM_PROMPT_PATH / OUTPUT_SCHEMA_PATH directly so tests
@@ -1981,6 +2157,7 @@ def _run_category_pass(
                             "tis_id": iso.get("tis_id"),
                             "category": f"{letter} ({category['name']})",
                         },
+                        output_schema=output_schema,
                     )
                 n_calls += 1
                 if args.dry_run:
@@ -2037,7 +2214,7 @@ def _run_category_pass(
 
             if args.dry_run:
                 continue
-            _write_category_results(out_path, tis_slug_val, results)
+            _write_category_results(out_path, tis_slug_val, results, model=args.model)
 
     if args.dry_run:
         return 0
@@ -2117,6 +2294,7 @@ def _run_category_pass_batch(
                         "mode": "batch",
                         "custom_id": cid,
                     },
+                    output_schema=output_schema,
                 )
                 items.append((cid, prompt))
                 meta[cid] = (tis_slug_val, category["name"])
@@ -2198,7 +2376,7 @@ def _run_category_pass_batch(
                 iso_results[tis_slug_val][category["name"]] = {"error": str(e)}
 
     for tis_slug_val, results in iso_results.items():
-        _write_category_results(iso_out[tis_slug_val], tis_slug_val, results)
+        _write_category_results(iso_out[tis_slug_val], tis_slug_val, results, model=args.model)
 
     if items:
         _write_usage_report(args.out, "category", args.model, usage_by_slug, batch=True)
@@ -2331,6 +2509,7 @@ def _run_synthesis_pass(records, spec, args, system_prompt, output_schema) -> in
                     "gene": gene_name,
                     "tis_id": iso.get("tis_id"),
                 },
+                output_schema=output_schema,
             )
             n_calls += 1
             if args.dry_run:
@@ -2356,6 +2535,7 @@ def _run_synthesis_pass(records, spec, args, system_prompt, output_schema) -> in
                 )
                 iso_dir.mkdir(parents=True, exist_ok=True)
                 out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
+                _write_run_stamp(out_path, pass_name="synthesis", model=args.model)
                 n_ok += 1
                 print(f"[{n_calls}] {tis_slug} OK")
             except Exception as e:
@@ -2413,6 +2593,7 @@ def _run_synthesis_pass_batch(records, spec, args, system_prompt, output_schema)
                     "mode": "batch",
                     "custom_id": cid,
                 },
+                output_schema=output_schema,
             )
             items.append((cid, prompt))
             meta[cid] = tis_slug
@@ -2449,6 +2630,7 @@ def _run_synthesis_pass_batch(records, spec, args, system_prompt, output_schema)
         out_path = out_by_slug[tis_slug]
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
+        _write_run_stamp(out_path, pass_name="synthesis", model=args.model)
         n_ok += 1
 
     _write_usage_report(args.out, "synthesis", args.model, usage_by_slug, batch=True)
