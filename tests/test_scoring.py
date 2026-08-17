@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from swissisoform.config import PipelineConfig, ScoringConfig
 from swissisoform.models import (
     CellLineExpression,
@@ -494,17 +496,65 @@ class TestF4TargetingChange:
 
 
 class TestF5GermlineToleranceConstraint:
+    """M1 is scored only where a unique-vs-shared contrast has a baseline.
+
+    ``_site()`` defaults to an EXTENSION, whose unique region was never canonical
+    coding sequence, so these tests build a truncation to exercise the branches.
+    """
+
+    @staticmethod
+    def _scorable_site():
+        site = _site()
+        site.orf_type = ORFType.TRUNCATED
+        return site
+
     def test_no_data(self):
         """Empty site → None (neither plm_vep nor variant_intersection)."""
-        res = _m1_pathogenic_variant_enrichment(_site(), ScoringConfig())
+        res = _m1_pathogenic_variant_enrichment(self._scorable_site(), ScoringConfig())
         assert res.value is None
-        assert "constraint_enrichment" in res.reason
+        assert "constraint_delta" in res.reason
 
-    def test_constraint_enrichment_true(self):
-        """ESM-2 constraint_enrichment ≥ threshold → True (gnomAD absent)."""
+    @pytest.mark.parametrize(
+        "orf_type",
+        [
+            ORFType.EXTENDED,
+            ORFType.UORF,
+            ORFType.UOORF,
+            ORFType.INTERNAL_OUT_OF_FRAME,
+            ORFType.THREE_UTR_ORF,
+            ORFType.ALT_ORF,
+        ],
+    )
+    def test_not_evaluable_without_a_canonical_baseline(self, orf_type):
+        """Both inputs contrast against the shared core, which is not comparable here.
+
+        None, not False: the criterion leaves the functional score's denominator
+        rather than counting as an evaluated miss. On cheeseman_test these fired
+        True on every extension at 6x-412x, off a confounded ratio.
+        """
         site = _site()
+        site.orf_type = orf_type
+        site.isoform_annotations["plm_vep"] = {"constraint_delta": 99.0, "status": "ok"}
+        site.isoform_annotations["variant_intersection"] = {
+            "gnomad_depletion_ratio": 0.01,
+            "summary": {"status": "ok"},
+        }
+        res = _m1_pathogenic_variant_enrichment(site, ScoringConfig())
+        assert res.value is None
+        assert "no baseline" in res.reason
+
+    def test_truncation_is_still_scored(self):
+        """The removed region IS canonical coding sequence, so the contrast holds."""
+        site = self._scorable_site()
+        site.isoform_annotations["plm_vep"] = {"constraint_delta": 1.0, "status": "ok"}
+        res = _m1_pathogenic_variant_enrichment(site, ScoringConfig())
+        assert res.value is True
+
+    def test_constraint_delta_true(self):
+        """ESM-C constraint_delta ≥ threshold → True (gnomAD absent)."""
+        site = self._scorable_site()
         site.isoform_annotations["plm_vep"] = {
-            "constraint_enrichment": 2.5,
+            "constraint_delta": 2.5,
             "status": "ok",
         }
         res = _m1_pathogenic_variant_enrichment(site, ScoringConfig())
@@ -512,7 +562,7 @@ class TestF5GermlineToleranceConstraint:
 
     def test_gnomad_depletion_true(self):
         """gnomAD depletion ratio below threshold → True (plm absent)."""
-        site = _site()
+        site = self._scorable_site()
         site.isoform_annotations["variant_intersection"] = {
             "gnomad_depletion_ratio": 0.5,
             "summary": {"status": "ok"},
@@ -522,9 +572,9 @@ class TestF5GermlineToleranceConstraint:
 
     def test_neither_branch_fires_false(self):
         """Both signals present but neither passes → False."""
-        site = _site()
+        site = self._scorable_site()
         site.isoform_annotations["plm_vep"] = {
-            "constraint_enrichment": 1.0,
+            "constraint_delta": -1.0,
             "status": "ok",
         }
         site.isoform_annotations["variant_intersection"] = {
@@ -536,9 +586,9 @@ class TestF5GermlineToleranceConstraint:
 
     def test_plm_not_ok_ignored(self):
         """plm_vep status not ok → constraint ignored; falls back to gnomAD."""
-        site = _site()
+        site = self._scorable_site()
         site.isoform_annotations["plm_vep"] = {
-            "constraint_enrichment": 99.0,
+            "constraint_delta": 99.0,
             "status": "not_run",
         }
         site.isoform_annotations["variant_intersection"] = {
@@ -551,13 +601,13 @@ class TestF5GermlineToleranceConstraint:
 
     def test_threshold_respected(self):
         """Custom thresholds gate both branches."""
-        site = _site()
+        site = self._scorable_site()
         site.isoform_annotations["plm_vep"] = {
-            "constraint_enrichment": 2.5,
+            "constraint_delta": 2.5,
             "status": "ok",
         }
         assert _m1_pathogenic_variant_enrichment(site, ScoringConfig()).value is True
-        strict = ScoringConfig(m1_constraint_enrichment_min=3.0)
+        strict = ScoringConfig(m1_constraint_delta_min=3.0)
         assert _m1_pathogenic_variant_enrichment(site, strict).value is False
 
 

@@ -829,7 +829,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_variant_intersection_n_gnomad_in_shared_region",
             "isoform_variant_intersection_unique_region_nt",
             "isoform_variant_intersection_shared_region_nt",
-            "isoform_plm_vep_constraint_enrichment",
+            "isoform_plm_vep_constraint_delta",
             "isoform_plm_vep_mean_llr_unique_region",
             "isoform_plm_vep_mean_llr_shared_region",
             "isoform_plm_vep_n_constrained_positions_unique",
@@ -842,21 +842,21 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "Is the unique region under germline constraint? Two independent "
             "signals: (1) gnomad_depletion_ratio < 1 means germline variation "
             "AVOIDS the unique region (density-normalized vs shared core); "
-            "(2) ESM-C constraint_enrichment high means residues there are "
-            "predicted intolerant to substitution. This measures tolerance/"
-            "constraint, not damaging-variant burden. "
+            "(2) ESM-C constraint_delta POSITIVE means the model predicts the "
+            "unique region's residues better than the shared core, i.e. finds "
+            "them more conserved (it is mean logP(wt) unique minus shared; higher "
+            "logP(wt) = better predicted = more conserved). This measures "
+            "tolerance/constraint, not damaging-variant burden. "
             "The two are either-or evidence with OPPOSITE directionality (gnomAD "
-            "low = constrained, ESM-C high = constrained); either alone suffices, "
-            "so they need not agree. "
-            "VALID ONLY ON TRUNCATIONS, where the region is canonical coding "
+            "low = constrained, ESM-C delta high = constrained); either alone "
+            "suffices, so they need not agree. "
+            "SCORED ONLY ON TRUNCATIONS, where the region is canonical coding "
             "sequence. On an EXTENSION the unique region was 5'UTR/intron and was "
-            "never coding: the gnomAD ratio then measures never-coding variation "
-            "(confounded by UTR/splicing selection and coverage) and the ESM-C "
-            "score is out-of-distribution, reflecting composition rather than "
-            "intolerance — n_constrained_positions_unique is routinely 0 there. "
-            "Do not interpret either value, or their disagreement, as evidence "
-            "about protein constraint on an extension. On separate-ORF isoforms "
-            "there is no shared region, so the ratio is undefined by construction."
+            "never coding, and on a separate ORF there is no shared region at all: "
+            "both inputs then contrast quantities that are not comparable, so the "
+            "criterion reports NOT EVALUABLE rather than a verdict. The raw values "
+            "are still shown; do not read them, or their disagreement, as evidence "
+            "about protein constraint there."
         ),
     },
     "M2_clinical_variant_overlap": {
@@ -1473,24 +1473,24 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
     },
     # M1 — ESM-C (PLM VEP) constraint
     "isoform_plm_vep_status": {"label": "PLM VEP status", "format": "str"},
-    "isoform_plm_vep_constraint_enrichment": {
-        "label": "ESM-C constraint enrichment (unique vs shared)",
+    "isoform_plm_vep_constraint_delta": {
+        "label": "ESM-C constraint delta (unique − shared logP(wt))",
         "format": "float3",
     },
     "isoform_plm_vep_mean_llr_unique_region": {
-        "label": "Mean ESM-C LLR over unique region",
+        "label": "Mean ESM-C logP(wt) over unique region",
         "format": "float3",
     },
     "isoform_plm_vep_mean_llr_shared_region": {
-        "label": "Mean ESM-C LLR over shared region",
+        "label": "Mean ESM-C logP(wt) over shared region",
         "format": "float3",
     },
     "isoform_plm_vep_n_constrained_positions_unique": {
-        "label": "ESM-C constrained positions (unique)",
+        "label": "ESM-C conserved positions (unique)",
         "format": "int",
     },
     "isoform_plm_vep_n_constrained_positions_shared": {
-        "label": "ESM-C constrained positions (shared)",
+        "label": "ESM-C conserved positions (shared)",
         "format": "int",
     },
     "isoform_variant_intersection_n_total": {

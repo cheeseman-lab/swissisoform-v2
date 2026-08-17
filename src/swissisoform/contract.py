@@ -37,6 +37,24 @@ class ORFType(Enum):
     ALT_ORF = "alt_orf"
 
 
+# ORF types whose unique region was never canonical coding sequence: an extension's
+# came from 5'UTR or intron, and a separate ORF shares no reading frame with the CDS
+# at all. Any metric that contrasts the unique region against the canonical-shared
+# one is baseline-free for these — the two sides are not comparable quantities — so
+# a criterion built on such a contrast reports "not evaluable" rather than a verdict.
+# ANNOTATED and TRUNCATED are excluded: both live in canonical coding sequence.
+NO_CANONICAL_BASELINE_ORFS = frozenset(
+    {
+        ORFType.EXTENDED,
+        ORFType.UORF,
+        ORFType.UOORF,
+        ORFType.INTERNAL_OUT_OF_FRAME,
+        ORFType.THREE_UTR_ORF,
+        ORFType.ALT_ORF,
+    }
+)
+
+
 def orf_type_from_ribotish(tis_type: str) -> ORFType:
     """Map a Ribo-TISH TisType string to an ORFType enum value.
 

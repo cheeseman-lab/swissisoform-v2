@@ -1111,10 +1111,11 @@ CRITERION_ABOUT = {
     "M1_pathogenic_variant_enrichment": (
         "Does healthy human germline variation (gnomAD) avoid this region "
         "(depletion ratio < 1×), and is it intrinsically constrained (ESM-C "
-        "constraint enrichment)? Depletion of population variation plus high "
+        "constraint delta > 0)? Depletion of population variation plus high "
         "sequence constraint mean the region resists change — it is functionally "
-        "important. gnomAD is a tolerance catalogue, not a disease one; "
-        "disease/cancer variants (ClinVar / COSMIC) live in M2."
+        "important. Scored only where the unique region is canonical coding "
+        "sequence, i.e. on truncations. gnomAD is a tolerance catalogue, not a "
+        "disease one; disease/cancer variants (ClinVar / COSMIC) live in M2."
     ),
     "M2_clinical_variant_overlap": (
         "Are disease (ClinVar / COSMIC) variants enriched per nucleotide in the "
@@ -2067,7 +2068,7 @@ def criterion_evidence_for(iso) -> dict:
                     [
                         "isoform_plm_vep_mean_llr_unique_region",
                         "isoform_plm_vep_mean_llr_shared_region",
-                        "isoform_plm_vep_constraint_enrichment",
+                        "isoform_plm_vep_constraint_delta",
                     ],
                 ),
                 (

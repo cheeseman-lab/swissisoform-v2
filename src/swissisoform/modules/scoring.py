@@ -48,8 +48,8 @@ Localization (L):
 
 Mutation Landscape (M):
     M1 Germline tolerance / constraint over the unique region
-       (ESM-C ``plm_vep`` constraint enrichment OR gnomAD depletion via
-       ``variant_intersection``)
+       (ESM-C ``plm_vep`` constraint delta OR gnomAD depletion via
+       ``variant_intersection``; not evaluable without a canonical baseline)
     M2 Disease-variant density enrichment in unique region vs shared core
        (``variant_intersection.disease_enrichment_ratio``)
 

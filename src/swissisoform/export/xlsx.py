@@ -124,9 +124,12 @@ FIELD = {
     "n_pathogenic_in_unique_region": "pathogenic variants in the unique region",
     "n_pathogenic_in_shared_region": "pathogenic variants in the shared region",
     # plm vep
-    "constraint_enrichment": "unique/shared evolutionary-constraint enrichment",
-    "n_constrained_positions_unique": "constrained positions in the unique region",
-    "n_constrained_positions_shared": "constrained positions in the shared region",
+    "constraint_delta": (
+        "mean logP(wt) unique − shared; positive = unique region better predicted, "
+        "i.e. more conserved"
+    ),
+    "n_constrained_positions_unique": "conserved positions in the unique region",
+    "n_constrained_positions_shared": "conserved positions in the shared region",
     # variant effect (per-variant ESM-C ΔLLR + AlphaMissense)
     "n_scored_plm": "clinical variants given an ESM-C ΔLLR score",
     "n_scored_am": "clinical variants given an AlphaMissense score",

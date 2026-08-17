@@ -181,8 +181,9 @@ class ScoringConfig:
         pepquery_var_mods: PepQuery2 ``-varMod`` UNIMOD ids (default
             Oxidation M + Acetyl peptide N-term).
         pepquery_max_var: PepQuery2 ``-maxVar`` — max variable mods per peptide.
-        m1_constraint_enrichment_min: M1 threshold — minimum ESM-C constraint
-            enrichment (unique vs shared) to call germline constraint.
+        m1_constraint_delta_min: M1 threshold — minimum ESM-C constraint delta
+            (mean logP(wt) unique − shared; positive = unique region better
+            predicted, i.e. more conserved) to call germline constraint.
         m1_depletion_ratio_max: M1 threshold — gnomAD depletion ratio below
             which germline variation is judged to avoid the unique region.
         m2_disease_enrichment_min: M2 threshold — disease-variant density
@@ -235,7 +236,7 @@ class ScoringConfig:
     c1_pident_min: float = 0.80  # CALIBRATE ON GENOME-WIDE RUN — provisional
     c2_pident_min: float = 0.50  # CALIBRATE ON GENOME-WIDE RUN — provisional
     # M1 germline tolerance/constraint thresholds.
-    m1_constraint_enrichment_min: float = 2.0  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    m1_constraint_delta_min: float = 0.0  # CALIBRATE ON GENOME-WIDE RUN — provisional
     m1_depletion_ratio_max: float = 0.80  # CALIBRATE ON GENOME-WIDE RUN — provisional
     # P1 threshold for mean pLDDT over the differential region. Scale
     # matches whatever the structure backend emits: Boltz-2 emits 0–1
@@ -271,7 +272,7 @@ class ScoringConfig:
     p3_min_sse_plddt: float = 0.70  # mirrors p1_plddt_threshold (0–1 ESMFold2 scale)
     # Dormant per-variant damaging cutoffs (VariantEffectModule still reads
     # m1_llr_damaging_threshold for ΔLLR labeling; M1 scoring no longer uses
-    # these — see m1_constraint_enrichment_min / m1_depletion_ratio_max).
+    # these — see m1_constraint_delta_min / m1_depletion_ratio_max).
     m1_min_pathogenic_in_unique: int = 1
     m1_llr_damaging_threshold: float = -7.5
 

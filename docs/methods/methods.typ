@@ -716,12 +716,27 @@ damaging-count formulation is superseded.
 
 A separate language-model module (`plm_vep`) records the ESM-2
 sequence-_constraint_ profile of the proteins themselves — the mean
-wild-type-residue log-probability (a constraint signal, with no alternate
-allele) over the isoform-unique and canonical-shared regions, their
-enrichment ratio, and the count of strongly-constrained positions in each
+wild-type-residue log-probability $log P("wt")$ (a constraint signal, with
+no alternate allele) over the isoform-unique and canonical-shared regions,
+their difference, and the count of strongly-conserved positions in each
 region — distinct from the per-variant $Delta "LLR"$ scores above, which
-carry the allele change. The unique/shared constraint enrichment ratio
-is one of the two inputs to F5.
+carry the allele change. A _higher_ (nearer zero) $log P("wt")$ marks a
+residue the model predicts confidently from its context, and hence a more
+conserved one; the direction was verified against the Zoonomia 241-mammal
+PhyloP track over the same codons (Pearson $+0.40$, Spearman $+0.48$ across
+6,842 residues, positive in all 27 proteins examined). The constraint
+_delta_, mean $log P("wt")$ unique minus shared, is therefore positive when
+the isoform-unique region is better predicted than the retained core; it is
+reported as a difference rather than a ratio because both terms are
+negative log-probabilities, which makes a ratio invert and diverge as the
+denominator approaches zero. That delta is one of the two inputs to F5.
+
+Both F5 inputs — the delta and the germline depletion ratio — contrast the
+isoform-unique region against the canonical-shared one, so both require the
+unique region to be canonical coding sequence. For an N-terminal extension
+it never was, and a separate ORF has no shared region at all; F5 therefore
+reports _not evaluable_ for those ORF types rather than scoring a contrast
+without a baseline, and is scored only on truncations.
 
 == ORF classification and initiation-context descriptors
 
@@ -823,11 +838,14 @@ The six functional criteria are:
   versus the isoform (§3.6).
 - *F5 — germline tolerance / constraint*: the isoform-unique region shows
   germline constraint by either of two independent signals — an ESM-2
-  unique/shared constraint enrichment at or above a threshold ($2.0$,
-  provisional), or a gnomAD germline depletion ratio below a threshold
-  ($0.80$, provisional), the latter indicating that common germline
-  variation avoids the unique region (per-variant effect scoring, §4.5).
-  It is `None` only when both inputs are missing.
+  constraint delta at or above a threshold ($0.0$, provisional), meaning the
+  unique region is predicted at least as confidently as the retained core,
+  or a gnomAD germline depletion ratio below a threshold ($0.80$,
+  provisional), the latter indicating that common germline variation avoids
+  the unique region (per-variant effect scoring, §4.5). It is `None` when
+  both inputs are missing, and for ORF types whose unique region was never
+  canonical coding sequence (extensions and separate ORFs), where neither
+  contrast has a baseline.
 - *F6 — disease density enrichment*: the disease (ClinVar / COSMIC)
   variant density of the isoform-unique region, relative to the
   canonical-shared region, is at or above one ($"F6" gt.eq 1.0$,
