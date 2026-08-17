@@ -1051,8 +1051,13 @@ def run_tool_loop(
 
         tool_uses = [b for b in content if getattr(b, "type", None) == "tool_use"]
         if not tool_uses:
-            # No tool call. Accept a verdict the model wrote as plain JSON, else
-            # nudge once before giving up.
+            # No tool call. A verdict the model wrote as plain JSON is still a
+            # verdict, so accept it — but through the same gates as the terminal
+            # tool below. `strict: true` constrains tool INPUTS, so a payload
+            # arriving as text is unpoliced by construction; taking it on the
+            # truthiness of one key let an off-enum verdict, an over-long
+            # reasoning, or leaked tool-call markup reach categories.json, where
+            # nothing downstream rejects it either.
             text = _extract_text(content)
             payload: Any = None
             if text:
@@ -1060,19 +1065,48 @@ def run_tool_loop(
                     payload = parse_response(text)
                 except json.JSONDecodeError:
                     payload = None
-            if isinstance(payload, dict) and payload.get("verdict"):
+
+            reason: str | None = None  # None means "accept"
+            if not (isinstance(payload, dict) and payload.get("verdict")):
+                reason = _TOOL_NUDGE
+            elif n_data_calls < min_data_calls:
+                # Premature, not corrupt — and deliberately NOT added to
+                # bad_verdicts, or answering in prose would be a way around the
+                # read-first rule via the salvage path.
+                reason = _premature_verdict_msg(
+                    min_data_calls=min_data_calls,
+                    n_data_calls=n_data_calls,
+                    terminal_tool=terminal_tool,
+                )
+            else:
+                violations = _verdict_violations(payload, verdict_schema) if verdict_schema else []
+                if violations:
+                    bad_verdicts.append(payload)
+                    reason = (
+                        "Rejected: " + "; ".join(violations) + f". Re-emit via {terminal_tool} "
+                        "with plain-text reasoning only."
+                    )
+
+            if reason is None:
                 trace["outcome"] = "text_verdict"
                 trace["n_data_calls"] = n_data_calls
                 return payload, trace
             if nudged:
+                # The rejection shares the nudge's one-shot budget rather than
+                # earning its own; a payload rejected on content is still worth
+                # salvaging, one rejected as premature is not.
+                if bad_verdicts:
+                    return _salvaged(bad_verdicts, trace, n_data_calls=n_data_calls, turns=turn)
                 trace["outcome"] = "no_tool_call"
                 raise ToolLoopError(
-                    f"model made no tool call and returned no parseable verdict after {turn} turns",
+                    f"model made no tool call and gave no usable verdict after "
+                    f"{turn} turns: {reason}",
                     trace,
                 )
             nudged = True
             turn_record["nudged"] = True
-            messages.append({"role": "user", "content": [{"type": "text", "text": _TOOL_NUDGE}]})
+            turn_record["nudge_reason"] = reason
+            messages.append({"role": "user", "content": [{"type": "text", "text": reason}]})
             continue
 
         results: list[dict[str, Any]] = []
@@ -1082,11 +1116,10 @@ def run_tool_loop(
 
             if name == terminal_tool:
                 if n_data_calls < min_data_calls:
-                    msg = (
-                        f"Rejected: call at least {min_data_calls} reader tools before "
-                        f"{terminal_tool}. You have made {n_data_calls} successful "
-                        "data call(s). Inspect the variant data first, then emit "
-                        "your verdict."
+                    msg = _premature_verdict_msg(
+                        min_data_calls=min_data_calls,
+                        n_data_calls=n_data_calls,
+                        terminal_tool=terminal_tool,
                     )
                     results.append(
                         {
@@ -1146,17 +1179,8 @@ def run_tool_loop(
 
         messages.append({"role": "user", "content": results})
 
-    # Salvage: a rejected verdict is still mostly good prose (the markup lands at
-    # the tail), so ship it truncated rather than lose the turn's work entirely.
     if bad_verdicts:
-        trace["outcome"] = "emit_verdict_salvaged"
-        trace["n_data_calls"] = n_data_calls
-        print(
-            f"    [salvage] {terminal_tool} never validated in {max_turns} turns; "
-            "truncating the last payload at the markup marker",
-            file=sys.stderr,
-        )
-        return _strip_verdict_markup(bad_verdicts[-1]), trace
+        return _salvaged(bad_verdicts, trace, n_data_calls=n_data_calls, turns=max_turns)
 
     trace["outcome"] = "max_turns_exhausted"
     trace["n_data_calls"] = n_data_calls
@@ -1396,6 +1420,39 @@ def _verdict_violations(payload: Any, schema: dict[str, Any]) -> list[str]:
         if _VERDICT_MARKUP.search(text):
             out.append(f"{field}: contains tool-call markup, expected plain text")
     return out
+
+
+def _premature_verdict_msg(*, min_data_calls: int, n_data_calls: int, terminal_tool: str) -> str:
+    """Rejection for a verdict offered before the data was read.
+
+    Shared by both doors a verdict can arrive through — the terminal tool call
+    and the plain-JSON text fallback — so the read-first rule reads the same
+    either way and cannot be reworded in one place only.
+    """
+    return (
+        f"Rejected: call at least {min_data_calls} reader tools before "
+        f"{terminal_tool}. You have made {n_data_calls} successful "
+        "data call(s). Inspect the variant data first, then emit your verdict."
+    )
+
+
+def _salvaged(
+    bad_verdicts: list[dict[str, Any]], trace: dict[str, Any], *, n_data_calls: int, turns: int
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Ship the last rejected verdict with its markup cut off. Last resort.
+
+    A rejected payload is usually good prose with the markup at the tail, so
+    truncating beats losing the turn's work. Shared by both verdict doors —
+    only content rejections reach here; a premature verdict is never collected.
+    """
+    trace["outcome"] = "emit_verdict_salvaged"
+    trace["n_data_calls"] = n_data_calls
+    print(
+        f"    [salvage] no verdict validated in {turns} turns; "
+        "truncating the last payload at the markup marker",
+        file=sys.stderr,
+    )
+    return _strip_verdict_markup(bad_verdicts[-1]), trace
 
 
 def _strip_verdict_markup(payload: dict[str, Any]) -> dict[str, Any]:

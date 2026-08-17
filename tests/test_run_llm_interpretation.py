@@ -659,7 +659,11 @@ def test_tool_loop_raises_with_trace_after_max_turns(mod, monkeypatch):
 
 
 def test_tool_loop_accepts_a_plain_json_verdict(mod, monkeypatch):
-    """A model that answers in prose JSON instead of calling the terminal tool."""
+    """A model that answers in prose JSON instead of calling the terminal tool.
+
+    Passes the schema, so this pins the accept AFTER validation rather than the
+    old truthiness check — the payload is clean and both data calls were made.
+    """
     calls: list = []
     script = [
         _Response([_tool_use("query_variants", {}, "t1")]),
@@ -671,6 +675,7 @@ def test_tool_loop_accepts_a_plain_json_verdict(mod, monkeypatch):
     verdict, trace = mod.run_tool_loop(
         system="S", user="U", tools=[], dispatch=_dispatch_ok,
         model="claude-sonnet-5", max_tokens=1000, api_key="k",
+        verdict_schema=_SCHEMA,
     )
     assert verdict == VERDICT
     assert trace["outcome"] == "text_verdict"
@@ -2198,6 +2203,135 @@ def test_tool_loop_without_a_schema_is_unchanged(mod, monkeypatch):
         model="claude-sonnet-5", max_tokens=1000, api_key="k",
     )
     assert verdict == _DIRTY and trace["outcome"] == "emit_verdict"
+
+
+# ── The other verdict door: plain JSON, no tool call ──────────────────────
+#
+# `strict: true` polices tool INPUTS, so a verdict arriving as text is unpoliced
+# by construction. It used to be accepted on `payload.get("verdict")` alone —
+# the same payload the tool door would reject and retry.
+
+
+def _data_turns(n: int = 2) -> list:
+    """n reader-tool turns, so min_data_calls is satisfied."""
+    return [_Response([_tool_use("query_variants", {}, f"t{i}")]) for i in range(n)]
+
+
+def _nudge_reasons(trace: dict) -> list[str]:
+    return [t["nudge_reason"] for t in trace["turns"] if t.get("nudge_reason")]
+
+
+def test_text_verdict_carrying_markup_is_rejected_then_re_answered(mod, monkeypatch):
+    """The leaked-markup payload, delivered by the door strict:true cannot reach."""
+    script = [
+        *_data_turns(),
+        _Response([_text(json.dumps(_DIRTY))], stop_reason="end_turn"),
+        _Response([_text(json.dumps(_CLEAN))], stop_reason="end_turn"),
+    ]
+    monkeypatch.setattr(mod, "_try_import_anthropic", lambda: _fake_anthropic(script, []))
+
+    verdict, trace = mod.run_tool_loop(
+        system="S", user="U", tools=[], dispatch=_dispatch_ok,
+        model="claude-sonnet-5", max_tokens=1000, api_key="k",
+        verdict_schema=_SCHEMA,
+    )
+    assert verdict == _CLEAN and trace["outcome"] == "text_verdict"
+    (reason,) = _nudge_reasons(trace)
+    assert "tool-call markup" in reason
+
+
+def test_off_enum_text_verdict_is_rejected(mod, monkeypatch):
+    """The site matches verdicts by string literal, so an off-enum value fires nothing."""
+    script = [
+        *_data_turns(),
+        _Response([_text(json.dumps({"verdict": "Interesting", "reasoning": "ok"}))],
+                  stop_reason="end_turn"),
+        _Response([_text(json.dumps(_CLEAN))], stop_reason="end_turn"),
+    ]
+    monkeypatch.setattr(mod, "_try_import_anthropic", lambda: _fake_anthropic(script, []))
+
+    verdict, trace = mod.run_tool_loop(
+        system="S", user="U", tools=[], dispatch=_dispatch_ok,
+        model="claude-sonnet-5", max_tokens=1000, api_key="k",
+        verdict_schema=_SCHEMA,
+    )
+    assert verdict == _CLEAN
+    (reason,) = _nudge_reasons(trace)
+    assert "verdict" in reason and "is not one of" in reason
+
+
+def test_text_verdict_before_the_data_calls_is_rejected(mod, monkeypatch):
+    """Answering in prose must not be a way around the read-first rule."""
+    script = [
+        _Response([_text(json.dumps(_CLEAN))], stop_reason="end_turn"),  # turn 1, no data yet
+        *_data_turns(),
+        _Response([_text(json.dumps(_CLEAN))], stop_reason="end_turn"),
+    ]
+    monkeypatch.setattr(mod, "_try_import_anthropic", lambda: _fake_anthropic(script, []))
+
+    verdict, trace = mod.run_tool_loop(
+        system="S", user="U", tools=[], dispatch=_dispatch_ok,
+        model="claude-sonnet-5", max_tokens=1000, api_key="k",
+        verdict_schema=_SCHEMA,
+    )
+    assert verdict == _CLEAN and trace["n_data_calls"] == 2
+    (reason,) = _nudge_reasons(trace)
+    assert "call at least 2 reader tools" in reason
+
+
+def test_two_bad_text_verdicts_are_salvaged(mod, monkeypatch):
+    """Same last resort the tool door gets: good prose, markup cut at the tail."""
+    script = [
+        *_data_turns(),
+        _Response([_text(json.dumps(_DIRTY))], stop_reason="end_turn"),
+        _Response([_text(json.dumps(_DIRTY))], stop_reason="end_turn"),
+    ]
+    monkeypatch.setattr(mod, "_try_import_anthropic", lambda: _fake_anthropic(script, []))
+
+    verdict, trace = mod.run_tool_loop(
+        system="S", user="U", tools=[], dispatch=_dispatch_ok,
+        model="claude-sonnet-5", max_tokens=1000, api_key="k",
+        verdict_schema=_SCHEMA,
+    )
+    assert trace["outcome"] == "emit_verdict_salvaged"
+    assert verdict["reasoning"] == "Fold is modest."
+
+
+def test_two_premature_text_verdicts_raise_rather_than_salvage(mod, monkeypatch):
+    """A premature verdict is not corrupt, so it is never collected for salvage."""
+    script = [
+        _Response([_text(json.dumps(_CLEAN))], stop_reason="end_turn"),
+        _Response([_text(json.dumps(_CLEAN))], stop_reason="end_turn"),
+    ]
+    monkeypatch.setattr(mod, "_try_import_anthropic", lambda: _fake_anthropic(script, []))
+
+    with pytest.raises(mod.ToolLoopError) as excinfo:
+        mod.run_tool_loop(
+            system="S", user="U", tools=[], dispatch=_dispatch_ok,
+            model="claude-sonnet-5", max_tokens=1000, api_key="k",
+            verdict_schema=_SCHEMA,
+        )
+    assert "call at least 2 reader tools" in str(excinfo.value)
+    assert excinfo.value.trace["outcome"] == "no_tool_call"
+
+
+def test_text_verdict_without_a_schema_still_checks_the_data_calls(mod, monkeypatch):
+    """No schema means no content validation — the read-first rule is independent."""
+    script = [
+        _Response([_text(json.dumps(_DIRTY))], stop_reason="end_turn"),  # no data calls yet
+        *_data_turns(),
+        _Response([_text(json.dumps(_DIRTY))], stop_reason="end_turn"),
+    ]
+    monkeypatch.setattr(mod, "_try_import_anthropic", lambda: _fake_anthropic(script, []))
+
+    verdict, trace = mod.run_tool_loop(
+        system="S", user="U", tools=[], dispatch=_dispatch_ok,
+        model="claude-sonnet-5", max_tokens=1000, api_key="k",
+    )
+    assert verdict == _DIRTY  # unvalidated, exactly as before
+    assert trace["outcome"] == "text_verdict"
+    (reason,) = _nudge_reasons(trace)
+    assert "call at least 2 reader tools" in reason
 
 
 def test_rejection_message_does_not_echo_the_markup_back(mod):
