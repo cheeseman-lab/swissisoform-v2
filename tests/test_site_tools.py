@@ -388,7 +388,7 @@ def test_effect_stats_class_counts(variants):
 def test_effect_caveat_fires_on_extension(variants):
     out = t.variant_effect_stats(variants, TIS_A, region="unique", orf_type="extended")
     assert "caveat" in out
-    assert "never canonical coding" in out["caveat"]
+    assert "never canonical coding sequence" in out["caveat"]
 
 
 def test_effect_caveat_absent_on_truncation(variants):
@@ -401,6 +401,28 @@ def test_effect_caveat_fires_on_separate_orf(variants):
     out = t.variant_effect_stats(variants, TIS_A, orf_type="uorf")
     assert "caveat" in out
     assert "reading frame" in out["caveat"]
+
+
+@pytest.mark.parametrize("orf_type", ["extended", "uorf"])
+def test_effect_caveat_separates_the_two_predictors(variants, orf_type):
+    """AlphaMissense is absent by construction; ESM-C is scored in the isoform frame.
+
+    They were merged as "canonical-frame, therefore uninterpretable", which is
+    true only of AlphaMissense — varianteffect._score_hit_plm scores an
+    isoform-unique hit against the ISOFORM's log-probs (807 of 958 extension
+    unique-region rows on cheeseman_test carry a real ΔLLR). The merged wording
+    told the model to discard them, and shipped verdicts did.
+    """
+    caveat = t.variant_effect_stats(variants, TIS_A, orf_type=orf_type)["caveat"]
+    am, llr = caveat.split("plm_delta_llr", 1)
+    # AlphaMissense: absent, and a null must not read as tolerance.
+    assert "am_pathogenicity is ABSENT BY CONSTRUCTION" in am
+    assert "never evidence of tolerance" in am
+    # ESM-C: scored, usable, calibrated — never discarded.
+    assert "ISOFORM" in llr and "you may use them" in llr
+    assert "not evidence of purifying selection" in llr.lower()
+    for banned in ("uninterpretable", "do not interpret", "out-of-distribution offset"):
+        assert banned not in llr.lower(), f"caveat still discards the ΔLLR: {banned!r}"
 
 
 # ── query_variants ────────────────────────────────────────────────────────

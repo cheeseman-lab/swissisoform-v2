@@ -85,8 +85,9 @@ _SORT_KEYS: dict[str, tuple[str, bool]] = {
 }
 _SORT_CHOICES = ("position", *_SORT_KEYS)
 
-# ORF types whose unique region was never canonical coding sequence, making the
-# canonical-frame effect predictors uninterpretable there. See _effect_caveat.
+# ORF types whose unique region was never canonical coding sequence, so
+# AlphaMissense — a canonical-transcript lookup — has nothing to return there.
+# ESM-C is scored in the isoform frame and is unaffected. See _effect_caveat.
 _SEPARATE_ORF_TYPES = frozenset({"uorf", "uoorf", "internal_oof", "3utr_orf", "alt_orf"})
 
 
@@ -223,36 +224,54 @@ def _iso(
 
 
 def _effect_caveat(orf_type: Any) -> str | None:
-    """Frame-validity warning for the canonical-frame effect predictors.
+    """Per-predictor validity note for a unique region that was never canonical CDS.
 
-    ``am_pathogenicity`` (AlphaMissense) and ``plm_delta_llr`` (ESM-C) are scored
-    in the CANONICAL reading frame. That is valid over a truncation's unique
-    region — removed canonical coding sequence — but not over an extension's,
-    which was 5'UTR or intron and never coding, nor over a separate ORF's. The
-    warning is attached to the tool result as well as stated in the prompt so a
-    near-zero mean cannot be read as evidence of tolerance.
+    The two effect predictors behave differently there, and merging them was
+    wrong in one direction:
+
+    - ``am_pathogenicity`` (AlphaMissense) IS canonical-frame — a precomputed
+      table keyed by canonical transcript position, with no entry for a position
+      outside the canonical CDS. Absent by construction (0 of 958 extension
+      unique-region rows on cheeseman_test carry a score).
+    - ``plm_delta_llr`` (ESM-C) is frame-aware: ``varianteffect._score_hit_plm``
+      scores an ``in_isoform_unique`` hit against the ISOFORM's log-probs. It is
+      populated (807 of those same 958 rows) and usable. What "never coding"
+      costs it is calibration, not validity — the sequence exists and is
+      scoreable, it simply has no history of purifying selection behind it.
+
+    Emitted on the tool result because the M prompt treats a ``caveat`` field as
+    a hard constraint, so this text is what the model is bound by.
     """
     s = str(orf_type or "").strip().lower()
     if s == "extended":
-        return (
-            "FRAME CAVEAT: this is an extension, so its unique region was 5'UTR or "
-            "intron and was never canonical coding sequence. am_pathogenicity and "
-            "plm_delta_llr are scored in the canonical frame and are therefore "
-            "uninterpretable over the unique region — AlphaMissense is near-zero or "
-            "absent there and the ESM-C LLR degenerates to an out-of-distribution "
-            "offset. Do NOT read a low effect score over the unique region as "
-            "evidence that the region is tolerant to variation; weigh the "
-            "positional clustering signal instead. These scores remain valid over "
-            "the shared region."
+        subject = (
+            "this is an extension, so its unique region was 5'UTR or intron and "
+            "was never canonical coding sequence"
         )
-    if s in _SEPARATE_ORF_TYPES:
-        return (
-            "FRAME CAVEAT: this isoform is a separate ORF that does not share a "
-            "reading frame with the canonical CDS, so the canonical-frame scores "
-            "am_pathogenicity and plm_delta_llr do not describe this protein's "
-            "residues at all. Do not interpret them here."
+    elif s in _SEPARATE_ORF_TYPES:
+        subject = (
+            "this isoform is a separate ORF and does not share a reading frame "
+            "with the canonical CDS, so no part of it is canonical coding sequence"
         )
-    return None
+    else:
+        return None
+    return (
+        f"FRAME CAVEAT: {subject}. The two effect predictors differ here and must "
+        "not be treated alike. am_pathogenicity is ABSENT BY CONSTRUCTION over "
+        "this region: AlphaMissense is a precomputed canonical-transcript table "
+        "with no entry for a position outside the canonical CDS, so a null is a "
+        "missing lookup, never evidence of tolerance — do not average it, do not "
+        "report its absence as a finding. plm_delta_llr IS scored here, in the "
+        "ISOFORM's own frame (the pipeline scores unique-region variants against "
+        "the isoform protein), so the values are real and you may use them. "
+        "Calibrate rather than discard: ESM-C reports how disruptive the "
+        "substitution is in this sequence context, NOT evidence of purifying "
+        "selection, because this sequence has no coding evolutionary history. "
+        "Read a low delta LLR as model-perceived disruptiveness; do not convert "
+        "it into a claim about constraint, and do not read a mild one as proof "
+        "the region tolerates variation. Both predictors are unaffected over the "
+        "shared region."
+    )
 
 
 # ── Readers ───────────────────────────────────────────────────────────────

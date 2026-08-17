@@ -6,15 +6,21 @@ already attached to a TIS, then aggregates over the isoform-unique region:
 1. **ESM-C masked-marginal ΔLLR** — ``logP(alt) − logP(wt)`` at the variant's
    residue, read from the per-position distribution cached by
    ``swissisoform.plm.embed`` (``aa_logprobs``). More negative ⇒ the
-   substitution is less tolerated by the language model. Looked up in the
-   **canonical** protein space, since the clinical module's ``protein_pos``
-   is canonical-transcript-frame (set by ``ConsequenceValidator`` against the
-   canonical CDS). Valid for shared-region variants and truncation-unique
-   variants (both live in the canonical protein); extension-unique variants
-   fall outside the canonical CDS and never reach this module with a
-   ``protein_pos``.
+   substitution is less tolerated by the language model. **Frame-aware**
+   (``_score_hit_plm``): an ``in_isoform_unique`` hit carrying an
+   ``isoform_protein_pos`` — an extension's or separate ORF's own residues —
+   is scored against the ISOFORM protein; everything else (shared region, a
+   truncation's lost N-terminus, any unmapped variant) against the canonical
+   protein, whose ``protein_pos`` ``ConsequenceValidator`` set. Both frames
+   are real sequence, so both are scoreable; what an extension's unique region
+   lacks is not a frame but an evolutionary history, which makes the score a
+   statement about model-perceived disruptiveness rather than about selection.
 2. **AlphaMissense** — DeepMind's calibrated missense pathogenicity
-   (0-1 score + class) by genomic ``(chrom, pos, ref, alt)``.
+   (0-1 score + class) by genomic ``(chrom, pos, ref, alt)``. Canonical-frame
+   only: a precomputed canonical-transcript table has no entry for a position
+   outside the canonical CDS, so it is absent by construction over an
+   extension's or separate ORF's unique region, and is excluded from the
+   damaging flag there.
 
 Runs as a SiteModule **after** ``ClinicalModule`` and
 ``VariantIntersectionModule`` so it can read the genomic-membership flags
