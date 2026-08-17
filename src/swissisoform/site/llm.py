@@ -193,6 +193,19 @@ _UNSUPPORTED_SCHEMA_KEYWORDS = frozenset(
     {"uniqueItems", "minItems", "maxItems", "minimum", "maximum", "multipleOf"}
 )
 
+# Values that are instance DATA, not subschemas. Filtering them rewrites what the
+# schema asserts — a `const: {"minimum": 3}` would reach the API missing a key,
+# constraining the model to a different constant than the schema declares.
+_DATA_VALUED_KEYWORDS = frozenset({"enum", "const", "default", "examples"})
+
+# Values that are name -> subschema MAPS. Recurse into the values only: the names
+# are the author's field names, and one that happens to read like a keyword
+# ("maximum") must not be filtered out of `properties` while `required` still
+# names it — with additionalProperties:false that schema cannot be satisfied.
+_SCHEMA_MAP_KEYWORDS = frozenset(
+    {"properties", "patternProperties", "$defs", "definitions", "dependentSchemas"}
+)
+
 
 def _output_format_schema(schema: dict[str, Any]) -> dict[str, Any]:
     """Copy of ``schema`` safe to send as ``output_config.format``.
@@ -200,17 +213,28 @@ def _output_format_schema(schema: dict[str, Any]) -> dict[str, Any]:
     Wire copy only — ``build_prompt`` and ``_emit_schema_warnings`` keep the full
     schema, which is the only thing communicating the constraints the decoder
     ignores.
+
+    Every value is classified before it is walked, because "is this a dict?" does
+    not answer the question that matters: a subschema is filtered, a name-to-
+    subschema map has only its values filtered, and instance data is left alone.
     """
     if not isinstance(schema, dict):
         return schema
-    out = {
-        k: _output_format_schema(v) if isinstance(v, dict) else v
-        for k, v in schema.items()
-        if k not in _UNSUPPORTED_SCHEMA_KEYWORDS
-    }
-    props = out.get("properties")
-    if isinstance(props, dict):
-        out["properties"] = {k: _output_format_schema(v) for k, v in props.items()}
+    out: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key in _UNSUPPORTED_SCHEMA_KEYWORDS:
+            continue
+        if key in _DATA_VALUED_KEYWORDS:
+            out[key] = value
+        elif key in _SCHEMA_MAP_KEYWORDS and isinstance(value, dict):
+            out[key] = {name: _output_format_schema(sub) for name, sub in value.items()}
+        elif isinstance(value, list):
+            # anyOf/oneOf/allOf and tuple-form items. String lists (required,
+            # multi-type) pass through untouched — the non-dict guard returns
+            # each element as-is.
+            out[key] = [_output_format_schema(item) for item in value]
+        else:
+            out[key] = _output_format_schema(value) if isinstance(value, dict) else value
     return out
 
 

@@ -2014,6 +2014,79 @@ def test_output_format_schema_drops_only_the_rejected_keywords(mod):
     assert schema["properties"]["tags"]["uniqueItems"] is True, "input must not be mutated"
 
 
+# The filter has to classify each value before walking it: a subschema is
+# filtered, a name -> subschema map has only its VALUES filtered, and instance
+# data is left alone. "Is it a dict?" answers none of those, and got all three
+# of the following wrong.
+
+
+def test_a_property_named_like_a_keyword_survives(mod):
+    """Dropping it would leave `required` naming a key additionalProperties forbids."""
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["maximum", "verdict"],
+        "properties": {
+            "maximum": {"type": "number", "minimum": 0},  # field name, not a keyword
+            "verdict": {"enum": ["a"]},
+        },
+    }
+    out = mod._output_format_schema(schema)
+    assert sorted(out["properties"]) == ["maximum", "verdict"]
+    assert set(out["required"]) <= set(out["properties"]), "unsatisfiable wire schema"
+    # ...while a genuine keyword INSIDE that property is still stripped.
+    assert "minimum" not in out["properties"]["maximum"]
+
+
+def test_list_valued_subschemas_are_filtered(mod):
+    """anyOf/oneOf/allOf and tuple-form items are lists, and were skipped entirely."""
+    schema = {
+        "properties": {
+            "hits": {"anyOf": [{"type": "array", "uniqueItems": True}, {"type": "null"}]},
+            "pair": {"items": [{"type": "integer", "minimum": 0}, {"type": "string"}]},
+            "both": {"allOf": [{"maxItems": 3}], "oneOf": [{"multipleOf": 2}]},
+        }
+    }
+    assert "uniqueItems" not in json.dumps(mod._output_format_schema(schema))
+    assert "minimum" not in json.dumps(mod._output_format_schema(schema))
+    assert "maxItems" not in json.dumps(mod._output_format_schema(schema))
+    assert "multipleOf" not in json.dumps(mod._output_format_schema(schema))
+
+
+def test_instance_data_is_never_filtered(mod):
+    """const/enum/default hold values, not schemas — filtering rewrites the assertion.
+
+    Object-valued enum survived only because lists were skipped, so recursing
+    into lists without this exemption would trade one bug for another.
+    """
+    schema = {
+        "properties": {
+            "cfg": {
+                "const": {"minimum": 3, "label": "x"},
+                "enum": [{"maximum": 9}],
+                "default": {"maxItems": 1},
+            }
+        }
+    }
+    cfg = mod._output_format_schema(schema)["properties"]["cfg"]
+    assert cfg["const"] == {"minimum": 3, "label": "x"}
+    assert cfg["enum"] == [{"maximum": 9}]
+    assert cfg["default"] == {"maxItems": 1}
+
+
+def test_defs_names_and_string_lists_pass_through(mod):
+    """$defs is another name -> schema map; required/type lists are not schemas."""
+    schema = {
+        "$defs": {"minimum": {"type": "integer", "maximum": 5}},
+        "type": ["string", "null"],
+        "required": ["minimum"],
+    }
+    out = mod._output_format_schema(schema)
+    assert list(out["$defs"]) == ["minimum"]  # the definition's NAME
+    assert "maximum" not in out["$defs"]["minimum"]  # its keyword, still stripped
+    assert out["type"] == ["string", "null"] and out["required"] == ["minimum"]
+
+
 def test_real_schemas_are_wire_safe(mod):
     """The two live schemas survive the subset filter."""
     root = ROOT / "scripts/site/prompts/output_schemas"
