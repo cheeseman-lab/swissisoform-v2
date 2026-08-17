@@ -895,8 +895,13 @@ MIN_DATA_TOOL_CALLS = 2
 # context window mid-loop.
 MAX_TOOL_RESULT_CHARS = 60_000
 
+# Category-neutral on purpose: this is sent to every tool loop, and M's readers
+# query variants while P's read a structure. The category's own vocabulary is
+# already in front of the model twice — its system prompt's ## Tools section and
+# the tool schemas on every request — so naming it here would only be a way to
+# get it wrong.
 _TOOL_NUDGE = (
-    "You did not call a tool. Use the reader tools to inspect the variant data, "
+    "You did not call a tool. Use the reader tools to inspect the underlying data, "
     "then call emit_verdict exactly once with your verdict and reasoning."
 )
 
@@ -1451,12 +1456,13 @@ def _premature_verdict_msg(*, min_data_calls: int, n_data_calls: int, terminal_t
 
     Shared by both doors a verdict can arrive through — the terminal tool call
     and the plain-JSON text fallback — so the read-first rule reads the same
-    either way and cannot be reworded in one place only.
+    either way and cannot be reworded in one place only. Category-neutral for
+    the same reason as :data:`_TOOL_NUDGE`.
     """
     return (
         f"Rejected: call at least {min_data_calls} reader tools before "
         f"{terminal_tool}. You have made {n_data_calls} successful "
-        "data call(s). Inspect the variant data first, then emit your verdict."
+        "data call(s). Inspect the underlying data first, then emit your verdict."
     )
 
 
