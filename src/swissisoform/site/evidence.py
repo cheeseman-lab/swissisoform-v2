@@ -2000,43 +2000,28 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
                 # first (then pathogenic/damaging within that), ensuring the
                 # truncated view always surfaces the region the criterion is about.
                 MAX_HITS = 30
-                # Criteria whose claim is about the isoform-unique region.
+                # Criteria whose claim is about the isoform-unique region. P3 is
+                # NOT one of them here: it never reaches the model through this
+                # list — _shape_p3_hits below discards `hits` and rebuilds from
+                # the raw column, with its own cap — so ranking it here would be
+                # work thrown away.
                 unique_region_criteria = {
                     "M1_pathogenic_variant_enrichment",
                     "M2_clinical_variant_overlap",
-                    "P3_secondary_structure",
                 }
                 prioritize_unique = criterion_id in unique_region_criteria
                 if n_hits_total > MAX_HITS:
 
                     def _region_rank(h: dict[str, Any]) -> int:
-                        """0 = must survive the cap, higher = droppable first.
-
-                        P3's hits are SSE elements, which carry ``region`` rather
-                        than the variants' ``in_isoform_unique`` flag, so the
-                        membership test has to know both shapes. It also ranks on
-                        the SCORED set: an element that clears both thresholds is
-                        the finding itself and outranks a sub-threshold one in
-                        the same region, which is only context for why the
-                        verdict went the way it did.
-                        """
+                        """0 = must survive the cap, 1 = droppable first."""
                         if not prioritize_unique:
                             return 1
-                        if criterion_id == "P3_secondary_structure":
-                            if h.get("region") not in ("unique", "spans"):
-                                return 2
-                            qualifies = (h.get("length") or 0) >= _P3_MIN_LEN and (
-                                h.get("plddt_mean") or 0
-                            ) >= _P3_MIN_PLDDT
-                            return 0 if qualifies else 1
                         return 0 if h.get("in_isoform_unique") else 1
 
                     def _priority(h: dict[str, Any]) -> tuple[int, int]:
                         # Region membership leads so the hits the criterion is
                         # about survive truncation; clinical significance is the
-                        # secondary sort within each bucket (a no-op for SSE
-                        # elements, which all rank the same and so keep N-to-C
-                        # order).
+                        # secondary sort within each bucket.
                         return (_region_rank(h), clinsig_rank(h))
 
                     hits = sorted(all_hits, key=_priority)[:MAX_HITS]
@@ -2063,6 +2048,8 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         "n_hits_shown": len(hits),
     }
     if criterion_id == "P3_secondary_structure":
+        # Replaces `hits` wholesale, so nothing above this line reaches the model
+        # for P3 — see _shape_p3_hits.
         return _shape_p3_hits(sliced, raw)
     return sliced
 
