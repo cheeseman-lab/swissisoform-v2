@@ -476,6 +476,12 @@ _VARIANTS_LONG_BASE_COLS = (
     "isoform_aa_ref",
     "isoform_aa_alt",
     "isoform_consequence",
+    # At codon 0 the consequence turns on codon membership, not the amino acid,
+    # so the codons are the evidence for a start_lost call.
+    "codon_ref",
+    "codon_alt",
+    "isoform_codon_ref",
+    "isoform_codon_alt",
 )
 
 # Pulled from the per-hit ``metadata`` sub-dict. ``clinvar_title`` reads
@@ -487,6 +493,13 @@ _VARIANTS_LONG_METADATA_COLS = (
     ("clinvar_title", "title"),
 )
 
+# Pulled from the matching ``isoform_varianteffect_hits`` entry. The five below
+# effect_damaging are what make it readable rather than a bare boolean: plm_status
+# explains a null delta_llr (not_missense vs aa_ref_mismatch, otherwise
+# indistinguishable from a failure), plm_frame says which protein it was scored
+# against, effect_lof separates a frameshift/stop from a damaging missense call,
+# and effect_tolerated_in_gnomad distinguishes "predicted benign" from "predicted
+# damaging but common in healthy humans", which the AF gate turns to False.
 _VARIANTS_LONG_EFFECT_COLS = (
     "am_class",
     "am_pathogenicity",
@@ -494,6 +507,11 @@ _VARIANTS_LONG_EFFECT_COLS = (
     "plm_llr_wt",
     "plm_llr_alt",
     "effect_damaging",
+    "effect_lof",
+    "effect_consequence",
+    "effect_tolerated_in_gnomad",
+    "plm_frame",
+    "plm_status",
 )
 
 
@@ -548,8 +566,11 @@ def write_variants_long(parquet_path: Path, out_path: Path) -> int:
             rows.append(record)
 
     out_df = pd.DataFrame(rows)
-    if "effect_damaging" in out_df.columns:
-        out_df["effect_damaging"] = out_df["effect_damaging"].astype("boolean")
+    # Nullable boolean, so a hit with no effect record stays NA rather than
+    # becoming False — "not scored" and "scored not damaging" are different.
+    for col in ("effect_damaging", "effect_lof", "effect_tolerated_in_gnomad"):
+        if col in out_df.columns:
+            out_df[col] = out_df[col].astype("boolean")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_df.to_parquet(out_path, index=False)
     return len(rows)
@@ -684,9 +705,17 @@ CRITERIA: dict[str, dict[str, Any]] = {
         ],
         "headline_col": _CODING_SELECTION,
         "interpretation_hint": (
-            "Does the unique coding region show purifying selection by phyloP "
-            "(absolute mean ≥ ~2 indicates strong constraint)? The shared region "
-            "and enrichment ratio are context only, not the basis for the call."
+            "Does the unique coding region show purifying selection by phyloP? The "
+            "score is SIGNED, not a magnitude: phyloP measures deviation from "
+            "neutral evolution, so positive = conserved, ~0 = neutral, and NEGATIVE "
+            "= accelerated. A negative mean is the opposite of constraint and can "
+            "never pass — never read a large negative as strong conservation. "
+            "The criterion needs the unique-region mean at or above the configured "
+            "threshold (2.0), which is deliberately stricter than the ±1.0 band the "
+            "headline uses to label selection descriptively: a mean between 1 and 2 "
+            "is correctly called purifying on the tile AND correctly scores False "
+            "here — below the bar, not a contradiction to explain away. The shared "
+            "region and enrichment ratio are context only, not the basis for the call."
         ),
     },
     "D1_multi_cell_line": {
@@ -740,15 +769,21 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "tis_pvalue",
             "fisher_qvalue",
         ],
-        # Computed headline: the maximum per-cell-line initiation efficiency
-        # (TIS counts / gene RNA-seq counts ratio) across the six samples — see
-        # ``_MAX_INITIATION_EFFICIENCY`` handling in ``slice_criterion``.
+        # Computed headline: the alt/canonical initiation-efficiency RATIO at the
+        # cell line with the highest alt efficiency among those carrying a canonical
+        # twin; the bare maximum is only the fallback when no line has one. See the
+        # ``_START_SITE_USAGE`` branch in ``slice_criterion``.
         "headline_col": _START_SITE_USAGE,
         "interpretation_hint": (
             "How efficiently is this TIS initiated? Each per-cell-line value is the "
-            "TIS read counts / gene RNA-seq counts ratio; the headline is the max "
-            "across cell lines. Compare to the canonical_ twins for a within-gene "
-            "baseline."
+            "TIS read counts / gene RNA-seq counts ratio. The headline is NOT one of "
+            "those values: it is the alt/canonical RATIO at the cell line with the "
+            "highest alt efficiency that also has a canonical twin, so '0.43x vs "
+            "canonical' means this start is used less than half as much as the "
+            "canonical one — a fold-change, not an efficiency. Only when no cell line "
+            "has a canonical twin does the headline fall back to the bare maximum, "
+            "labelled 'Max Initiation Efficiency'. Compare the per-cell-line values to "
+            "their canonical_ twins for the within-gene baseline."
         ),
     },
     "D3_mass_spec": {
@@ -762,7 +797,18 @@ CRITERIA: dict[str, dict[str, Any]] = {
         "evidence_hits_col": "cmp_massspec_hits_in_diff_region",
         "headline_col": _MASSPEC_VALIDATED,
         "interpretation_hint": (
-            "Are there PepQuery2 validated peptides in the isoform's unique region?"
+            "Did PepQuery2 match public MS spectra to a peptide that only the isoform "
+            "can produce? 'Unique to isoform' is a SET DIFFERENCE over tryptic "
+            "peptides — in the isoform's digest, absent from the canonical's — not a "
+            "coordinate test against the differential region, so do not claim such a "
+            "peptide sits inside that region. On a TRUNCATION the two come apart by "
+            "construction: the differential region is the LOST canonical N-terminus, "
+            "which the isoform cannot produce a peptide from at all, so the "
+            "diff-region hit list is empty while the diagnostic peptide — the novel "
+            "junction created by the new start — sits in SHARED-region coordinates. "
+            "A validated peptide is positive evidence the isoform exists; its absence "
+            "is weak evidence against, since detection depends on the spectra "
+            "searched."
         ),
     },
     "P1_structured_extension": {
@@ -858,8 +904,29 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "cmp_interproscan_n_hits_in_diff_region",
         ],
         "evidence_hits_col": "cmp_interproscan_hits_in_diff_region",
+        "hits_note": (
+            "Every InterProScan hit OVERLAPPING the differential region, on the pane "
+            "named by cmp_interproscan_hits_source_pane (the canonical for a truncation, "
+            "since the lost region exists only there). This is the broader set, NOT the "
+            "one S1 scores — see the interpretation_hint for the three conditions a hit "
+            "must meet to be counted."
+        ),
         "headline_col": _DIVERGING_DOMAINS,
-        "interpretation_hint": ("Does the differential region overlap with InterProScan domains?"),
+        "interpretation_hint": (
+            "Is a real functional domain GAINED or LOST in the differential region? "
+            "Symmetric by direction: on an extension, a domain starting in the added "
+            "segment and absent from the canonical is a GAIN; on a truncation, one "
+            "starting in the removed segment and absent from the isoform is a LOSS. "
+            "The scored count requires all three conditions together — a REAL InterPro "
+            "domain (genuine interpro_id, excluding disorder/structural-prediction "
+            "databases), STARTING inside the region, and ABSENT from the other form's "
+            "domain set. Overlapping the region is not enough, and neither is a domain "
+            "present in both forms at shifted coordinates: a truncation renumbers every "
+            "downstream domain without changing it. So the hits list is routinely "
+            "non-empty while the criterion is False — that is the expected reading of a "
+            "boundary-spanning or merely repositioned domain, not a contradiction to "
+            "explain away."
+        ),
     },
     "L2_targeting_change": {
         "axis": "F",
@@ -1070,14 +1137,15 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "strongly. The gained/lost counts are context only — two proteins of "
             "different length always differ in hundreds of features, so their "
             "presence says nothing about magnitude. "
-            "Treat this as a PRESENCE/ABSENCE signal only. Feature labels are "
-            "auto-generated and provisional, not curated annotation: many carry no "
-            "content (hollow labels are withheld, leaving the feature identified by "
+            "Feature labels are auto-generated and provisional, not curated "
+            "annotation: many carry no content (hollow labels are withheld, leaving "
+            "the feature identified by "
             "index alone), and many others merely describe the feature's own "
             "activation pattern or restate sequence composition already scored by "
             "the whole-protein biophysical shift in this same category. Do NOT name, "
             "quote or interpret a feature label in the reasoning, and do not let a "
-            "label move the verdict — cite only that features differ, and how many."
+            "label move the verdict — cite the activation-shift magnitude, not the "
+            "labels and not the counts."
         ),
     },
 }
@@ -1092,7 +1160,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
 #
 # ``members`` are all keys in ``CRITERIA`` — every member (including S2 biophysics
 # and S3 SAE) is a first-class scored criterion sliced through ``slice_criterion``.
-# All 15 criteria — including P2 — are covered exactly once; there is no
+# All 16 criteria — including P2 and P3 — are covered exactly once; there is no
 # LLM-excluded criterion.
 CATEGORIES: list[dict[str, Any]] = [
     {
@@ -1950,9 +2018,10 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
     elif headline_col == _MASSPEC_VALIDATED:
         # "{v}/{u} isoform-unique peptides validated": v = isoform-unique tryptic
         # peptides matched to public MS spectra by PepQuery2 (the D3 score
-        # numerator), u = total isoform-unique peptides searched. The isoform
-        # digest is scoped to unique peptides, so ``validated_peptides`` == the
-        # validated-unique count. Unscored (—) until PepQuery has run.
+        # numerator), u = total isoform-unique peptides searched.
+        # ``validated_peptides`` is counted unique-scoped at the source, so v is the
+        # same quantity D3 scores rather than a broader count that happens to agree.
+        # Unscored (—) until PepQuery has run.
         summary = raw.get("isoform_massspec_summary")
         if isinstance(summary, dict) and summary.get("pepquery_run"):
             v = summary.get("validated_peptides") or 0
@@ -2119,6 +2188,10 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         "n_hits_total": n_hits_total,
         "n_hits_shown": len(hits),
     }
+    # A criterion whose hits list is broader than what it scores says so here, so
+    # the two are not read as the same set (S1: overlap vs starts-in-and-absent).
+    if cfg.get("hits_note"):
+        sliced["hits_note"] = cfg["hits_note"]
     if criterion_id == "P3_secondary_structure":
         # Replaces `hits` wholesale, so nothing above this line reaches the model
         # for P3 — see _shape_p3_hits.

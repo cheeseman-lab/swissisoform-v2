@@ -1978,9 +1978,10 @@ def _tool_categories(args, prompts_root: Path, records=None) -> dict[str, dict[s
 # cited the pre-computed PAE block means rather than the values they had queried.
 #
 # P: ``pae_region_blocks`` partitions the structure into diff/body and reports the
-# three block means. ``pae_block()`` with default arguments computes exactly the
-# diff-vs-body value, so the loop was shipping the answer to one of its own tool
-# calls on every turn. ``pae_status`` is deliberately RETAINED — it is
+# three block means — every one of which ``pae_block()`` recomputes from the same
+# matrix, the diagonal diff-vs-diff on a bare call and the other two by naming
+# ranges, so the loop was shipping the answers to its own tool calls on every
+# turn. ``pae_status`` is deliberately RETAINED — it is
 # availability metadata, not a measurement, and it saves a wasted call
 # discovering that no PAE matrix exists.
 SUPERSEDED_BY_TOOLS: dict[str, tuple[str, ...]] = {
@@ -2494,7 +2495,7 @@ def _build_synthesis_record(
     / localization, the baseline the isoform diverges from), the digested per-category
     reads (``category_reads`` — the ``{verdict, reasoning}`` per CDLMPS category), and
     the raw underlying evidence (``criteria_evidence``, one ``slice_criterion`` payload
-    per criterion, all 15 incl. S2/S3) so the model can weigh actual numbers.
+    per criterion, all 16 incl. P3/S2/S3) so the model can weigh actual numbers.
 
     ``gene`` is the gene block from the evidence record (``build_gene_record``); when
     absent, only ``{name}`` is carried (older records / dry-run stubs).

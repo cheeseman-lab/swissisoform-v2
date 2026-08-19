@@ -124,10 +124,41 @@ class TestMassSpecModule:
 
         validated = {"TESTGENE": {first_pep}}
         module = MassSpecModule(config, validated_peptides=validated)
-        result = module.annotate(protein, gene_name="TESTGENE")
+        # A canonical is required for the unique-scoped count: without one,
+        # uniqueness is unknown and the summary reports None, not a number.
+        result = module.annotate(protein, canonical_protein="MQQQQQR*", gene_name="TESTGENE")
         validated_hits = [h for h in result["hits"] if h["validated"]]
         assert len(validated_hits) >= 1
         assert result["summary"]["validated_peptides"] >= 1
+
+    def test_validated_peptides_is_unknown_without_a_canonical(self, config):
+        """Uniqueness unknown -> the unique-scoped count is None, never 0.
+
+        Reporting 0 would read as "searched and found nothing unique" when the
+        truth is that we cannot tell which peptides are unique at all.
+        """
+        protein = "MAAAAAALLLLLLLRKKKKKKKR*"
+        first_pep = MassSpecModule(config)._tryptic_digest(protein)[0]["peptide"]
+        module = MassSpecModule(config, validated_peptides={"TESTGENE": {first_pep}})
+        result = module.annotate(protein, gene_name="TESTGENE")
+        assert result["summary"]["pepquery_run"] is True
+        assert result["summary"]["unique_peptides"] is None
+        assert result["summary"]["validated_peptides"] is None
+
+    def test_validated_non_unique_peptide_is_not_counted(self, config):
+        """The headline numerator must equal D3's: unique AND validated.
+
+        A validated peptide the canonical also produces is evidence the canonical
+        exists, not the isoform, so counting it inflated the site headline above
+        both the unique total and the score it summarises.
+        """
+        protein = "MAAAAAALLLLLLLRKKKKKKKR*"
+        shared_pep = MassSpecModule(config)._tryptic_digest(protein)[0]["peptide"]
+        # Same peptide in the canonical digest -> not unique, but validated.
+        module = MassSpecModule(config, validated_peptides={"TESTGENE": {shared_pep}})
+        result = module.annotate(protein, canonical_protein=protein, gene_name="TESTGENE")
+        assert any(h["validated"] and h["unique_to_isoform"] is False for h in result["hits"])
+        assert result["summary"]["validated_peptides"] == 0
 
     def test_empty_protein(self, config):
         """Empty string returns empty hits; unique/validated are None (unknown)
@@ -167,7 +198,7 @@ class TestMassSpecModule:
         module = MassSpecModule(
             config, validated_peptides={"TESTGENE": {first_pep}}
         )
-        result = module.annotate(protein, gene_name="TESTGENE")
+        result = module.annotate(protein, canonical_protein="MQQQQQR*", gene_name="TESTGENE")
         assert result["summary"]["pepquery_run"] is True
         assert result["summary"]["validated_peptides"] >= 1
 
@@ -251,9 +282,14 @@ class TestMassSpecModule:
         assert set(out["GENE_B"]) == {"PEPTWO"}
 
         # And downstream: MassSpecModule on GENE_C now correctly reports
-        # pepquery_run=True (it ran) + validated_peptides=0 (found nothing).
+        # pepquery_run=True (it ran) + validated_peptides=0 (found nothing) —
+        # distinct from None, which means it never ran. The canonical is supplied
+        # because the count is unique-scoped: without one, uniqueness is unknown
+        # and the answer is None for a third reason.
         module = MassSpecModule(config, validated_peptides=out)
-        result = module.annotate("MAAAAAALLLLLLLRKKKKKKKR*", gene_name="GENE_C")
+        result = module.annotate(
+            "MAAAAAALLLLLLLRKKKKKKKR*", canonical_protein="MQQQQQR*", gene_name="GENE_C"
+        )
         assert result["summary"]["pepquery_run"] is True
         assert result["summary"]["validated_peptides"] == 0
 

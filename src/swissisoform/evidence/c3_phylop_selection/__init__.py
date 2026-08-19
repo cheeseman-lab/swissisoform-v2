@@ -8,10 +8,12 @@ from swissisoform.models import TranslationInitiationSite
 
 
 def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResult:
-    """C3: absolute PhyloP over the unique region indicates purifying selection.
+    """C3: mean PhyloP over the unique region indicates purifying selection.
 
-    Scored on the *absolute* mean PhyloP of the unique region exceeding
-    ``cfg.c3_phylop_min`` (strong purifying selection at coding level). This is
+    Scored on the *signed* mean PhyloP of the unique region reaching
+    ``cfg.c3_phylop_min`` (strong purifying selection at coding level). Signed,
+    not absolute: PhyloP measures deviation from neutral evolution, so a large
+    negative mean is strong ACCELERATION and must fail, not pass. This is also
     NOT a unique-vs-shared comparison — the claim is that the unique region is
     itself under coding-level constraint. ``phylop_enrichment`` (unique/shared)
     is reported as context only.

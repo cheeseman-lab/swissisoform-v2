@@ -176,8 +176,9 @@ class ScoringConfig:
         c1_pident_min: C1 threshold — minimum primate mean AA percent-identity
             over the unique region.
         c2_pident_min: C2 threshold — minimum mammalian mean AA percent-identity.
-        c3_phylop_min: C3 threshold — minimum absolute mean PhyloP over the
-            unique region (strong purifying selection).
+        c3_phylop_min: C3 threshold — minimum signed mean PhyloP over the
+            unique region (strong purifying selection). Signed: a negative mean
+            is acceleration and fails, however large.
         phylop_coding_min: Legacy C3 alias retained for context display.
         initiation_efficiency_min: D2 threshold — minimum ribosome
             initiation efficiency across any cell line.
@@ -220,8 +221,9 @@ class ScoringConfig:
     # longer the C1/C2 score basis (mean_pident is). Kept for reason strings.
     primate_frac_intact_min: float = 0.5
     mammalian_frac_intact_min: float = 0.3
-    # C3 principled anchor: absolute mean PhyloP over the unique region, strong
-    # purifying selection. Replaces the unique-vs-shared framing.
+    # C3 principled anchor: signed mean PhyloP over the unique region, strong
+    # purifying selection. Replaces the unique-vs-shared framing. Stricter than
+    # the ±1.0 band the site's headline uses to label selection descriptively.
     c3_phylop_min: float = 2.0
     phylop_coding_min: float = 1.0
     initiation_efficiency_min: float = 0.01

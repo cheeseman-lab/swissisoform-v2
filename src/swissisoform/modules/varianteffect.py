@@ -15,6 +15,11 @@ already attached to a TIS, then aggregates over the isoform-unique region:
    are real sequence, so both are scoreable; what an extension's unique region
    lacks is not a frame but an evolutionary history, which makes the score a
    statement about model-perceived disruptiveness rather than about selection.
+   The one exception is the isoform's own codon 0, reported as
+   ``plm_status="start_codon"``: a start-codon variant is decided by whether the
+   trinucleotide still initiates, which an amino-acid substitution score cannot
+   express, and AlphaMissense is absent there too — so such a hit carries no
+   effect score at all and is notable for its position, not its numbers.
 2. **AlphaMissense** — DeepMind's calibrated missense pathogenicity
    (0-1 score + class) by genomic ``(chrom, pos, ref, alt)``. Canonical-frame
    only: a precomputed canonical-transcript table has no entry for a position
@@ -200,6 +205,10 @@ class VariantEffectModule:
         ``plm_status`` reason and the ``plm_frame`` actually scored
         (``"canonical"`` or ``"isoform"``). All four numeric fields are
         ``None`` when not scorable.
+
+        ``plm_status`` values: ``ok``, ``no_aa_logprobs`` (no cache entry),
+        ``start_codon`` (isoform codon 0 — see below), ``not_missense``,
+        ``pos_out_of_range``, ``aa_ref_mismatch`` (a genuine frame/offset error).
         """
         out = {
             "plm_llr_wt": None,
@@ -209,6 +218,17 @@ class VariantEffectModule:
         }
         if aa_logprobs is None:
             return {**out, "plm_status": "no_aa_logprobs"}
+        # Codon 0 of the isoform: unscoreable by construction, and the amino-acid
+        # question is the wrong one. install_initiator_met forces residue 0 to M
+        # while the validator translates the near-cognate codon literally (CTG->L),
+        # so the aa_ref guard below would report a data error for an expected
+        # condition. Scoring against M instead would only measure the model's Met
+        # prior. What decides a start-codon variant is whether the trinucleotide
+        # still initiates — CTG does, CTA does not — which no substitution score
+        # can express: a third-base change can abolish the start and leave the
+        # residue identical. Isoform frame only; canonical pos 0 is a real M.
+        if frame == "isoform" and isinstance(pos, int) and pos == 0:
+            return {**out, "plm_status": "start_codon"}
         col_ref = aa_column(aa_ref)
         col_alt = aa_column(aa_alt)
         if not isinstance(pos, int) or col_ref is None or col_alt is None:

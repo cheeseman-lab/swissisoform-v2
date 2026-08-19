@@ -63,9 +63,16 @@ QUERY_VARIANT_COLUMNS = (
     "in_isoform_unique",
     "clinical_significance",
     "consequence",
+    # The frame-resolved consequence varianteffect actually scored (isoform frame
+    # for unique-region hits), which is where a start_lost call surfaces —
+    # ``consequence`` alone is canonical-frame and reads "intronic" there.
+    "effect_consequence",
+    "isoform_codon_ref",
+    "isoform_codon_alt",
     "hgvsp",
     "am_pathogenicity",
     "plm_delta_llr",
+    "plm_status",
     "cosmic_sample_count",
     "allele_frequency",
 )
@@ -182,9 +189,14 @@ def _iso(
     """Rows for one isoform, narrowed by region / clinical call / source.
 
     The single place that knows this table's column semantics, so the readers
-    cannot drift apart. Three subtleties it exists to encapsulate: the unique
-    region is only ~14% of rows, so ``region="any"`` is the only way to see
-    shared-region and start-codon-adjacent variants; ``clinsig`` matches by family
+    cannot drift apart. Three subtleties it exists to encapsulate: ``unique`` and
+    ``shared`` partition the rows (every row is in exactly one; unique is only ~14%
+    of them, and on a truncation it is the canonical segment the isoform LOSES),
+    so each filter returns one side of the alternative start codon and
+    ``region="any"`` is the only way to see both at once — there is no positional
+    window. The shared segment is sequence-identical to the corresponding stretch
+    of the canonical protein, except that ``install_initiator_met`` forces residue
+    0 to M, so a near-cognate truncation start differs there. ``clinsig`` matches by family
     via :func:`evidence.clinsig_family`, never equality (ClinVar spells a
     pathogenic call three ways, and equality undercounts by ~20%); and ``clinsig``
     is ClinVar-only, so setting it at all excludes every gnomAD and COSMIC row —
@@ -267,7 +279,25 @@ def _effect_caveat(orf_type: Any) -> str | None:
         "Read a low delta LLR as model-perceived disruptiveness; do not convert "
         "it into a claim about constraint, and do not read a mild one as proof "
         "the region tolerates variation. Both predictors are unaffected over the "
-        "shared region."
+        "shared region. "
+        "START CODON: a hit at isoform_protein_pos 0 sits in this isoform's own "
+        "start codon and carries NO effect score by construction — plm_status is "
+        "'start_codon' and AlphaMissense is absent — because what decides such a "
+        "variant is whether the trinucleotide still initiates translation (CTG "
+        "does, CTA does not), which an amino-acid substitution score cannot "
+        "express. A third-base change can abolish the start while leaving the "
+        "residue identical, so a 'synonymous' call there is not reassurance. "
+        "Treat a position-0 hit as inherently notable and read it on the codon: "
+        "isoform_codon_ref -> isoform_codon_alt is carried on every row, and a "
+        "substitution that leaves the codon able to initiate (ATG or a near-cognate: "
+        "CTG, GTG, TTG, ACG, AGG, AAG, ATA, ATC, ATT) keeps the isoform intact, "
+        "while one that drops out of that set ABLATES the start — the whole "
+        "proteoform, not one residue. That case is labelled "
+        "effect_consequence='start_lost' and scored damaging through the "
+        "loss-of-function branch, so absent effect scores there are a definitive "
+        "finding, not a gap. Note the plain 'consequence' column is canonical-frame "
+        "and reads 'intronic' over an extension; effect_consequence is the one "
+        "scored in the isoform's own frame."
     )
 
 
@@ -462,10 +492,17 @@ _REGION_PROP = {
     "type": "string",
     "enum": list(_REGIONS),
     "description": (
-        "Which part of the isoform to read. 'unique' = the isoform-specific region "
-        "(what M1/M2 are about; a minority of variants). 'shared' = the region "
-        "identical to the canonical protein. 'any' = the whole isoform, the only "
-        "way to see shared-region and start-codon-adjacent variants. Default: any."
+        "Which part of the isoform to read. 'unique' and 'shared' partition this "
+        "isoform's variants — every row is in exactly one, so each filter returns "
+        "one side of the alternative start codon. 'unique' = the differential "
+        "region (what M1/M2 are about; a minority of variants): sequence the "
+        "isoform GAINS on an extension, the canonical segment it LOSES on a "
+        "truncation — there these are the variants the isoform no longer carries. "
+        "'shared' = the retained core, sequence-identical to the corresponding "
+        "stretch of the canonical protein (that stretch, not the whole protein). "
+        "'any' = the union; with no positional filter here it is the only way to "
+        "see a neighbourhood spanning the start codon in one result set. "
+        "Default: any."
     ),
 }
 _CLINSIG_PROP = {
@@ -494,8 +531,11 @@ M_TOOLS: list[dict[str, Any]] = [
         "name": "variant_position_histogram",
         "description": (
             "Per-residue variant counts across the protein, with clustering "
-            "statistics (residue span, top positions, fraction of variants falling on "
-            "the 10 busiest residues). Use this to tell a tight hotspot from a diffuse "
+            "statistics (residue span, top positions, and the fraction of the POSITIONED "
+            "variants falling on the 10 busiest residues — rows with no position in the "
+            "reported space are excluded from that fraction and counted in n_missing_pos, "
+            "so read it against n and n_with_position). Use this to tell a tight hotspot "
+            "from a diffuse "
             "spread — an enrichment ratio cannot express the difference. The result's "
             "position_space says whether the residue numbers are ISOFORM or CANONICAL "
             "numbering; always cite positions in the space it reports."

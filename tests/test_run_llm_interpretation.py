@@ -1021,7 +1021,7 @@ def test_tool_loop_opening_context_carries_no_variant_rows(
     opening = calls[0]["messages"][0]["content"][0]["text"]
     payload = json.loads(opening)
     assert all(m["hits"] == [] for m in payload["members"])
-    assert "hits_note" in payload["members"][0]
+    assert "deliberately omitted" in payload["members"][0]["hits_note"]
     # The trace records the size so the multi-turn cost is measurable after a run.
     trace = json.loads((out_dir / mod._tis_slug(TIS_ID) / "M_trace.json").read_text())
     assert trace["opening_context_chars"] == len(opening)
@@ -1041,7 +1041,7 @@ def test_no_tools_path_still_sends_the_hits(
     monkeypatch.setattr(mod, "call_llm", capture)
     mod.main(_category_run_args(category_records, tmp_path / "out", ["--no-tools"]))
     assert any('"hits"' in p for p in prompts)
-    assert not any("hits_note" in p for p in prompts)
+    assert not any("deliberately omitted" in p for p in prompts)
 
 
 def test_category_pass_writes_a_separate_tool_usage_report(

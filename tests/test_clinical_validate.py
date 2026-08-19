@@ -246,6 +246,51 @@ class TestValidateSNVWithSequence:
         assert result["codon_alt"] == "TCC"
         assert result["validated"] is True
 
+    def _make_near_cognate_validator(self) -> ConsequenceValidator:
+        """Same ORF but a CTG start — an alt-TIS isoform's near-cognate initiator."""
+        validator = ConsequenceValidator(cds_df=CDS_DF)
+        validator.build_position_map("TX1")
+        validator._coding_seq_cache["TX1"] = "CTGGCCTAAGGGAAATTT"
+        return validator
+
+    def test_start_codon_ablated_is_start_lost_even_when_synonymous(self):
+        """CTG -> CTA at codon 0: still Leu, but CTA cannot initiate.
+
+        The whole point of deciding codon 0 on codon membership: a third-base
+        change translates to the same residue while ablating the start, so the
+        amino-acid classification (synonymous) is the opposite of the truth.
+        """
+        validator = self._make_near_cognate_validator()
+        # Position 102 = coding_pos 2, codon 0 (CTG), offset 2.
+        result = validator.validate_variant("TX1", 102, "G", "A")
+        assert result["codon_ref"] == "CTG"
+        assert result["codon_alt"] == "CTA"
+        assert result["aa_ref"] == result["aa_alt"] == "L"  # would have been synonymous
+        assert result["consequence"] == "start_lost"
+
+    def test_start_codon_retained_keeps_the_literal_consequence(self):
+        """CTG -> GTG at codon 0: still a near-cognate start, so not start_lost."""
+        validator = self._make_near_cognate_validator()
+        result = validator.validate_variant("TX1", 100, "C", "G")
+        assert result["codon_alt"] == "GTG"
+        assert result["consequence"] == "missense_variant"  # Leu -> Val
+
+    def test_atg_start_is_never_ablated_by_an_snv(self):
+        """NEAR_COGNATE_STARTS is ATG's single-substitution neighbourhood, so no
+        SNV can drop an ATG start out of it — only near-cognate starts are fragile.
+        """
+        validator = self._make_validator()  # ATG start
+        result = validator.validate_variant("TX1", 101, "T", "C")
+        assert result["codon_alt"] == "ACG"
+        assert result["consequence"] == "missense_variant"
+
+    def test_start_lost_only_applies_to_codon_zero(self):
+        """A downstream codon that happens to leave the set is untouched."""
+        validator = self._make_validator()
+        result = validator.validate_variant("TX1", 103, "G", "T")  # codon 1
+        assert result["protein_pos"] == 1
+        assert result["consequence"] == "missense_variant"
+
     def test_synonymous(self):
         """GCC -> GCT at codon 1: Ala -> Ala = synonymous."""
         validator = self._make_validator()

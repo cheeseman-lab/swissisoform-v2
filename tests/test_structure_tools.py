@@ -115,19 +115,50 @@ def test_truncation_diff_region_defaults_to_the_canonical(cache):
 
 
 def test_diff_default_does_not_leak_across_sides(cache):
-    """Asking for the side that does NOT hold the diff region profiles it whole.
+    """Asking for the diff region on the side that does not hold it is an error.
 
-    Silently applying the other space's coordinates would profile arbitrary
-    residues of the wrong protein and report them as the differential region.
+    Applying the other space's coordinates would profile arbitrary residues of the
+    wrong protein; falling back to the whole protein answered a different question
+    under a status="ok" the model cannot tell from a real one. Both directions:
+    a truncation's region lives in the canonical, an extension's in the isoform.
     """
+    trunc = _raw(diff_space="canonical", diff_start=0, diff_end=20)
+    with pytest.raises(ValueError, match="canonical numbering"):
+        st.plddt_profile(trunc, side="isoform", cache_dir=cache)
+
+    ext = _raw(diff_space="isoform", diff_start=0, diff_end=20)
+    with pytest.raises(ValueError, match="isoform numbering"):
+        st.plddt_profile(ext, side="canonical", cache_dir=cache)
+
+    # The message carries the region's own coordinates and both ways out.
+    with pytest.raises(ValueError, match=r"residues 1-20.*explicit start/end"):
+        st._window(None, None, 130, trunc, "isoform")
+
+
+def test_wrong_side_default_reaches_the_model_as_an_error(cache):
+    """Not a plausible-looking answer: the loop gets {"error": ...} to correct."""
+    dispatch = st.make_p_dispatch(
+        _raw(diff_space="canonical", diff_start=0, diff_end=20), cache_dir=cache
+    )
+    for name in ("plddt_profile", "pae_block"):
+        result = dispatch(name, {"side": "isoform"})
+        assert "error" in result, f"{name} returned {result!r} instead of an error"
+        assert "canonical" in result["error"] and "isoform" in result["error"]
+        assert result.get("status") != "ok"
+
+
+def test_explicit_bounds_still_read_the_other_side(cache):
+    """The comparison _SIDE_PROP invites stays available — you just say the window."""
     raw = _raw(diff_space="canonical", diff_start=0, diff_end=20)
-    out = st.plddt_profile(raw, side="isoform", cache_dir=cache)
-    assert out["region"] == [1, 130]  # whole isoform, not [1, 20]
+    out = st.plddt_profile(raw, side="isoform", start=1, end=20, cache_dir=cache)
+    assert out["status"] == "ok"
+    assert out["region"] == [1, 20]
 
 
 def test_side_is_always_reported(cache):
     for side in ("isoform", "canonical"):
-        assert st.plddt_profile(_raw(), side=side, cache_dir=cache)["side"] == side
+        out = st.plddt_profile(_raw(), side=side, start=1, end=20, cache_dir=cache)
+        assert out["side"] == side
 
 
 def test_default_side_follows_diff_space(cache):
@@ -221,6 +252,25 @@ def test_window_rejects_a_range_entirely_outside_the_protein():
     # Overlapping and default windows are unaffected.
     assert st._window(120, 9999, 130, raw, "isoform") == (120, 130)
     assert st._window(None, None, 130, raw, "isoform") == (1, 30)
+
+
+def test_inverted_window_is_an_error_not_a_single_residue(cache):
+    """`max(s, e)` collapsed end<start to [start, start] and answered status="ok" —
+    a one-residue reading of a malformed question, the paper-over the out-of-bounds
+    guards already reject.
+    """
+    with pytest.raises(ValueError, match=r"end=10 is before start=50"):
+        st._window(50, 10, 130, _raw(), "isoform")
+
+    dispatch = st.make_p_dispatch(_raw(), cache_dir=cache)
+    for name, kwargs in [
+        ("plddt_profile", {"side": "isoform", "start": 50, "end": 10}),
+        ("pae_block", {"side": "isoform", "rows": [50, 10]}),
+    ]:
+        result = dispatch(name, kwargs)
+        assert "error" in result, f"{name} returned {result!r} instead of an error"
+        assert "50" in result["error"] and "10" in result["error"], result["error"]
+        assert result.get("status") != "ok"
 
 
 def test_window_ending_before_the_n_terminus_is_an_error(cache):
@@ -515,10 +565,12 @@ def test_untaggable_side_returns_elements_without_a_region(cache):
     raw = _sse_raw(
         "c" * 24 + "a" * 16 + "c" * 90, diff_space="canonical", diff_start=0, diff_end=20
     )
-    out = st.secondary_structure(raw, side="isoform", cache_dir=cache)
+    # Explicit bounds: the default is an error on this side, and reading the whole
+    # isoform is exactly the comparison you have to ask for by name.
+    out = st.secondary_structure(raw, side="isoform", start=1, end=130, cache_dir=cache)
 
     assert out["region_is_differential"] is False
-    assert out["region"] == [1, 130]  # whole isoform, per _window's fallback
+    assert out["region"] == [1, 130]
     assert out["elements"]
     assert all("region" not in e for e in out["elements"])
 

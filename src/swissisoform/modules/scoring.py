@@ -1,6 +1,6 @@
 """Module: Evidence Scoring — CDLMPS categories, dual-axis roll-up.
 
-Fifteen criteria per TIS, grouped into the six CDLMPS categories and derived
+Sixteen criteria per TIS, grouped into the six CDLMPS categories and derived
 from the annotations other modules have already attached. The two-axis
 roll-up is kept for back-compat: existence = Conservation + Detection,
 functional = Localization + Mutation + Predicted-structure + Structural.
@@ -180,7 +180,7 @@ class EvidenceScoringModule:
         scoring_mod.run([s for g in genes for s in g.tis_sites])
 
     Reads from ``site.isoform_annotations`` and ``site.comparison``,
-    evaluates 15 criteria (6 existence [C+D] + 9 functional [L+M+P+S]) and
+    evaluates 16 criteria (6 existence [C+D] + 10 functional [L+M+P+S]) and
     writes them onto ``site.isoform_annotations["scoring"]``.
 
     Attributes:

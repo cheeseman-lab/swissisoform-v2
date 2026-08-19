@@ -175,7 +175,9 @@ def _window(
 
     Bounds are 1-based inclusive on the wire (residue numbering as a biologist
     reads it) and clamped to the structure. The differential-region default only
-    applies on the side that actually contains it, per ``diff_space``.
+    applies on the side that actually contains it, per ``diff_space``; asking for
+    it on the other side raises rather than falling back to the whole protein,
+    which would answer a different question under an indistinguishable shape.
 
     A window overlapping the protein is clamped to it; one entirely outside
     raises. ``ValueError`` reaches the model as ``{"error": ...}`` through
@@ -187,8 +189,19 @@ def _window(
         d_start, d_end, space = _diff_bounds(raw)
         if space == side and d_start is not None and d_end is not None:
             start, end = d_start + 1, d_end  # 0-based half-open -> 1-based inclusive
+        elif space in _SIDES and d_start is not None and d_end is not None:
+            # The region is one-sided: it has no counterpart in this structure, so
+            # there is no window to default to. Silently reading the whole protein
+            # answered a different question under a status="ok" indistinguishable
+            # from a real one.
+            raise ValueError(
+                f"The differential region is in {space} numbering (residues "
+                f"{d_start + 1}-{d_end}), so it has no window in the {side} structure. "
+                f"Pass explicit start/end to read the {side} side, or omit side to "
+                f"read {space}."
+            )
         else:
-            start, end = 1, length
+            start, end = 1, length  # no differential region recorded at all
     if start is not None and int(start) > length:
         raise ValueError(
             f"start={int(start)} is past the end of the {side} structure "
@@ -202,7 +215,14 @@ def _window(
         )
     s = 1 if start is None else min(length, max(1, int(start)))
     e = length if end is None else min(length, int(end))
-    return s, max(s, e)
+    if e < s:
+        # Was max(s, e): an inverted range collapsed to one residue and answered
+        # status="ok", the same paper-over the out-of-bounds guards above reject.
+        raise ValueError(
+            f"end={int(end)} is before start={int(start)}. A window runs "
+            f"N-terminal to C-terminal; residue numbering is 1-based."
+        )
+    return s, e
 
 
 # ── Readers ───────────────────────────────────────────────────────────────
@@ -503,7 +523,9 @@ _SIDE_PROP = {
         "them — the isoform for extensions, the canonical for truncations — and "
         "every result reports which side it came from. Omit this to read the side "
         "that CONTAINS the differential region, which is what you usually want; "
-        "name a side explicitly only to compare the two structures."
+        "name a side explicitly only to compare the two structures — and then pass "
+        "explicit start/end, because the region has no window on that side and "
+        "omitting them is an error, not a whole-protein read."
     ),
 }
 _RANGE_ITEMS = {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2}
@@ -513,7 +535,8 @@ P_TOOLS: list[dict[str, Any]] = [
         "name": "plddt_profile",
         "description": (
             "Per-residue fold confidence (pLDDT, 0-1) over a residue window, with "
-            "mean/min/max. Omit start and end to profile the differential region. "
+            "mean/min/max. Omit start and end to profile the differential region, "
+            "which works on the side that contains it. "
             "Use it to tell a uniformly disordered segment from a confident element "
             "beside a floppy linker — a single mean cannot express the difference."
         ),
@@ -533,7 +556,10 @@ P_TOOLS: list[dict[str, Any]] = [
             "Mean predicted aligned error (angstroms) between two residue ranges: "
             "how confidently one region is positioned RELATIVE to another. Low = "
             "confidently docked, high = orientation unresolved even if each region "
-            "folds well. Returns aggregates, never the matrix. Use it to test "
+            "folds well. Returns aggregates, never the matrix. rows and cols default "
+            "independently, so a bare call returns the differential region against "
+            "ITSELF (the diagonal block); pass cols explicitly for the region against "
+            "the rest of the fold. Use it to test "
             "whether an extension is placed against the core, and to check the "
             "confidence qualifiers before treating a shared-region RMSD as a real "
             "conformational change."
@@ -543,9 +569,11 @@ P_TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "side": _SIDE_PROP,
                 "rows": {**_RANGE_ITEMS, "description": "[start, end] 1-based inclusive; "
-                         "defaults to the differential region."},
+                         "defaults to the differential region, on the side that "
+                         "contains it."},
                 "cols": {**_RANGE_ITEMS, "description": "[start, end] 1-based inclusive; "
-                         "defaults to the differential region."},
+                         "defaults to the differential region, on the side that "
+                         "contains it."},
             },
             "required": [],
         },
@@ -557,7 +585,8 @@ P_TOOLS: list[dict[str, Any]] = [
             "their residue ranges, lengths and per-element mean pLDDT. Use this to "
             "LOCATE structure — pLDDT tells you how confident a region is, NOT "
             "whether it is a helix, and the two frequently disagree. Omit start/end "
-            "to cover the differential region. Elements are returned at their FULL "
+            "to cover the differential region, which works on the side that contains "
+            "it. Elements are returned at their FULL "
             "extent, so one that begins inside your window and continues past it is "
             "reported at its true length and its end may exceed the window — that "
             "is a real element crossing the boundary, not an error. Each carries "

@@ -55,6 +55,19 @@ NO_CANONICAL_BASELINE_ORFS = frozenset(
 )
 
 
+# Codons that can initiate translation: ATG plus the near-cognate starts — its
+# single-substitution neighbours, all observed driving real alt-TIS events (the
+# Ribo-TISH calls in this pipeline use CTG, GTG, TTG, ACG and ATC). Membership is
+# what decides a start-codon variant: a substitution that leaves the codon in this
+# set keeps the isoform initiating, one that drops it out ablates the start and
+# with it the whole proteoform. The amino acid is irrelevant to that question —
+# a third-base change can abolish a near-cognate start while translating to the
+# same residue.
+NEAR_COGNATE_STARTS = frozenset(
+    {"ATG", "CTG", "GTG", "TTG", "ACG", "AGG", "AAG", "ATA", "ATC", "ATT"}
+)
+
+
 def orf_type_from_ribotish(tis_type: str) -> ORFType:
     """Map a Ribo-TISH TisType string to an ORFType enum value.
 
