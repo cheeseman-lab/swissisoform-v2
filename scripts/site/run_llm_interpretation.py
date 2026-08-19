@@ -7,8 +7,9 @@ the evidence JSON + `prompts/output_schema.json`, calls the Anthropic API,
 validates + writes the structured output to `llm/{gene}.json`.
 
 Single-threaded; idempotent (skips genes whose output already exists unless
-``--force``). ``--dry-run`` prints the assembled prompt and exits without any
-network calls.
+``--force``). ``--dry-run`` prints prompt-size diagnostics and exits without any
+network calls; ``--save-prompts`` writes every assembled prompt in full to
+``data/llm_inputs/{run}/`` as one ``.txt`` per call, and composes with ``--dry-run``.
 
 Usage:
     python scripts/site/run_llm_interpretation.py \
@@ -16,6 +17,12 @@ Usage:
       --out data/output/cheeseman_13gene/llm/
 
     python scripts/site/run_llm_interpretation.py --dry-run --gene TRNT1
+
+    # Dump the whole prompt corpus without any API calls:
+    python scripts/site/run_llm_interpretation.py --pass category \
+      --dry-run --save-prompts \
+      --records data/output/cheeseman_test/llm_evidence \
+      --out data/output/cheeseman_test/llm
 """
 
 from __future__ import annotations

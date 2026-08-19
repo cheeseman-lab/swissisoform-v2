@@ -113,6 +113,103 @@ class TestDeltaLLR:
         assert hit["plm_delta_llr"] is None
         assert out["n_scored_plm"] == 0
 
+    def test_isoform_start_codon_is_marked_not_a_frame_error(self, tmp_path):
+        """Codon 0 of the isoform is unscoreable by construction, not a data error.
+
+        install_initiator_met makes the protein start with M while the validator
+        translates the near-cognate codon literally (CTG->L), so the aa_ref guard
+        would report aa_ref_mismatch — the status reserved for genuine off-by-one
+        and wrong-frame lookups.
+        """
+        _seed_aa_logprobs(tmp_path, CANON, {(0, "M"): -0.2, (0, "V"): -4.0})
+        hit = _vi_hit(
+            isoform_protein_pos=0,
+            isoform_aa_ref="L",  # literal CTG translation; the protein holds M
+            isoform_aa_alt="V",
+            in_isoform_unique=True,
+        )
+        out = VariantEffectModule(PipelineConfig(), plm_cache_dir=tmp_path).annotate_site(
+            _with_intersection(_tis(), [hit])
+        )
+        got = out["hits"][0]
+        assert got["plm_status"] == "start_codon"
+        assert got["plm_status"] != "aa_ref_mismatch"
+        assert got["plm_delta_llr"] is None
+        assert got["plm_llr_wt"] is None and got["plm_llr_alt"] is None
+
+    def test_synonymous_start_codon_also_marked(self, tmp_path):
+        """A third-base change can abolish a near-cognate start with the residue
+        unchanged, so it must not fall through to a benign-looking score.
+        """
+        _seed_aa_logprobs(tmp_path, CANON, {(0, "M"): -0.2})
+        hit = _vi_hit(
+            isoform_protein_pos=0,
+            isoform_aa_ref="L",
+            isoform_aa_alt="L",
+            in_isoform_unique=True,
+        )
+        out = VariantEffectModule(PipelineConfig(), plm_cache_dir=tmp_path).annotate_site(
+            _with_intersection(_tis(), [hit])
+        )
+        assert out["hits"][0]["plm_status"] == "start_codon"
+
+    def test_start_lost_is_damaging_without_any_effect_score(self, tmp_path):
+        """A start-ablating variant carries no ΔLLR and no AlphaMissense, and is
+        damaging anyway — via the loss-of-function branch, which is exactly what
+        the two missense-only predictors cannot express.
+        """
+        _seed_aa_logprobs(tmp_path, CANON, {(0, "M"): -0.2})
+        hit = _vi_hit(
+            isoform_protein_pos=0,
+            isoform_consequence="start_lost",
+            isoform_aa_ref="L",
+            isoform_aa_alt="L",  # third-base change: same residue, no start
+            in_isoform_unique=True,
+        )
+        out = VariantEffectModule(PipelineConfig(), plm_cache_dir=tmp_path).annotate_site(
+            _with_intersection(_tis(), [hit])
+        )
+        got = out["hits"][0]
+        assert got["plm_status"] == "start_codon"
+        assert got["plm_delta_llr"] is None
+        assert got["am_pathogenicity"] is None
+        assert got["effect_lof"] is True
+        assert got["effect_damaging"] is True
+
+    def test_start_lost_survives_the_gnomad_af_gate(self, tmp_path):
+        """LoF is exempt from the tolerance gate: a start that does not initiate
+        is not rescued by being common.
+        """
+        _seed_aa_logprobs(tmp_path, CANON, {(0, "M"): -0.2})
+        hit = _vi_hit(
+            isoform_protein_pos=0,
+            isoform_consequence="start_lost",
+            in_isoform_unique=True,
+            source="gnomAD",
+            allele_frequency=0.05,
+        )
+        out = VariantEffectModule(PipelineConfig(), plm_cache_dir=tmp_path).annotate_site(
+            _with_intersection(_tis(), [hit])
+        )
+        got = out["hits"][0]
+        assert got["effect_tolerated_in_gnomad"] is True
+        assert got["effect_damaging"] is True
+
+    def test_canonical_position_zero_still_scores(self, tmp_path):
+        """The marker is isoform-frame only: the canonical's own ATG really is M,
+        so those variants keep their scores.
+        """
+        _seed_aa_logprobs(tmp_path, CANON, {(0, "M"): -1.0, (0, "V"): -9.0})
+        hit = _vi_hit(protein_pos=0, aa_ref="M", aa_alt="V", in_isoform_unique=False,
+                      in_isoform_shared=True)
+        out = VariantEffectModule(PipelineConfig(), plm_cache_dir=tmp_path).annotate_site(
+            _with_intersection(_tis(), [hit])
+        )
+        got = out["hits"][0]
+        assert got["plm_status"] == "ok"
+        assert got["plm_frame"] == "canonical"
+        assert got["plm_delta_llr"] == pytest.approx(-8.0)
+
     def test_indel_not_missense(self, tmp_path):
         _seed_aa_logprobs(tmp_path, CANON, {})
         hit = _vi_hit(ref="CTT", alt="C", aa_ref=None, aa_alt=None, consequence="frameshift")
@@ -292,7 +389,7 @@ class TestSharedRegionAggregates:
 
 
 class TestSourceSeparatedAggregates:
-    """§4 — predictors split into gnomad (germline → F5) and disease (→ F6)."""
+    """§4 — predictors split into gnomad (germline → M1) and disease (→ M2)."""
 
     def test_gnomad_vs_disease_damaging_split(self, tmp_path):
         _seed_aa_logprobs(tmp_path, CANON, {(3, "A"): -1.0, (3, "V"): -9.0})  # ΔLLR -8 → damaging

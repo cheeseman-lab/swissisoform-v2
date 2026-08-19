@@ -205,7 +205,7 @@ class VariantIntersectionModule:
         n_path_unique = 0
         n_path_shared = 0
         # Source-separated (§3): gnomAD answers "tolerated in healthy humans?",
-        # ClinVar/COSMIC answer "disease-associated?" — opposite meanings, so F6
+        # ClinVar/COSMIC answer "disease-associated?" — opposite meanings, so M2
         # (disease burden) should read the disease counts, not the lumped total.
         n_disease_unique = 0
         n_disease_shared = 0

@@ -1,4 +1,4 @@
-"""Tests for the F7 shared-region Cα RMSD metric + evidence criterion.
+"""Tests for the P2 shared-region Cα RMSD metric + evidence criterion.
 
 Three layers, no GPU / no real CIFs:
 

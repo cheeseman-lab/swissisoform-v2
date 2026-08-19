@@ -142,6 +142,13 @@ class StructureConfig:
     batch_size: int = 4
 
 
+# Filename of the per-run sidecar recording the ScoringConfig a run was scored
+# with, written beside all_paired.parquet. Lives here rather than in either
+# writer or reader so runner (writer) and site.evidence (reader) share one name
+# without the core depending on the site layer.
+SCORING_SIDECAR = "scoring_config.json"
+
+
 @dataclass
 class ScoringConfig:
     """Configuration for evidence scoring (Module 10).
@@ -155,7 +162,7 @@ class ScoringConfig:
     continuous signals into the boolean criterion outputs.
 
     Attributes:
-        min_cell_lines: E4 threshold — minimum cell lines with expression.
+        min_cell_lines: D1 threshold — minimum cell lines with expression.
         existence_high_threshold: Score cutoff for
             ``existence_high_confidence``.
         functional_high_threshold: Score cutoff for
@@ -163,29 +170,31 @@ class ScoringConfig:
         truncation_max_aa: Maximum truncation length still considered
             potentially functional (downstream consumers only).
         primate_frac_intact_min: Context display only — fraction of primate
-            species with intact reading frame. No longer the E1 score basis.
+            species with intact reading frame. No longer the C1 score basis.
         mammalian_frac_intact_min: Context display only — same for mammalian
-            radiation. No longer the E2 score basis.
-        e1_pident_min: E1 threshold — minimum primate mean AA percent-identity
+            radiation. No longer the C2 score basis.
+        c1_pident_min: C1 threshold — minimum primate mean AA percent-identity
             over the unique region.
-        e2_pident_min: E2 threshold — minimum mammalian mean AA percent-identity.
-        e3_phylop_min: E3 threshold — minimum absolute mean PhyloP over the
-            unique region (strong purifying selection).
-        phylop_coding_min: Legacy E3 alias retained for context display.
-        initiation_efficiency_min: E5 threshold — minimum ribosome
+        c2_pident_min: C2 threshold — minimum mammalian mean AA percent-identity.
+        c3_phylop_min: C3 threshold — minimum signed mean PhyloP over the
+            unique region (strong purifying selection). Signed: a negative mean
+            is acceleration and fails, however large.
+        phylop_coding_min: Legacy C3 alias retained for context display.
+        initiation_efficiency_min: D2 threshold — minimum ribosome
             initiation efficiency across any cell line.
-        massspec_unique_peptides_min: E6 threshold — minimum number of
+        massspec_unique_peptides_min: D3 threshold — minimum number of
             peptides uniquely assigned to the isoform.
         pepquery_fix_mods: PepQuery2 ``-fixMod`` UNIMOD ids (default
             Carbamidomethyl C).
         pepquery_var_mods: PepQuery2 ``-varMod`` UNIMOD ids (default
             Oxidation M + Acetyl peptide N-term).
         pepquery_max_var: PepQuery2 ``-maxVar`` — max variable mods per peptide.
-        f5_constraint_enrichment_min: F5 threshold — minimum ESM-C constraint
-            enrichment (unique vs shared) to call germline constraint.
-        f5_depletion_ratio_max: F5 threshold — gnomAD depletion ratio below
+        m1_constraint_delta_min: M1 threshold — minimum ESM-C constraint delta
+            (mean logP(wt) unique − shared; positive = unique region better
+            predicted, i.e. more conserved) to call germline constraint.
+        m1_depletion_ratio_max: M1 threshold — gnomAD depletion ratio below
             which germline variation is judged to avoid the unique region.
-        f6_disease_enrichment_min: F6 threshold — disease-variant density
+        m2_disease_enrichment_min: M2 threshold — disease-variant density
             enrichment (unique vs shared) zero-point.
         s2_gravy_delta_min: S2 shift — |gravy_delta| cutoff (whole-protein
             isoform − canonical mean hydropathy).
@@ -195,11 +204,11 @@ class ScoringConfig:
             isoform − canonical).
         s3_top_delta_min: S3 threshold — minimum strongest shared-feature SAE
             activation shift, max(|top_gained_delta_max|, |top_lost_delta_max|).
-        f7_rmsd_shared_min: F7 threshold — minimum shared-region Cα RMSD (Å) to
+        p2_rmsd_shared_min: P2 threshold — minimum shared-region Cα RMSD (Å) to
             call a significant structural change in the retained region.
-        f7_min_shared_len: F7 guard — minimum shared-region length (aa) below
+        p2_min_shared_len: P2 guard — minimum shared-region length (aa) below
             which the RMSD is too noisy to score (criterion → None).
-        f7_plddt_min: F7 confidence gate — minimum of the two per-side mean
+        p2_plddt_min: P2 confidence gate — minimum of the two per-side mean
             shared-region pLDDTs required before the RMSD is trusted (a floppy
             low-confidence region must not read as a structural change).
     """
@@ -209,12 +218,13 @@ class ScoringConfig:
     functional_high_threshold: int = 3
     truncation_max_aa: int = 200
     # Context display only — primate/mammalian frame-intact fractions are no
-    # longer the E1/E2 score basis (mean_pident is). Kept for reason strings.
+    # longer the C1/C2 score basis (mean_pident is). Kept for reason strings.
     primate_frac_intact_min: float = 0.5
     mammalian_frac_intact_min: float = 0.3
-    # E3 principled anchor: absolute mean PhyloP over the unique region, strong
-    # purifying selection. Replaces the unique-vs-shared framing.
-    e3_phylop_min: float = 2.0
+    # C3 principled anchor: signed mean PhyloP over the unique region, strong
+    # purifying selection. Replaces the unique-vs-shared framing. Stricter than
+    # the ±1.0 band the site's headline uses to label selection descriptively.
+    c3_phylop_min: float = 2.0
     phylop_coding_min: float = 1.0
     initiation_efficiency_min: float = 0.01
     massspec_unique_peptides_min: int = 1
@@ -229,22 +239,22 @@ class ScoringConfig:
     pepquery_fix_mods: str = "1"
     pepquery_var_mods: str = "2,5"
     pepquery_max_var: int = 3
-    # F6 principled anchor: disease-variant density enrichment zero-point.
-    f6_disease_enrichment_min: float = 1.0
-    # E1/E2 score on AA percent-identity over the unique region.
-    e1_pident_min: float = 0.80  # CALIBRATE ON GENOME-WIDE RUN — provisional
-    e2_pident_min: float = 0.50  # CALIBRATE ON GENOME-WIDE RUN — provisional
-    # F5 germline tolerance/constraint thresholds.
-    f5_constraint_enrichment_min: float = 2.0  # CALIBRATE ON GENOME-WIDE RUN — provisional
-    f5_depletion_ratio_max: float = 0.80  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    # M2 principled anchor: disease-variant density enrichment zero-point.
+    m2_disease_enrichment_min: float = 1.0
+    # C1/C2 score on AA percent-identity over the unique region.
+    c1_pident_min: float = 0.80  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    c2_pident_min: float = 0.50  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    # M1 germline tolerance/constraint thresholds.
+    m1_constraint_delta_min: float = 0.0  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    m1_depletion_ratio_max: float = 0.80  # CALIBRATE ON GENOME-WIDE RUN — provisional
     # P1 threshold for mean pLDDT over the differential region. Scale
     # matches whatever the structure backend emits: Boltz-2 emits 0–1
     # (so use 0.70); AlphaFold-style backends emit 0–100 (use 70.0).
-    # (Field name kept ``f1_*`` for back-compat; P1 is the renamed F1.)
-    f1_plddt_threshold: float = 0.70
+    # (Field name kept ``f1_*`` for back-compat; P1 is the renamed P1.)
+    p1_plddt_threshold: float = 0.70
     # S2 whole-protein biophysical-shift cutoffs (isoform − canonical |delta|;
-    # any one satisfied → shifted). This is the frame the old F1 distinctness
-    # half used (folding, F1's other half, is now P1).
+    # any one satisfied → shifted). This is the frame the old P1 distinctness
+    # half used (folding, P1's other half, is now P1).
     s2_gravy_delta_min: float = 0.3  # PROVISIONAL — set in threshold discussion
     s2_fraction_charged_delta_min: float = 0.05  # PROVISIONAL — set in threshold discussion
     s2_disorder_delta_min: float = 0.05  # PROVISIONAL — set in threshold discussion
@@ -256,17 +266,24 @@ class ScoringConfig:
     # carried no information. |top delta| spans 0.36–30.85 (median 9.36); 10.0
     # sits just above the median and fires on ~46% of isoforms.
     s3_top_delta_min: float = 10.0
-    # F7 shared-region structural change. RMSD scale is Å; pLDDT gate is on the
-    # 0–1 ESMFold2 scale (mirror of f1_plddt_threshold). The real RMSD cutoff is
+    # P2 shared-region structural change. RMSD scale is Å; pLDDT gate is on the
+    # 0–1 ESMFold2 scale (mirror of p1_plddt_threshold). The real RMSD cutoff is
     # to be picked from the genome-wide distribution (near-zero spike + tail).
-    f7_rmsd_shared_min: float = 2.0  # CALIBRATE ON GENOME-WIDE RUN — provisional
-    f7_min_shared_len: int = 20  # CALIBRATE ON GENOME-WIDE RUN — provisional
-    f7_plddt_min: float = 0.70  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    p2_rmsd_shared_min: float = 2.0  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    p2_min_shared_len: int = 20  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    p2_plddt_min: float = 0.70  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    # P3 secondary structure in the differential region. BOTH must hold for an
+    # element to count: length (a helix turn is ~3.6 residues, so 6+ is a real
+    # element rather than a geometric blip) AND its own mean pLDDT — secondary
+    # structure here is derived from predicted coordinates, so a clean-looking
+    # helix through a disordered stretch is geometry fitted to a guess.
+    p3_min_sse_length: int = 6  # CALIBRATE ON GENOME-WIDE RUN — provisional
+    p3_min_sse_plddt: float = 0.70  # mirrors p1_plddt_threshold (0–1 ESMFold2 scale)
     # Dormant per-variant damaging cutoffs (VariantEffectModule still reads
-    # f5_llr_damaging_threshold for ΔLLR labeling; F5 scoring no longer uses
-    # these — see f5_constraint_enrichment_min / f5_depletion_ratio_max).
-    f5_min_pathogenic_in_unique: int = 1
-    f5_llr_damaging_threshold: float = -7.5
+    # m1_llr_damaging_threshold for ΔLLR labeling; M1 scoring no longer uses
+    # these — see m1_constraint_delta_min / m1_depletion_ratio_max).
+    m1_min_pathogenic_in_unique: int = 1
+    m1_llr_damaging_threshold: float = -7.5
 
 
 @dataclass

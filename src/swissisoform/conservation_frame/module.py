@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 
 # The 14 per-region frame metrics (7 primate + 7 mammalian). Each is emitted
 # once for the differential (unique) region and once — as a ``{clade}_canonical_*``
-# twin — for the full canonical ORF, so E1/E2 read as canonical-vs-isoform.
+# twin — for the full canonical ORF, so C1/C2 read as canonical-vs-isoform.
 _METRIC_FIELDS: tuple[str, ...] = (
     "primate_n_species_aligned",
     "primate_n_species_intact_frame",
@@ -214,7 +214,7 @@ class ConservationFrameModule:
             return self._empty_result(status="no_alignment")
 
         # Canonical-ORF baseline (flag H): score the full canonical ORF too, so
-        # E1/E2 can be read as canonical-vs-isoform. The canonical ORF is a known
+        # C1/C2 can be read as canonical-vs-isoform. The canonical ORF is a known
         # real coding ORF — a positive control for how frame-conserved a genuine
         # ORF is at this locus. Emitted as ``{clade}_canonical_*`` twins.
         canonical_metrics: dict[str, Any] | None = None

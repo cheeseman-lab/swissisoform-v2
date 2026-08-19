@@ -1,13 +1,19 @@
 """Module: PLM VEP — variant-effect scores from ESM-C masked-marginal LLR.
 
 Consumes per-residue log-likelihood scores (computed offline by
-``swissisoform.plm.embed.precompute_plm``) and emits TIS-level
-constraint metrics:
+``swissisoform.plm.embed.precompute_plm``) and emits TIS-level constraint
+metrics.
 
-- mean LLR over the isoform-unique region,
-- mean LLR over the shared region (canonical-frame body),
-- enrichment ratio (unique / shared),
-- count of strongly-constrained positions (LLR < threshold) in the unique region.
+The cached per-residue value is ``logP(wt)``, the model's log-probability of the
+residue actually present — no alternate allele. **Higher (nearer zero) means more
+conserved**: the residue is strongly determined by its context. Verified against
+Zoonomia 241-mammal PhyloP over the same codons — pearson +0.40, spearman +0.48
+over 6,842 residues, positive in 27/27 proteins (``figures/plm_direction/``).
+
+- mean logP(wt) over the isoform-unique region,
+- mean logP(wt) over the shared region (canonical-frame body),
+- constraint delta (unique − shared; positive = unique region more conserved),
+- count of strongly-conserved positions (logP(wt) >= threshold) in each region.
 
 Why a SiteModule, not a ProteinModule: LLR is context-dependent — running
 ESM-C on ``diff_region.sequence`` alone (Scope-A re-run) gives different
@@ -15,15 +21,14 @@ scores than slicing the same positions out of the full-protein forward
 pass. So we compute LLR on the full canonical and isoform proteins, then
 slice to unique/shared regions per the diff_region coordinates.
 
-Activates F5 (pathogenic variant enrichment) once paired with the clinical
-module's variant positions in a follow-up; for now, F5 needs the
-constraint-enrichment column emitted here as input.
+M1 (germline tolerance / constraint) reads ``constraint_delta`` from here as one
+of its two either-or inputs; it abstains entirely on ORF types whose unique
+region was never canonical coding sequence, where this contrast has no baseline.
 """
 
 from __future__ import annotations
 
 import logging
-import math
 from pathlib import Path
 from typing import Any
 
@@ -34,10 +39,22 @@ from swissisoform.plm.regions import diff_region_indices
 
 logger = logging.getLogger(__name__)
 
-# LLR threshold below which a position counts as strongly-constrained.
-# -5.0 was the ESM-2 650M top-decile cutoff; ESM-C LLR magnitudes differ, so
-# this is PROVISIONAL for ESM-C and should be recalibrated on a genome-wide run.
-DEFAULT_CONSTRAINT_THRESHOLD = -5.0
+# logP(wt) AT OR ABOVE which a position counts as strongly-conserved.
+#
+# Direction matters and was previously inverted here. The cached array is
+# logP(wt) — the model's confidence in the residue actually present — so HIGH
+# (near 0) means the residue is strongly determined by its context. Measured
+# against Zoonomia 241-mammal PhyloP over the same codons (6,842 residues, 27
+# proteins): pearson +0.40 / spearman +0.48, positive in 27/27 proteins, decile
+# means rising monotonically from PhyloP 2.0 to 5.4. The old threshold counted
+# logP(wt) < -5.0 — the ~1% of residues the model finds LEAST expected — as
+# "constrained", inherited from an ESM-2 650M top-decile cutoff on ΔLLR, a
+# different population entirely.
+#
+# -0.5 is PROVISIONAL: it is the median of the observed logP(wt) distribution
+# (49% of positions sit above it), not a calibrated cutoff. Recalibrate on the
+# genome-wide run against PhyloP, not against a ΔLLR-derived number.
+DEFAULT_CONSERVED_THRESHOLD = -0.5
 
 
 def _safe_mean(arr: Any) -> float | None:
@@ -60,7 +77,7 @@ class PLMVEPModule:
         "plm_vep_mean_llr_canonical",
         "plm_vep_mean_llr_unique_region",
         "plm_vep_mean_llr_shared_region",
-        "plm_vep_constraint_enrichment",
+        "plm_vep_constraint_delta",
         "plm_vep_n_constrained_positions_unique",
         "plm_vep_n_constrained_positions_shared",
     ]
@@ -71,19 +88,19 @@ class PLMVEPModule:
         config: PipelineConfig,
         *,
         cache_dir: Path | str = DEFAULT_CACHE_DIR,
-        constraint_threshold: float = DEFAULT_CONSTRAINT_THRESHOLD,
+        conserved_threshold: float = DEFAULT_CONSERVED_THRESHOLD,
     ) -> None:
         """Initialize the module.
 
         Args:
             config: Pipeline configuration.
             cache_dir: Directory holding the ``<hash>.npz`` LLR cache files.
-            constraint_threshold: LLR threshold below which a position counts as
-                "constrained". Default -5.0 (top decile in ESM-2 650M).
+            conserved_threshold: logP(wt) at or ABOVE which a position counts as
+                strongly-conserved. See :data:`DEFAULT_CONSERVED_THRESHOLD`.
         """
         self.config = config
         self.cache_dir = Path(cache_dir)
-        self.constraint_threshold = constraint_threshold
+        self.conserved_threshold = conserved_threshold
 
     def _load_llr(self, protein: str) -> Any | None:
         if not protein:
@@ -101,7 +118,7 @@ class PLMVEPModule:
             "mean_llr_canonical": None,
             "mean_llr_unique_region": None,
             "mean_llr_shared_region": None,
-            "constraint_enrichment": None,
+            "constraint_delta": None,
             "n_constrained_positions_unique": None,
             "n_constrained_positions_shared": None,
         }
@@ -146,14 +163,20 @@ class PLMVEPModule:
         out["mean_llr_unique_region"] = unique_mean
         out["mean_llr_shared_region"] = shared_mean
 
-        if unique_mean is not None and shared_mean is not None and shared_mean != 0:
-            out["constraint_enrichment"] = unique_mean / shared_mean
-        elif unique_mean is not None and shared_mean == 0:
-            out["constraint_enrichment"] = math.inf if unique_mean != 0 else 0.0
+        # A DIFFERENCE, not a ratio. Both means are negative log-probabilities, so
+        # a ratio inverts (a more-negative unique region gives a value above 1) and
+        # explodes as the denominator approaches zero on a well-predicted core —
+        # cheeseman_test produced 412x and 257x that way. The difference is signed
+        # in the direction it reads: POSITIVE means the unique region is better
+        # predicted, i.e. more conserved, than the shared core.
+        if unique_mean is not None and shared_mean is not None:
+            out["constraint_delta"] = unique_mean - shared_mean
 
-        thr = self.constraint_threshold
-        out["n_constrained_positions_unique"] = sum(1 for v in unique_vals if v < thr)
-        out["n_constrained_positions_shared"] = sum(1 for v in shared_vals if v < thr)
+        # >= thr, not < thr: a residue the model predicts confidently is the
+        # conserved one (see DEFAULT_CONSERVED_THRESHOLD for the measurement).
+        thr = self.conserved_threshold
+        out["n_constrained_positions_unique"] = sum(1 for v in unique_vals if v >= thr)
+        out["n_constrained_positions_shared"] = sum(1 for v in shared_vals if v >= thr)
         return out
 
     def run(self, tis_sites: list[TranslationInitiationSite]) -> list[TranslationInitiationSite]:

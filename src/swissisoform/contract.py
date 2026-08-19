@@ -37,6 +37,37 @@ class ORFType(Enum):
     ALT_ORF = "alt_orf"
 
 
+# ORF types whose unique region was never canonical coding sequence: an extension's
+# came from 5'UTR or intron, and a separate ORF shares no reading frame with the CDS
+# at all. Any metric that contrasts the unique region against the canonical-shared
+# one is baseline-free for these — the two sides are not comparable quantities — so
+# a criterion built on such a contrast reports "not evaluable" rather than a verdict.
+# ANNOTATED and TRUNCATED are excluded: both live in canonical coding sequence.
+NO_CANONICAL_BASELINE_ORFS = frozenset(
+    {
+        ORFType.EXTENDED,
+        ORFType.UORF,
+        ORFType.UOORF,
+        ORFType.INTERNAL_OUT_OF_FRAME,
+        ORFType.THREE_UTR_ORF,
+        ORFType.ALT_ORF,
+    }
+)
+
+
+# Codons that can initiate translation: ATG plus the near-cognate starts — its
+# single-substitution neighbours, all observed driving real alt-TIS events (the
+# Ribo-TISH calls in this pipeline use CTG, GTG, TTG, ACG and ATC). Membership is
+# what decides a start-codon variant: a substitution that leaves the codon in this
+# set keeps the isoform initiating, one that drops it out ablates the start and
+# with it the whole proteoform. The amino acid is irrelevant to that question —
+# a third-base change can abolish a near-cognate start while translating to the
+# same residue.
+NEAR_COGNATE_STARTS = frozenset(
+    {"ATG", "CTG", "GTG", "TTG", "ACG", "AGG", "AAG", "ATA", "ATC", "ATT"}
+)
+
+
 def orf_type_from_ribotish(tis_type: str) -> ORFType:
     """Map a Ribo-TISH TisType string to an ORFType enum value.
 

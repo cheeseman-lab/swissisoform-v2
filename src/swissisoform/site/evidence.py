@@ -11,13 +11,95 @@ This is pure DataFrame → dict conversion: no LLM calls, no network.
 
 from __future__ import annotations
 
+import dataclasses
 import json
+import logging
 import math
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
+from swissisoform.config import SCORING_SIDECAR, ScoringConfig
+
+logger = logging.getLogger(__name__)
+
+# The thresholds this process reads. Defaults until a caller points it at a run.
+#
+# A threshold like p3_min_sse_plddt decides "does this element qualify", and three
+# places answer that question: the scorer (writing the verdict into the parquet),
+# this module (headline, modal counts, hit ranking, the qualifies_when line the LLM
+# is shown) and structure_tools (the number the P model quotes). Reading it from a
+# fresh ScoringConfig() here meant those three could only ever agree by accident —
+# so a run scored with an override would render a card contradicting its own
+# verdict, silently. SCORING_SIDECAR travels with the parquet and settles it.
+#
+# This module is staged into the website's deploy context
+# (website/prepare_deploy.sh), which is why config.py is staged with it.
+_ACTIVE_SCORING = ScoringConfig()
+_WARNED_MISSING: set[str] = set()
+
+
+def use_scoring_config(source: Path | str | ScoringConfig | None) -> ScoringConfig:
+    """Point this process at the thresholds a particular run was scored with.
+
+    ``source`` may be a run directory, a path to its ``scoring_config.json``, a
+    ``ScoringConfig``, or None (reset to defaults). Returns what is now active.
+
+    A run produced before the sidecar existed has none: that keeps the defaults
+    and warns once for that path. It does not raise — old outputs must still
+    render — but it must not be silent either, since silence is the failure mode
+    this whole mechanism exists to remove.
+    """
+    global _ACTIVE_SCORING
+    if source is None:
+        _ACTIVE_SCORING = ScoringConfig()
+        return _ACTIVE_SCORING
+    if isinstance(source, ScoringConfig):
+        _ACTIVE_SCORING = source
+        return _ACTIVE_SCORING
+
+    path = Path(source)
+    if path.is_dir():
+        path = path / SCORING_SIDECAR
+    if not path.exists():
+        key = str(path)
+        if key not in _WARNED_MISSING:
+            _WARNED_MISSING.add(key)
+            logger.warning(
+                "no %s at %s; falling back to ScoringConfig defaults. Thresholds "
+                "shown may not be the ones this run was scored with.",
+                SCORING_SIDECAR,
+                path,
+            )
+        _ACTIVE_SCORING = ScoringConfig()
+        return _ACTIVE_SCORING
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    fields = {f.name for f in dataclasses.fields(ScoringConfig)}
+    # Only known fields: a sidecar from a newer/older version must not crash the
+    # render. JSON gives the pepquery mod tuples back as lists; nothing in the
+    # site layer reads them, so that drift is left alone rather than converted.
+    _ACTIVE_SCORING = ScoringConfig(
+        **{k: v for k, v in (payload.get("scoring") or payload).items() if k in fields}
+    )
+    return _ACTIVE_SCORING
+
+
+def active_scoring() -> ScoringConfig:
+    """The thresholds in force for this process."""
+    return _ACTIVE_SCORING
+
+
+def p3_min_sse_length() -> int:
+    """Minimum SSE length for P3, from the active config."""
+    return _ACTIVE_SCORING.p3_min_sse_length
+
+
+def p3_min_sse_plddt() -> float:
+    """Minimum per-element mean pLDDT for P3, from the active config."""
+    return _ACTIVE_SCORING.p3_min_sse_plddt
 
 PATHOGENIC_CLINSIG_TOKENS = ("pathogenic", "likely_pathogenic", "likely pathogenic")
 
@@ -37,6 +119,11 @@ _SIMILARITY_HEADLINES = {
 _GNOMAD_FOLD = "__gnomad_fold__"
 _DISEASE_FOLD = "__disease_fold__"
 _DIVERGING_DOMAINS = "__diverging_domains__"
+_SSE_HEADLINE = "__sse_headline__"
+# The P3 thresholds live in the active ScoringConfig — read them through
+# p3_min_sse_length() / p3_min_sse_plddt(), never by binding a value at import.
+# Every consumer of "does this element qualify" must agree with the verdict, and
+# a bound value cannot follow use_scoring_config().
 # Fold-change variant-density headlines (M1/M2): "{noun} {fold}x more/less in
 # unique region — {call}". low/high = call word for ratio <1 / >1.
 _VARIANT_FOLD_HEADLINES = {
@@ -119,6 +206,73 @@ def _get(row: pd.Series, key: str) -> Any:
 def _scalar_or_none(row: pd.Series, key: str) -> Any:
     value = _get(row, key)
     return value
+
+
+# ── Clinical-significance normalisation ───────────────────────────────────
+#
+# ``clinical_significance`` is a ClinVar-only free-text field: gnomAD and COSMIC
+# rows carry no value at all, and ClinVar spells the same call several ways
+# ("Pathogenic", "Pathogenic/Likely pathogenic", "Likely pathogenic"). Anything
+# selecting on it must match by family rather than by equality, or it silently
+# undercounts. Both helpers below live here so the LLM tool readers
+# (``swissisoform.site.tools``) and the hit-truncation sort agree on what
+# "pathogenic" means.
+
+CLINSIG_FAMILIES = ("pathogenic", "benign", "uncertain", "conflicting", "none")
+
+
+def clinsig_family(value: Any) -> str:
+    """Bucket a ClinVar ``clinical_significance`` string into a coarse family.
+
+    Families are the ones a caller actually filters on:
+    ``pathogenic`` (Pathogenic + Pathogenic/Likely pathogenic + Likely
+    pathogenic), ``benign`` (Benign + Benign/Likely benign + Likely benign),
+    ``uncertain``, ``conflicting``, and ``none`` for an absent value (every
+    gnomAD/COSMIC row, plus ClinVar rows with no assertion).
+
+    ``conflicting`` is tested first because "Conflicting classifications of
+    pathogenicity" contains the substring "pathogenic" and would otherwise be
+    counted as a pathogenic call.
+    """
+    sig = str(value or "").strip().lower()
+    if not sig or sig == "nan" or sig == "none":
+        return "none"
+    if "conflicting" in sig:
+        return "conflicting"
+    if "pathogenic" in sig:
+        return "pathogenic"
+    if "uncertain" in sig:
+        return "uncertain"
+    if "benign" in sig:
+        return "benign"
+    return "none"
+
+
+def clinsig_rank(hit: dict[str, Any]) -> int:
+    """Truncation-sort priority for one variant hit — lower surfaces first.
+
+    Finer-grained than :func:`clinsig_family` because the sort separates a firm
+    Pathogenic call from a Likely pathogenic one. Used by
+    :func:`slice_criterion` to decide which hits survive the ``MAX_HITS`` cap.
+
+    Note: a "Conflicting classifications of pathogenicity" value ranks 0 here
+    (it contains "pathogenic" and not "likely"), which is more generous than
+    :func:`clinsig_family`, where it is its own family. Kept as-is so the
+    existing truncation order is unchanged; it only affects which hits appear in
+    a capped view, never a count.
+    """
+    sig = str(hit.get("clinical_significance") or "").lower()
+    if "pathogenic" in sig and "likely" not in sig:
+        return 0  # Pathogenic
+    if "likely_pathogenic" in sig or "likely pathogenic" in sig:
+        return 1
+    if hit.get("effect_damaging") is True:
+        return 2
+    if "uncertain" in sig:
+        return 4
+    if "benign" in sig:
+        return 5
+    return 3  # other / unknown
 
 
 def _diff_space_from_orf_type(orf_type: Any) -> str | None:
@@ -322,6 +476,12 @@ _VARIANTS_LONG_BASE_COLS = (
     "isoform_aa_ref",
     "isoform_aa_alt",
     "isoform_consequence",
+    # At codon 0 the consequence turns on codon membership, not the amino acid,
+    # so the codons are the evidence for a start_lost call.
+    "codon_ref",
+    "codon_alt",
+    "isoform_codon_ref",
+    "isoform_codon_alt",
 )
 
 # Pulled from the per-hit ``metadata`` sub-dict. ``clinvar_title`` reads
@@ -333,6 +493,13 @@ _VARIANTS_LONG_METADATA_COLS = (
     ("clinvar_title", "title"),
 )
 
+# Pulled from the matching ``isoform_varianteffect_hits`` entry. The five below
+# effect_damaging are what make it readable rather than a bare boolean: plm_status
+# explains a null delta_llr (not_missense vs aa_ref_mismatch, otherwise
+# indistinguishable from a failure), plm_frame says which protein it was scored
+# against, effect_lof separates a frameshift/stop from a damaging missense call,
+# and effect_tolerated_in_gnomad distinguishes "predicted benign" from "predicted
+# damaging but common in healthy humans", which the AF gate turns to False.
 _VARIANTS_LONG_EFFECT_COLS = (
     "am_class",
     "am_pathogenicity",
@@ -340,6 +507,11 @@ _VARIANTS_LONG_EFFECT_COLS = (
     "plm_llr_wt",
     "plm_llr_alt",
     "effect_damaging",
+    "effect_lof",
+    "effect_consequence",
+    "effect_tolerated_in_gnomad",
+    "plm_frame",
+    "plm_status",
 )
 
 
@@ -394,8 +566,11 @@ def write_variants_long(parquet_path: Path, out_path: Path) -> int:
             rows.append(record)
 
     out_df = pd.DataFrame(rows)
-    if "effect_damaging" in out_df.columns:
-        out_df["effect_damaging"] = out_df["effect_damaging"].astype("boolean")
+    # Nullable boolean, so a hit with no effect record stays NA rather than
+    # becoming False — "not scored" and "scored not damaging" are different.
+    for col in ("effect_damaging", "effect_lof", "effect_tolerated_in_gnomad"):
+        if col in out_df.columns:
+            out_df[col] = out_df[col].astype("boolean")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_df.to_parquet(out_path, index=False)
     return len(rows)
@@ -530,9 +705,17 @@ CRITERIA: dict[str, dict[str, Any]] = {
         ],
         "headline_col": _CODING_SELECTION,
         "interpretation_hint": (
-            "Does the unique coding region show purifying selection by phyloP "
-            "(absolute mean ≥ ~2 indicates strong constraint)? The shared region "
-            "and enrichment ratio are context only, not the basis for the call."
+            "Does the unique coding region show purifying selection by phyloP? The "
+            "score is SIGNED, not a magnitude: phyloP measures deviation from "
+            "neutral evolution, so positive = conserved, ~0 = neutral, and NEGATIVE "
+            "= accelerated. A negative mean is the opposite of constraint and can "
+            "never pass — never read a large negative as strong conservation. "
+            "The criterion needs the unique-region mean at or above the configured "
+            "threshold (2.0), which is deliberately stricter than the ±1.0 band the "
+            "headline uses to label selection descriptively: a mean between 1 and 2 "
+            "is correctly called purifying on the tile AND correctly scores False "
+            "here — below the bar, not a contradiction to explain away. The shared "
+            "region and enrichment ratio are context only, not the basis for the call."
         ),
     },
     "D1_multi_cell_line": {
@@ -586,15 +769,21 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "tis_pvalue",
             "fisher_qvalue",
         ],
-        # Computed headline: the maximum per-cell-line initiation efficiency
-        # (TIS counts / gene RNA-seq counts ratio) across the six samples — see
-        # ``_MAX_INITIATION_EFFICIENCY`` handling in ``slice_criterion``.
+        # Computed headline: the alt/canonical initiation-efficiency RATIO at the
+        # cell line with the highest alt efficiency among those carrying a canonical
+        # twin; the bare maximum is only the fallback when no line has one. See the
+        # ``_START_SITE_USAGE`` branch in ``slice_criterion``.
         "headline_col": _START_SITE_USAGE,
         "interpretation_hint": (
             "How efficiently is this TIS initiated? Each per-cell-line value is the "
-            "TIS read counts / gene RNA-seq counts ratio; the headline is the max "
-            "across cell lines. Compare to the canonical_ twins for a within-gene "
-            "baseline."
+            "TIS read counts / gene RNA-seq counts ratio. The headline is NOT one of "
+            "those values: it is the alt/canonical RATIO at the cell line with the "
+            "highest alt efficiency that also has a canonical twin, so '0.43x vs "
+            "canonical' means this start is used less than half as much as the "
+            "canonical one — a fold-change, not an efficiency. Only when no cell line "
+            "has a canonical twin does the headline fall back to the bare maximum, "
+            "labelled 'Max Initiation Efficiency'. Compare the per-cell-line values to "
+            "their canonical_ twins for the within-gene baseline."
         ),
     },
     "D3_mass_spec": {
@@ -608,7 +797,18 @@ CRITERIA: dict[str, dict[str, Any]] = {
         "evidence_hits_col": "cmp_massspec_hits_in_diff_region",
         "headline_col": _MASSPEC_VALIDATED,
         "interpretation_hint": (
-            "Are there PepQuery2 validated peptides in the isoform's unique region?"
+            "Did PepQuery2 match public MS spectra to a peptide that only the isoform "
+            "can produce? 'Unique to isoform' is a SET DIFFERENCE over tryptic "
+            "peptides — in the isoform's digest, absent from the canonical's — not a "
+            "coordinate test against the differential region, so do not claim such a "
+            "peptide sits inside that region. On a TRUNCATION the two come apart by "
+            "construction: the differential region is the LOST canonical N-terminus, "
+            "which the isoform cannot produce a peptide from at all, so the "
+            "diff-region hit list is empty while the diagnostic peptide — the novel "
+            "junction created by the new start — sits in SHARED-region coordinates. "
+            "A validated peptide is positive evidence the isoform exists; its absence "
+            "is weak evidence against, since detection depends on the spectra "
+            "searched."
         ),
     },
     "P1_structured_extension": {
@@ -637,8 +837,9 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "distinctness signal (GRAVY / fraction_charged / disorder) is scored "
             "separately under S2, so do not weigh it here. "
             "This member also carries the model-confidence metrics for the whole "
-            "prediction — global pTM (ptm_isoform / ptm_canonical) and the PAE blocks "
-            "(pae_diff_vs_diff, pae_body_vs_body, pae_diff_vs_body, pae_status). Low "
+            "prediction — global pTM (ptm_isoform / ptm_canonical), pae_status, and the "
+            "PAE block means where this record carries them (the tool loop omits them "
+            "in favour of querying pae_block directly). Low "
             "pTM / high PAE means the predicted fold and the relative placement of "
             "regions are unreliable, which is the qualifier the Core Fold Perturbation "
             "(shared-region RMSD) member in this same category must be read against."
@@ -703,8 +904,29 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "cmp_interproscan_n_hits_in_diff_region",
         ],
         "evidence_hits_col": "cmp_interproscan_hits_in_diff_region",
+        "hits_note": (
+            "Every InterProScan hit OVERLAPPING the differential region, on the pane "
+            "named by cmp_interproscan_hits_source_pane (the canonical for a truncation, "
+            "since the lost region exists only there). This is the broader set, NOT the "
+            "one S1 scores — see the interpretation_hint for the three conditions a hit "
+            "must meet to be counted."
+        ),
         "headline_col": _DIVERGING_DOMAINS,
-        "interpretation_hint": ("Does the differential region overlap with InterProScan domains?"),
+        "interpretation_hint": (
+            "Is a real functional domain GAINED or LOST in the differential region? "
+            "Symmetric by direction: on an extension, a domain starting in the added "
+            "segment and absent from the canonical is a GAIN; on a truncation, one "
+            "starting in the removed segment and absent from the isoform is a LOSS. "
+            "The scored count requires all three conditions together — a REAL InterPro "
+            "domain (genuine interpro_id, excluding disorder/structural-prediction "
+            "databases), STARTING inside the region, and ABSENT from the other form's "
+            "domain set. Overlapping the region is not enough, and neither is a domain "
+            "present in both forms at shifted coordinates: a truncation renumbers every "
+            "downstream domain without changing it. So the hits list is routinely "
+            "non-empty while the criterion is False — that is the expected reading of a "
+            "boundary-spanning or merely repositioned domain, not a contradiction to "
+            "explain away."
+        ),
     },
     "L2_targeting_change": {
         "axis": "F",
@@ -747,7 +969,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "isoform_variant_intersection_n_gnomad_in_shared_region",
             "isoform_variant_intersection_unique_region_nt",
             "isoform_variant_intersection_shared_region_nt",
-            "isoform_plm_vep_constraint_enrichment",
+            "isoform_plm_vep_constraint_delta",
             "isoform_plm_vep_mean_llr_unique_region",
             "isoform_plm_vep_mean_llr_shared_region",
             "isoform_plm_vep_n_constrained_positions_unique",
@@ -760,21 +982,21 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "Is the unique region under germline constraint? Two independent "
             "signals: (1) gnomad_depletion_ratio < 1 means germline variation "
             "AVOIDS the unique region (density-normalized vs shared core); "
-            "(2) ESM-C constraint_enrichment high means residues there are "
-            "predicted intolerant to substitution. This measures tolerance/"
-            "constraint, not damaging-variant burden. "
+            "(2) ESM-C constraint_delta POSITIVE means the model predicts the "
+            "unique region's residues better than the shared core, i.e. finds "
+            "them more conserved (it is mean logP(wt) unique minus shared; higher "
+            "logP(wt) = better predicted = more conserved). This measures "
+            "tolerance/constraint, not damaging-variant burden. "
             "The two are either-or evidence with OPPOSITE directionality (gnomAD "
-            "low = constrained, ESM-C high = constrained); either alone suffices, "
-            "so they need not agree. "
-            "VALID ONLY ON TRUNCATIONS, where the region is canonical coding "
+            "low = constrained, ESM-C delta high = constrained); either alone "
+            "suffices, so they need not agree. "
+            "SCORED ONLY ON TRUNCATIONS, where the region is canonical coding "
             "sequence. On an EXTENSION the unique region was 5'UTR/intron and was "
-            "never coding: the gnomAD ratio then measures never-coding variation "
-            "(confounded by UTR/splicing selection and coverage) and the ESM-C "
-            "score is out-of-distribution, reflecting composition rather than "
-            "intolerance — n_constrained_positions_unique is routinely 0 there. "
-            "Do not interpret either value, or their disagreement, as evidence "
-            "about protein constraint on an extension. On separate-ORF isoforms "
-            "there is no shared region, so the ratio is undefined by construction."
+            "never coding, and on a separate ORF there is no shared region at all: "
+            "both inputs then contrast quantities that are not comparable, so the "
+            "criterion reports NOT EVALUABLE rather than a verdict. The raw values "
+            "are still shown; do not read them, or their disagreement, as evidence "
+            "about protein constraint there."
         ),
     },
     "M2_clinical_variant_overlap": {
@@ -799,6 +1021,38 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "unique coding region? disease_enrichment_ratio > 1 means the unique "
             "region carries a higher disease-variant density than the shared core; "
             "the raw unique/shared disease and pathogenic counts are context."
+        ),
+    },
+    "P3_secondary_structure": {
+        "axis": "F",
+        "label": "Secondary Structure",
+        "short_label": "SSE",
+        "evidence_cols": [
+            "isoform_structure_sse_status",
+            "isoform_structure_plddt_diffregion_mean",
+            "isoform_structure_ptm_isoform",
+            "isoform_structure_ptm_canonical",
+        ],
+        # The whole-protein scan, each element region-tagged and at its TRUE
+        # length. The window-clipped list this used to point at measured only
+        # the portion inside the differential region, so a boundary-crossing
+        # element reached the model short — or, when the clipped portion fell
+        # below the per-type emission floor, not at all.
+        "evidence_hits_col": "isoform_structure_sse_all_elements",
+        "headline_col": _SSE_HEADLINE,
+        # The gain/loss asymmetry and the residue space are stated as data by
+        # _shape_p3_hits, so the hint only carries what the payload cannot.
+        "interpretation_hint": (
+            "Does the differential region contain actual secondary structure — a "
+            "helix or strand — as opposed to coil? Assigned from predicted "
+            "coordinates (P-SEA), so BOTH length and confidence are required: a "
+            "geometrically clean helix through a disordered stretch is geometry "
+            "fitted to a guess, not a finding. "
+            "It says nothing about whether the element is INTEGRATED with the rest "
+            "of the fold — read the contact and PAE evidence in this category for "
+            "that, never infer it from an element's presence. pLDDT is not a proxy "
+            "for secondary structure; the highest-confidence stretch of a region is "
+            "frequently coil."
         ),
     },
     "P2_shared_structural_change": {
@@ -826,8 +1080,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "the canonical protein? The shared region is identical in sequence, so a "
             "high Cα RMSD (Kabsch-superposed on the shared residues only) is "
             "CONSISTENT WITH the extension/truncation reorganizing how that region "
-            "folds — most isoforms read ≈ 0. TM-score is a length-normalized "
-            "companion. "
+            "folds. TM-score is a length-normalized companion. "
             "CONFIDENCE GATE — a high RMSD is NOT on its own evidence of refolding. "
             "The common cause is ESMFold placing a poorly-determined region "
             "differently between two low-confidence models, which is placement/"
@@ -835,8 +1088,8 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "a real refold, check the fold-confidence metrics carried here and in the "
             "Fold Confidence member of this same category: global pTM (ptm_isoform / "
             "ptm_canonical), shared-region pLDDT (plddt_shared_mean_isoform / "
-            "plddt_shared_mean_canonical), and the PAE blocks (pae_body_vs_body, "
-            "pae_diff_vs_body, pae_status). If pTM ≲ 0.50, OR either shared pLDDT < "
+            "plddt_shared_mean_canonical), and the PAE (pae_status, plus the block "
+            "means where this record carries them). If pTM ≲ 0.50, OR either shared pLDDT < "
             "0.70, OR PAE is high, treat the RMSD as an artifact of low confidence: "
             "state it as an unresolved hypothesis at most, and never make it the "
             "headline or say the isoform 'remodels'/'reorganizes'/'destabilizes' the "
@@ -884,14 +1137,15 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "strongly. The gained/lost counts are context only — two proteins of "
             "different length always differ in hundreds of features, so their "
             "presence says nothing about magnitude. "
-            "Treat this as a PRESENCE/ABSENCE signal only. Feature labels are "
-            "auto-generated and provisional, not curated annotation: many carry no "
-            "content (hollow labels are withheld, leaving the feature identified by "
+            "Feature labels are auto-generated and provisional, not curated "
+            "annotation: many carry no content (hollow labels are withheld, leaving "
+            "the feature identified by "
             "index alone), and many others merely describe the feature's own "
             "activation pattern or restate sequence composition already scored by "
             "the whole-protein biophysical shift in this same category. Do NOT name, "
             "quote or interpret a feature label in the reasoning, and do not let a "
-            "label move the verdict — cite only that features differ, and how many."
+            "label move the verdict — cite the activation-shift magnitude, not the "
+            "labels and not the counts."
         ),
     },
 }
@@ -906,7 +1160,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
 #
 # ``members`` are all keys in ``CRITERIA`` — every member (including S2 biophysics
 # and S3 SAE) is a first-class scored criterion sliced through ``slice_criterion``.
-# All 15 criteria — including P2 — are covered exactly once; there is no
+# All 16 criteria — including P2 and P3 — are covered exactly once; there is no
 # LLM-excluded criterion.
 CATEGORIES: list[dict[str, Any]] = [
     {
@@ -940,7 +1194,11 @@ CATEGORIES: list[dict[str, Any]] = [
     {
         "letter": "P",
         "name": "Predicted Structure",
-        "members": ["P1_structured_extension", "P2_shared_structural_change"],
+        "members": [
+            "P1_structured_extension",
+            "P2_shared_structural_change",
+            "P3_secondary_structure",
+        ],
     },
     {
         "letter": "S",
@@ -974,7 +1232,7 @@ _BIOPHYSICS_FEATURES: list[tuple[str, str]] = [
 # ──────────────────────────────────────────────────────────────────────────
 
 CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
-    # E1/E2 — conservation_frame primate + mammalian
+    # C1/C2 — conservation_frame primate + mammalian
     "isoform_conservation_frame_primate_frac_intact": {
         "label": "Fraction of primates with intact ORF",
         "format": "percent",
@@ -1031,7 +1289,7 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "Max evolutionary depth (mammals)",
         "format": "int",
     },
-    # E1/E2 — canonical (within-gene baseline) twins
+    # C1/C2 — canonical (within-gene baseline) twins
     "isoform_conservation_frame_primate_canonical_mean_pident": {
         "label": "Canonical mean % identity to primate orthologs",
         "format": "percent",
@@ -1056,7 +1314,7 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "Canonical mammalian species aligned",
         "format": "int",
     },
-    # E3 — phyloP / phastCons
+    # C3 — phyloP / phastCons
     "isoform_conservation_phylop_at_tis": {
         "label": "PhyloP score at TIS",
         "format": "float3",
@@ -1093,17 +1351,17 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "phastCons mean over Kozak window",
         "format": "float3",
     },
-    # E5 — initiation efficiency stats
+    # D2 — initiation efficiency stats
     "ribo_pvalue": {"label": "Ribo-TISH p-value", "format": "sci"},
     "tis_pvalue": {"label": "TIS detection p-value", "format": "sci"},
     "fisher_qvalue": {"label": "Fisher combined q-value", "format": "sci"},
-    # E6 — mass spec
+    # D3 — mass spec
     "isoform_massspec_summary": {"label": "PepQuery2 summary", "format": "json"},
     "cmp_massspec_n_hits_in_diff_region": {
         "label": "MS peptides in diff region",
         "format": "int",
     },
-    # F1 — structure pLDDT
+    # P1 — structure pLDDT
     "isoform_structure_status": {"label": "Structure prediction status", "format": "str"},
     "isoform_structure_plddt_canonical_mean": {
         "label": "Mean pLDDT (canonical)",
@@ -1145,7 +1403,7 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "Extension↔body Cα contacts (<8 Å)",
         "format": "int",
     },
-    # F1 — biophysical distinctness (unique vs shared region)
+    # P1 — biophysical distinctness (unique vs shared region)
     "cmp_biophysics_gravy_delta": {"label": "Δ GRAVY (isoform − canonical)", "format": "float3"},
     "cmp_biophysics_fraction_charged_delta": {
         "label": "Δ fraction charged (isoform − canonical)",
@@ -1188,7 +1446,7 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "Disorder-promoting fraction unique/shared ratio",
         "format": "float3",
     },
-    # F2/F4 — localization
+    # L1/L2 — localization
     "canonical_localization_deeploc_prediction": {
         "label": "DeepLoc prediction (canonical)",
         "format": "str",
@@ -1249,7 +1507,7 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "Isoform membrane state",
         "format": "str",
     },
-    # F4 — SignalP / TargetP N-terminal sorting signals
+    # L2 — SignalP / TargetP N-terminal sorting signals
     "cmp_signalp_signalp_prediction_changed": {
         "label": "Signal-peptide prediction changes",
         "format": "bool",
@@ -1322,13 +1580,13 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "TargetP prediction (isoform)",
         "format": "str",
     },
-    # F3 — InterProScan domains
+    # S1 — InterProScan domains
     "isoform_interproscan_summary": {"label": "InterProScan summary", "format": "json"},
     "cmp_interproscan_n_hits_in_diff_region": {
         "label": "Domains in diff region",
         "format": "int",
     },
-    # F5/F6 — variant intersection + variant effect
+    # M1/M2 — variant intersection + variant effect
     "isoform_variant_intersection_gnomad_depletion_ratio": {
         "label": "gnomAD depletion ratio (unique/shared density)",
         "format": "float3",
@@ -1353,26 +1611,26 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "gnomAD variants in shared region",
         "format": "int",
     },
-    # F5 — ESM-C (PLM VEP) constraint
+    # M1 — ESM-C (PLM VEP) constraint
     "isoform_plm_vep_status": {"label": "PLM VEP status", "format": "str"},
-    "isoform_plm_vep_constraint_enrichment": {
-        "label": "ESM-C constraint enrichment (unique vs shared)",
+    "isoform_plm_vep_constraint_delta": {
+        "label": "ESM-C constraint delta (unique − shared logP(wt))",
         "format": "float3",
     },
     "isoform_plm_vep_mean_llr_unique_region": {
-        "label": "Mean ESM-C LLR over unique region",
+        "label": "Mean ESM-C logP(wt) over unique region",
         "format": "float3",
     },
     "isoform_plm_vep_mean_llr_shared_region": {
-        "label": "Mean ESM-C LLR over shared region",
+        "label": "Mean ESM-C logP(wt) over shared region",
         "format": "float3",
     },
     "isoform_plm_vep_n_constrained_positions_unique": {
-        "label": "ESM-C constrained positions (unique)",
+        "label": "ESM-C conserved positions (unique)",
         "format": "int",
     },
     "isoform_plm_vep_n_constrained_positions_shared": {
-        "label": "ESM-C constrained positions (shared)",
+        "label": "ESM-C conserved positions (shared)",
         "format": "int",
     },
     "isoform_variant_intersection_n_total": {
@@ -1431,7 +1689,7 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
         "label": "Mean AlphaMissense pathogenicity, germline (unique)",
         "format": "float3",
     },
-    # F7 — shared-region structural change (structure)
+    # P2 — shared-region structural change (structure)
     "isoform_structure_rmsd_shared": {
         "label": "Shared-region Cα RMSD",
         "format": "angstrom",
@@ -1466,7 +1724,7 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
     },
 }
 
-# E4/E5 — per-cell-line expression columns (generated programmatically)
+# D1/D2 — per-cell-line expression columns (generated programmatically)
 for _sample in ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"):
     _display = _sample.replace("_", " ")
     CRITERIA_METRIC_LABELS[f"expr_{_sample}_initiation_efficiency"] = {
@@ -1675,6 +1933,53 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         else:
             headline = None
         headline_fmt = "str"
+    elif headline_col == _SSE_HEADLINE:
+        # "2 secondary structures identified in unique region" — a COUNT of the
+        # confident elements, which is what P3 scores on. A count rather than the
+        # single longest element, because the modal below lists every element
+        # with its true span; naming one up here invited the reader to compare
+        # two numbers for the same helix (the headline's clipped to the region,
+        # the table's not) and read the difference as an error.
+        # Reads the SAME source as the P3 scorer: elements touching the unique
+        # region at their true length, not the window-clipped diff scan. A
+        # different source here would let the tile and the verdict disagree.
+        # `or []` would call __bool__ on a numpy object array and raise; the hits
+        # branch below avoids the same trap with an explicit None check.
+        _all = raw.get("isoform_structure_sse_all_elements")
+        els = [
+            e
+            for e in (_all if _all is not None else [])
+            if isinstance(e, dict) and e.get("region") in ("unique", "spans")
+        ]
+        if not els:
+            ok = raw.get("isoform_structure_sse_status") == "ok"
+            headline = "No helix or strand in diff region" if ok else None
+        else:
+            # Must agree with P3, which requires BOTH length and confidence. A
+            # headline counting sub-threshold elements reads as a finding while
+            # the criterion scores False — the tile and the verdict then tell a
+            # reader opposite things.
+            ok = [
+                e for e in els
+                if (e.get("length") or 0) >= p3_min_sse_length()
+                and (e.get("plddt_mean") or 0) >= p3_min_sse_plddt()
+            ]
+            if ok:
+                n = len(ok)
+                noun = "secondary structure" if n == 1 else "secondary structures"
+                tail = f" {noun} identified in unique region"
+                headline = f"{n}{tail}"
+                # Only the count is bold — it is the whole point of the tile.
+                headline_segments = [
+                    {"t": str(n), "strong": True},
+                    {"t": tail, "strong": False},
+                ]
+            else:
+                # Elements exist but none clear both thresholds, so the count is
+                # zero and the tile reads the same as genuinely-empty. The
+                # near-miss detail lives in the modal's element listing.
+                headline = "No helix or strand in diff region"
+        headline_fmt = "str"
     elif headline_col == _CODING_SELECTION:
         # Mean PhyloP over the isoform-unique region + a selection call: PhyloP
         # measures deviation from neutral evolution, so >0 = conserved (purifying
@@ -1695,7 +2000,7 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         headline_fmt = "str"
     elif headline_col == _N_CELL_LINES_DETECTED:
         # "detected in n/m cell lines": n = cell lines with an expression record
-        # for this TIS (present per-sample column, mirrors the E4 scorer's
+        # for this TIS (present per-sample column, mirrors the D1 scorer's
         # ``len(site.expression)``); m = the full cell-line panel.
         n = 0
         for s in _INITIATION_EFFICIENCY_SAMPLES:
@@ -1712,10 +2017,11 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         headline_fmt = "str"
     elif headline_col == _MASSPEC_VALIDATED:
         # "{v}/{u} isoform-unique peptides validated": v = isoform-unique tryptic
-        # peptides matched to public MS spectra by PepQuery2 (the E6 score
-        # numerator), u = total isoform-unique peptides searched. The isoform
-        # digest is scoped to unique peptides, so ``validated_peptides`` == the
-        # validated-unique count. Unscored (—) until PepQuery has run.
+        # peptides matched to public MS spectra by PepQuery2 (the D3 score
+        # numerator), u = total isoform-unique peptides searched.
+        # ``validated_peptides`` is counted unique-scoped at the source, so v is the
+        # same quantity D3 scores rather than a broader count that happens to agree.
+        # Unscored (—) until PepQuery has run.
         summary = raw.get("isoform_massspec_summary")
         if isinstance(summary, dict) and summary.get("pepquery_run"):
             v = summary.get("validated_peptides") or 0
@@ -1732,7 +2038,7 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         headline_fmt = "str"
     elif headline_col == _DIVERGING_DOMAINS:
         # Curated count of real domains changed in the differential region — the
-        # same value the F3 score uses (>=1 passes). Rendered "n diverging domains".
+        # same value the S1 score uses (>=1 passes). Rendered "n diverging domains".
         n = raw.get("cmp_interproscan_n_real_domains_changed_in_diff_region")
         if n is None or (isinstance(n, float) and math.isnan(n)):
             headline = None
@@ -1831,11 +2137,15 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
                 all_hits = [h for h in raw_hits if isinstance(h, dict)]
                 n_hits_total = len(all_hits)
                 # Cap at MAX_HITS to keep the LLM prompt under the 200k token limit.
-                # F5/F6 are unique-region claims, so prioritise unique-region hits
+                # M1/M2 are unique-region claims, so prioritise unique-region hits
                 # first (then pathogenic/damaging within that), ensuring the
                 # truncated view always surfaces the region the criterion is about.
                 MAX_HITS = 30
-                # Criteria whose claim is about the isoform-unique region.
+                # Criteria whose claim is about the isoform-unique region. P3 is
+                # NOT one of them here: it never reaches the model through this
+                # list — _shape_p3_hits below discards `hits` and rebuilds from
+                # the raw column, with its own cap — so ranking it here would be
+                # work thrown away.
                 unique_region_criteria = {
                     "M1_pathogenic_variant_enrichment",
                     "M2_clinical_variant_overlap",
@@ -1843,26 +2153,17 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
                 prioritize_unique = criterion_id in unique_region_criteria
                 if n_hits_total > MAX_HITS:
 
-                    def _clinsig_rank(h: dict[str, Any]) -> int:
-                        sig = str(h.get("clinical_significance") or "").lower()
-                        if "pathogenic" in sig and "likely" not in sig:
-                            return 0  # Pathogenic
-                        if "likely_pathogenic" in sig or "likely pathogenic" in sig:
+                    def _region_rank(h: dict[str, Any]) -> int:
+                        """0 = must survive the cap, 1 = droppable first."""
+                        if not prioritize_unique:
                             return 1
-                        if h.get("effect_damaging") is True:
-                            return 2
-                        if "uncertain" in sig:
-                            return 4
-                        if "benign" in sig:
-                            return 5
-                        return 3  # other / unknown
+                        return 0 if h.get("in_isoform_unique") else 1
 
                     def _priority(h: dict[str, Any]) -> tuple[int, int]:
-                        # Lead with unique-region membership for unique-region
-                        # criteria so those hits survive truncation; clinical
-                        # significance is the secondary sort within each bucket.
-                        in_unique = 0 if (prioritize_unique and h.get("in_isoform_unique")) else 1
-                        return (in_unique, _clinsig_rank(h))
+                        # Region membership leads so the hits the criterion is
+                        # about survive truncation; clinical significance is the
+                        # secondary sort within each bucket.
+                        return (_region_rank(h), clinsig_rank(h))
 
                     hits = sorted(all_hits, key=_priority)[:MAX_HITS]
                 else:
@@ -1870,7 +2171,7 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
             except TypeError:
                 hits = []
 
-    return {
+    sliced = {
         "criterion_id": criterion_id,
         "axis": cfg["axis"],
         "label": cfg["label"],
@@ -1887,6 +2188,98 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         "n_hits_total": n_hits_total,
         "n_hits_shown": len(hits),
     }
+    # A criterion whose hits list is broader than what it scores says so here, so
+    # the two are not read as the same set (S1: overlap vs starts-in-and-absent).
+    if cfg.get("hits_note"):
+        sliced["hits_note"] = cfg["hits_note"]
+    if criterion_id == "P3_secondary_structure":
+        # Replaces `hits` wholesale, so nothing above this line reaches the model
+        # for P3 — see _shape_p3_hits.
+        return _shape_p3_hits(sliced, raw)
+    return sliced
+
+
+# ORF types with no shared region — the whole isoform is the differential.
+_SEPARATE_ORFS = frozenset({"uorf", "uoorf", "internal_oof", "3utr_orf", "alt_orf"})
+# P3 scores these regions; everything else is retained core.
+_P3_SCORED_REGIONS = ("unique", "spans")
+# Bound the scored list too — small in practice (max 5 on cheeseman_test).
+_P3_MAX_ELEMENTS = 30
+
+
+def _shape_p3_hits(sliced: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
+    """Re-frame P3's element list as what the isoform gains or loses.
+
+    The flat list left three things to infer: which protein the coordinates index
+    (canonical for truncations, under an ``isoform_``-prefixed column), that
+    ``unique``/``spans`` is the scored set, and that it means "lost" on a
+    truncation. Shared elements are ~90% of the payload and are never scored, so
+    they collapse to a summary; the full list stays reachable through
+    ``secondary_structure`` with explicit bounds.
+    """
+    orf = str(raw.get("orf_type") or "")
+    # Read the FULL element list, not sliced["hits"] — that is capped at MAX_HITS,
+    # which would undercount the shared summary on long proteins.
+    raw_els = raw.get("isoform_structure_sse_all_elements")
+    every = [] if raw_els is None else [e for e in raw_els if isinstance(e, dict)]
+    scored = [h for h in every if h.get("region") in _P3_SCORED_REGIONS][:_P3_MAX_ELEMENTS]
+    shared = [h for h in every if h.get("region") == "shared"]
+
+    def _bound(key: str) -> int | None:
+        v = raw.get(key)
+        try:
+            return None if v is None else int(v)
+        except (TypeError, ValueError):
+            return None
+
+    lo, hi = _bound("diff_start"), _bound("diff_end")
+    span = f"{lo + 1}-{hi}" if lo is not None and hi is not None else "unknown range"
+
+    if orf == "truncated":
+        status, key = "lost", "elements_lost"
+        frame = (
+            f"This truncation removes canonical residues {span}. The elements below are "
+            f"read off the CANONICAL structure and are LOST in the isoform."
+        )
+    elif orf == "extended":
+        status, key = "gained", "elements_gained"
+        frame = (
+            f"This extension adds isoform residues {span}. The elements below are read "
+            f"off the ISOFORM structure and are GAINED relative to the canonical protein."
+        )
+    elif orf in _SEPARATE_ORFS:
+        status, key = "gained", "elements_gained"
+        frame = (
+            "This is a separate ORF: the entire isoform is the differential region and "
+            "there is no shared region. The elements below are read off the ISOFORM "
+            "structure."
+        )
+    else:
+        status, key = "present", "elements_in_differential_region"
+        frame = f"ORF type {orf!r} has no gain/loss framing; elements are reported as-is."
+
+    out = {k: v for k, v in sliced.items() if k != "hits"}
+    out["residue_space"] = raw.get("diff_space")
+    out["frame"] = frame
+    out["qualifies_when"] = (
+        f"length >= {p3_min_sse_length()} aa AND plddt_mean >= {p3_min_sse_plddt()}"
+    )
+    out[key] = [
+        {
+            **h,
+            "status": status,
+            "qualifies": (h.get("length") or 0) >= p3_min_sse_length()
+            and (h.get("plddt_mean") or 0) >= p3_min_sse_plddt(),
+        }
+        for h in scored
+    ]
+    out["shared_elements_summary"] = {
+        "n_helix": sum(1 for h in shared if h.get("type") == "helix"),
+        "n_strand": sum(1 for h in shared if h.get("type") == "strand"),
+        "longest": max((h.get("length") or 0 for h in shared), default=0),
+    }
+    out["n_hits_shown"] = len(out[key])
+    return out
 
 
 def _diff_region_location(orf_type: Any) -> str | None:
@@ -2057,6 +2450,14 @@ def slice_category(isoform_record: dict[str, Any], category: dict[str, Any]) -> 
         ``kind="criterion"``); a member whose ``CRITERIA`` entry sets
         ``omit_if_empty`` and produced no evidence (e.g. S2/S3 when biophysics/SAE
         did not run) is dropped from the display.
+
+        Each member's own ``isoform`` block is DROPPED here: the category-level
+        block above carries the same identity (plus ``differential_region_location``),
+        so keeping the per-member copies repeated it once per member — four
+        near-identical blocks in a 3-member category, 5-10% of the payload.
+        ``slice_criterion`` still returns the block for standalone callers (the
+        website UI tiles, the synthesis pass), which have no outer block to
+        inherit from; only the bundled form drops it.
     """
     members: list[dict[str, Any]] = []
     for member in category["members"]:
@@ -2066,6 +2467,7 @@ def slice_category(isoform_record: dict[str, Any], category: dict[str, Any]) -> 
         if CRITERIA[member].get("omit_if_empty") and not entry["evidence"]:
             continue
         entry["kind"] = "criterion"
+        entry.pop("isoform", None)
         members.append(entry)
 
     return {

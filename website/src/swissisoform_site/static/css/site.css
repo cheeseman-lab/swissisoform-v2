@@ -1061,8 +1061,17 @@
 .diff-hit-kind {
   display: inline-block; font-size: .68rem; text-transform: uppercase; letter-spacing: .03em;
   padding: .05rem .35rem; border-radius: 4px; margin-right: .4rem; color: #fff; font-weight: 600;
+  /* Fallback background. The text is white, so a kind with no rule below would
+     render white-on-white — invisible except when selected. */
+  background: #64748b;
 }
 .diff-hit-domain { background: #2ca02c; }
+/* Secondary structure. Unlike the badges above these are LIGHT fills, so each
+   overrides the base class's white text with a dark tone of its own hue —
+   reusing the site's existing light-chip palette (.ev-true / .ev-false /
+   .orf-extended) rather than inventing new colors. */
+.diff-hit-helix  { background: #fee2e2; color: #7f1d1d; }  /* alpha helix — light red */
+.diff-hit-strand { background: #dcfce7; color: #14532d; }  /* beta strand — light green */
 .diff-hit-motif { background: #9467bd; }
 .diff-hit-peptide { background: #0891b2; }
 .diff-hit-gained { background: #16a34a; }
@@ -1116,6 +1125,18 @@
 .crit-metrics .dm-label { padding: .26rem .6rem .26rem 0; color: #475569; font-size: .84rem; }
 .crit-metrics .dm-val { padding: .26rem 0; text-align: right; font-variant-numeric: tabular-nums;
   font-weight: 600; color: #1e293b; font-size: .84rem; }
+/* paired two-column listing (P3 secondary structure: unique | shared core) */
+.crit-pairs { border-collapse: collapse; width: 100%; table-layout: fixed; margin-top: .4rem; }
+.crit-pairs th { text-align: left; font-size: .7rem; text-transform: uppercase; letter-spacing: .03em;
+  color: #94a3b8; padding: .15rem .55rem .3rem; border-bottom: 1px solid #e2e8f0; width: 50%; }
+.crit-pairs td { padding: .28rem .55rem; font-size: .82rem; border-bottom: 1px solid #f1f5f9;
+  vertical-align: top; }
+.crit-pairs td.dm-shared { color: #94a3b8; }
+.crit-pairs .sse-span { font-variant-numeric: tabular-nums; font-weight: 600; color: #1e293b;
+  margin: 0 .35rem; }
+.crit-pairs td.dm-shared .sse-span { color: #64748b; font-weight: 500; }
+.crit-pairs .sse-detail { color: #64748b; }
+.crit-pairs .sse-empty { color: #cbd5e1; }
 .crit-hits { list-style: none; padding: 0; margin: .5rem 0 0; display: flex; flex-direction: column; gap: .25rem; }
 .crit-hits li { font-size: .82rem; color: #334155; }
 .crit-seq { font-family: ui-monospace, monospace; font-size: .72rem; color: #64748b; word-break: break-all;

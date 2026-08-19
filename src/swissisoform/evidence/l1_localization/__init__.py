@@ -1,4 +1,4 @@
-"""F2 — localization change. Plumbing: swissisoform.localization (via site.comparison)."""
+"""L1 — localization change. Plumbing: swissisoform.localization (via site.comparison)."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ __all__ = [
 def score(
     site: TranslationInitiationSite, cfg: ScoringConfig  # noqa: ARG001
 ) -> CriterionResult:
-    """F2: isoform's localization features differ from canonical.
+    """L1: isoform's localization features differ from canonical.
 
     Reads the DeepLoc comparator and ORs over its categorical change flags —
     prediction (top compartment), signals (sorting signals), and membrane

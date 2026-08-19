@@ -283,12 +283,12 @@ class Comparator:
             if source_pane is not None:
                 result["hits_source_pane"] = source_pane
             # Surface each pane's summary status so a status-gated criterion
-            # (F3) can tell "scan ran, zero hits" from "scan failed" instead
+            # (S1) can tell "scan ran, zero hits" from "scan failed" instead
             # of counting an empty list as a confident negative.
             result["hits_canonical_status"] = _summary_status(canonical)
             result["hits_isoform_status"] = _summary_status(isoform)
 
-        # F3: count REAL InterPro domains that start in the diff region and are
+        # S1: count REAL InterPro domains that start in the diff region and are
         # absent from the other form's hit set (a genuine gain/loss, not a
         # coordinate shift of a domain present on both panes).
         if module_name == "interproscan":
@@ -330,7 +330,7 @@ class Comparator:
 
         # Truncation: diff lives in canonical coordinates → filter canonical hits
         if diff_region.canonical_start is not None and diff_region.canonical_end is not None:
-            # E6: don't credit the isoform with canonical lost-region peptides.
+            # D3: don't credit the isoform with canonical lost-region peptides.
             if module_name in _ISOFORM_EVIDENCE_MODULES:
                 return [], "isoform"
             canonical_hits = canonical_ann.get("hits", [])
@@ -384,7 +384,7 @@ class Comparator:
           absent from isoform.
 
         Returns ``None`` when either pane's scan didn't run (status not ok),
-        so F3 can distinguish "no domains changed" from "couldn't tell".
+        so S1 can distinguish "no domains changed" from "couldn't tell".
         """
         if _summary_status(canonical) != "ok" or _summary_status(isoform) != "ok":
             return None

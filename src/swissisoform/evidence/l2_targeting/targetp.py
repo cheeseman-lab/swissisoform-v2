@@ -10,7 +10,7 @@ distinguishes three targeting classes (in addition to ``noTP``):
 
 For human isoforms, the biologically informative calls are ``SP``
 (overlapping with SignalP's call) and ``mTP`` (which SignalP cannot
-predict). Using TargetP + SignalP together lets F4
+predict). Using TargetP + SignalP together lets L2
 (``targeting/signal change``) fire on either signal-peptide or
 mitochondrial-presequence gain/loss in the extension region.
 

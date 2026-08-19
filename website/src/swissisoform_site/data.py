@@ -26,6 +26,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from functools import lru_cache
+from itertools import zip_longest
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,9 @@ from markupsafe import escape
 # backend evidence module (which the LLM per-category pass also consumes) and is
 # copied into the site package by prepare_deploy.sh, so UI and LLM never drift.
 from swissisoform.site.evidence import CATEGORIES as _CATEGORIES
+from swissisoform.site.evidence import p3_min_sse_length as _p3_min_sse_length
+from swissisoform.site.evidence import p3_min_sse_plddt as _p3_min_sse_plddt
+from swissisoform.site.evidence import use_scoring_config as _use_scoring_config
 
 logger = logging.getLogger(__name__)
 
@@ -222,6 +226,15 @@ def _clean_nan(obj: Any) -> Any:
     if isinstance(obj, dict):
         return {k: _clean_nan(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
+        return [_clean_nan(v) for v in obj]
+    # numpy arrays are sequences, not scalars, and must be handled BEFORE the
+    # .item() branch: a size-1 object array satisfies hasattr(obj, "item") and
+    # .item() returns the single element, silently turning a one-hit list into a
+    # bare dict. Consumers then iterate it and get key strings instead of hits —
+    # which is how a real 19-residue helix rendered as "No helix or strand in
+    # region" for every isoform whose region held exactly one element. numpy
+    # scalars (np.float64, np.int64) are ndim 0 and still take the branch below.
+    if getattr(obj, "ndim", 0) > 0:
         return [_clean_nan(v) for v in obj]
     # pandas/numpy scalars: convert via item() if available
     if hasattr(obj, "item") and not isinstance(obj, (str, bytes)):
@@ -549,6 +562,12 @@ def load_all() -> dict[str, GeneRecord]:
         logger.warning("parquet not found at %s — site will render empty.", parquet_path)
         return {}
 
+    # Adopt the thresholds this parquet was scored with before reading anything
+    # out of it: the P3 card's "qualifies" language has to match the verdicts
+    # baked into the file, including when an older parquet is rendered after a
+    # retune. Falls back to defaults (with a warning) for pre-sidecar runs.
+    _use_scoring_config(root)
+
     df = pd.read_parquet(parquet_path)
     struct_index = _structure_index(str(structures_dir))
     colors = _colors_index(str(structures_dir / "colors"))
@@ -861,7 +880,7 @@ def sae_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
         isoform-unique residues.
 
     Scoring and LLM surfacing are intentionally out of scope for this card — it
-    is descriptive over data already in the parquet. (The scored F7 criterion is
+    is descriptive over data already in the parquet. (The scored P2 criterion is
     the separate "Core Fold Perturbation" RMSD tile.)
     """
     raw = iso.raw or {}
@@ -909,7 +928,7 @@ def sae_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
 
 
 # Biophysical properties shown in the standalone Biophysics card (differential vs
-# shared region) — mirrors the table formerly nested in the F1 structure modal.
+# shared region) — mirrors the table formerly nested in the P1 structure modal.
 _BIOPHYSICS_FEATURES = [
     ("Isoelectric point (pI)", "pI"),
     ("Hydropathy (GRAVY)", "gravy"),
@@ -929,7 +948,7 @@ _BIOPHYSICS_COL_CLASSES = ["", "dm-shared", "dm-ratio"]  # differential | shared
 
 
 def biophysics_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
-    """Standalone Biophysics card data (was a sub-section of the F1 modal).
+    """Standalone Biophysics card data (was a sub-section of the P1 modal).
 
     Descriptive, not scored — reads the ``cmp_biophysics_*`` columns already on
     ``iso.raw`` (differential/shared/ratio + enriched flag per property) and returns
@@ -959,7 +978,7 @@ def biophysics_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
         return None
 
     # Directional headline: how the differential region compares to the shared
-    # core for the three properties F1 keys off. Number = (differential − core);
+    # core for the three properties P1 keys off. Number = (differential − core);
     # the sign gives the direction word. Region-vs-core (not the whole-protein
     # isoform−canonical delta) so small regions aren't diluted and truncations
     # read the same way as extensions.
@@ -1000,7 +1019,7 @@ def biophysics_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
             "about": (
                 "Biophysical character of the isoform-differential region versus the "
                 "shared canonical core — pI, hydropathy, charge, disorder and related "
-                "properties. Descriptive; the folding (F1) score keys off the GRAVY / "
+                "properties. Descriptive; the folding (P1) score keys off the GRAVY / "
                 "charge / disorder deltas."
             ),
             "sections": [
@@ -1099,16 +1118,31 @@ CRITERION_ABOUT = {
     "M1_pathogenic_variant_enrichment": (
         "Does healthy human germline variation (gnomAD) avoid this region "
         "(depletion ratio < 1×), and is it intrinsically constrained (ESM-C "
-        "constraint enrichment)? Depletion of population variation plus high "
+        "constraint delta > 0)? Depletion of population variation plus high "
         "sequence constraint mean the region resists change — it is functionally "
-        "important. gnomAD is a tolerance catalogue, not a disease one; "
-        "disease/cancer variants (ClinVar / COSMIC) live in M2."
+        "important. Scored only where the unique region is canonical coding "
+        "sequence, i.e. on truncations. gnomAD is a tolerance catalogue, not a "
+        "disease one; disease/cancer variants (ClinVar / COSMIC) live in M2."
     ),
     "M2_clinical_variant_overlap": (
         "Are disease (ClinVar / COSMIC) variants enriched per nucleotide in the "
         "differential region versus the shared core (disease enrichment ratio ≥ "
         "1×)? Disease variants concentrating in the unique region tie it to "
         "phenotype."
+    ),
+    "P3_secondary_structure": (
+        "Does the differential region contain actual secondary structure — a helix "
+        "or strand — rather than coil? ESMFold2 predicts coordinates but no "
+        "secondary structure, so elements are assigned from those coordinates "
+        "(P-SEA, Cα geometry). Because they are derived from a prediction, each "
+        "element carries its own mean pLDDT: a geometrically clean helix running "
+        "through a disordered stretch is geometry fitted to a guess, so BOTH "
+        "length and confidence are required to score. The direction differs by ORF "
+        "type — an extension GAINS the element (a candidate functional addition), "
+        "a truncation LOSES one, and there the element is read off the canonical "
+        "structure because the removed segment exists only in it. This says "
+        "nothing about whether the element is integrated with the rest of the "
+        "fold; the contact and PAE evidence in this same category answers that."
     ),
     "P2_shared_structural_change": (
         "The shared region is the stretch of protein identical in both the isoform "
@@ -1230,13 +1264,19 @@ METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
     "Normalized complexity": ("m-biophysics", "Compositional complexity normalized to length."),
     # Clinical burden
     "All variants": ("m-clinical", "ClinVar / gnomAD / COSMIC variants intersecting each region."),
-    "Disease variants": ("m-clinical", "ClinVar + COSMIC (disease/cancer) variants in each region — gnomAD (population/tolerance) is excluded; it feeds F5's constraint, not disease burden."),
+    "Disease variants": ("m-clinical", "ClinVar + COSMIC (disease/cancer) variants in each region — gnomAD (population/tolerance) is excluded; it feeds M1's constraint, not disease burden."),
     "gnomAD variants": ("m-clinical", "gnomAD (healthy-population/germline) variants per nucleotide per region. Depletion in the differential region (depletion ratio <1×) = it resists germline variation = constrained."),
     "Pathogenic": ("m-clinical", "Pathogenic / likely-pathogenic variants in each region."),
     "Clinical/observed variants": ("m-clinical", "ClinVar / gnomAD / COSMIC variants intersecting the region."),
     "Pathogenic variants": ("m-clinical", "Pathogenic / likely-pathogenic variants in the region."),
     "Clinical variants in diff region": ("m-clinical", "Clinical-database variants inside the differential region."),
 }
+
+
+# P-SEA reports bare "helix"/"strand"; the UI names the actual structure types.
+# helix/strand only: sse_elements emits an element solely for _STRUCTURED runs,
+# so coil residues never reach here as elements (test_coil_is_never_an_element).
+_SSE_LABEL = {"helix": "alpha helix", "strand": "beta strand"}
 
 
 def _term(label: str) -> dict[str, str]:
@@ -1249,7 +1289,7 @@ def _term(label: str) -> dict[str, str]:
 
 
 def criterion_evidence_for(iso) -> dict:
-    """Per-criterion differential evidence for the score modals (E1–E6, F1–F7).
+    """Per-criterion differential evidence for the score modals (C1–D3, P1–P2).
 
     Pulls the conservation / structure / biophysics / localization / PLM-VEP /
     function / clinical evidence off the parquet row, sliced finer than a flat
@@ -1579,8 +1619,154 @@ def criterion_evidence_for(iso) -> dict:
             "compare_rows": [row],
         }
 
+    def _sse_split():
+        """Whole-protein SSE elements split into (unique, shared) lists.
+
+        Reads ``isoform_structure_sse_all_elements``, where each element is
+        tagged ``unique`` / ``shared`` / ``spans`` by the pipeline. A ``spans``
+        element crosses the boundary and counts for the isoform: it has
+        secondary structure in the unique region, which is what the card asks.
+        Its full span is shown, so the extent into the shared core is visible
+        without spending a line of the tile saying so.
+        """
+        raw_all = g("isoform_structure_sse_all_elements")
+        els = [e for e in (raw_all if raw_all is not None else []) if isinstance(e, dict)]
+        unique = [e for e in els if e.get("region") in ("unique", "spans")]
+        shared = [e for e in els if e.get("region") == "shared"]
+        return unique, shared
+
+    def _sse_qualifies(e):
+        """The P3 test: long enough AND confident enough.
+
+        Thresholds come from ScoringConfig via site.evidence — the same values
+        the scorer uses — so retuning the config moves this modal, the tile
+        headline and the verdict together instead of leaving them disagreeing.
+        """
+        return (e.get("length") or 0) >= _p3_min_sse_length() and (
+            e.get("plddt_mean") or 0
+        ) >= _p3_min_sse_plddt()
+
+    def _sse_stat(els, kind):
+        return sum(1 for e in els if e.get("type") == kind)
+
+    def _sse_longest(els):
+        return max((e.get("length") or 0 for e in els), default=0)
+
+    def _sse_mean_plddt(els):
+        vals = [e["plddt_mean"] for e in els if e.get("plddt_mean") is not None]
+        return sum(vals) / len(vals) if vals else None
+
+    def _sse_unique_label():
+        # On a truncation the differential region exists only in the canonical
+        # protein — calling that column "isoform-unique" would name the one
+        # protein that does not contain it.
+        return "Removed (canonical)" if is_trunc else "Isoform-unique"
+
+    def sec_sse_summary():
+        if g("isoform_structure_sse_status") != "ok":
+            return None
+        unique, shared = _sse_split()
+        if not unique and not shared:
+            return None
+        # Counts describe the elements that COUNT — the same qualifying set the
+        # tile headline and the P3 verdict use. Counting every element here
+        # instead put two different answers to "how many" on one card (TRIP13:
+        # headline 1, table 1 helix + 1 strand, because its 14 aa helix sits at
+        # pLDDT 0.63). The sub-threshold ones are listed in their own section
+        # below rather than dropped.
+        unique = [e for e in unique if _sse_qualifies(e)]
+        shared = [e for e in shared if _sse_qualifies(e)]
+
+        def row(label, fn, fmt=str):
+            u, s = fn(unique), fn(shared)
+            return {
+                "label": label,
+                "cols": [fmt(u) if u is not None else "—", fmt(s) if s is not None else "—"],
+                "hot": False,
+                **_term(label),
+            }
+
+        rows = [
+            row("Alpha helices", lambda e: _sse_stat(e, "helix")),
+            row("Beta strands", lambda e: _sse_stat(e, "strand")),
+            row("Longest element (aa)", _sse_longest),
+            row("Mean pLDDT", _sse_mean_plddt, lambda v: f"{v:.2f}"),
+        ]
+        return {
+            "title": "Secondary structure · differential vs shared region",
+            "subtitle": "helices and strands assigned from the predicted coordinates (P-SEA)",
+            # Differential | Shared is one of the two house header flavors every
+            # comparison table uses (test_comparison_tables_use_two_standard_flavors);
+            # the ORF-type-aware wording lives on the paired listing below, which
+            # is a different kind of table and not bound by that convention.
+            "cmp_headers": ["Metric", "Differential", "Shared"],
+            "col_classes": DIFF_SHARED_2,
+            "compare_rows": rows,
+        }
+
+    def sec_sse_list(qualifying=True):
+        """Elements with their coordinates, in two columns.
+
+        Split into two sections so every count on the card agrees: the first
+        lists what the headline and P3 count, the second the ones that fall
+        short. Both keep the differential | shared layout.
+        """
+        if g("isoform_structure_sse_status") != "ok":
+            return None
+        unique, shared = _sse_split()
+        keep = _sse_qualifies if qualifying else (lambda e: not _sse_qualifies(e))
+        unique = [e for e in unique if keep(e)]
+        shared = [e for e in shared if keep(e)]
+        if not unique and not shared:
+            return None
+
+        def cell(e):
+            if e is None:
+                return None
+            span = f"{e.get('start')}–{e.get('end')}"
+            bits = [f"{e.get('length')} aa"]
+            if e.get("plddt_mean") is not None:
+                bits.append(f"pLDDT {e['plddt_mean']:.2f}")
+            kind = e.get("type") or ""
+            return {
+                # `kind` keys the CSS class and stays the bare P-SEA type name;
+                # `label` is what the badge reads.
+                "kind": kind,
+                "label": _SSE_LABEL.get(kind, kind),
+                "span": span,
+                "detail": " · ".join(bits),
+            }
+
+        pairs = [
+            {"left": cell(u), "right": cell(s)}
+            for u, s in zip_longest(unique, shared, fillvalue=None)
+        ]
+        counts = (
+            f"{len(unique)} in the differential region, {len(shared)} in the shared core"
+        )
+        if qualifying:
+            title = "Elements and coordinates"
+            subtitle = f"{counts} — residue numbering is 1-based on the protein holding the region"
+        else:
+            title = "Below threshold"
+            # Named for both reasons: across cheeseman_test 62 of 69 sub-threshold
+            # elements are short rather than low-confidence, so calling the
+            # section "low confidence" would mislabel most of it.
+            # Interpolated, not written out: this sentence states the same rule
+            # _sse_qualifies applies, so a retune must move both together.
+            subtitle = (
+                f"{counts} — shorter than {_p3_min_sse_length()} aa or below "
+                f"pLDDT {_p3_min_sse_plddt():.2f}, so not counted above"
+            )
+        return {
+            "title": title,
+            "subtitle": subtitle,
+            "pair_headers": [_sse_unique_label(), "Shared core"],
+            "pairs": pairs,
+        }
+
     def sec_shared_rmsd():
-        # F7 — strict shared-region Cα RMSD (Kabsch-superposed on the shared
+        # P2 — strict shared-region Cα RMSD (Kabsch-superposed on the shared
         # residues only). Global TM/RMSD ride in the caption; the shared-region
         # metrics are the score basis. When not evaluable, surface the status so
         # the modal explains itself rather than rendering blank.
@@ -1829,7 +2015,7 @@ def criterion_evidence_for(iso) -> dict:
         # gnomAD = germline population variation, a *tolerance* readout. Depletion
         # in the differential region vs the shared core = healthy human variation
         # avoids it = the region is constrained. Depletion ratio < 1× =
-        # constrained; > 1× = tolerated. (Disease variants live in F6.)
+        # constrained; > 1× = tolerated. (Disease variants live in M2.)
         # Density denominator is the nt length of each region (emitted by the
         # variant_intersection module), not AA length — fall back to the AA-len
         # ratio only when the nt columns predate this row.
@@ -1879,7 +2065,7 @@ def criterion_evidence_for(iso) -> dict:
             "subtitle": (
                 "gnomAD (population) variant density per nucleotide — depletion "
                 "ratio < 1× means healthy human variation avoids the region "
-                "(constrained), the F5 basis alongside ESM-C constraint"
+                "(constrained), the M1 basis alongside ESM-C constraint"
             ),
             "cmp_headers": ["Variant set", "Differential", "Shared", "Depletion ratio"],
             "col_classes": DIFF_SHARED_3,
@@ -1896,7 +2082,7 @@ def criterion_evidence_for(iso) -> dict:
                     [
                         "isoform_plm_vep_mean_llr_unique_region",
                         "isoform_plm_vep_mean_llr_shared_region",
-                        "isoform_plm_vep_constraint_enrichment",
+                        "isoform_plm_vep_constraint_delta",
                     ],
                 ),
                 (
@@ -1921,7 +2107,7 @@ def criterion_evidence_for(iso) -> dict:
 
     def sec_variant_burden(source, pool_label):
         # Predicted-damaging variant counts for one source pool (§4): gnomad
-        # (germline → F5) or disease (ClinVar+COSMIC → F6). The predictors are
+        # (germline → M1) or disease (ClinVar+COSMIC → M2). The predictors are
         # source-independent; this counts their calls over the chosen pool,
         # differential vs shared, length-normalized enrichment.
         unique_len = getattr(iso, "diff_end", None) or len(
@@ -2057,7 +2243,7 @@ def criterion_evidence_for(iso) -> dict:
             if nu is None and ns is None:
                 continue
             # Prefer the module's disease enrichment ratio for the disease row
-            # (it is the F6 basis); fall back to the locally-computed density.
+            # (it is the M2 basis); fall back to the locally-computed density.
             if label == "Disease variants" and disease_ratio is not None:
                 r = disease_ratio
             else:
@@ -2081,7 +2267,7 @@ def criterion_evidence_for(iso) -> dict:
             "subtitle": (
                 "counts per region; ratio is density-normalized (variants per "
                 "nucleotide, differential ÷ shared — ≥1× = disease variants "
-                "concentrate in the differential region, the F6 basis)"
+                "concentrate in the differential region, the M2 basis)"
             ),
             "cmp_headers": ["Variant set", "Differential", "Shared", "Enrichment"],
             "col_classes": DIFF_SHARED_3,
@@ -2097,6 +2283,11 @@ def criterion_evidence_for(iso) -> dict:
         "D2_initiation_efficiency": [sec_efficiency()],
         "D3_mass_spec": [sec_massspec()],
         "P1_structured_extension": [sec_structure(), sec_structure_region()],
+        "P3_secondary_structure": [
+            sec_sse_summary(),
+            sec_sse_list(qualifying=True),
+            sec_sse_list(qualifying=False),
+        ],
         "L1_localization_change": [sec_deeploc()],
         "S1_domain_change": [sec_domains_motifs()],
         "L2_targeting_change": [sec_targeting()],
@@ -2168,7 +2359,7 @@ def llm_for_isoform(gene: GeneRecord, tis_id: str) -> dict[str, Any] | None:
     return None
 
 
-# Drives the evidence-tile UI grid on the isoform page (E1..E6, F1..F7).
+# Drives the evidence-tile UI grid on the isoform page (C1..D3, P1..P2).
 CRITERIA_FOR_PAGE = [
     {
         "id": "C1_primate_conservation",
@@ -2249,6 +2440,12 @@ CRITERIA_FOR_PAGE = [
         "axis": "F",
         "label": "Core Fold Perturbation",
         "short_label": "Shared RMSD",
+    },
+    {
+        "id": "P3_secondary_structure",
+        "axis": "F",
+        "label": "Secondary Structure",
+        "short_label": "SSE",
     },
     # S2/S3 are first-class scored criteria (biophysics + SAE); the page renders
     # them via their bespoke cards (_biophysics_card.html / _sae_card.html), but

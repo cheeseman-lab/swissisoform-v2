@@ -7,7 +7,7 @@ the output into the per-protein cache schema owned by
 :mod:`swissisoform.structure.fold`.
 
 pLDDT is emitted on a **0-1** scale (verified on GPU), matching Boltz-2 and the
-``f1_plddt_threshold`` default of 0.70 — no rescaling needed.
+``p1_plddt_threshold`` default of 0.70 — no rescaling needed.
 
 Requires ``esm`` (the EvolutionaryScale package) + the Biohub ``transformers``
 fork in the active env (``.[fold]`` extra). See pyproject ``[fold]``.

@@ -22,7 +22,7 @@ def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResul
       narrative.
 
     **Folding only.** P1 asks solely whether the differential region is
-    well-folded (mean pLDDT >= ``cfg.f1_plddt_threshold``). The biophysical-
+    well-folded (mean pLDDT >= ``cfg.p1_plddt_threshold``). The biophysical-
     distinctness half that this criterion used to carry now lives in its own
     criterion (``S2_biophysics``), so the two signals are scored independently.
 
@@ -54,7 +54,7 @@ def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResul
             "P1_structured_extension", None, "plddt_diffregion_mean unavailable"
         )
 
-    threshold = cfg.f1_plddt_threshold
+    threshold = cfg.p1_plddt_threshold
     folded = plddt >= threshold
     folded_str = "folded" if folded else "unfolded"
     return CriterionResult(

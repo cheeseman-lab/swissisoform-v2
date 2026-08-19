@@ -325,7 +325,7 @@ class MassSpecModule:
         # pepquery_run is True only when a validated-peptide cache was
         # provided at init *and* contains an entry for this gene.  An
         # empty cache means PepQuery2 was never precomputed — downstream
-        # consumers (scoring E6) should treat ``validated_peptides == 0``
+        # consumers (scoring D3) should treat ``validated_peptides == 0``
         # as "cannot evaluate" rather than "no evidence".
         pepquery_run = gene_known and gene_name in self.validated_peptides
 
@@ -382,7 +382,12 @@ class MassSpecModule:
 
             if unique is True:
                 unique_count += 1
-            if validated is True:
+            # Scoped to unique peptides, matching D3's numerator exactly (which
+            # requires unique_to_isoform AND validated). Counting every validated
+            # peptide let a validated non-unique one — a junction-variant peptide
+            # the canonical also produces — inflate the site headline above both
+            # the unique total and the score it claims to summarise.
+            if unique is True and validated is True:
                 validated_count += 1
 
             # Per-PSM confidence for a validated peptide (graded MS evidence,
@@ -423,7 +428,11 @@ class MassSpecModule:
         summary = {
             "total_peptides": len(hits),
             "unique_peptides": unique_count if canonical_known else None,
-            "validated_peptides": validated_count if pepquery_run else None,
+            # Unique-scoped, so None (unknown) — never 0 — when the canonical is
+            # missing and uniqueness itself is unknown, mirroring unique_peptides.
+            "validated_peptides": (
+                validated_count if (pepquery_run and canonical_known) else None
+            ),
             "min_peptide_length": min(lengths),
             "max_peptide_length": max(lengths),
             "pepquery_run": pepquery_run,

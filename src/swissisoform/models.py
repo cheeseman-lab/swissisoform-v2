@@ -177,7 +177,7 @@ class TranslationInitiationSite:
 
     # Per-cell-line expression of this transcript's *canonical* (Annotated) start,
     # so downstream comparison can put canonical-start vs alt-start initiation
-    # efficiency side by side (E4/E5). Keyed by cell line; empty when the Tid has
+    # efficiency side by side (D1/D2). Keyed by cell line; empty when the Tid has
     # no Annotated row or in single-sample mode.
     canonical_expression: dict[str, CellLineExpression] = field(default_factory=dict)
 
@@ -193,7 +193,7 @@ class TranslationInitiationSite:
 
     # Canonical (Annotated) start's Kozak window + codon — symmetric twins of
     # ``kozak_context`` / ``start_codon`` for the canonical-vs-isoform start-site
-    # comparison (E3). Populated by the assembly layer when a genome FASTA + the
+    # comparison (C3). Populated by the assembly layer when a genome FASTA + the
     # transcript skeleton are available; left None otherwise.
     canonical_kozak_context: str | None = None
     canonical_start_codon: str | None = None

@@ -8,7 +8,10 @@
 #   2. The viewer imports swissisoform.site.evidence (a light presentation
 #      module — numpy + pandas only) from the main package — copy just it + the
 #      package __init__s into the build context so the image has it on
-#      PYTHONPATH=/app/src (set in the Dockerfile).
+#      PYTHONPATH=/app/src (set in the Dockerfile). config.py rides along
+#      because evidence.py reads its scoring thresholds (e.g. the P3 SSE
+#      cutoffs the viewer renders against) from ScoringConfig rather than
+#      restating them; it is dataclasses + pathlib only, so it costs nothing.
 #
 # Both targets are gitignored build artifacts (see website/.gitignore); rerun
 # this before every `railway up` so the deploy reflects the latest pipeline run
@@ -23,6 +26,14 @@ rm -rf data/all_paired.parquet data/variants_long.parquet \
 cp -L "$SRC/all_paired.parquet"          data/all_paired.parquet
 cp -L "$SRC/variants_long.parquet"       data/variants_long.parquet
 cp -L "$SRC/transcript_skeletons.parquet" data/transcript_skeletons.parquet
+# Thresholds the parquet was scored with; without it the deployed site falls back
+# to library defaults and its P3 language can contradict the verdicts it renders.
+if [[ -f "$SRC/scoring_config.json" ]]; then
+    cp -L "$SRC/scoring_config.json"     data/scoring_config.json
+else
+    rm -f data/scoring_config.json
+    echo "  note: no scoring_config.json in $SRC (pre-sidecar run) — site uses defaults"
+fi
 # llm/ + structures/ are optional — the site degrades to placeholders without
 # them (e.g. a --skip-llm build, or before GPU folding). Stage an empty llm/ so
 # the app's data dir shape is consistent.
@@ -34,6 +45,7 @@ rm -rf src/swissisoform scripts
 mkdir -p src/swissisoform/site scripts
 touch scripts/__init__.py                # keep scripts/ a package so COPY scripts/ resolves
 cp ../src/swissisoform/__init__.py        src/swissisoform/__init__.py
+cp ../src/swissisoform/config.py          src/swissisoform/config.py
 cp ../src/swissisoform/site/__init__.py   src/swissisoform/site/__init__.py
 cp ../src/swissisoform/site/evidence.py   src/swissisoform/site/evidence.py
 

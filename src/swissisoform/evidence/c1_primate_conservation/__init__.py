@@ -1,4 +1,4 @@
-"""E1 — primate conservation. Plumbing: swissisoform.conservation_frame."""
+"""C1 — primate conservation. Plumbing: swissisoform.conservation_frame."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from swissisoform.models import TranslationInitiationSite
 
 
 def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResult:
-    """E1: primate amino-acid identity over the unique region exceeds threshold.
+    """C1: primate amino-acid identity over the unique region exceeds threshold.
 
     Scored on ``primate_mean_pident`` (mean AA percent identity of the aligned
     primate orthologs), not ``frac_intact`` — pident measures sequence
@@ -23,11 +23,11 @@ def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResul
         return CriterionResult(
             "C1_primate_conservation", None, "primate_mean_pident unavailable"
         )
-    passed = val >= cfg.e1_pident_min
+    passed = val >= cfg.c1_pident_min
     frac = ann.get("primate_frac_intact")
     frac_str = f"{frac:.2f}" if isinstance(frac, (int, float)) else "n/a"
     return CriterionResult(
         "C1_primate_conservation",
         passed,
-        f"mean_pident={val:.2f} (threshold {cfg.e1_pident_min}); frac_intact={frac_str}",
+        f"mean_pident={val:.2f} (threshold {cfg.c1_pident_min}); frac_intact={frac_str}",
     )

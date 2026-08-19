@@ -6,20 +6,31 @@ already attached to a TIS, then aggregates over the isoform-unique region:
 1. **ESM-C masked-marginal ΔLLR** — ``logP(alt) − logP(wt)`` at the variant's
    residue, read from the per-position distribution cached by
    ``swissisoform.plm.embed`` (``aa_logprobs``). More negative ⇒ the
-   substitution is less tolerated by the language model. Looked up in the
-   **canonical** protein space, since the clinical module's ``protein_pos``
-   is canonical-transcript-frame (set by ``ConsequenceValidator`` against the
-   canonical CDS). Valid for shared-region variants and truncation-unique
-   variants (both live in the canonical protein); extension-unique variants
-   fall outside the canonical CDS and never reach this module with a
-   ``protein_pos``.
+   substitution is less tolerated by the language model. **Frame-aware**
+   (``_score_hit_plm``): an ``in_isoform_unique`` hit carrying an
+   ``isoform_protein_pos`` — an extension's or separate ORF's own residues —
+   is scored against the ISOFORM protein; everything else (shared region, a
+   truncation's lost N-terminus, any unmapped variant) against the canonical
+   protein, whose ``protein_pos`` ``ConsequenceValidator`` set. Both frames
+   are real sequence, so both are scoreable; what an extension's unique region
+   lacks is not a frame but an evolutionary history, which makes the score a
+   statement about model-perceived disruptiveness rather than about selection.
+   The one exception is the isoform's own codon 0, reported as
+   ``plm_status="start_codon"``: a start-codon variant is decided by whether the
+   trinucleotide still initiates, which an amino-acid substitution score cannot
+   express, and AlphaMissense is absent there too — so such a hit carries no
+   effect score at all and is notable for its position, not its numbers.
 2. **AlphaMissense** — DeepMind's calibrated missense pathogenicity
-   (0-1 score + class) by genomic ``(chrom, pos, ref, alt)``.
+   (0-1 score + class) by genomic ``(chrom, pos, ref, alt)``. Canonical-frame
+   only: a precomputed canonical-transcript table has no entry for a position
+   outside the canonical CDS, so it is absent by construction over an
+   extension's or separate ORF's unique region, and is excluded from the
+   damaging flag there.
 
 Runs as a SiteModule **after** ``ClinicalModule`` and
 ``VariantIntersectionModule`` so it can read the genomic-membership flags
 (``in_isoform_unique``) the latter writes. Emits a per-variant table plus
-unique-region aggregates that feed evidence-scoring criterion F5.
+unique-region aggregates that feed evidence-scoring criterion M1.
 
 Two independent damaging branches (mirrors v1):
 1. **Loss-of-function** — a frameshift / stop-gained / splice / start-lost
@@ -105,15 +116,15 @@ class VariantEffectModule:
         "varianteffect_hits",
         "varianteffect_n_scored_plm",
         "varianteffect_n_scored_am",
-        # Blended (all sources) per region. The shared twins back F5's
+        # Blended (all sources) per region. The shared twins back M1's
         # differential-vs-shared enrichment (§2).
         *_ve_metric_cols("unique"),
         "varianteffect_max_am_pathogenicity_unique",
         *_ve_metric_cols("shared"),
         "varianteffect_max_am_pathogenicity_shared",
         # Source-separated (§4): the predictors are source-independent, so each
-        # region splits into gnomad (germline → F5) and disease (ClinVar+COSMIC
-        # → F6). Blended = gnomad + disease.
+        # region splits into gnomad (germline → M1) and disease (ClinVar+COSMIC
+        # → M2). Blended = gnomad + disease.
         *_ve_metric_cols("unique_gnomad"),
         *_ve_metric_cols("unique_disease"),
         *_ve_metric_cols("shared_gnomad"),
@@ -156,7 +167,7 @@ class VariantEffectModule:
         if llr_damaging_threshold is not None:
             self.llr_damaging_threshold = llr_damaging_threshold
         elif scoring is not None:
-            self.llr_damaging_threshold = scoring.f5_llr_damaging_threshold
+            self.llr_damaging_threshold = scoring.m1_llr_damaging_threshold
         else:
             self.llr_damaging_threshold = DEFAULT_LLR_DAMAGING_THRESHOLD
         self.gnomad_tolerated_af = DEFAULT_GNOMAD_TOLERATED_AF
@@ -194,6 +205,10 @@ class VariantEffectModule:
         ``plm_status`` reason and the ``plm_frame`` actually scored
         (``"canonical"`` or ``"isoform"``). All four numeric fields are
         ``None`` when not scorable.
+
+        ``plm_status`` values: ``ok``, ``no_aa_logprobs`` (no cache entry),
+        ``start_codon`` (isoform codon 0 — see below), ``not_missense``,
+        ``pos_out_of_range``, ``aa_ref_mismatch`` (a genuine frame/offset error).
         """
         out = {
             "plm_llr_wt": None,
@@ -203,6 +218,17 @@ class VariantEffectModule:
         }
         if aa_logprobs is None:
             return {**out, "plm_status": "no_aa_logprobs"}
+        # Codon 0 of the isoform: unscoreable by construction, and the amino-acid
+        # question is the wrong one. install_initiator_met forces residue 0 to M
+        # while the validator translates the near-cognate codon literally (CTG->L),
+        # so the aa_ref guard below would report a data error for an expected
+        # condition. Scoring against M instead would only measure the model's Met
+        # prior. What decides a start-codon variant is whether the trinucleotide
+        # still initiates — CTG does, CTA does not — which no substitution score
+        # can express: a third-base change can abolish the start and leave the
+        # residue identical. Isoform frame only; canonical pos 0 is a real M.
+        if frame == "isoform" and isinstance(pos, int) and pos == 0:
+            return {**out, "plm_status": "start_codon"}
         col_ref = aa_column(aa_ref)
         col_alt = aa_column(aa_alt)
         if not isinstance(pos, int) or col_ref is None or col_alt is None:
@@ -290,8 +316,8 @@ class VariantEffectModule:
         # Predictor aggregates keyed by (region, source): region ∈ {unique,
         # shared}, source ∈ {gnomad, disease}. The predictors are
         # source-independent (they score a substitution's effect), so we apply
-        # them to both pools and surface the gnomad slice in F5 (germline
-        # tolerance) and the disease slice in F6 (clinical). The blended
+        # them to both pools and surface the gnomad slice in M1 (germline
+        # tolerance) and the disease slice in M2 (clinical). The blended
         # region-only columns are derived as gnomad+disease (§4).
         def _bucket() -> dict[str, Any]:
             return {

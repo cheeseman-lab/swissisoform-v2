@@ -60,45 +60,67 @@ class TestPLMVEPModule:
         ann = module.annotate_site(synthetic_tis[0])
         assert ann["status"] == "no_cache"
         assert ann["mean_llr_isoform"] is None
-        assert ann["constraint_enrichment"] is None
+        assert ann["constraint_delta"] is None
 
     def test_extension_isoform_space(self, synthetic_tis, config, tmp_path):
+        """Extension slices the ISOFORM array; a well-predicted unique region scores +.
+
+        logP(wt) near zero = the model expects that residue = conserved, so the
+        unique region here (-0.2) is the conserved one and the shared core (-3.0)
+        is not. Verified against PhyloP in figures/plm_direction/.
+        """
         # Site 3: extension +strand; isoform is "LRRPPAGA" + canonical, diff 0:8
         site = next(s for s in synthetic_tis if s.tis_id == "chr1:940:+:CTG")
         iso_seq = site.isoform_protein.rstrip("*")
-        # Build LLR: extension residues strongly constrained (-6.0), shared mild (-1.0).
+        llr = np.full(len(iso_seq), -3.0, dtype=np.float32)
+        llr[: site.diff_region.isoform_end] = -0.2
+        _seed_cache(tmp_path, site.isoform_protein, llr)
+        can_seq = site.canonical_protein.rstrip("*")
+        _seed_cache(tmp_path, site.canonical_protein, np.full(len(can_seq), -3.0, dtype=np.float32))
+
+        module = PLMVEPModule(config, cache_dir=tmp_path, conserved_threshold=-0.5)
+        ann = module.annotate_site(site)
+        assert ann["status"] == "ok"
+        assert ann["mean_llr_unique_region"] == pytest.approx(-0.2)
+        assert ann["mean_llr_shared_region"] == pytest.approx(-3.0)
+        # Difference, not ratio: positive because the unique region is better predicted.
+        assert ann["constraint_delta"] == pytest.approx(2.8)
+        assert ann["n_constrained_positions_unique"] == site.diff_region.isoform_end
+        assert ann["n_constrained_positions_shared"] == 0
+
+    def test_a_poorly_predicted_unique_region_scores_negative(
+        self, synthetic_tis, config, tmp_path
+    ):
+        """The inverted case, which the old ratio reported as 6x constraint."""
+        site = next(s for s in synthetic_tis if s.tis_id == "chr1:940:+:CTG")
+        iso_seq = site.isoform_protein.rstrip("*")
         llr = np.full(len(iso_seq), -1.0, dtype=np.float32)
         llr[: site.diff_region.isoform_end] = -6.0
         _seed_cache(tmp_path, site.isoform_protein, llr)
-        # canonical too (all -1.0)
         can_seq = site.canonical_protein.rstrip("*")
         _seed_cache(tmp_path, site.canonical_protein, np.full(len(can_seq), -1.0, dtype=np.float32))
 
-        module = PLMVEPModule(config, cache_dir=tmp_path, constraint_threshold=-5.0)
+        module = PLMVEPModule(config, cache_dir=tmp_path, conserved_threshold=-0.5)
         ann = module.annotate_site(site)
-        assert ann["status"] == "ok"
-        assert ann["mean_llr_unique_region"] == pytest.approx(-6.0)
-        assert ann["mean_llr_shared_region"] == pytest.approx(-1.0)
-        assert ann["constraint_enrichment"] == pytest.approx(6.0)
-        assert ann["n_constrained_positions_unique"] == site.diff_region.isoform_end
-        assert ann["n_constrained_positions_shared"] == 0
+        assert ann["constraint_delta"] == pytest.approx(-5.0)
+        assert ann["n_constrained_positions_unique"] == 0
 
     def test_truncation_uses_canonical_space(self, synthetic_tis, config, tmp_path):
         # Site 5: truncation +strand; lost region in canonical 0:9
         site = next(s for s in synthetic_tis if s.tis_id == "chr1:1030:+:ATG")
         can_seq = site.canonical_protein.rstrip("*")
-        llr = np.full(len(can_seq), -1.0, dtype=np.float32)
-        llr[: site.diff_region.canonical_end] = -7.0
+        llr = np.full(len(can_seq), -3.0, dtype=np.float32)
+        llr[: site.diff_region.canonical_end] = -0.1
         _seed_cache(tmp_path, site.canonical_protein, llr)
         # isoform too
         iso_seq = site.isoform_protein.rstrip("*")
-        _seed_cache(tmp_path, site.isoform_protein, np.full(len(iso_seq), -1.0, dtype=np.float32))
+        _seed_cache(tmp_path, site.isoform_protein, np.full(len(iso_seq), -3.0, dtype=np.float32))
 
-        module = PLMVEPModule(config, cache_dir=tmp_path, constraint_threshold=-5.0)
+        module = PLMVEPModule(config, cache_dir=tmp_path, conserved_threshold=-0.5)
         ann = module.annotate_site(site)
         assert ann["status"] == "ok"
-        assert ann["mean_llr_unique_region"] == pytest.approx(-7.0)
-        assert ann["mean_llr_shared_region"] == pytest.approx(-1.0)
+        assert ann["mean_llr_unique_region"] == pytest.approx(-0.1)
+        assert ann["mean_llr_shared_region"] == pytest.approx(-3.0)
         assert ann["n_constrained_positions_unique"] == site.diff_region.canonical_end
 
     def test_run_does_not_drop_sites(self, synthetic_tis, config, tmp_path):
@@ -114,7 +136,7 @@ class TestPLMVEPModule:
                 "mean_llr_canonical",
                 "mean_llr_unique_region",
                 "mean_llr_shared_region",
-                "constraint_enrichment",
+                "constraint_delta",
                 "n_constrained_positions_unique",
                 "n_constrained_positions_shared",
             ]:

@@ -1,4 +1,4 @@
-"""F3 — domain gain/loss. Plumbing: swissisoform.interproscan."""
+"""S1 — domain gain/loss. Plumbing: swissisoform.interproscan."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ __all__ = [
 def score(
     site: TranslationInitiationSite, cfg: ScoringConfig  # noqa: ARG001
 ) -> CriterionResult:
-    """F3: domain gain/loss — a REAL InterPro domain is gained or lost in the diff region.
+    """S1: domain gain/loss — a REAL InterPro domain is gained or lost in the diff region.
 
     Symmetric across ORF types — the metric asks "is a functional domain
     gained or lost in the differential region?" and the interpretation flips

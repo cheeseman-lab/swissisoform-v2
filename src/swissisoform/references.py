@@ -116,7 +116,7 @@ def build_config(
         hal_ref_genome="Homo_sapiens",
     )
     # Use ScoringConfig defaults for the high-confidence cutoffs (5/3) and the
-    # principled E3/E4 anchors; the 13-gene set validates scoring LOGIC, not
+    # principled C3/D1 anchors; the 13-gene set validates scoring LOGIC, not
     # calibration, so no per-run override of those thresholds.
     cfg.scoring = ScoringConfig(min_cell_lines=min_cell_lines)
     # Folding backend is config-driven: the GPU fold job, the cache-lookup

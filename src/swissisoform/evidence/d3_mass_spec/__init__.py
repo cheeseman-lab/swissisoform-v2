@@ -1,4 +1,4 @@
-"""E6 — mass spec. Plumbing: swissisoform.massspec."""
+"""D3 — mass spec. Plumbing: swissisoform.massspec."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ __all__ = [
 
 
 def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResult:
-    """E6: PepQuery2-validated unique peptide(s) match public MS spectra.
+    """D3: PepQuery2-validated unique peptide(s) match public MS spectra.
 
     Requires the massspec module to have been initialised with a
     precomputed ``validated_peptides`` cache covering the gene.  When

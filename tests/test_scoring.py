@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from swissisoform.config import PipelineConfig, ScoringConfig
 from swissisoform.models import (
     CellLineExpression,
@@ -57,7 +59,7 @@ class TestE1PrimateConservation:
             "primate_frac_intact": 0.8,
             "summary": {"status": "ok"},
         }
-        res = _c1_primate_conservation(site, ScoringConfig(e1_pident_min=0.8))
+        res = _c1_primate_conservation(site, ScoringConfig(c1_pident_min=0.8))
         assert res.value is True
 
     def test_fails_below_threshold(self):
@@ -67,7 +69,7 @@ class TestE1PrimateConservation:
             "primate_frac_intact": 0.2,
             "summary": {"status": "ok"},
         }
-        res = _c1_primate_conservation(site, ScoringConfig(e1_pident_min=0.8))
+        res = _c1_primate_conservation(site, ScoringConfig(c1_pident_min=0.8))
         assert res.value is False
 
     def test_not_run(self):
@@ -103,7 +105,7 @@ class TestE2MammalianConservation:
             "mammalian_frac_intact": 0.4,
             "summary": {"status": "ok"},
         }
-        res = _c2_mammalian_conservation(site, ScoringConfig(e2_pident_min=0.5))
+        res = _c2_mammalian_conservation(site, ScoringConfig(c2_pident_min=0.5))
         assert res.value is True
 
     def test_fails_below_threshold(self):
@@ -113,7 +115,7 @@ class TestE2MammalianConservation:
             "mammalian_frac_intact": 0.4,
             "summary": {"status": "ok"},
         }
-        res = _c2_mammalian_conservation(site, ScoringConfig(e2_pident_min=0.5))
+        res = _c2_mammalian_conservation(site, ScoringConfig(c2_pident_min=0.5))
         assert res.value is False
 
 
@@ -124,7 +126,7 @@ class TestE3Phylop:
             "phylop_unique_region_mean": 2.5,
             "summary": {"region_status": "ok"},
         }
-        # Default e3_phylop_min is 2.0 (absolute purifying-selection anchor).
+        # Default c3_phylop_min is 2.0 (absolute purifying-selection anchor).
         res = _c3_phylop_coding_selection(site, ScoringConfig())
         assert res.value is True
 
@@ -494,17 +496,65 @@ class TestF4TargetingChange:
 
 
 class TestF5GermlineToleranceConstraint:
+    """M1 is scored only where a unique-vs-shared contrast has a baseline.
+
+    ``_site()`` defaults to an EXTENSION, whose unique region was never canonical
+    coding sequence, so these tests build a truncation to exercise the branches.
+    """
+
+    @staticmethod
+    def _scorable_site():
+        site = _site()
+        site.orf_type = ORFType.TRUNCATED
+        return site
+
     def test_no_data(self):
         """Empty site → None (neither plm_vep nor variant_intersection)."""
-        res = _m1_pathogenic_variant_enrichment(_site(), ScoringConfig())
+        res = _m1_pathogenic_variant_enrichment(self._scorable_site(), ScoringConfig())
         assert res.value is None
-        assert "constraint_enrichment" in res.reason
+        assert "constraint_delta" in res.reason
 
-    def test_constraint_enrichment_true(self):
-        """ESM-2 constraint_enrichment ≥ threshold → True (gnomAD absent)."""
+    @pytest.mark.parametrize(
+        "orf_type",
+        [
+            ORFType.EXTENDED,
+            ORFType.UORF,
+            ORFType.UOORF,
+            ORFType.INTERNAL_OUT_OF_FRAME,
+            ORFType.THREE_UTR_ORF,
+            ORFType.ALT_ORF,
+        ],
+    )
+    def test_not_evaluable_without_a_canonical_baseline(self, orf_type):
+        """Both inputs contrast against the shared core, which is not comparable here.
+
+        None, not False: the criterion leaves the functional score's denominator
+        rather than counting as an evaluated miss. On cheeseman_test these fired
+        True on every extension at 6x-412x, off a confounded ratio.
+        """
         site = _site()
+        site.orf_type = orf_type
+        site.isoform_annotations["plm_vep"] = {"constraint_delta": 99.0, "status": "ok"}
+        site.isoform_annotations["variant_intersection"] = {
+            "gnomad_depletion_ratio": 0.01,
+            "summary": {"status": "ok"},
+        }
+        res = _m1_pathogenic_variant_enrichment(site, ScoringConfig())
+        assert res.value is None
+        assert "no baseline" in res.reason
+
+    def test_truncation_is_still_scored(self):
+        """The removed region IS canonical coding sequence, so the contrast holds."""
+        site = self._scorable_site()
+        site.isoform_annotations["plm_vep"] = {"constraint_delta": 1.0, "status": "ok"}
+        res = _m1_pathogenic_variant_enrichment(site, ScoringConfig())
+        assert res.value is True
+
+    def test_constraint_delta_true(self):
+        """ESM-C constraint_delta ≥ threshold → True (gnomAD absent)."""
+        site = self._scorable_site()
         site.isoform_annotations["plm_vep"] = {
-            "constraint_enrichment": 2.5,
+            "constraint_delta": 2.5,
             "status": "ok",
         }
         res = _m1_pathogenic_variant_enrichment(site, ScoringConfig())
@@ -512,7 +562,7 @@ class TestF5GermlineToleranceConstraint:
 
     def test_gnomad_depletion_true(self):
         """gnomAD depletion ratio below threshold → True (plm absent)."""
-        site = _site()
+        site = self._scorable_site()
         site.isoform_annotations["variant_intersection"] = {
             "gnomad_depletion_ratio": 0.5,
             "summary": {"status": "ok"},
@@ -522,9 +572,9 @@ class TestF5GermlineToleranceConstraint:
 
     def test_neither_branch_fires_false(self):
         """Both signals present but neither passes → False."""
-        site = _site()
+        site = self._scorable_site()
         site.isoform_annotations["plm_vep"] = {
-            "constraint_enrichment": 1.0,
+            "constraint_delta": -1.0,
             "status": "ok",
         }
         site.isoform_annotations["variant_intersection"] = {
@@ -536,9 +586,9 @@ class TestF5GermlineToleranceConstraint:
 
     def test_plm_not_ok_ignored(self):
         """plm_vep status not ok → constraint ignored; falls back to gnomAD."""
-        site = _site()
+        site = self._scorable_site()
         site.isoform_annotations["plm_vep"] = {
-            "constraint_enrichment": 99.0,
+            "constraint_delta": 99.0,
             "status": "not_run",
         }
         site.isoform_annotations["variant_intersection"] = {
@@ -551,13 +601,13 @@ class TestF5GermlineToleranceConstraint:
 
     def test_threshold_respected(self):
         """Custom thresholds gate both branches."""
-        site = _site()
+        site = self._scorable_site()
         site.isoform_annotations["plm_vep"] = {
-            "constraint_enrichment": 2.5,
+            "constraint_delta": 2.5,
             "status": "ok",
         }
         assert _m1_pathogenic_variant_enrichment(site, ScoringConfig()).value is True
-        strict = ScoringConfig(f5_constraint_enrichment_min=3.0)
+        strict = ScoringConfig(m1_constraint_delta_min=3.0)
         assert _m1_pathogenic_variant_enrichment(site, strict).value is False
 
 
@@ -607,18 +657,18 @@ class TestModuleIntegration:
         mod = EvidenceScoringModule(PipelineConfig(scoring=ScoringConfig()))
         site = _site()  # no upstream data
         out = mod.annotate_site(site)
-        # E4 always evaluates (reads site.expression), others None
+        # D1 always evaluates (reads site.expression), others None
         assert out["existence_evaluable"] == 1
         assert out["existence_score"] == 0
         # All functional criteria correctly return None on empty input:
-        # F1 (structure), F3 (IPS), F5 (vi+plm) check status fields;
-        # F2/F4/F6 need comparator/variant data not present here.
+        # P1 (structure), S1 (IPS), M1 (vi+plm) check status fields;
+        # L1/L2/M2 need comparator/variant data not present here.
         assert out["functional_evaluable"] == 0
 
     def test_score_counts_only_true(self):
         cfg = ScoringConfig(
-            e1_pident_min=0.8,
-            e2_pident_min=0.5,
+            c1_pident_min=0.8,
+            c2_pident_min=0.5,
             min_cell_lines=1,
             existence_high_threshold=3,
             functional_high_threshold=1,
@@ -641,12 +691,12 @@ class TestModuleIntegration:
         site.expression["HeLa"] = CellLineExpression(raw_count=10, cpm=1.0, p_value=0.01)
         out = mod.annotate_site(site)
 
-        # E1, E2, E4 True → existence_score = 3
+        # C1, C2, D1 True → existence_score = 3
         assert out["existence_score"] == 3
         assert out["existence_high_confidence"] is True
-        # F5 (gnomAD depletion present? no — only disease ratio) and F6.
+        # M1 (gnomAD depletion present? no — only disease ratio) and M2.
         # variant_intersection carries no gnomad_depletion_ratio and no plm_vep,
-        # so F5 → None; F6 True → functional_score = 1.
+        # so M1 → None; M2 True → functional_score = 1.
         assert out["functional_score"] == 1
         assert out["functional_high_confidence"] is True
         assert out["criteria"]["C1_primate_conservation"] is True
@@ -663,8 +713,8 @@ class TestModuleIntegration:
 class TestMetadata:
     def test_counts(self):
         assert len(EXISTENCE_CRITERIA) == 6
-        assert len(FUNCTIONAL_CRITERIA) == 9
-        assert len(EXISTENCE_CRITERIA) + len(FUNCTIONAL_CRITERIA) == 15
+        assert len(FUNCTIONAL_CRITERIA) == 10
+        assert len(EXISTENCE_CRITERIA) + len(FUNCTIONAL_CRITERIA) == 16
 
     def test_output_columns(self):
         cols = EvidenceScoringModule.OUTPUT_COLUMNS

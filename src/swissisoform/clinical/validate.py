@@ -18,6 +18,8 @@ from typing import Any
 import pandas as pd
 from Bio.Seq import Seq
 
+from swissisoform.contract import NEAR_COGNATE_STARTS
+
 logger = logging.getLogger(__name__)
 
 COMPLEMENT = {"A": "T", "T": "A", "G": "C", "C": "G"}
@@ -471,7 +473,16 @@ class ConsequenceValidator:
         aa_ref = str(Seq(codon_ref).translate())
         aa_alt = str(Seq(codon_alt).translate())
 
-        if aa_ref == aa_alt:
+        if coding_pos // 3 == 0 and codon_alt not in NEAR_COGNATE_STARTS:
+            # Codon 0 is this ORF's start. What matters is whether the trinucleotide
+            # still initiates, not what it translates to: dropping out of
+            # NEAR_COGNATE_STARTS ablates the start and the proteoform with it, and
+            # a third-base change can do that while keeping the residue identical.
+            # "start_lost" is already in varianteffect's LOF_CONSEQUENCES, so this
+            # reaches the loss-of-function branch that AlphaMissense and ESM-C —
+            # both missense-only, and both blind here — cannot express.
+            consequence = "start_lost"
+        elif aa_ref == aa_alt:
             consequence = "synonymous_variant"
         elif aa_alt == "*":
             consequence = "stop_gained"
@@ -625,11 +636,18 @@ class ConsequenceValidator:
                         variant["aa_ref"] = result["aa_ref"]
                     if result["aa_alt"] is not None:
                         variant["aa_alt"] = result["aa_alt"]
+                    # The codons carry the start_lost call's evidence: at codon 0
+                    # the verdict is codon membership, which no amino-acid field
+                    # records.
+                    variant["codon_ref"] = result["codon_ref"]
+                    variant["codon_alt"] = result["codon_alt"]
             else:
                 variant[f"{field_prefix}_consequence"] = result["consequence"]
                 variant[f"{field_prefix}_protein_pos"] = result["protein_pos"]
                 variant[f"{field_prefix}_aa_ref"] = result["aa_ref"]
                 variant[f"{field_prefix}_aa_alt"] = result["aa_alt"]
+                variant[f"{field_prefix}_codon_ref"] = result["codon_ref"]
+                variant[f"{field_prefix}_codon_alt"] = result["codon_alt"]
         return variants
 
 

@@ -592,7 +592,7 @@ def _row_to_tis(
             )
 
     # Canonical start's Kozak window + codon (symmetric with kozak_context /
-    # start_codon) — for the canonical-vs-isoform start-site comparison (E3).
+    # start_codon) — for the canonical-vs-isoform start-site comparison (C3).
     canonical_kozak_context: str | None = None
     canonical_start_codon_val: str | None = None
     if fasta is not None and canonical_orf_exons_site:

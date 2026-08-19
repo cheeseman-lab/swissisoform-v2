@@ -10,18 +10,18 @@ import pytest
 from swissisoform.site import evidence as ber
 
 
-def test_criteria_dict_has_exactly_15_entries() -> None:
-    # 13 flat criteria + S2 biophysics + S3 SAE (now first-class scored criteria).
-    assert len(ber.CRITERIA) == 15
-    # 6 E and 9 F (S2/S3 are functional-axis)
+def test_criteria_dict_has_exactly_16_entries() -> None:
+    # 13 flat criteria + S2 biophysics + S3 SAE + P3 secondary structure.
+    assert len(ber.CRITERIA) == 16
+    # 6 E and 10 F (S2/S3/P3 are functional-axis)
     e_count = sum(1 for c in ber.CRITERIA.values() if c["axis"] == "E")
     f_count = sum(1 for c in ber.CRITERIA.values() if c["axis"] == "F")
     assert e_count == 6
-    assert f_count == 9
+    assert f_count == 10
 
 
 def test_criterion_ids_match_scoring_module() -> None:
-    """The 15 criterion ids must match what src/swissisoform/modules/scoring.py emits."""
+    """The 16 criterion ids must match what src/swissisoform/modules/scoring.py emits."""
     expected = {
         "C1_primate_conservation",
         "C2_mammalian_conservation",
@@ -30,6 +30,7 @@ def test_criterion_ids_match_scoring_module() -> None:
         "D2_initiation_efficiency",
         "D3_mass_spec",
         "P1_structured_extension",
+        "P3_secondary_structure",
         "L1_localization_change",
         "S1_domain_change",
         "L2_targeting_change",
@@ -116,7 +117,7 @@ def test_slice_extracts_all_evidence_cols() -> None:
 
 
 def test_real_trnt1_record_e1_e2_e3() -> None:
-    """End-to-end: refresh TRNT1 record, slice E1/E2/E3, sanity-check values."""
+    """End-to-end: refresh TRNT1 record, slice C1/C2/C3, sanity-check values."""
     p = Path("data/output/cheeseman_13gene/llm_evidence/TRNT1.json")
     if not p.exists():
         pytest.skip("real TRNT1 record not present")
@@ -134,7 +135,7 @@ def test_real_trnt1_record_e1_e2_e3() -> None:
 
 
 def test_f5_extracts_variants_as_hits() -> None:
-    """F5 has evidence_hits_col — must populate hits list; headline is the
+    """M1 has evidence_hits_col — must populate hits list; headline is the
     gnomAD depletion ratio (germline tolerance/constraint), not a damaging count.
     """
     iso = {

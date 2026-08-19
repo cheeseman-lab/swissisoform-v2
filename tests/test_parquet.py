@@ -318,3 +318,76 @@ class TestPairedDataframeGenomicIntervals:
             orig = [tuple(x) for x in df[c].iloc[0]]
             roundtripped = [tuple(x) for x in back[c].iloc[0]]
             assert orig == roundtripped, f"round-trip failed for {c}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Fold-cache hash columns reach the parquet natively
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestStructureHashColumnsInParquet:
+    """The pipeline must EMIT the hash columns, not need them patched in.
+
+    ``scripts/backfill/backfill_structure_hashes.py`` splices these columns into
+    runs that predate ``StructureModule`` emitting them. That backfill is only
+    deletable if a normal run produces the columns itself, so this test walks the
+    real serialization path — ``StructureModule.run`` writes into
+    ``site.isoform_annotations["structure"]``, and ``_flatten_annotations`` turns
+    those keys into ``isoform_structure_<key>`` columns.
+    """
+
+    @staticmethod
+    def _gene() -> Gene:
+        iso = "MVLSPADKTNVK"
+        can = "MVLSPADKTNVKAAWGKVGAHAGEYG"
+        site = TranslationInitiationSite(
+            tis_id="chr1:100:+:ATG:ENST_TEST.1",
+            gene_name="GENE",
+            transcript_id="ENST_TEST.1",
+            chrom="chr1",
+            position=100,
+            strand="+",
+            start_codon="ATG",
+            orf_type=ORFType.EXTENDED,
+            aa_len=len(iso),
+            canonical_protein=can,
+            isoform_protein=iso,
+            diff_region=DifferentialRegion(sequence="X"),
+            expression={"HeLa": CellLineExpression(raw_count=1, cpm=1.0, p_value=1.0)},
+        )
+        return Gene(
+            gene_name="GENE",
+            gene_id="ENSG_TEST",
+            canonical_transcript_id="ENST_TEST.1",
+            canonical_protein=can,
+            tis_sites=[site],
+        )
+
+    def test_hash_columns_emitted_by_a_normal_run(self, tmp_path) -> None:
+        from swissisoform.config import PipelineConfig
+        from swissisoform.structure.fold import protein_hash
+        from swissisoform.structure.module import StructureModule
+
+        gene = self._gene()
+        # Empty cache dir: the hashes must still be emitted (they come from the
+        # sequences), which is exactly the "exists but never folded" case.
+        StructureModule(PipelineConfig(), cache_dir=tmp_path, backend="esmfold2").run(
+            gene.tis_sites
+        )
+        df = paired_tis_dataframe([gene])
+
+        for c in ("isoform_structure_canonical_hash", "isoform_structure_isoform_hash"):
+            assert c in df.columns, f"pipeline did not emit {c}"
+        row = df.iloc[0]
+        assert row["isoform_structure_canonical_hash"] == protein_hash(gene.canonical_protein)
+        assert row["isoform_structure_isoform_hash"] == protein_hash(
+            gene.tis_sites[0].isoform_protein
+        )
+        # And they survive a parquet round-trip, since that is how the LLM pass
+        # reads them (via build_gene_record's _raw mirror).
+        path = tmp_path / "paired.parquet"
+        df.to_parquet(path, index=False)
+        back = pd.read_parquet(path)
+        assert back["isoform_structure_isoform_hash"].iloc[0] == protein_hash(
+            gene.tis_sites[0].isoform_protein
+        )

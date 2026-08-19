@@ -21,8 +21,16 @@ dependencies = [
     "pyBigWig>=0.3.22",
     "requests>=2.31.0",
     "pyyaml>=6.0",
+    # Validates the LLM passes' structured output against
+    # scripts/site/prompts/output_schemas/*.json. A runtime dep, not dev-only:
+    # the LLM stage runs in production website builds, which is exactly where an
+    # unchecked output contract matters. Small and pure-Python bar rpds-py,
+    # which ships wheels.
+    "jsonschema>=4.0",
     "tmtools>=0.3.0",
     "biotite>=1.0",
+    # LLM stage. Floor is where strict tool schemas were verified.
+    "anthropic>=0.116.0",
 ]
 
 [project.optional-dependencies]

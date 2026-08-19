@@ -22,7 +22,7 @@ def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResul
     * ``disorder`` (mean Top-IDP propensity).
 
     Each lever fires when ``|<feat>_delta| >= cutoff``. ``True`` when *any* lever
-    fires. This is the frame the old F1 distinctness half used (folding, F1's
+    fires. This is the frame the old P1 distinctness half used (folding, P1's
     other half, now lives in P1); unlike the region-vs-core contrast it also
     scores uORF/altORF isoforms, which have no shared region.
 

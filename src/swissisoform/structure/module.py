@@ -5,8 +5,8 @@ SiteModule that looks up cached Boltz-2 / Chai-1 fold results for both
 and (when ``tmtools`` + ``biotite`` are available) computes TM-score,
 shared-region RMSD, and extension-to-canonical-body contact count.
 
-Activates F1 (structured extension) when ``plddt_diffregion_mean`` exceeds
-``ScoringConfig.f1_plddt_threshold`` (default 0.70 on Boltz-2's 0-1 scale;
+Activates P1 (structured extension) when ``plddt_diffregion_mean`` exceeds
+``ScoringConfig.p1_plddt_threshold`` (default 0.70 on Boltz-2's 0-1 scale;
 AlphaFold-style backends emit 0-100 and would use 70.0). Pure lookup + numpy
 at pipeline runtime; GPU folding happens out-of-band via
 ``scripts/slurm/run_fold.sbatch``.
@@ -32,6 +32,7 @@ from swissisoform.structure.fold import (
     load_cache,
     protein_hash,
 )
+from swissisoform.structure.sse import annotate_sse, classify_elements, sse_elements
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,25 @@ class StructureModule:
         "structure_pae_body_vs_body",
         "structure_pae_diff_vs_body",
         "structure_pae_status",
+        # Cache addresses. The fold cache is keyed by sha1 of the protein
+        # sequence, but the sequences are not carried downstream (the parquet
+        # holds only lengths), so anything reading the cache after the pipeline
+        # — the P-category LLM readers, ad-hoc analysis — has no way back to a
+        # cache entry from a tis_id. Emitting the hashes here is that bridge;
+        # combined with ``structure_backend`` they reconstruct the full path via
+        # ``fold.cache_path``. Populated from the sequence alone, so they are
+        # present even when nothing has been folded yet.
+        "structure_canonical_hash",
+        "structure_isoform_hash",
+        # Secondary structure, derived from the coordinates via P-SEA. One
+        # whole-protein scan, each element tagged region=unique/shared/spans and
+        # carrying its own plddt_mean — so a geometrically clean helix through a
+        # disordered stretch is distinguishable from a real one. P3 scores on the
+        # unique/spans subset; the P3 card lists unique vs shared side by side.
+        "structure_sse_status",
+        "structure_sse_isoform",
+        "structure_sse_canonical",
+        "structure_sse_all_elements",
     ]
     SCOPE: str = "C"
 
@@ -115,14 +135,39 @@ class StructureModule:
             "pae_body_vs_body": None,
             "pae_diff_vs_body": None,
             "pae_status": reason,
+            "canonical_hash": None,
+            "isoform_hash": None,
+            "sse_status": reason,
+            "sse_isoform": None,
+            "sse_canonical": None,
+            "sse_all_elements": [],
+        }
+
+    @staticmethod
+    def _hashes(site: TranslationInitiationSite) -> dict[str, Any]:
+        """Fold-cache addresses for this site's two proteins.
+
+        Derived from the sequences alone, so they are emitted whether or not a
+        fold exists — a hash with no cache entry is the honest way to say "this
+        protein was never folded", which a null hash could not distinguish from
+        "no sequence".
+        """
+        return {
+            "canonical_hash": (
+                protein_hash(site.canonical_protein) if site.canonical_protein else None
+            ),
+            "isoform_hash": (
+                protein_hash(site.isoform_protein) if site.isoform_protein else None
+            ),
         }
 
     def annotate_site(self, site: TranslationInitiationSite) -> dict[str, Any]:
         """Compute structure-derived comparison metrics for a single TIS."""
+        hashes = self._hashes(site)
         can = self._load(site.canonical_protein)
         iso = self._load(site.isoform_protein)
         if can is None and iso is None:
-            return self._empty("no_cache")
+            return {**self._empty("no_cache"), **hashes}
 
         can_metrics = (can or {}).get("metrics") or {}
         iso_metrics = (iso or {}).get("metrics") or {}
@@ -132,7 +177,7 @@ class StructureModule:
         # Surface the worst non-ok status if either side failed; otherwise "ok".
         # Order: too_long > failed > uniform_plddt > ok > partial.
         # uniform_plddt = backend only produced complex_plddt (uniform fill),
-        # not per-residue. Downstream criteria (F1) should opt out rather
+        # not per-residue. Downstream criteria (P1) should opt out rather
         # than score against the planted scalar.
         if can_status == "too_long" or iso_status == "too_long":
             status = "too_long"
@@ -146,6 +191,7 @@ class StructureModule:
             status = "partial"
 
         out = self._empty(status)
+        out.update(hashes)
         out["backend"] = self.backend
 
         can_plddt = (can or {}).get("confidence", {}).get("plddt") if can else None
@@ -190,7 +236,35 @@ class StructureModule:
         for k, v in self._pae_blocks(site, can, iso).items():
             out[k] = v
 
+        for k, v in self._sse(site, can, iso).items():
+            out[k] = v
+
         return out
+
+    @staticmethod
+    def _diff_side(
+        site: TranslationInitiationSite,
+        can: dict[str, Any] | None,
+        iso: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any] | None, int | None, int | None, str]:
+        """The structure CONTAINING the differential region, and its bounds.
+
+        Extensions and separate ORFs add sequence that exists only in the isoform
+        fold; truncations remove sequence that exists only in the canonical one.
+        Every per-region metric — PAE blocks, secondary structure — must be read
+        off the right side or it describes the wrong protein.
+
+        Returns ``(entry, start, end, space)`` with 0-based half-open bounds.
+        """
+        dr = site.diff_region
+        orf = site.orf_type.value if site.orf_type else None
+        iso_start = getattr(dr, "isoform_start", None) if dr else None
+        can_start = getattr(dr, "canonical_start", None) if dr else None
+        truncated = (orf == "truncated") or (iso_start is None and can_start is not None)
+
+        if truncated:
+            return can, can_start, getattr(dr, "canonical_end", None) if dr else None, "canonical"
+        return iso, iso_start, getattr(dr, "isoform_end", None) if dr else None, "isoform"
 
     def _pae_blocks(
         self,
@@ -199,27 +273,62 @@ class StructureModule:
         iso: dict[str, Any] | None,
     ) -> dict[str, Any]:
         """Compute PAE block means over the structure carrying the diff region."""
-        dr = site.diff_region
-        orf = site.orf_type.value if site.orf_type else None
-        iso_start = getattr(dr, "isoform_start", None) if dr else None
-        can_start = getattr(dr, "canonical_start", None) if dr else None
-        truncated = (orf == "truncated") or (iso_start is None and can_start is not None)
-
-        if truncated:
-            entry, start, end = (
-                can,
-                can_start,
-                getattr(dr, "canonical_end", None) if dr else None,
-            )
-        else:
-            entry, start, end = (
-                iso,
-                iso_start,
-                getattr(dr, "isoform_end", None) if dr else None,
-            )
-
+        entry, start, end, _ = self._diff_side(site, can, iso)
         pae = load_pae((entry or {}).get("pae_path")) if entry else None
         return pae_region_blocks(pae, start, end)
+
+    def _sse(
+        self,
+        site: TranslationInitiationSite,
+        can: dict[str, Any] | None,
+        iso: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Secondary structure over the whole protein, tagged by region.
+
+        Derived from coordinates (P-SEA) rather than predicted, so every element
+        carries its own mean pLDDT: without that, a geometrically clean helix
+        through a disordered stretch reads identically to a real one. P3 scores
+        on the ``unique``/``spans`` subset, requiring both length and confidence.
+
+        The protein is scanned ONCE, whole, and each element classified against
+        the differential-region bounds. A window-scoped scan (the former
+        ``sse_diff_elements``) was wrong twice over: it truncated any element
+        crossing the boundary to the part inside, and — because ``sse_elements``
+        applies its per-type length floors AFTER clipping — dropped one entirely
+        when the clipped remainder fell below the floor. That turned CBX1's 7 aa
+        strand into 3 aa and made EIF2B1's 14 aa helix at pLDDT 0.97 vanish, so
+        the region read as structureless.
+        """
+        out: dict[str, Any] = {
+            "sse_status": "no_structure",
+            "sse_isoform": None,
+            "sse_canonical": None,
+            "sse_all_elements": [],
+        }
+        sse_iso = annotate_sse((iso or {}).get("cif_path")) if iso else None
+        sse_can = annotate_sse((can or {}).get("cif_path")) if can else None
+        out["sse_isoform"] = sse_iso
+        out["sse_canonical"] = sse_can
+
+        entry, start, end, space = self._diff_side(site, can, iso)
+        sse = sse_iso if space == "isoform" else sse_can
+        if not sse or entry is None:
+            return out
+        if start is None or end is None:
+            out["sse_status"] = "no_diff_region"
+            return out
+
+        plddt = (entry.get("confidence") or {}).get("plddt")
+        out.update(
+            sse_status="ok",
+            # diff bounds are 0-based half-open; sse_elements is 1-based inclusive.
+            sse_all_elements=classify_elements(
+                sse_elements(sse, plddt),
+                diff_start=int(start) + 1,
+                diff_end=int(end),
+            ),
+        )
+        return out
 
     def run(self, tis_sites: list[TranslationInitiationSite]) -> list[TranslationInitiationSite]:
         """Attach structure annotations to each TIS."""

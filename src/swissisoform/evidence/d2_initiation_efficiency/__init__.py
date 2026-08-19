@@ -1,4 +1,4 @@
-"""E5 — initiation efficiency. Plumbing: site.expression."""
+"""D2 — initiation efficiency. Plumbing: site.expression."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from swissisoform.models import TranslationInitiationSite
 
 
 def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResult:
-    """E5: max per-cell-line initiation efficiency exceeds threshold.
+    """D2: max per-cell-line initiation efficiency exceeds threshold.
 
     Evaluates to ``None`` when no cell line carries an efficiency value —
     our upstream TIS counts don't always produce it.

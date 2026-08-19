@@ -18,6 +18,7 @@ from swissisoform.site.evidence import (
     format_metric,
     slice_criterion,
     summarise,
+    use_scoring_config,
     write_evidence_records,
     write_variants_long,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "format_metric",
     "slice_criterion",
     "summarise",
+    "use_scoring_config",
     "write_evidence_records",
     "write_variants_long",
 ]
@@ -54,6 +56,11 @@ def main() -> None:
         help="If set, also write a flat variants_long parquet to this path.",
     )
     args = p.parse_args()
+
+    # Thresholds come from the run that produced this parquet, not from the
+    # library defaults — the records carry "qualifies_when" strings and hit
+    # rankings that must match the verdicts already scored into it.
+    use_scoring_config(args.parquet.parent)
 
     counts = write_evidence_records(args.parquet, args.out)
     print(f"Wrote {counts['genes']} gene files ({counts['isoforms']} isoforms) to {args.out}")

@@ -1,4 +1,4 @@
-"""E2 — mammalian conservation. Plumbing: swissisoform.conservation_frame."""
+"""C2 — mammalian conservation. Plumbing: swissisoform.conservation_frame."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from swissisoform.models import TranslationInitiationSite
 
 
 def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResult:
-    """E2: mammalian amino-acid identity over the unique region exceeds threshold.
+    """C2: mammalian amino-acid identity over the unique region exceeds threshold.
 
     Scored on ``mammalian_mean_pident`` (mean AA percent identity across the
     aligned mammalian orthologs), not ``frac_intact``. ``frac_intact`` is kept
@@ -24,11 +24,11 @@ def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResul
         return CriterionResult(
             "C2_mammalian_conservation", None, "mammalian_mean_pident unavailable"
         )
-    passed = val >= cfg.e2_pident_min
+    passed = val >= cfg.c2_pident_min
     frac = ann.get("mammalian_frac_intact")
     frac_str = f"{frac:.2f}" if isinstance(frac, (int, float)) else "n/a"
     return CriterionResult(
         "C2_mammalian_conservation",
         passed,
-        f"mean_pident={val:.2f} (threshold {cfg.e2_pident_min}); frac_intact={frac_str}",
+        f"mean_pident={val:.2f} (threshold {cfg.c2_pident_min}); frac_intact={frac_str}",
     )

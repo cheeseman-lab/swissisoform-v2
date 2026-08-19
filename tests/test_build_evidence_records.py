@@ -243,12 +243,13 @@ def test_categories_cover_all_criteria_once():
     members = [m for cat in ber.CATEGORIES for m in cat["members"]]
     # All members are first-class criteria now — no descriptive magic strings.
     assert all(m in ber.CRITERIA for m in members)
-    # All 15 criteria covered exactly once.
+    # All 16 criteria covered exactly once.
     assert sorted(members) == sorted(ber.CRITERIA)
-    assert len(members) == len(set(members)) == 15
-    # S2/S3 live once each, in category S.
+    assert len(members) == len(set(members)) == 16
+    # S2/S3 live once each, in category S; P3 once, in category P.
     assert members.count("S2_biophysics") == 1
     assert members.count("S3_sae") == 1
+    assert members.count("P3_secondary_structure") == 1
     assert not hasattr(ber, "LLM_EXCLUDED_CRITERIA")
     assert not hasattr(ber, "DESCRIPTIVE_MEMBERS")
 
@@ -312,6 +313,33 @@ def test_slice_category_bundles_scored_members():
     assert by_member["S3_sae"]["value"] is False
     assert by_member["S3_sae"]["evidence"]["counts"]["isoform_only"] == 3
     assert by_member["S3_sae"]["evidence"]["top_gained"]["feature_index"] == 42
+
+
+def test_slice_category_carries_one_identity_block_not_one_per_member():
+    """The category block states the isoform once; members inherit it.
+
+    Regression on a legacy of the per-criterion LLM pass: each criterion was its
+    own API call and so carried its own identity. Bundling them into one call
+    (commit 6760c84) repeated the same seven fields once per member.
+    """
+    iso_record = {
+        "tis_id": "chr1:100:+:ATG:ENST_A",
+        "gene": {"name": "GENE_A"},
+        "orf_type": "extended",
+        "differential_sequence": "MABC",
+        "diff_space": "isoform",
+        "isoform_length_aa": 60,
+        "canonical_length_aa": 50,
+        "scoring": {"criteria": {}},
+        "_raw": {"cmp_interproscan_n_hits_in_diff_region": 1},
+    }
+    out = ber.slice_category(iso_record, _S_CATEGORY())
+    assert out["isoform"]["tis_id"] == "chr1:100:+:ATG:ENST_A"
+    assert out["isoform"]["differential_sequence"] == "MABC"
+    assert all("isoform" not in m for m in out["members"])
+    # Standalone callers (website tiles, synthesis pass) have no outer block to
+    # inherit from, so slice_criterion itself is unchanged.
+    assert "isoform" in ber.slice_criterion(iso_record, "S1_domain_change")
 
 
 def test_slice_category_omits_empty_builder_members_without_data():

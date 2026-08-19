@@ -1,4 +1,4 @@
-"""E3 — phylop coding selection. Plumbing: swissisoform.conservation."""
+"""C3 — phylop coding selection. Plumbing: swissisoform.conservation."""
 
 from __future__ import annotations
 
@@ -8,10 +8,12 @@ from swissisoform.models import TranslationInitiationSite
 
 
 def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResult:
-    """E3: absolute PhyloP over the unique region indicates purifying selection.
+    """C3: mean PhyloP over the unique region indicates purifying selection.
 
-    Scored on the *absolute* mean PhyloP of the unique region exceeding
-    ``cfg.e3_phylop_min`` (strong purifying selection at coding level). This is
+    Scored on the *signed* mean PhyloP of the unique region reaching
+    ``cfg.c3_phylop_min`` (strong purifying selection at coding level). Signed,
+    not absolute: PhyloP measures deviation from neutral evolution, so a large
+    negative mean is strong ACCELERATION and must fail, not pass. This is also
     NOT a unique-vs-shared comparison — the claim is that the unique region is
     itself under coding-level constraint. ``phylop_enrichment`` (unique/shared)
     is reported as context only.
@@ -30,12 +32,12 @@ def score(site: TranslationInitiationSite, cfg: ScoringConfig) -> CriterionResul
         return CriterionResult(
             "C3_phylop_coding_selection", None, "phylop_unique_region_mean unavailable"
         )
-    passed = val >= cfg.e3_phylop_min
+    passed = val >= cfg.c3_phylop_min
     enrich = ann.get("phylop_enrichment")
     enrich_str = f"{enrich:.2f}" if isinstance(enrich, (int, float)) else "n/a"
     return CriterionResult(
         "C3_phylop_coding_selection",
         passed,
-        f"phylop_unique={val:.2f} (threshold {cfg.e3_phylop_min}); "
+        f"phylop_unique={val:.2f} (threshold {cfg.c3_phylop_min}); "
         f"enrichment={enrich_str} (context)",
     )
