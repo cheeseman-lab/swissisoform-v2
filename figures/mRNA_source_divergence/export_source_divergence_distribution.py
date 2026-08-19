@@ -14,10 +14,10 @@ Outputs:
      rank, bars sorted by top fraction.
 
 Both the CSV and PNG default to this script's own directory
-(``figures/source_divergence/``).
+(``figures/mRNA_source_divergence/``).
 
 Usage:
-    python figures/source_divergence/export_source_divergence_distribution.py --sample HeLa
+    python figures/mRNA_source_divergence/export_source_divergence_distribution.py --sample HeLa
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ from swissisoform.runner import (
 from swissisoform.sourceresolve.diagnostics import divergent_site_distribution
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-# Outputs (CSV + PNG) live alongside this script, under figures/source_divergence/.
+# Outputs (CSV + PNG) live alongside this script, under figures/mRNA_source_divergence/.
 HERE = Path(__file__).resolve().parent
 
 
