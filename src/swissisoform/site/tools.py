@@ -23,8 +23,10 @@ import pandas as pd
 
 # ``_to_native`` is the package's numpy/pandas -> JSON-native coercion (NaN and
 # pd.NA become None). Imported rather than duplicated so a tool result and the
-# evidence record serialise a value identically.
-from swissisoform.site.evidence import _to_native, clinsig_family
+# evidence record serialise a value identically. ``_SEPARATE_ORFS`` likewise —
+# the frame caveat and the evidence record must agree on which ORF types share
+# no reading frame with the canonical CDS.
+from swissisoform.site.evidence import _SEPARATE_ORFS, _to_native, clinsig_family
 
 __all__ = [
     "DATA_TOOL_NAMES",
@@ -84,11 +86,6 @@ _SORT_KEYS: dict[str, tuple[str, bool]] = {
     "allele_frequency": ("allele_frequency", False),
 }
 _SORT_CHOICES = ("position", *_SORT_KEYS)
-
-# ORF types whose unique region was never canonical coding sequence, so
-# AlphaMissense — a canonical-transcript lookup — has nothing to return there.
-# ESM-C is scored in the isoform frame and is unaffected. See _effect_caveat.
-_SEPARATE_ORF_TYPES = frozenset({"uorf", "uoorf", "internal_oof", "3utr_orf", "alt_orf"})
 
 
 def _position_column(orf_type: Any) -> tuple[str, str]:
@@ -248,7 +245,7 @@ def _effect_caveat(orf_type: Any) -> str | None:
             "this is an extension, so its unique region was 5'UTR or intron and "
             "was never canonical coding sequence"
         )
-    elif s in _SEPARATE_ORF_TYPES:
+    elif s in _SEPARATE_ORFS:
         subject = (
             "this isoform is a separate ORF and does not share a reading frame "
             "with the canonical CDS, so no part of it is canonical coding sequence"
@@ -594,8 +591,8 @@ M_TOOLS: list[dict[str, Any]] = [
         # is why P's pae_block (two-element range params) stays unstrict.
         #
         # It guarantees the *shape*, not the prose: a string parameter may still
-        # contain anything, so _normalise_tool_input in llm.py remains as a
-        # backstop and now warns when it fires.
+        # contain anything, so llm.py's _verdict_violations / _strip_verdict_markup
+        # remain as the backstop over the value itself.
         "strict": True,
         "input_schema": {
             "type": "object",
@@ -663,7 +660,6 @@ def make_m_dispatch(
         # orf_type is bound here, never model-supplied: it selects the populated
         # position column and gates the frame caveat, both properties of the
         # annotation rather than choices the model gets to make.
-        kwargs.pop("orf_type", None)
         kwargs["orf_type"] = orf_type
         try:
             return reader(variants_long, tis_id, **kwargs)
