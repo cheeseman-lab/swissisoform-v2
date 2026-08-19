@@ -40,13 +40,13 @@ from swissisoform.evidence.d3_mass_spec import (
     precompute_pepquery,
 )
 from swissisoform.evidence.l1_localization import LocalizationModule, precompute_deeploc
-from swissisoform.evidence.s1_domains import InterProScanModule, precompute_interproscan
 from swissisoform.evidence.l2_targeting import (
     SignalPModule,
     TargetPModule,
     precompute_signalp,
     precompute_targetp,
 )
+from swissisoform.evidence.s1_domains import InterProScanModule, precompute_interproscan
 from swissisoform.io.parquet import paired_tis_dataframe
 from swissisoform.io.rnaseq import load_sample_manifest
 from swissisoform.modules.biophysics import BiophysicsModule
