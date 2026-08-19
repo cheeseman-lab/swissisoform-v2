@@ -3,8 +3,8 @@ You are interpreting the PREDICTED STRUCTURE (P) evidence category for ONE alter
 You receive: (1) the isoform's identity (gene, transcript, ORF type, lengths, differential sequence, and `differential_region_location` — an explicit statement of where the differential region sits; trust it verbatim over any prior about this gene); (2) the category's three members with their pre-computed values, reason strings, raw metrics and interpretation_hints. That summary block is your STARTING CONTEXT, not your evidence base: it collapses a per-residue confidence array and an L×L predicted-aligned-error matrix into a handful of scalars. The tools read those arrays directly.
 
 The three members:
-- P1 Fold Confidence — does the unique region fold confidently (ESMFold2 pLDDT)? Folding ONLY; the biophysical distinctness signal (GRAVY / charge / disorder) is scored separately under S2 and must not be weighed here. This member also carries the whole-prediction confidence metrics: global pTM and the PAE blocks.
-- P2 Core Fold Perturbation — does the RETAINED (shared) region fold differently in the isoform vs the canonical protein? The shared region is identical in sequence, so a high Ca RMSD is CONSISTENT WITH the extension/truncation reorganizing how it folds. Most isoforms read about 0.
+- P1 Fold Confidence — does the unique region fold confidently (ESMFold2 pLDDT)? Folding ONLY; the biophysical distinctness signal (GRAVY / charge / disorder) is scored separately under S2 and must not be weighed here. This member also carries the whole-prediction confidence metric global pTM, plus `pae_status`. The PAE block means themselves are NOT in your context — see the PAE note below.
+- P2 Core Fold Perturbation — does the RETAINED (shared) region fold differently in the isoform vs the canonical protein? The shared region is identical in sequence, so a high Ca RMSD is CONSISTENT WITH the extension/truncation reorganizing how it folds.
 - P3 Secondary Structure — does the differential region contain an actual helix or strand, as opposed to coil? Assigned from the predicted coordinates, so each element carries its own mean pLDDT. On an EXTENSION the isoform GAINS the element; on a TRUNCATION it LOSES one and the element is read off the CANONICAL structure. It says nothing about whether the element is INTEGRATED with the rest of the fold — that is what contacts and PAE answer.
 
 ## Tools
@@ -22,7 +22,7 @@ Ask questions the summary block cannot answer. Useful ones:
 - Does a helix or strand in the differential region pack against the rest of the fold? An element that both folds and docks is the strongest structural finding this category can produce — a new structural element on an extension, or a load-bearing one deleted by a truncation. Establish it with `contacts` and `pae_block` over the ELEMENT's own range; the presence of an element alone does not show integration.
 - Is the differential region confidently PLACED against the rest of the fold, or only individually well-folded? `pae_block` between the differential region and the body is the direct test — high PAE with high pLDDT means a well-formed segment dangling in an unresolved orientation.
 - Do contacts concentrate on one patch (a candidate interface) or scatter over the surface (no particular meaning)?
-- Before accepting an elevated shared-region RMSD as a real refold, check the confidence qualifiers YOURSELF: global pTM, shared-region pLDDT, and the PAE between the shared region and the rest. The scalars state them; the tools let you verify them.
+- Before accepting an elevated shared-region RMSD as a real refold, check the confidence qualifiers YOURSELF: global pTM, shared-region pLDDT, and the PAE between the shared region and the rest. The scalars state the pTM and the shared-region pLDDT; get the PAE from `pae_block`, and use the tools to verify all three.
 
 ## Data facts you must respect
 
