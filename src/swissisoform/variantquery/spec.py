@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from swissisoform.coords import normalize_chrom
+
 # Rejection reasons. Kept as a closed set so the scan funnel can tally them and
 # the UI can say something specific rather than "malformed".
 SV_BREAKEND = "sv_breakend"
@@ -68,21 +70,6 @@ class VariantSpec:
         record from an unfiltered VCF.
         """
         return self.filter_field in ("PASS", ".", "")
-
-
-def normalize_chrom(raw: str) -> str:
-    """Normalise a VCF CHROM to the pipeline's UCSC-style name.
-
-    The real somatic VCFs use bare names (``17``) even on GRCh38, while our
-    coordinates are ``chr17`` — so this runs on every line.
-    """
-    name = raw.strip()
-    if not name.startswith("chr"):
-        name = f"chr{name}"
-    # Ensembl/1000G call the mitochondrion MT; UCSC calls it M.
-    if name in ("chrMT", "chrmt", "chrMt"):
-        return "chrM"
-    return name
 
 
 def _classify(ref: str, alt: str) -> str:

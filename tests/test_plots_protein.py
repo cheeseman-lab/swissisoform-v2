@@ -37,7 +37,8 @@ def _gene_view():
         ],
         variants=[
             {"variant_id": "ClinVar:1", "pos": 60, "consequence": "missense_variant",
-             "significance": "Pathogenic", "hgvsp": "p.X", "source": "ClinVar", "in_unique": False},
+             "significance": "Pathogenic", "protein_change": "p.X", "source": "ClinVar",
+             "in_unique": False},
         ],
         domains=[{"name": "Chromo", "interpro_id": "IPR000953", "x0": 20, "x1": 80,
                   "isoforms": ["extended · CTG", "truncated · AAG"]}],

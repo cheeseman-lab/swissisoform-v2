@@ -16,6 +16,7 @@ from typing import Any
 import pandas as pd
 
 from swissisoform.coords import orf_exons_from_skeleton
+from swissisoform.coords import revcomp as _revcomp
 from swissisoform.models import (
     CellLineExpression,
     DifferentialRegion,
@@ -27,15 +28,6 @@ from swissisoform.models import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Nucleotide complements for reverse-strand Kozak extraction.
-_COMPLEMENT = str.maketrans("ACGTN", "TGCAN")
-
-
-def _revcomp(seq: str) -> str:
-    """Return the reverse-complement of a DNA sequence (upper-cased)."""
-    return seq.upper().translate(_COMPLEMENT)[::-1]
-
 
 def extract_kozak_context(
     fasta: Any,

@@ -17,15 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from swissisoform.coords import revcomp as _revcomp
 from swissisoform.models import TranscriptCoordinates
-
-# Reuse the same complement table the assembly layer uses for revcomp.
-_COMPLEMENT = str.maketrans("ACGTN", "TGCAN")
-
-
-def _revcomp(seq: str) -> str:
-    """Reverse-complement an upper-cased DNA sequence."""
-    return seq.upper().translate(_COMPLEMENT)[::-1]
 
 
 def _cdna_index(coords: TranscriptCoordinates, gpos: int) -> int | None:

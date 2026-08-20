@@ -91,27 +91,12 @@ def test_total_orf_length_is_three_times_the_protein_length(records) -> None:
 
 
 # ----------------------------------------------------------------------
-# Translation + consequence, against biopython on real ORFs
+# Consequence classification on real ORF geometry
+#
+# There is no longer a second codon table to cross-check: the scan classifies
+# through ``ConsequenceValidator``, which translates with biopython. What is left
+# to verify here is that real exon geometry never breaks the classifier.
 # ----------------------------------------------------------------------
-
-
-def test_translate_agrees_with_biopython_on_every_orf(genome_validator, records) -> None:
-    """Our stdlib codon table vs Bio.Seq.translate over real coding sequences."""
-    from Bio.Seq import Seq
-
-    from swissisoform.variantquery.consequence import translate
-
-    checked = 0
-    for record in records:
-        for exons in (record.orf_exons, record.canonical_orf_exons):
-            if not exons:
-                continue
-            cds = genome_validator.build_coding_sequence_from_orf(
-                list(exons), record.strand, record.chrom
-            )
-            assert translate(cds) == str(Seq(cds).translate()), record.tis_id
-            checked += 1
-    assert checked >= 30, f"only {checked} ORFs compared"
 
 
 def test_orf_length_is_three_times_the_protein(genome_validator, records) -> None:
@@ -131,14 +116,17 @@ def test_fixture_variants_classify_against_real_orfs(genome_validator, records) 
     """Every fixture variant × every ORF containing it, through the real CDS.
 
     Not asserting specific terms here — that is the fixture test's job. This asserts
-    the classifier never crashes on real geometry and never returns a bare term with
-    no explanation, which is how a silent mis-map would show up.
+    the classifier never crashes on real geometry and always explains an answer that
+    carries no amino acids, which is how a silent mis-map would show up.
     """
     import csv
 
-    from swissisoform.variantquery.consequence import OTHER, classify
     from swissisoform.variantquery.frame import resolve_residue
     from swissisoform.variantquery.index import OrfIndex
+
+    # Terms that legitimately have no amino acids: the classifier resolves them from
+    # the length delta without reading sequence.
+    no_amino_acids = {"frameshift_variant", "inframe_insertion", "inframe_deletion"}
 
     expectations = Path("/lab/barcheese01/ating/ecf_data/test_expectations.tsv")
     if not expectations.is_file():
@@ -164,16 +152,20 @@ def test_fixture_variants_classify_against_real_orfs(genome_validator, records) 
                 cds = genome_validator.build_coding_sequence_from_orf(
                     list(exons), record.strand, record.chrom
                 )
-                c = classify(
-                    exons=exons,
+                out = genome_validator.classify_against_orf(
+                    orf_exons=[tuple(exon) for exon in exons],
                     strand=record.strand,
                     cds=cds,
-                    pos=pos,
+                    genomic_pos=pos,
                     ref=ref,
                     alt=alt,
+                    orf_key=(record.tis_id, frame),
                 )
-                assert c.term, f"{chrom}:{pos} {ref}>{alt} on {record.tis_id}"
-                if c.term == OTHER or not c.hgvsp:
-                    assert c.note, f"unexplained refusal on {record.tis_id}: {c}"
+                term = out["consequence"]
+                assert term, f"{chrom}:{pos} {ref}>{alt} on {record.tis_id}"
+                if out["aa_ref"] is None:
+                    assert term in no_amino_acids or not out["validated"] or term == (
+                        "intronic"
+                    ), f"unexplained missing amino acids on {record.tis_id}: {out}"
                 classified += 1
     assert classified >= 20, f"only {classified} (variant, ORF) pairs classified"

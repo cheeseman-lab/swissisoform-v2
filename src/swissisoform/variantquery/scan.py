@@ -13,7 +13,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from swissisoform.variantquery.consequence import OTHER, classify, classify_without_sequence
+from swissisoform.clinical.validate import ConsequenceValidator
+from swissisoform.variantquery.consequence import OTHER, classify_without_sequence
 from swissisoform.variantquery.frame import region_for, resolve_residue
 from swissisoform.variantquery.index import OrfIndex
 from swissisoform.variantquery.spec import Rejection, VariantSpec, parse_line
@@ -23,16 +24,50 @@ from swissisoform.variantquery.vcf import iter_data_lines
 #: disk. Exceeding it sets ``truncated`` rather than failing the scan.
 DEFAULT_MAX_HITS = 20_000
 
+#: Classifier terms that carry no amino acids and read as a failure without a
+#: reason attached. Everything else explains itself.
+_TERM_NOTES = {
+    # Two ways to be intronic: the variant maps nowhere in this frame, or only part
+    # of a multi-base span does. Neither can be translated, so one wording covers it.
+    "intronic": "not inside this ORF's coding sequence",
+    "reference_mismatch": "REF does not match this ORF's reference sequence",
+}
+_UNCLASSIFIED_NOTE = "could not be classified against this ORF's coding sequence"
+
+
+def _hit_fields(result: dict[str, Any]) -> tuple[str, str, str, str]:
+    """``classify_against_orf`` output → the four fields a hit records.
+
+    ``consequence=None`` means the classifier could not answer — no position map, no
+    sequence, or a codon running past the end of it — which is distinct from a term
+    it declines to refine, so it gets its own note rather than a bare ``other``.
+    """
+    term = result.get("consequence")
+    if not term:
+        return OTHER, "", "", _UNCLASSIFIED_NOTE
+    return (
+        term,
+        result.get("aa_ref") or "",
+        result.get("aa_alt") or "",
+        _TERM_NOTES.get(term, ""),
+    )
+
 
 @dataclass(frozen=True, slots=True)
 class VariantHit:
     """One (variant, ORF) pair. A position in N isoforms yields N hits.
 
-    ``residue`` is **0-based**, matching ``protein_pos`` elsewhere in the
-    pipeline — so TP53 p.R248 reports ``residue=247``. ``hgvsp`` is 1-based, as the
-    notation requires, and is numbered against the protein named by ``frame``: the
-    same nucleotide is a different residue in every ORF containing it, so the two
-    fields have to travel together.
+    ``residue`` is **0-based**, matching ``protein_pos`` elsewhere in the pipeline —
+    so TP53 p.R248 reports ``residue=247`` — and is numbered against the protein
+    named by ``frame``. The same nucleotide is a different residue in every ORF
+    containing it, so the two fields have to travel together.
+
+    Everything below ``region`` comes from the pipeline's own classifier
+    (:meth:`~swissisoform.clinical.validate.ConsequenceValidator.classify_against_orf`),
+    so an uploaded variant is described exactly the way an annotated one is: the
+    consequence term, the reference and alternate amino acids, and nothing else. No
+    HGVS notation is produced here — the pipeline never derives one either, it copies
+    what VEP / ClinVar / COSMIC supplied, and an uploaded VCF has no such source.
     """
 
     line_no: int
@@ -51,11 +86,12 @@ class VariantHit:
     #: One of the figure's consequence terms; ``other`` when unclassifiable.
     consequence: str = OTHER
     #: Reference and alternate amino acids. More than one letter when a multi-base
-    #: substitution straddles a codon boundary.
+    #: substitution straddles a codon boundary; empty for indels, which the
+    #: classifier resolves by length without reading sequence.
     aa_ref: str = ""
     aa_alt: str = ""
-    hgvsp: str = ""
-    #: Why the notation is absent, when it is (e.g. an indel crossing an intron).
+    #: Why the amino acids are absent, when the term alone does not say (e.g. a span
+    #: that leaves the coding sequence, or a REF the reference disagrees with).
     consequence_note: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -169,6 +205,10 @@ def scan(
     counts = ScanCounts()
     hits: list[VariantHit] = []
     genes: dict[str, GeneSummary] = {}
+    # One validator for the whole scan, so its position-map cache is reused across
+    # every variant that lands in the same ORF. Constructed with no ``cds_df`` and no
+    # genome: the coding sequence comes from the index, so nothing here opens a FASTA.
+    validator = ConsequenceValidator()
 
     for line_no, line in iter_data_lines(path):
         counts.lines += 1
@@ -198,22 +238,30 @@ def scan(
                 # truncation's lost N-terminus is numbered against the canonical.
                 cds = record.cds_for(frame)
                 if cds:
-                    consequence = classify(
-                        exons=record.exons_for(frame),
+                    result = validator.classify_against_orf(
+                        orf_exons=[tuple(exon) for exon in record.exons_for(frame)],
                         strand=record.strand,
                         cds=cds,
-                        pos=spec.pos,
+                        genomic_pos=spec.pos,
                         ref=spec.ref,
                         alt=spec.alt,
-                        start_codon=record.start_codon_for(frame),
+                        orf_key=(record.tis_id, frame),
+                        context=f"{record.tis_id}:{frame}",
                     )
+                    term, aa_ref, aa_alt, note = _hit_fields(result)
+                    # One residue number, and it comes from the classifier.
+                    # ``resolve_residue`` walks the REF span in ascending *genomic*
+                    # order, which on the minus strand reaches the span's last
+                    # translated base first — so it lands a codon late on a
+                    # multi-base variant. It still decides the frame.
+                    if result["protein_pos"] is not None:
+                        residue = result["protein_pos"]
                 else:
                     # Index built without a genome: length still gives the class,
                     # but missense/synonymous/stop_gained are indistinguishable.
-                    consequence = classify_without_sequence(spec.ref, spec.alt)
-                counts.consequences[consequence.term] = (
-                    counts.consequences.get(consequence.term, 0) + 1
-                )
+                    term, note = classify_without_sequence(spec.ref, spec.alt)
+                    aa_ref = aa_alt = ""
+                counts.consequences[term] = counts.consequences.get(term, 0) + 1
                 counts.hits += 1
                 summary = genes.setdefault(record.gene_name, GeneSummary(record.gene_name))
                 summary.n_hits += 1
@@ -239,11 +287,10 @@ def scan(
                             frame=frame,
                             residue=residue,
                             region=region,
-                            consequence=consequence.term,
-                            aa_ref=consequence.aa_ref,
-                            aa_alt=consequence.aa_alt,
-                            hgvsp=consequence.hgvsp,
-                            consequence_note=consequence.note,
+                            consequence=term,
+                            aa_ref=aa_ref,
+                            aa_alt=aa_alt,
+                            consequence_note=note,
                         )
                     )
                 else:

@@ -320,7 +320,6 @@ def test_hit_records_expose_only_the_expected_fields(result) -> None:
             "consequence",
             "aa_ref",
             "aa_alt",
-            "hgvsp",
             "consequence_note",
         }
 
@@ -345,10 +344,12 @@ def test_synonymous_hits_exist_and_are_not_guessed_as_missense(result) -> None:
     """
     by_gene = {}
     for hit in result.hits:
-        by_gene.setdefault(hit.gene, set()).add((hit.consequence, hit.hgvsp))
+        by_gene.setdefault(hit.gene, set()).add(
+            (hit.consequence, hit.aa_ref, hit.aa_alt, hit.residue)
+        )
 
-    assert ("synonymous_variant", "p.D2D") in by_gene["EIF2B1"]
-    assert ("synonymous_variant", "p.R18R") in by_gene["SRSF2"]
+    assert ("synonymous_variant", "D", "D", 1) in by_gene["EIF2B1"]
+    assert ("synonymous_variant", "R", "R", 17) in by_gene["SRSF2"]
     n_syn = sum(1 for h in result.hits if h.consequence == "synonymous_variant")
     assert n_syn >= 6, f"expected the silent hits to survive, got {n_syn}"
 
@@ -365,28 +366,35 @@ def test_multi_codon_mnv_reports_both_residues(result) -> None:
     ube2m = [h for h in result.hits if h.gene == "UBE2M" and h.ref == "CAA"]
     assert ube2m
     hit = ube2m[0]
-    assert hit.hgvsp == "p.F225_E226delinsSK", hit
     assert (hit.aa_ref, hit.aa_alt) == ("FE", "SK")
+    # The residue is the FIRST codon the span changes. This is minus-strand, so the
+    # span's lowest coding offset — not the one POS maps to, which is a codon later.
+    assert hit.residue == 224, hit
 
 
-def test_the_first_orf_base_is_a_start_loss_with_the_real_start_codon(result) -> None:
-    """CDC34's TIS is CTG, so residue 1 is Leu — not an assumed Met."""
+def test_a_start_codon_that_still_initiates_is_not_a_start_loss(result) -> None:
+    """CDC34's TIS is CTG, and this C>T makes it TTG — still a near-cognate start.
+
+    What decides a start-codon variant is whether the trinucleotide still initiates,
+    not whether the first codon changed: TTG does, so the ORF survives and the
+    question falls back to the residue, which is unchanged (Leu either way).
+    """
     first_base = [h for h in result.hits if h.pos == 531767]
     assert first_base
     hit = first_base[0]
-    assert hit.consequence == "start_lost"
-    assert hit.hgvsp == "p.L1?", hit
+    assert hit.consequence == "synonymous_variant", hit
+    assert (hit.aa_ref, hit.aa_alt, hit.residue) == ("L", "L", 0)
 
 
-def test_hgvsp_numbering_differs_per_orf_for_one_nucleotide(result) -> None:
+def test_residue_numbering_differs_per_orf_for_one_nucleotide(result) -> None:
     """Same substitution, different residue number in each ORF containing it.
 
-    This is why hgvsp travels with ``frame`` — the notation is meaningless without
-    knowing which protein it counts against.
+    This is why ``residue`` travels with ``frame`` — the number is meaningless
+    without knowing which protein it counts against.
     """
-    same_pos = [h for h in result.hits if h.pos == 541549 and h.hgvsp]
-    notations = {h.hgvsp for h in same_pos}
-    assert len(notations) > 1, f"expected per-ORF numbering, got {notations}"
+    same_pos = [h for h in result.hits if h.pos == 541549 and h.residue is not None]
+    residues = {h.residue for h in same_pos}
+    assert len(residues) > 1, f"expected per-ORF numbering, got {residues}"
     assert all(h.consequence == "synonymous_variant" for h in same_pos)
 
 
@@ -399,30 +407,35 @@ def test_stop_gained_is_reached_on_real_data(result) -> None:
     hits = [h for h in result.hits if h.pos == 48101323]
     assert hits, "the stop_gained fixture row produced no hit"
     assert all(h.consequence == "stop_gained" for h in hits), hits
-    assert all(h.hgvsp.endswith("*") for h in hits), [h.hgvsp for h in hits]
+    assert all(h.aa_alt == "*" for h in hits), [h.aa_alt for h in hits]
     assert all(h.region == "unique" for h in hits), "a nonsense in the extension"
 
 
-def test_inframe_deletion_names_the_removed_codon(result) -> None:
+def test_inframe_deletion_is_classified_and_placed(result) -> None:
+    """Class from the length delta, residue from the anchor — no sequence read.
+
+    Amino acids stay empty for indels, exactly as they do for an annotated variant:
+    the classifier resolves them by length rather than translating.
+    """
     hits = [h for h in result.hits if h.pos == 531771]
     assert hits
     hit = hits[0]
     assert hit.consequence == "inframe_deletion"
-    assert hit.hgvsp == "p.E2del", hit
+    assert (hit.aa_ref, hit.aa_alt) == ("", "")
+    assert hit.residue == 1, hit
 
 
-def test_a_span_leaving_the_exon_keeps_its_class_but_withholds_the_notation(result) -> None:
-    """Splicing intronic bases into the CDS would be wrong, so no p. string.
+def test_a_span_leaving_the_exon_still_gets_its_class(result) -> None:
+    """The length delta needs no sequence, so the row is still right.
 
-    The class still comes from the length delta, which needs no sequence — so the
-    variant is still drawn on the right row, just without a protein change.
+    Amino acids are absent because they are absent for every indel, not because this
+    one crosses an intron — the classifier never translates an indel.
     """
     hits = [h for h in result.hits if h.pos == 532107]
     assert hits
     hit = hits[0]
     assert hit.consequence == "frameshift_variant", hit
-    assert hit.hgvsp == "", "must not invent a notation across an intron"
-    assert "coding sequence" in hit.consequence_note
+    assert (hit.aa_ref, hit.aa_alt) == ("", "")
     assert hit.residue is not None, "still placeable — pos itself is in the exon"
 
 

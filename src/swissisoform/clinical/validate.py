@@ -18,16 +18,14 @@ from typing import Any
 import pandas as pd
 from Bio.Seq import Seq
 
+from swissisoform import coords
 from swissisoform.contract import NEAR_COGNATE_STARTS
 
 logger = logging.getLogger(__name__)
 
-COMPLEMENT = {"A": "T", "T": "A", "G": "C", "C": "G"}
-
-
-def _revcomp(seq: str) -> str:
-    """Reverse-complement an A/C/G/T/N sequence; non-ACGT bases pass through."""
-    return "".join(COMPLEMENT.get(b, b) for b in reversed(seq))
+# The reverse complement lives in coords, which the website image also vendors;
+# aliased here because this module's own callers grew up importing it from here.
+_revcomp = coords.revcomp
 
 
 class ConsequenceValidator:
@@ -49,7 +47,7 @@ class ConsequenceValidator:
     Both paths share the codon-level classification helper
     :meth:`_analyze_variant`, so consequence semantics (synonymous /
     missense / stop_gained / stop_lost / inframe_insertion /
-    inframe_deletion / frameshift_variant / mnv / intronic /
+    inframe_deletion / frameshift_variant / intronic /
     reference_mismatch) are identical regardless of which frame is used.
 
     When no genome FASTA is provided, validation falls back to position
@@ -88,90 +86,94 @@ class ConsequenceValidator:
     # Canonical-CDS path (transcript_id-based; original API)
     # ------------------------------------------------------------------
 
-    def build_position_map(self, transcript_id: str) -> dict[int, int]:
-        """Build genomic_pos -> coding_pos map for a transcript's CDS.
+    def _canonical_cds_exons(self, transcript_id: str) -> tuple[list[tuple[int, int]], str, str]:
+        """The transcript's CDS as an ORF exon list: 0-based half-open, ascending.
 
-        Walks through CDS exon regions in strand-aware order, assigning
-        each genomic position a linear 0-indexed coding position starting
-        from the canonical start codon.
+        The one thing the canonical-transcript path needs that the ORF path does not
+        — turning GTF rows into exons. Everything after it (the coding-position walk,
+        the sequence fetch) is shared, so the canonical frame stops being a special
+        implementation and becomes just another exon list.
 
-        Args:
-            transcript_id: GENCODE transcript ID (e.g. ``"ENST00000269305.9"``).
+        GTF coordinates are 1-based inclusive (``io/gtf.py:164-165``), so a row
+        becomes ``(start - 1, end)``. CDS bases upstream of the ``start_codon``
+        feature are clipped away: counting them would shift every coding position.
 
         Returns:
-            Dict mapping genomic positions (1-based, inclusive) to coding
-            positions (0-based).
+            ``(exons, strand, chrom)``, or ``([], "", "")`` when the transcript has
+            no CDS rows.
         """
-        if transcript_id in self._position_map_cache:
-            return self._position_map_cache[transcript_id]
-
         if self._cds_df is None or self._cds_df.empty:
-            return {}
+            return [], "", ""
 
-        tx_cds = self._cds_df[
-            (self._cds_df["transcript_id"] == transcript_id)
-            & (self._cds_df["feature_type"] == "CDS")
-        ].copy()
-
+        tx = self._cds_df[self._cds_df["transcript_id"] == transcript_id]
+        tx_cds = tx[tx["feature_type"] == "CDS"]
         if tx_cds.empty:
-            return {}
+            return [], "", ""
 
-        strand = tx_cds.iloc[0]["strand"]
-        self._strand_cache[transcript_id] = strand
+        strand = str(tx_cds.iloc[0]["strand"])
+        chrom = str(tx_cds.iloc[0]["chromosome"])
 
-        # Find canonical start from start_codon feature
-        start_codons = self._cds_df[
-            (self._cds_df["transcript_id"] == transcript_id)
-            & (self._cds_df["feature_type"] == "start_codon")
-        ]
-
+        start_codons = tx[tx["feature_type"] == "start_codon"]
         if not start_codons.empty:
             canonical_start = (
                 start_codons.iloc[0]["start"] if strand == "+" else start_codons.iloc[0]["end"]
             )
         else:
             canonical_start = tx_cds["start"].min() if strand == "+" else tx_cds["end"].max()
+        canonical_start = int(canonical_start)
 
-        # Sort CDS regions in mRNA order
-        if strand == "+":
-            tx_cds = tx_cds.sort_values("start")
-        else:
-            tx_cds = tx_cds.sort_values("start", ascending=False)
-
-        pos_map: dict[int, int] = {}
-        coding_pos = 0
-
+        exons: list[tuple[int, int]] = []
         for _, cds in tx_cds.iterrows():
-            cds_start = int(cds["start"])
-            cds_end = int(cds["end"])
-
+            cds_start, cds_end = int(cds["start"]), int(cds["end"])
             if strand == "+":
                 effective_start = max(cds_start, canonical_start)
                 if effective_start <= cds_end:
-                    for gpos in range(effective_start, cds_end + 1):
-                        pos_map[gpos] = coding_pos
-                        coding_pos += 1
+                    exons.append((effective_start - 1, cds_end))
             else:
                 effective_end = min(cds_end, canonical_start)
                 if cds_start <= effective_end:
-                    for gpos in range(effective_end, cds_start - 1, -1):
-                        pos_map[gpos] = coding_pos
-                        coding_pos += 1
+                    exons.append((cds_start - 1, effective_end))
 
+        # Ascending genomic order whatever the strand — the shared walkers reverse
+        # for the minus strand themselves.
+        exons.sort()
+        return exons, strand, chrom
+
+    def build_position_map(self, transcript_id: str) -> dict[int, int]:
+        """Build genomic_pos -> coding_pos map for a transcript's CDS.
+
+        Args:
+            transcript_id: GENCODE transcript ID (e.g. ``"ENST00000269305.9"``).
+
+        Returns:
+            Dict mapping genomic positions (1-based, inclusive) to coding
+            positions (0-based), empty when the transcript has no CDS.
+        """
+        if transcript_id in self._position_map_cache:
+            return self._position_map_cache[transcript_id]
+
+        exons, strand, _chrom = self._canonical_cds_exons(transcript_id)
+        if not exons:
+            return {}
+        self._strand_cache[transcript_id] = strand
+
+        pos_map = dict(coords.iter_coding_positions(exons, strand))
         self._position_map_cache[transcript_id] = pos_map
         return pos_map
 
     def build_coding_sequence(self, transcript_id: str) -> str:
-        """Extract the coding sequence from genome FASTA using the position map.
+        """Extract the transcript's coding sequence from the genome FASTA.
 
-        Requires a genome FASTA path to have been set at init time. Bases are
-        complemented for minus-strand transcripts.
+        Requires a genome FASTA path at init. Delegates to
+        :meth:`build_coding_sequence_from_orf` once the CDS rows have been turned
+        into exons, so there is one sequence-extraction implementation rather than a
+        second one that fetches per base.
 
         Args:
             transcript_id: GENCODE transcript ID.
 
         Returns:
-            Coding sequence string, or empty string if no genome is available.
+            Coding sequence in mRNA order, or empty string if no genome is available.
         """
         if transcript_id in self._coding_seq_cache:
             return self._coding_seq_cache[transcript_id]
@@ -179,36 +181,16 @@ class ConsequenceValidator:
         if self._genome_path is None:
             return ""
 
-        if self._genome is None:
-            import pysam
-
-            self._genome = pysam.FastaFile(self._genome_path)
-
-        pos_map = self.build_position_map(transcript_id)
-        if not pos_map:
+        exons, strand, chrom = self._canonical_cds_exons(transcript_id)
+        if not exons:
             return ""
+        self._strand_cache[transcript_id] = strand
 
-        strand = self._strand_cache.get(transcript_id, "+")
-
-        tx_cds = self._cds_df[
-            (self._cds_df["transcript_id"] == transcript_id)
-            & (self._cds_df["feature_type"] == "CDS")
-        ]
-        if tx_cds.empty:
-            return ""
-        chrom = tx_cds.iloc[0]["chromosome"]
-
-        # Sort genomic positions by coding position (i.e. mRNA order)
-        sorted_positions = sorted(pos_map.items(), key=lambda x: x[1])
-
-        coding_bases: list[str] = []
-        for gpos, _cpos in sorted_positions:
-            base = self._genome.fetch(chrom, gpos - 1, gpos)
-            if strand == "-":
-                base = COMPLEMENT.get(base.upper(), base)
-            coding_bases.append(base.upper())
-
-        seq = "".join(coding_bases)
+        # Tuple key so a transcript can never collide with an ORF key, which is what
+        # the two separate caches were originally guarding against.
+        seq = self.build_coding_sequence_from_orf(
+            exons, strand, chrom, orf_key=("transcript", transcript_id)
+        )
         self._coding_seq_cache[transcript_id] = seq
         return seq
 
@@ -249,22 +231,10 @@ class ConsequenceValidator:
         if key in self._orf_position_map_cache:
             return self._orf_position_map_cache[key]
 
-        intervals = list(orf_exons)
-        if strand == "-":
-            intervals = list(reversed(intervals))
-
-        pos_map: dict[int, int] = {}
-        coding_pos = 0
-        for start, end in intervals:
-            if strand == "+":
-                for gpos in range(start + 1, end + 1):
-                    pos_map[gpos] = coding_pos
-                    coding_pos += 1
-            else:
-                for gpos in range(end, start, -1):
-                    pos_map[gpos] = coding_pos
-                    coding_pos += 1
-
+        # One traversal, shared with ``coords.coding_offset`` — which answers the same
+        # question for a single position without building the map. Materialising it
+        # here is worth it because the pipeline asks about many variants per ORF.
+        pos_map = dict(coords.iter_coding_positions(orf_exons, strand))
         self._orf_position_map_cache[key] = pos_map
         return pos_map
 
@@ -328,14 +298,65 @@ class ConsequenceValidator:
         instead of a transcript_id + canonical CDS lookup. Used to re-call
         each variant in the *isoform* reading frame for the isoform-unique
         region.
+
+        Reads the coding sequence out of the genome; callers that already hold it
+        (the VCF scan, whose ORF index ships ``orf_cds``) should use
+        :meth:`classify_against_orf` instead and skip the FASTA entirely.
         """
-        pos_map = self.build_position_map_from_orf(orf_exons, strand, orf_key=orf_key)
         coding_seq = self.build_coding_sequence_from_orf(
             orf_exons, strand, chrom, orf_key=orf_key
         )
+        return self.classify_against_orf(
+            orf_exons=orf_exons,
+            strand=strand,
+            cds=coding_seq,
+            genomic_pos=genomic_pos,
+            ref=ref,
+            alt=alt,
+            orf_key=orf_key,
+            context=context,
+        )
+
+    def classify_against_orf(
+        self,
+        *,
+        orf_exons: list[tuple[int, int]],
+        strand: str,
+        cds: str,
+        genomic_pos: int,
+        ref: str,
+        alt: str,
+        orf_key: Any = None,
+        context: str = "",
+    ) -> dict[str, Any]:
+        """Classify a variant against an ORF whose coding sequence the caller has.
+
+        The same analysis as :meth:`validate_variant_against_orf` with the one
+        difference that matters outside this process: the sequence is *given*, not
+        fetched. Position mapping needs only the exons, so nothing here touches
+        pysam or the genome FASTA — which is what lets the deployed website vendor
+        this module and classify an uploaded VCF against the coding sequence stored
+        in ``orf_index.parquet``.
+
+        Args:
+            orf_exons: 0-based half-open plus-strand intervals, ascending.
+            strand: ``"+"`` or ``"-"``.
+            cds: That ORF's coding sequence in mRNA order, no trailing stop. Must
+                be the sequence *these* exons describe — pairing one ORF's exons
+                with another's sequence shifts every residue silently.
+            genomic_pos: 1-based genomic position of the variant.
+            ref: Reference allele, plus-strand.
+            alt: Alternate allele, plus-strand.
+            orf_key: Optional hashable cache key for the position map.
+            context: Label used in warning messages.
+
+        Returns:
+            The same dict as :meth:`_analyze_variant`.
+        """
+        pos_map = self.build_position_map_from_orf(orf_exons, strand, orf_key=orf_key)
         return self._analyze_variant(
             pos_map=pos_map,
-            coding_seq=coding_seq,
+            coding_seq=cds,
             strand=strand,
             genomic_pos=genomic_pos,
             ref=ref,
@@ -397,10 +418,22 @@ class ConsequenceValidator:
                 "validated": True,
             }
 
-        # MNV — skip codon walk to avoid reference_mismatch spam.
-        if len(ref) > 1:
+        # Substitutions — one base or several, handled by the same codon walk. A
+        # multi-base substitution can straddle a codon boundary and change two
+        # residues, so the walk covers every codon the span touches rather than one.
+        #
+        # On the minus strand mRNA order runs against genomic order, so the span's
+        # first *translated* base is the one with the lowest coding offset — POS is
+        # its last. Taking the minimum is a no-op for an SNV and for the plus strand.
+        span_offsets = [pos_map.get(p) for p in range(genomic_pos, genomic_pos + len(ref))]
+        if any(offset is None for offset in span_offsets):
+            # Part of the span lies outside this ORF's coding sequence, so splicing
+            # the ALT in would translate intronic bases. Second of the two ways a
+            # variant is called intronic: the first (above) is an anchor that maps
+            # nowhere and carries no residue, this one is an anchor that maps while
+            # the rest of the span runs off the end, so the anchor's residue stands.
             return {
-                "consequence": "mnv",
+                "consequence": "intronic",
                 "protein_pos": coding_pos // 3,
                 "aa_ref": None,
                 "aa_alt": None,
@@ -408,8 +441,8 @@ class ConsequenceValidator:
                 "codon_alt": None,
                 "validated": True,
             }
+        coding_pos = min(span_offsets)  # type: ignore[arg-type]
 
-        # SNV
         if not coding_seq:
             return {
                 "consequence": None,
@@ -421,10 +454,13 @@ class ConsequenceValidator:
                 "validated": False,
             }
 
-        codon_start = (coding_pos // 3) * 3
-        offset = coding_pos % 3
+        first_codon = coding_pos // 3
+        last_codon = (coding_pos + len(ref) - 1) // 3
+        codon_start = first_codon * 3
+        codon_end = (last_codon + 1) * 3
+        offset = coding_pos - codon_start
 
-        if codon_start + 3 > len(coding_seq):
+        if codon_end > len(coding_seq):
             logger.warning(
                 "Codon extends beyond coding sequence for %s at gpos %d",
                 context or "<unknown-orf>",
@@ -432,7 +468,7 @@ class ConsequenceValidator:
             )
             return {
                 "consequence": None,
-                "protein_pos": coding_pos // 3,
+                "protein_pos": first_codon,
                 "aa_ref": None,
                 "aa_alt": None,
                 "codon_ref": None,
@@ -440,28 +476,31 @@ class ConsequenceValidator:
                 "validated": False,
             }
 
-        codon_ref = coding_seq[codon_start : codon_start + 3]
+        codon_ref = coding_seq[codon_start:codon_end]
 
+        # Whole-string reverse complement, not per base: a multi-base allele is
+        # written on the plus strand in genomic order, so it needs reversing as well
+        # as complementing to read in mRNA sense. Identical to a per-base complement
+        # when the allele is one base.
+        ref_bases = ref.upper()
+        alt_bases = alt.upper()
         if strand == "-":
-            ref_base = COMPLEMENT.get(ref.upper(), ref.upper())
-            alt_base = COMPLEMENT.get(alt.upper(), alt.upper())
-        else:
-            ref_base = ref.upper()
-            alt_base = alt.upper()
+            ref_bases = _revcomp(ref_bases)
+            alt_bases = _revcomp(alt_bases)
 
-        if codon_ref[offset] != ref_base:
+        if codon_ref[offset : offset + len(ref_bases)] != ref_bases:
             logger.warning(
                 "Reference mismatch at %s gpos=%d — expected %s at offset %d of codon %s, got %s",
                 context or "<unknown-orf>",
                 genomic_pos,
-                ref_base,
+                ref_bases,
                 offset,
                 codon_ref,
-                codon_ref[offset],
+                codon_ref[offset : offset + len(ref_bases)],
             )
             return {
                 "consequence": "reference_mismatch",
-                "protein_pos": coding_pos // 3,
+                "protein_pos": first_codon,
                 "aa_ref": None,
                 "aa_alt": None,
                 "codon_ref": codon_ref,
@@ -469,11 +508,13 @@ class ConsequenceValidator:
                 "validated": False,
             }
 
-        codon_alt = codon_ref[:offset] + alt_base + codon_ref[offset + 1 :]
+        codon_alt = (
+            codon_ref[:offset] + alt_bases + codon_ref[offset + len(ref_bases) :]
+        )
         aa_ref = str(Seq(codon_ref).translate())
         aa_alt = str(Seq(codon_alt).translate())
 
-        if coding_pos // 3 == 0 and codon_alt not in NEAR_COGNATE_STARTS:
+        if first_codon == 0 and codon_alt[:3] not in NEAR_COGNATE_STARTS:
             # Codon 0 is this ORF's start. What matters is whether the trinucleotide
             # still initiates, not what it translates to: dropping out of
             # NEAR_COGNATE_STARTS ablates the start and the proteoform with it, and
@@ -484,16 +525,18 @@ class ConsequenceValidator:
             consequence = "start_lost"
         elif aa_ref == aa_alt:
             consequence = "synonymous_variant"
-        elif aa_alt == "*":
+        elif "*" in aa_alt:
+            # Membership, not equality: a substitution spanning two codons can turn
+            # the second one into a stop while leaving the first a normal residue.
             consequence = "stop_gained"
-        elif aa_ref == "*":
+        elif "*" in aa_ref:
             consequence = "stop_lost"
         else:
             consequence = "missense_variant"
 
         return {
             "consequence": consequence,
-            "protein_pos": coding_pos // 3,
+            "protein_pos": first_codon,
             "aa_ref": aa_ref,
             "aa_alt": aa_alt,
             "codon_ref": codon_ref,

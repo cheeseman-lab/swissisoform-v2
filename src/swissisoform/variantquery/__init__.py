@@ -4,11 +4,19 @@ Answers one question, fast: does this variant land inside an annotated ORF, and
 if so which isoform, which residue, and is that residue in the isoform-unique or
 the shared region?
 
-Deliberately **stdlib-only** — no pandas, no pysam, no Flask. That is what lets
-the website vendor this package into its Railway image (the seam
-``website/prepare_deploy.sh`` already uses for ``swissisoform.site.evidence``)
-and what keeps it unit-testable without a run or a web server. The pyarrow read
-that materialises an index lives at the call sites, not here.
+No Flask, no web server, and no genome: everything here runs off
+``orf_index.parquet``, which is what lets the website vendor this package into its
+Railway image (the seam ``website/prepare_deploy.sh`` already uses for
+``swissisoform.site.evidence``) and keeps it unit-testable without a run. The
+pyarrow read that materialises an index lives in :mod:`load`, not here.
+
+Consequence classification is **not** implemented here — it is
+:meth:`swissisoform.clinical.validate.ConsequenceValidator.classify_against_orf`,
+the pipeline's own classifier, called with the coding sequence the index carries.
+That is a deliberate dependency: this package pulls in ``clinical.validate`` and
+therefore pandas + biopython, and the image installs them. What stays local is
+what the pipeline has no counterpart for — resolving a bare coordinate to an ORF,
+and the sequence-free fallback for an index built without a genome.
 
 Coordinate conventions, inherited from :mod:`swissisoform.coords` and
 ``io/parquet.py``:

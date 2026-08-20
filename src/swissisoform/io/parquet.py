@@ -239,17 +239,12 @@ def _genomic_unique_shared(
     arbitrary windows around the *biologically meaningful* region of each
     TIS without re-running the assembly layer.
     """
-    from swissisoform.coords import interval_difference, interval_intersection
+    from swissisoform.coords import unique_shared_intervals
     from swissisoform.models import ORFType
 
     if not orf_exons or not canonical_orf_exons:
         return [], []
-    if orf_type == ORFType.TRUNCATED:
-        unique = interval_difference(canonical_orf_exons, orf_exons)
-    else:
-        unique = interval_difference(orf_exons, canonical_orf_exons)
-    shared = interval_intersection(orf_exons, canonical_orf_exons)
-    return unique, shared
+    return unique_shared_intervals(orf_type == ORFType.TRUNCATED, orf_exons, canonical_orf_exons)
 
 
 def _diff_location(diff: Any) -> tuple[int | None, int | None, str | None]:

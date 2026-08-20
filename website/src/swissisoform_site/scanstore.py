@@ -84,8 +84,10 @@ _SWEEP_MARKER = ".last_sweep"
 #: expired.
 #:
 #: History: d1 initial · d2 per-gene n_hits split from n_variants ·
-#: d3 per-hit consequence / aa_ref / aa_alt / hgvsp.
-DIGEST_SCHEMA = "d3"
+#: d3 per-hit consequence / aa_ref / aa_alt / hgvsp · d4 hgvsp dropped, and hits now
+#: classified by the pipeline's own ConsequenceValidator (so a minus-strand
+#: multi-base variant's residue moves one codon, to the first one it changes).
+DIGEST_SCHEMA = "d4"
 
 
 class ScanStoreError(RuntimeError):

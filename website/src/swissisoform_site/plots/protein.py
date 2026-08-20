@@ -85,7 +85,7 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
         view: duck-typed adapter with ``canonical_len``, ``bars`` (per isoform:
             ``label``/``x0``/``x1``/``is_trunc``/``diff_x0``/``diff_x1``/
             ``diff_on_canonical``), ``variants`` (``variant_id``/``pos``/
-            ``consequence``/``significance``/``hgvsp``/``source``/``in_unique``),
+            ``consequence``/``significance``/``protein_change``/``source``/``in_unique``),
             ``domains`` (``name``/``interpro_id``/``x0``/``x1``/``isoforms``),
             ``disorder``/``coiled_coil`` (``x0``/``x1``), ``motifs`` (``name``/
             ``x0``/``x1``), ``cell_lines`` (``sample`` + ``marks`` of
@@ -221,7 +221,7 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                 up_xs.append(v["pos"])
                 up_hover.append(
                     f"<b>From your VCF</b><br>{v.get('uploaded_detail') or ''}<br>"
-                    f"{v.get('hgvsp') or ''}<br>"
+                    f"{v.get('protein_change') or ''}<br>"
                     f"{c} · {'unique' if v.get('in_unique') else 'shared'} region"
                 )
                 continue
@@ -232,7 +232,7 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
             sizes.append((9 if is_path else 6) if in_unique else (7 if is_path else 4))
             opac.append(1.0 if in_unique else 0.4)
             hover.append(
-                f"{v.get('variant_id', '?')}<br>{v.get('hgvsp') or ''}<br>"
+                f"{v.get('variant_id', '?')}<br>{v.get('protein_change') or ''}<br>"
                 f"{c} · {'unique' if in_unique else 'shared'} region<br>"
                 f"{v.get('significance') or '—'} · {v.get('source') or ''}"
             )

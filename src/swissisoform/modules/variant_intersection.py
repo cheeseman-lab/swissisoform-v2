@@ -33,7 +33,7 @@ from copy import deepcopy
 from typing import Any
 
 from swissisoform.clinical.validate import ConsequenceValidator
-from swissisoform.coords import interval_difference, interval_intersection
+from swissisoform.coords import position_in_intervals, unique_shared_intervals
 from swissisoform.models import ORFType, TranslationInitiationSite
 
 logger = logging.getLogger(__name__)
@@ -59,18 +59,6 @@ def _density_ratio(
     if shared_density <= 0:
         return None
     return (n_unique / unique_nt) / shared_density
-
-
-def _point_in_intervals(pos: int, intervals: list[tuple[int, int]]) -> bool:
-    """True when *pos* (1-based genomic) lies in any half-open ``[start, end)`` interval.
-
-    The intervals are 0-based half-open plus-strand coordinates, so a 1-based
-    ``pos`` matches when ``start < pos <= end``.
-    """
-    for start, end in intervals:
-        if start < pos <= end:
-            return True
-    return False
 
 
 class VariantIntersectionModule:
@@ -156,13 +144,14 @@ class VariantIntersectionModule:
         # ORF-type-aware unique region. For truncations the "unique" coding
         # nucleotides live in canonical (the lost N-term); for everything else
         # they live in the isoform.
-        if site.orf_type == ORFType.TRUNCATED:
-            unique = interval_difference(site.canonical_orf_exons, site.orf_exons)
-            unique_space = "canonical"
-        else:
-            unique = interval_difference(site.orf_exons, site.canonical_orf_exons)
-            unique_space = "isoform"
-        shared = interval_intersection(site.orf_exons, site.canonical_orf_exons)
+        is_truncation = site.orf_type == ORFType.TRUNCATED
+        unique_space = "canonical" if is_truncation else "isoform"
+        # No missing-skeleton guard: an ORF with no canonical counterpart is entirely
+        # unique, which is the right answer for scoring. (The parquet writer takes the
+        # opposite view — see ``coords.unique_shared_intervals``.)
+        unique, shared = unique_shared_intervals(
+            is_truncation, site.orf_exons, site.canonical_orf_exons
+        )
 
         # Re-validate every variant in the isoform's reading frame, writing
         # isoform_* fields onto each dict in place. Caches by tis_id so calls
@@ -226,10 +215,10 @@ class VariantIntersectionModule:
                 n_unscored += 1
                 continue
 
-            in_unique = _point_in_intervals(pos, unique)
-            in_shared = _point_in_intervals(pos, shared)
-            in_isoform_orf = _point_in_intervals(pos, site.orf_exons)
-            in_canonical_orf = _point_in_intervals(pos, canonical_orf)
+            in_unique = position_in_intervals(pos, unique)
+            in_shared = position_in_intervals(pos, shared)
+            in_isoform_orf = position_in_intervals(pos, site.orf_exons)
+            in_canonical_orf = position_in_intervals(pos, canonical_orf)
 
             # Drop pure-intronic / pure-UTR variants that don't touch either
             # coding region. Keeps the hit list focused without losing any

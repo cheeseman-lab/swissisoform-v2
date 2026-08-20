@@ -17,7 +17,11 @@
 #      cutoffs the viewer renders against) from ScoringConfig rather than
 #      restating them; it is dataclasses + pathlib only, so it costs nothing.
 #      swissisoform.variantquery rides along the same way for the VCF scan
-#      endpoint — stdlib-only apart from a lazy pyarrow import in load.py.
+#      endpoint, and with it clinical/validate.py + contract.py, because the scan
+#      classifies variants with the pipeline's own ConsequenceValidator rather
+#      than a second implementation. That is what puts biopython in the image
+#      (see Dockerfile); pysam is not needed, since the coding sequence ships in
+#      orf_index.parquet and the genome readers are never called.
 #
 # ORF_INDEX_RUN is deliberately independent of RUN: the site *displays* one
 # small run but should *scan* the whole catalogue. orf_index.parquet is ~1.4 MB
@@ -71,14 +75,25 @@ cp -L "$INDEX_SRC/orf_index.parquet"     data/orf_index.parquet
 if [[ -d "$SRC/llm" ]]; then cp -rL "$SRC/llm" data/llm; else mkdir -p data/llm; fi
 if [[ -d "$SRC/structures" ]]; then cp -rL "$SRC/structures" data/structures; fi
 
-echo "[prepare_deploy] staging swissisoform.site.evidence + variantquery into the build context"
+echo "[prepare_deploy] staging swissisoform.site.evidence + clinical.validate + variantquery"
 rm -rf src/swissisoform scripts
-mkdir -p src/swissisoform/site src/swissisoform/variantquery scripts
+mkdir -p src/swissisoform/site src/swissisoform/variantquery src/swissisoform/clinical scripts
 touch scripts/__init__.py                # keep scripts/ a package so COPY scripts/ resolves
 cp ../src/swissisoform/__init__.py        src/swissisoform/__init__.py
 cp ../src/swissisoform/config.py          src/swissisoform/config.py
 cp ../src/swissisoform/site/__init__.py   src/swissisoform/site/__init__.py
 cp ../src/swissisoform/site/evidence.py   src/swissisoform/site/evidence.py
+# The scan classifies variants with the pipeline's own ConsequenceValidator rather
+# than a second implementation, so validate.py + the contract it reads come along.
+# It needs pysam only for the genome-reading functions, which the container never
+# calls: orf_index.parquet carries the coding sequence.
+cp ../src/swissisoform/contract.py          src/swissisoform/contract.py
+# coords.py holds the shared genomic primitives (the exon walk, interval
+# membership, revcomp, chromosome naming) that variantquery and the pipeline both
+# use. Kept stdlib-only for exactly this reason.
+cp ../src/swissisoform/coords.py            src/swissisoform/coords.py
+cp ../src/swissisoform/clinical/__init__.py src/swissisoform/clinical/__init__.py
+cp ../src/swissisoform/clinical/validate.py src/swissisoform/clinical/validate.py
 # variantquery: copy the whole package rather than a hand-listed set of modules.
 # A hardcoded list silently omits any module added later — adding consequence.py
 # without updating the list shipped an image whose scan.py could not import, so

@@ -548,7 +548,16 @@ def test_hover_names_the_source_and_the_vcf_line(client, scan_token) -> None:
     assert hovers
     assert all("From your VCF" in h for h in hovers)
     assert any(re.search(r"line \d+", h) for h in hovers)
-    assert any("p." in h for h in hovers)
+    # The nucleotide change belongs in the detail line, and the protein change on
+    # its own — a bug once put the protein change in both, losing the REF>ALT.
+    assert any(re.search(r"chr\d+:[\d,]+ [ACGT]+>[ACGT]+", h) for h in hovers), hovers
+    # HGVS three-letter notation, matching how the annotated variants read.
+    assert any(re.search(r"p\.[A-Z][a-z]{2}\d+([A-Z][a-z]{2}|Ter|=|\?)", h) for h in hovers), hovers
+    # ...and it must name the frame it counts against, since the identical-looking
+    # ClinVar string beside it is numbered against a transcript instead.
+    assert all(
+        "frame" in h for h in hovers if re.search(r"p\.[A-Z][a-z]{2}\d+", h)
+    ), hovers
 
 
 def test_one_variant_in_several_isoforms_is_a_single_mark(client, scan_token) -> None:
@@ -575,26 +584,29 @@ def test_a_stale_token_draws_nothing(client) -> None:
     assert uploaded_traces(figure) == []
 
 
-def test_a_withheld_notation_explains_itself_in_the_hover(client, scan_token) -> None:
-    """An absent p. string is deliberate, so the tooltip must say why.
+def test_an_absent_amino_acid_change_explains_itself_in_the_hover(client, scan_token) -> None:
+    """Indels carry no amino acids, so the tooltip must say so rather than blank out.
 
-    The fixture's exon-spanning deletion keeps its class (from the length delta) but
-    cannot be named, because splicing intronic bases into the CDS would be wrong.
-    Leaving the field blank would read as a rendering bug.
+    The classifier resolves an indel from its length delta without reading sequence —
+    the same answer an annotated variant gets — so there is a residue but no residue
+    change. Leaving the field empty would read as a rendering bug.
     """
     traces = uploaded_traces(gene_figure(client, f"/genes/CDC34?vcf={scan_token}"))
     hovers = [h for t in traces for h in t["hovertext"]]
-    withheld = [h for h in hovers if "not determined" in h]
-    assert withheld, hovers
-    assert "coding sequence" in withheld[0]
-    assert "| |" not in withheld[0].replace("<br>", " | "), "no empty tooltip field"
+    absent = [h for h in hovers if "no amino-acid change resolved" in h]
+    assert absent, hovers
+    assert re.search(r"residue \d+", absent[0])
+    assert "| |" not in absent[0].replace("<br>", " | "), "no empty tooltip field"
 
 
 def test_stop_gained_and_inframe_deletion_reach_the_figure(client, scan_token) -> None:
     """Both rows were unreachable before the fixture gained these cases."""
     cdc34 = uploaded_traces(gene_figure(client, f"/genes/CDC34?vcf={scan_token}"))
     hovers = [h for t in cdc34 for h in t["hovertext"]]
-    assert any("inframe_deletion" in h and "p.E2del" in h for h in hovers), hovers
+    assert any("inframe_deletion" in h and "residue 2" in h for h in hovers), hovers
+    # CDC34's CTG start: a first-base change keeps a near-cognate start, so it is
+    # synonymous, while the third-base row ablates it.
+    assert any("start_lost" in h for h in hovers), hovers
 
     cbx1 = uploaded_traces(gene_figure(client, f"/genes/CBX1?vcf={scan_token}"))
     cbx1_hovers = [h for t in cbx1 for h in t["hovertext"]]

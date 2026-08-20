@@ -999,6 +999,60 @@ def _frame_domain_clusters(occurrences: list[dict[str, Any]]) -> list[dict[str, 
     return out
 
 
+def hgvsp_from_hit(aa_ref: str, aa_alt: str, residue: int, consequence: str) -> str:
+    """HGVS protein notation for one scan hit, or ``""`` when none is derivable.
+
+    An uploaded variant has no upstream annotator — the pipeline's own variants carry
+    whatever VEP / ClinVar / COSMIC wrote — so the notation is built here from the
+    classifier's amino acids. Three-letter codes and the same conventions those
+    sources use, since both kinds share a tooltip:
+
+    ========================  ==========================
+    missense                  ``p.Arg253Glu``
+    synonymous                ``p.Arg253=``
+    stop gained               ``p.Arg253Ter``
+    stop lost                 ``p.Ter253Arg``
+    start lost                ``p.Leu1?``
+    multi-residue (MNV)       ``p.Phe225_Glu226delinsSerLys``
+    ========================  ==========================
+
+    **The residue is numbered against the ORF the hit names, not a transcript.** The
+    same nucleotide is a different residue in every ORF containing it, so the caller
+    must show the frame alongside — a bare ``p.Arg253Glu`` next to a ClinVar string
+    would otherwise read as the same coordinate system when it is not.
+
+    Args:
+        aa_ref: Reference residue(s), one letter each; empty for indels, which the
+            classifier resolves by length without reading sequence.
+        aa_alt: Alternate residue(s), same length as *aa_ref*.
+        residue: 0-based residue of the first affected codon.
+        consequence: The classifier's term, which decides the notation's shape.
+
+    Returns:
+        The notation, or ``""`` when there are no amino acids to name.
+    """
+    from Bio.Data.IUPACData import protein_letters_1to3
+
+    def three(one: str) -> str:
+        return "Ter" if one == "*" else protein_letters_1to3.get(one.upper(), one)
+
+    if not aa_ref or len(aa_ref) != len(aa_alt):
+        return ""
+
+    first = residue + 1
+    if consequence == "start_lost":
+        # What changed is whether the codon still initiates, not the residue — the
+        # same "?" VEP writes for p.Met1?.
+        return f"p.{three(aa_ref[0])}{first}?"
+    if len(aa_ref) > 1:
+        last = first + len(aa_ref) - 1
+        inserted = "".join(three(a) for a in aa_alt)
+        return f"p.{three(aa_ref[0])}{first}_{three(aa_ref[-1])}{last}delins{inserted}"
+    if aa_ref == aa_alt:
+        return f"p.{three(aa_ref)}{first}="
+    return f"p.{three(aa_ref)}{first}{three(aa_alt)}"
+
+
 def _uploaded_variant_records(hits: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     """Scan hits → figure records, in the same shape the ClinVar variants use.
 
@@ -1047,21 +1101,33 @@ def _uploaded_variant_records(hits: list[dict[str, Any]] | None) -> list[dict[st
             # A hit in the unique region of ANY isoform makes the mark prominent.
             merged[key]["in_unique"] |= hit.get("region") == "unique"
             continue
-        # An absent notation is deliberate (e.g. an indel crossing an intron), so say
-        # so rather than leaving a blank line in the tooltip that reads as a bug.
-        hgvsp = hit.get("hgvsp") or ""
-        if not hgvsp:
-            hgvsp = "protein change not determined"
+        # HGVS protein notation, in the same three-letter style the annotated
+        # variants carry, so both read alike on the same tooltip.
+        protein_change = hgvsp_from_hit(
+            hit.get("aa_ref") or "", hit.get("aa_alt") or "", residue, consequence
+        )
+        if not protein_change:
+            # Absent is a real answer for an indel — the classifier resolves those by
+            # length without reading sequence — so say which, rather than leaving a
+            # blank line in the tooltip that reads as a bug.
+            protein_change = f"residue {residue + 1} — no amino-acid change resolved"
             note = hit.get("consequence_note") or ""
             if note:
-                hgvsp += f" — {note}"
+                protein_change += f" ({note})"
+        # Name the frame in the same breath as the number. An uploaded variant is
+        # numbered against one ORF, while the ClinVar string beside it on the tooltip
+        # counts against a transcript — identical-looking notations, different
+        # coordinate systems, and nothing else on the mark says so.
+        frame = hit.get("frame") or ""
+        if frame:
+            protein_change += f" · {frame} frame"
 
         merged[key] = {
             "variant_id": variant_id,
             "pos": x + 1,  # the caller applies the global -1 shift
             "consequence": consequence,
             "significance": None,
-            "hgvsp": hgvsp,
+            "protein_change": protein_change,
             "source": "uploaded",
             "in_unique": hit.get("region") == "unique",
             "uploaded_detail": (
@@ -1223,7 +1289,7 @@ def _make_gene_protein_view(
                 "pos": fr,
                 "consequence": v.get("isoform_consequence") or v.get("consequence") or "other",
                 "significance": v.get("clinical_significance"),
-                "hgvsp": v.get("hgvsp"),
+                "protein_change": v.get("hgvsp"),
                 "source": v.get("source"),
                 "in_unique": bool(v.get("in_isoform_unique")),
             }

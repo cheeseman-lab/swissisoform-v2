@@ -1,17 +1,28 @@
-"""Genomic position → coding offset → protein residue, per ORF.
+"""Which protein a variant is numbered against, and where it sits on the figure.
 
-Pure arithmetic mirror of ``ConsequenceValidator.build_position_map_from_orf``
-(``clinical/validate.py:221``), which walks the exons in mRNA order and assigns
-consecutive coding offsets. That method materialises a full ``{gpos: offset}``
-dict and needs biopython in its module; here the same walk is done as O(exons)
-arithmetic with no dependencies, so it can run inside the website image.
-
-The two are cross-checked against each other in the test suite.
+The coordinate walk itself lives in :mod:`swissisoform.coords` and is shared with
+the pipeline's position mapper — one traversal, two access patterns. What is here is
+the part with no pipeline counterpart: choosing *which* of an isoform's two reading
+frames numbers a variant, and converting that residue into the gene figure's axis.
 """
 
 from __future__ import annotations
 
-from swissisoform.variantquery.index import Interval, OrfRecord
+from swissisoform.coords import coding_offset, span_overlaps_intervals
+from swissisoform.variantquery.index import OrfRecord
+
+__all__ = [
+    "FRAME_CANONICAL",
+    "FRAME_ISOFORM",
+    "REGION_OTHER",
+    "REGION_SHARED",
+    "REGION_UNIQUE",
+    "canonical_x",
+    "coding_offset",
+    "plotly_x",
+    "region_for",
+    "resolve_residue",
+]
 
 #: Which protein a residue is numbered against.
 FRAME_ISOFORM = "isoform"
@@ -23,30 +34,6 @@ REGION_SHARED = "shared"
 REGION_OTHER = "other"
 
 
-def coding_offset(exons: tuple[Interval, ...], strand: str, pos: int) -> int | None:
-    """0-based coding offset of 1-based ``pos`` within an ORF, or None if outside.
-
-    Exons are 0-based half-open plus-strand ascending; on the minus strand they
-    are walked in reverse (and each exon high→low) so offset 0 is always the
-    ORF's first translated base.
-    """
-    if not exons:
-        return None
-    ordered = exons if strand != "-" else tuple(reversed(exons))
-    offset = 0
-    for start, end in ordered:
-        if start < pos <= end:
-            # start+1 is the first base of the exon in plus-strand terms.
-            return offset + (pos - start - 1 if strand != "-" else end - pos)
-        offset += end - start
-    return None
-
-
-def _overlaps(intervals: tuple[Interval, ...], start: int, end: int) -> bool:
-    """True when any 0-based half-open interval overlaps 1-based ``[start, end]``."""
-    return any(s < end and e >= start for s, e in intervals)
-
-
 def region_for(record: OrfRecord, start: int, end: int) -> str:
     """Classify a 1-based inclusive span as isoform-unique, shared, or other.
 
@@ -55,9 +42,9 @@ def region_for(record: OrfRecord, start: int, end: int) -> str:
     the pipeline scored. ``unique`` wins a tie: a span straddling the boundary is
     the more interesting claim, and is what the differential-region cards show.
     """
-    if _overlaps(record.unique_intervals, start, end):
+    if span_overlaps_intervals(record.unique_intervals, start, end):
         return REGION_UNIQUE
-    if _overlaps(record.shared_intervals, start, end):
+    if span_overlaps_intervals(record.shared_intervals, start, end):
         return REGION_SHARED
     return REGION_OTHER
 
@@ -69,7 +56,7 @@ def resolve_residue(record: OrfRecord, start: int, end: int) -> tuple[int | None
     ordering is what puts a **truncation's lost N-terminus** in canonical frame:
     those bases are absent from the isoform protein, so only a canonical-frame
     residue number exists for them — matching how the gene figure already places
-    such variants (``app.py:715-753``).
+    such variants.
 
     For multi-base REFs the span is walked in ascending genomic order and the
     first base that lands inside the ORF is used, so a deletion starting in an
@@ -91,20 +78,27 @@ def resolve_residue(record: OrfRecord, start: int, end: int) -> tuple[int | None
     return None, "", None
 
 
-def plotly_x(record: OrfRecord, residue: int, frame: str) -> int | None:
-    """Residue → the gene figure's x coordinate.
+def canonical_x(
+    residue: int, frame: str, canonical_len: int | None, isoform_len: int | None
+) -> int | None:
+    """Residue → the gene figure's x coordinate, given the two protein lengths.
 
     The combined gene figure draws everything in canonical-residue space with
     isoforms right-aligned on the shared region, so an isoform-frame residue is
-    shifted by ``canonical_len - isoform_len``; a canonical-frame residue is
-    already in that space.
+    shifted by ``canonical_len - isoform_len``; a canonical-frame residue is already
+    in that space.
 
-    ``app.py:604-673`` writes this as ``residue + 1 + offset`` followed by a
-    global ``-1`` that anchors canonical residue 1 at x = 0; those cancel, so
-    plain ``residue + offset`` is the same coordinate.
+    The figure adapter writes the same conversion as ``residue + 1 + offset``
+    followed by a global ``-1`` that anchors canonical residue 1 at x = 0; those
+    cancel, so ``residue + offset`` is the same coordinate.
     """
     if frame == FRAME_CANONICAL:
         return residue
-    if record.canonical_len is None or record.isoform_len is None:
+    if canonical_len is None or isoform_len is None:
         return None
-    return residue + (record.canonical_len - record.isoform_len)
+    return residue + (canonical_len - isoform_len)
+
+
+def plotly_x(record: OrfRecord, residue: int, frame: str) -> int | None:
+    """:func:`canonical_x` for a scan hit, reading both lengths off its ORF."""
+    return canonical_x(residue, frame, record.canonical_len, record.isoform_len)

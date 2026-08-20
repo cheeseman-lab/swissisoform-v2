@@ -32,6 +32,7 @@ from swissisoform.coords import (
     interval_difference,
     interval_intersection,
     interval_length,
+    normalize_chrom,
 )
 from swissisoform.models import TranslationInitiationSite
 
@@ -122,7 +123,7 @@ class ConservationModule:
         """Return *chrom* as stored in UCSC BigWig (prefer ``chrN``)."""
         if not chrom:
             return chrom
-        return chrom if chrom.startswith("chr") else f"chr{chrom}"
+        return normalize_chrom(chrom)
 
     @staticmethod
     def _mean_from_bw(bw, chrom: str, start: int, end: int) -> float | None:
