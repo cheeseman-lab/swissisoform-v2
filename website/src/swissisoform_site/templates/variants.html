@@ -18,7 +18,6 @@
     </p>
     <p class="vq-sub">
       {% if digest.expires_at %}Deleted after {{ digest.expires_at }}.{% endif %}
-      {% if was_cached %} Reused an existing scan of the same file.{% endif %}
     </p>
   </header>
 

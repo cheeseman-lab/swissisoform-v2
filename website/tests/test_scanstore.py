@@ -55,6 +55,37 @@ def test_second_upload_is_only_cached_once_a_digest_exists() -> None:
     assert _save().was_cached is True
 
 
+def test_filename_lives_on_the_token_not_in_the_shared_blob() -> None:
+    """Two uploaders, one blob, two filenames — each must get their own back."""
+    first = _save(name="patient_A.vcf")
+    scanstore.write_digest(first.key, {"counts": {"hits": 1}})
+    second = _save(name="patient_B.vcf")
+
+    assert first.key == second.key
+    assert scanstore.load(first.token).digest["filename"] == "patient_A.vcf"
+    assert scanstore.load(second.token).digest["filename"] == "patient_B.vcf"
+
+
+def test_a_sweep_during_save_cannot_delete_the_upload(monkeypatch) -> None:
+    """Both gunicorn workers share this directory and sweep on their write path.
+
+    ``save`` used to promote the blob before writing the token, so a sweep landing
+    in that window saw an unreferenced blob and removed the very source the caller
+    was about to scan — an unhandled FileNotFoundError, not the 507 the route is
+    prepared for. Writing the token first makes the key live before the blob exists.
+    """
+    real_replace = scanstore.os.replace
+
+    def replace_with_a_sweep(src, dst):
+        # The other worker, landing exactly in the window.
+        scanstore.sweep(force=True)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(scanstore.os, "replace", replace_with_a_sweep)
+    saved = _save()
+    assert scanstore.source_path(saved.key).is_file()
+
+
 def test_different_index_version_gets_a_different_key() -> None:
     """A digest is only valid for the coordinates it was computed against."""
     a = _save(index_version="v1")

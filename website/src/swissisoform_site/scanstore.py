@@ -22,6 +22,11 @@ Two identifiers, deliberately separated:
   confirm what someone else uploaded by hashing a candidate file, which matters
   for controlled-access genomic data.
 
+The same reasoning binds anything *derived* from a shared blob: a cache-hit flag
+or the filename it was first stored under are both facts about a previous
+uploader, so neither may reach the client. Per-upload facts — filename, timing —
+live on the token and are read from there, never defaulted from the digest.
+
 Expiry is enforced when a token is **read**, not when the sweeper runs, so a
 missed sweep can never serve stale results. Deletion is best-effort cleanup.
 
@@ -263,14 +268,13 @@ def save(stream: BinaryIO, *, index_version: str, filename: str = "") -> SavedUp
     target = blob_dir(key)
     was_cached = digest_path(key).is_file()
 
-    if was_cached:
-        staging.unlink(missing_ok=True)
-    else:
-        target.mkdir(parents=True, exist_ok=True)
-        # os.replace is atomic within a filesystem, so a concurrent upload of the
-        # same file cannot observe a half-written source.
-        os.replace(staging, source_path(key))
-
+    # The token is written FIRST, before the blob is promoted. ``sweep()`` in the
+    # other worker derives its live set from the token files and deletes any blob
+    # not in it, so promoting first leaves a window where a sweep can remove the
+    # source this caller is about to scan — an unhandled FileNotFoundError, not the
+    # 507 the route is prepared for. Ordering it this way inverts the transient
+    # state to "token points at a blob that is not there yet", which ``load()``
+    # already reports as missing.
     token = secrets.token_urlsafe(_TOKEN_BYTES)
     _write_json(
         _tokens_dir() / f"{token}.json",
@@ -282,6 +286,14 @@ def save(stream: BinaryIO, *, index_version: str, filename: str = "") -> SavedUp
             "schema": DIGEST_SCHEMA,
         },
     )
+
+    if was_cached:
+        staging.unlink(missing_ok=True)
+    else:
+        target.mkdir(parents=True, exist_ok=True)
+        # os.replace is atomic within a filesystem, so a concurrent upload of the
+        # same file cannot observe a half-written source.
+        os.replace(staging, source_path(key))
     logger.info("scan upload stored token=%s key=%s cached=%s", token, key, was_cached)
     return SavedUpload(token=token, key=key, vcf_sha256=vcf_sha256, was_cached=was_cached)
 
@@ -335,7 +347,11 @@ def load(token: str) -> LoadedScan:
 
     digest = dict(digest)
     digest["vcf_id"] = token
-    digest.setdefault("filename", pointer.get("filename", ""))
+    # Assigned, never defaulted: the blob is addressed by content and shared by
+    # everyone who uploads the same bytes, so a filename stored in it belongs to
+    # whoever got there first. Only the token knows what *this* uploader called
+    # their file — the same reason created_at and expires_at are read from here.
+    digest["filename"] = pointer.get("filename", "")
     digest["created_at"] = pointer.get("created_at", "")
     digest["expires_at"] = _expiry_iso(pointer.get("created_at"))
     return LoadedScan(digest=digest, token=token)

@@ -612,7 +612,10 @@ def create_app() -> Flask:
                 "catalog_genes": index.n_genes,
                 "catalog_isoforms": index.n_isoforms,
             }
-            digest["filename"] = upload.filename
+            # Deliberately NOT digest["filename"]: the blob is keyed by content and
+            # shared by every uploader of the same bytes, so a filename written here
+            # is served to whoever uploads it next. It lives on the token instead,
+            # and scanstore.load() reads it from there.
             scanstore.write_digest(saved.key, digest)
 
         loaded = scanstore.load(saved.token)
@@ -621,10 +624,14 @@ def create_app() -> Flask:
             return jsonify({"error": "storage_failed", "message": "digest disappeared"}), 507
 
         payload = loaded.digest or {}
+        # ``was_cached`` is deliberately absent. Blobs are content-addressed and
+        # shared across uploaders, so reporting a cache hit tells the caller that
+        # SOMEONE ELSE already scanned those exact bytes — the confirm-by-upload
+        # oracle this module's capability tokens exist to prevent (scanstore.py
+        # docstring). It stays in the server log, which is ours.
         response_body = {
             "vcf_id": saved.token,
             "redirect": f"/variants/{saved.token}",
-            "was_cached": saved.was_cached,
             "counts": payload.get("counts", {}),
             "genes": payload.get("genes", []),
             "provenance": payload.get("provenance", {}),

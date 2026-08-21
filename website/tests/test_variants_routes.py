@@ -87,7 +87,6 @@ def test_scan_returns_a_token_and_the_funnel(client, vcf_bytes) -> None:
     payload = _post(client, vcf_bytes).get_json()
     assert payload["vcf_id"]
     assert payload["redirect"] == f"/variants/{payload['vcf_id']}"
-    assert payload["was_cached"] is False
 
     counts = payload["counts"]
     # Totals are derived, not literal, so adding fixture coverage does not break
@@ -186,12 +185,49 @@ def test_gzipped_upload_resolves_identically(client, vcf_bytes) -> None:
 def test_reupload_skips_the_parse_but_mints_a_new_token(client, vcf_bytes) -> None:
     first = _post(client, vcf_bytes).get_json()
     second = _post(client, vcf_bytes).get_json()
-    assert second["was_cached"] is True
     assert second["vcf_id"] != first["vcf_id"]
     assert second["counts"] == first["counts"]
     # Both tokens resolve to the same shared digest.
     assert client.get(f"/api/variants/{first['vcf_id']}.json").status_code == 200
     assert client.get(f"/api/variants/{second['vcf_id']}.json").status_code == 200
+
+    # The blob really is shared — checked at the store, not from the response,
+    # which must not say so (see test_response_never_reveals_a_cache_hit).
+    from swissisoform_site import scanstore
+
+    def _key(tok: str) -> str:
+        return json.loads((scanstore.scan_dir() / "tokens" / f"{tok}.json").read_text())["key"]
+
+    assert _key(first["vcf_id"]) == _key(second["vcf_id"])
+
+
+def test_response_never_reveals_a_cache_hit(client, vcf_bytes) -> None:
+    """Blobs are content-addressed and shared between uploaders.
+
+    So "this was already scanned" is a fact about someone *else's* upload, and
+    returning it lets anyone holding a candidate VCF confirm it was submitted —
+    the confirm-by-upload oracle the capability token exists to prevent.
+    """
+    first = _post(client, vcf_bytes).get_json()
+    second = _post(client, vcf_bytes).get_json()
+    assert "was_cached" not in first
+    assert "was_cached" not in second
+
+
+def test_filename_is_token_scoped_not_blob_scoped(client, vcf_bytes) -> None:
+    """A second uploader of the same bytes must see their OWN filename.
+
+    The digest lives in the shared blob, so a filename written into it was served
+    to everyone who uploaded those bytes afterwards — leaking what the first
+    uploader called their file.
+    """
+    a = _post(client, vcf_bytes, name="patient_A_confidential.vcf").get_json()
+    b = _post(client, vcf_bytes, name="patient_B.vcf").get_json()
+
+    da = client.get(f"/api/variants/{a['vcf_id']}.json").get_json()
+    db = client.get(f"/api/variants/{b['vcf_id']}.json").get_json()
+    assert da["filename"] == "patient_A_confidential.vcf"
+    assert db["filename"] == "patient_B.vcf"
 
 
 # ----------------------------------------------------------------------
