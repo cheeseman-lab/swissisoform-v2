@@ -30,6 +30,7 @@ from flask import (
     g,
     has_request_context,
     jsonify,
+    make_response,
     render_template,
     request,
     send_from_directory,
@@ -78,6 +79,11 @@ _CELL_LINE_SAMPLES = ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Se
 #: exome/somatic files while rejecting germline WGS, which has no business being
 #: parsed synchronously inside a request.
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+
+#: Hit rows rendered on the results page. The scan records up to
+#: ``scan.DEFAULT_MAX_HITS`` (20,000), and the page is rebuilt on every view of the
+#: token — so the table is capped here and the full list served from the JSON route.
+PAGE_MAX_HITS = 1000
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -233,6 +239,17 @@ def _log_scan(body: dict[str, Any], saved: Any) -> None:
             "scan response payload (SWISSISOFORM_SCAN_DEBUG=1)\n%s",
             json.dumps(body, indent=2, sort_keys=True, default=str),
         )
+
+
+def _no_index(response: Any) -> Any:
+    """Stamp a response as off-limits to crawlers.
+
+    Every token-addressed scan response carries this, HTML and JSON alike: a token
+    pasted anywhere a URL gets scanned — chat, an issue tracker, browser sync —
+    would otherwise make somebody's variant positions crawlable.
+    """
+    response.headers["X-Robots-Tag"] = "noindex, nofollow"
+    return response
 
 
 def create_app() -> Flask:
@@ -642,57 +659,90 @@ def create_app() -> Flask:
 
     @app.get("/variants/<token>")
     def variants_page(token: str) -> Any:
-        """Render one scan's results: the funnel, the genes hit, and every hit."""
+        """Render one scan's results: the funnel, the genes hit, and the hit table.
+
+        The hit list is capped at :data:`PAGE_MAX_HITS` rows and left out of the raw
+        JSON block. ``scan.DEFAULT_MAX_HITS`` is 20,000, and both the table and a
+        pretty-printed digest are rebuilt on *every* view of the token, not just the
+        first — a germline exome reaching that cap would render a multi-MB page each
+        time. The full list stays one request away, on the JSON route.
+        """
         loaded = scanstore.load(token)
         if loaded.expired:
-            return render_template(
-                "variants_gone.html",
-                heading="Scan expired",
-                message=(
-                    "Uploaded VCFs are deleted after 24 hours. Upload the file "
-                    "again to run a fresh scan."
-                ),
-            ), 410
+            return _no_index(
+                make_response(
+                    render_template(
+                        "variants_gone.html",
+                        heading="Scan expired",
+                        message=(
+                            "Uploaded VCFs are deleted after 24 hours. Upload the file "
+                            "again to run a fresh scan."
+                        ),
+                    ),
+                    410,
+                )
+            )
         if not loaded.ok:
-            return render_template(
-                "variants_gone.html",
-                heading="Scan not found",
-                message=(
-                    "That scan id is unknown — it may have expired, or the "
-                    "deployment may have restarted since the upload."
-                ),
-            ), 404
+            return _no_index(
+                make_response(
+                    render_template(
+                        "variants_gone.html",
+                        heading="Scan not found",
+                        message=(
+                            "That scan id is unknown — it may have expired, or the "
+                            "deployment may have restarted since the upload."
+                        ),
+                    ),
+                    404,
+                )
+            )
 
         digest = _clean(loaded.digest) or {}
         counts = digest.get("counts", {}) or {}
+        all_hits = digest.get("hits", []) or []
+        # Structurally honest: the key is dropped rather than truncated in place, so
+        # nothing reads a short list as if it were the whole one.
+        preview = {k: v for k, v in digest.items() if k != "hits"}
+        preview["hits_omitted"] = {
+            "count": len(all_hits),
+            "full_digest": url_for("variants_digest", token=token),
+        }
         # Only genes the *displayed* catalogue knows about can be linked. The scan
         # index deliberately covers the whole catalogue, so a hit in a gene this
         # build has no page for is expected, not an error.
         known_genes = set(load_all().keys())
-        return render_template(
-            "variants.html",
-            token=token,
-            digest=digest,
-            counts=counts,
-            provenance=digest.get("provenance", {}) or {},
-            genes=digest.get("genes", []) or [],
-            hits=digest.get("hits", []) or [],
-            known_genes=known_genes,
-            was_cached=False,
-            passing=max((counts.get("alleles") or 0) - (counts.get("skipped_non_pass") or 0), 0),
-            # Alleles that landed in an ORF, derived by subtraction so the funnel
-            # stays monotonic. counts["hits"] is NOT usable here: it counts
-            # (variant, isoform) pairs, so one allele in three isoforms is 3 hits
-            # and the last step would appear to grow. Subtraction is also
-            # independent of the hit-list cap.
-            in_orf_alleles=max(
-                (counts.get("alleles") or 0)
-                - (counts.get("skipped_non_pass") or 0)
-                - (counts.get("off_catalog_contig") or 0)
-                - (counts.get("no_orf") or 0),
-                0,
-            ),
-            raw_json=json.dumps(digest, indent=2, sort_keys=True),
+        return _no_index(
+            make_response(
+                render_template(
+                    "variants.html",
+                    token=token,
+                    digest=digest,
+                    counts=counts,
+                    provenance=digest.get("provenance", {}) or {},
+                    genes=digest.get("genes", []) or [],
+                    hits=all_hits[:PAGE_MAX_HITS],
+                    hits_total=len(all_hits),
+                    hits_capped=len(all_hits) > PAGE_MAX_HITS,
+                    digest_url=url_for("variants_digest", token=token),
+                    known_genes=known_genes,
+                    passing=max(
+                        (counts.get("alleles") or 0) - (counts.get("skipped_non_pass") or 0), 0
+                    ),
+                    # Alleles that landed in an ORF, derived by subtraction so the funnel
+                    # stays monotonic. counts["hits"] is NOT usable here: it counts
+                    # (variant, isoform) pairs, so one allele in three isoforms is 3 hits
+                    # and the last step would appear to grow. Subtraction is also
+                    # independent of the hit-list cap.
+                    in_orf_alleles=max(
+                        (counts.get("alleles") or 0)
+                        - (counts.get("skipped_non_pass") or 0)
+                        - (counts.get("off_catalog_contig") or 0)
+                        - (counts.get("no_orf") or 0),
+                        0,
+                    ),
+                    raw_json=json.dumps(preview, indent=2, sort_keys=True),
+                )
+            )
         )
 
     @app.get("/api/variants/status")

@@ -193,11 +193,64 @@ def test_gene_links_carry_the_scan_token(client, scan_token) -> None:
     assert re.search(rf'href="/genes/CBX1\?vcf={re.escape(scan_token)}"', page)
 
 
-def test_results_page_exposes_the_raw_digest(client, scan_token) -> None:
-    """The digest verbatim, so the backend's output is inspectable in-browser."""
+def test_results_page_exposes_the_scan_digest(client, scan_token) -> None:
+    """The digest inline so the backend's output is inspectable in-browser.
+
+    Everything except the hit list, which is what makes the block unbounded: it is
+    rebuilt on every view of the token, so it is replaced by a count and a link.
+    """
     page = client.get(f"/variants/{scan_token}").data.decode()
-    assert "Raw scan JSON" in page
+    assert "Scan JSON (counts, genes, provenance)" in page
     assert "&#34;counts&#34;" in page or '"counts"' in page
+    assert "hits_omitted" in page
+    assert f"/api/variants/{scan_token}.json" in page
+
+
+def test_hit_table_is_capped_and_says_so(client, scan_token, monkeypatch) -> None:
+    """A germline exome can reach scan.DEFAULT_MAX_HITS (20,000) rows.
+
+    Rendering all of them — plus a pretty-printed digest — on every view is the
+    defect; the cap must both apply and be visible, so a truncated table is never
+    mistaken for the whole result.
+    """
+    import swissisoform_site.app as site_app
+
+    monkeypatch.setattr(site_app, "PAGE_MAX_HITS", 1)
+    page = client.get(f"/variants/{scan_token}").data.decode()
+
+    total = len(json.loads(client.get(f"/api/variants/{scan_token}.json").data)["hits"])
+    assert total > 1, "fixture needs more than one hit for the cap to mean anything"
+    assert f"Showing the first 1 of {total:,}" in page
+    # The heading still reports the true total, not the rendered subset.
+    assert f"Hits ({total})" in page
+
+
+def test_hit_table_is_not_capped_when_it_fits(client, scan_token) -> None:
+    page = client.get(f"/variants/{scan_token}").data.decode()
+    assert "Showing the first" not in page
+
+
+def test_results_page_is_not_indexable(client, scan_token) -> None:
+    """The JSON twin has always sent this; the page rendering the same hits did not.
+
+    A token is a capability, and it travels in a URL — pasted into a chat, an issue
+    tracker or a synced browser, all of which are crawled.
+    """
+    response = client.get(f"/variants/{scan_token}")
+    assert response.headers["X-Robots-Tag"] == "noindex, nofollow"
+    assert '<meta name="robots" content="noindex, nofollow">' in response.data.decode()
+
+
+def test_dead_token_pages_are_not_indexable(client, scan_token, monkeypatch) -> None:
+    """404 and 410 are reached by token too, so they carry the header as well."""
+    unknown = client.get("/variants/neverminted")
+    assert unknown.status_code == 404
+    assert unknown.headers["X-Robots-Tag"] == "noindex, nofollow"
+
+    monkeypatch.setenv("SWISSISOFORM_SCAN_TTL_HOURS", "0")
+    expired = client.get(f"/variants/{scan_token}")
+    assert expired.status_code == 410
+    assert expired.headers["X-Robots-Tag"] == "noindex, nofollow"
 
 
 def test_unknown_scan_renders_a_page_not_a_traceback(client) -> None:

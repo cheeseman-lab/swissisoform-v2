@@ -1,6 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Variant scan · SwissIsoform v2{% endblock %}
 
+{% block head_extra %}
+<meta name="robots" content="noindex, nofollow">
+{% endblock %}
+
 {% block content %}
 <div class="about-shell vq-shell">
   <header class="about-head vq-head">
@@ -116,12 +120,18 @@
        count here exceeds the number of variants whenever a position falls inside
        more than one ORF. Labelling it "Variants" made the table look inconsistent
        with the funnel. #}
-    <h2>Hits ({{ hits|length }})</h2>
+    <h2>Hits ({{ hits_total }})</h2>
     <p class="vq-sub">
       {{ in_orf_alleles }} variant{{ "" if in_orf_alleles == 1 else "s" }}, one row per
       isoform each falls inside — the same nucleotide is a different residue in each
       ORF, because each starts at a different TIS.
     </p>
+    {% if hits_capped %}
+    <p class="vq-sub">
+      Showing the first {{ "{:,}".format(hits|length) }} of {{ "{:,}".format(hits_total) }}.
+      The full list is in the <a href="{{ digest_url }}">scan JSON</a>.
+    </p>
+    {% endif %}
     <div class="variants-scroll">
       <table class="variants-table js-sortable">
         <thead>
@@ -168,11 +178,15 @@
   </section>
   {% endif %}
 
-  {# The digest exactly as the backend produced it. Nothing new is exposed —
-     reaching this page already requires the token. #}
+  {# The digest as the backend produced it, minus the hit list — that is what makes
+     this block unbounded, and it is one request away on the JSON route. Nothing new
+     is exposed either way: reaching this page already requires the token. #}
   <details class="vq-raw">
-    <summary>Raw scan JSON</summary>
+    <summary>Scan JSON (counts, genes, provenance)</summary>
     <pre>{{ raw_json }}</pre>
+    <p class="vq-sub">
+      Including every hit: <a href="{{ digest_url }}">{{ digest_url }}</a>
+    </p>
   </details>
 
   <p class="vq-sub" style="margin-top:16px;">
