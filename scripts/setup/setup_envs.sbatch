@@ -11,7 +11,8 @@
 
 # Build the dedicated GPU conda environments from the pyproject extras via the
 # tracked builder scripts/setup/create_envs.sh:
-#   swissisoform-v2-plm   (.[plm])  — torch + fair-esm + xformers (ESM-C embed / SAE)
+#   swissisoform-v2-plm   (.[plm])  — torch + esm (Biohub transformers fork) + xformers
+#                                     (ESM-C embed / SAE encode)
 #   swissisoform-v2-fold  (.[fold]) — Boltz-2 / Chai-1 (ESMFold2 structures)
 #
 # flash-attn is not built here (from-source compile, needs a GPU node); add it with:
