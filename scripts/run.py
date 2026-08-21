@@ -136,9 +136,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument(
         "--drop-unsupported-tis", action="store_true",
-        help="Drop TIS no long-read sample scored, at the collapse step "
-             "(non-production; production keeps them). For long-read-only "
-             "timing tests where only long-read-supported TIS should advance",
+        help="Keep only long-read-supported TIS: drop rows no long-read sample "
+             "scored, at the collapse step. Only HeLa has IsoQuant data today, so "
+             "this drops every TIS called solely in another cell line (~half the "
+             "catalog) and narrows what min_cell_lines can see. That gap shrinks "
+             "as long-read data lands for the other lines — it is a coverage "
+             "artifact, not a fixed cost. Default off; the genome-wide campaign "
+             "passes it deliberately. Either way the run records what it selected "
+             "in population.json",
     )
     p.add_argument(
         "--no-spot-check-limit", action="store_true",

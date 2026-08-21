@@ -47,17 +47,21 @@ logger = logging.getLogger(__name__)
 
 
 def _is_true(value: object) -> bool:
-    """Truthy check robust to bool / ``"True"`` strings / NaN (CSV round-trips)."""
+    """Truthy check robust to bool / ``"True"`` strings / missing (CSV round-trips).
+
+    Covers every missing marker, not just ``float('nan')``: the combined catalog
+    stores these columns as ``object``/``None`` today, but a nullable-boolean
+    column would yield ``pd.NA``, whose ``bool()`` raises rather than returning
+    False — a crash on the step that decides the run's population.
+    """
     if isinstance(value, str):
         return value.strip().lower() == "true"
-    if value is None:
-        return False
-    if isinstance(value, float) and pd.isna(value):
+    if value is None or pd.isna(value):
         return False
     return bool(value)
 
 
-def _resolution_columns(df: pd.DataFrame) -> list[tuple[str, str]]:
+def resolution_columns(df: pd.DataFrame) -> list[tuple[str, str]]:
     """Return ``(resolved_col, source_col)`` pairs present in *df*.
 
     Handles both the per-sample filtered shape (bare ``resolved`` /
@@ -89,15 +93,26 @@ def collapse_to_source(df: pd.DataFrame, *, keep_unevaluated: bool = True) -> pd
             because its cell line lacks long-read support. When ``False``, those
             un-evaluated rows are dropped too (the pre-gate behavior): only
             Annotated rows and resolved source transcripts survive, so a run
-            keeps only long-read-supported TIS. Non-production — for
-            long-read-only timing tests (``--drop-unsupported-tis``).
+            keeps only long-read-supported TIS. Since only HeLa currently has
+            IsoQuant data, that drops every TIS called solely in another cell
+            line — about half the catalog, a coverage artifact that shrinks as
+            long-read data lands for the other lines. Selected by
+            ``--drop-unsupported-tis``, recorded in the run's ``population.json``.
 
     Returns:
         The collapsed frame (a copy). If the verdict columns are absent the
         input is returned unchanged.
     """
-    pairs = _resolution_columns(df)
+    pairs = resolution_columns(df)
     if not pairs:
+        # Population-defining step quietly doing nothing is how a run ends up
+        # advertising long-read filtering it never applied. Callers that
+        # *require* the collapse should check _resolution_columns themselves.
+        logger.warning(
+            "collapse_to_source: no source-resolution verdict columns — skipping "
+            "collapse (no-op). Rebuild the combined catalog (--rebuild-combined) "
+            "if the long-read cascade was meant to have run."
+        )
         return df
     if "TisType" not in df.columns or "Tid" not in df.columns:
         logger.warning(

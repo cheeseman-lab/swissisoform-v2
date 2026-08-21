@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 import pandas as pd
+import pyarrow as pa
 
 from swissisoform.models import (
     CellLineExpression,
@@ -18,6 +19,48 @@ from swissisoform.models import (
     ORFType,
     TranslationInitiationSite,
 )
+
+# The clinical summaries hold Counters over open key sets — variant sources and
+# VEP consequence terms — so pyarrow infers a DIFFERENT struct for every frame:
+# 9-13 distinct `by_consequence` fields across the genome-wide shards, and
+# `struct<>` when a frame has no clinical hits at all, which Parquet cannot write
+# ("no child field"). Declaring them as maps fixes both: a map's type does not
+# depend on which keys are present, and an empty map is representable.
+#
+# Note this makes the column read back as list-of-(key, value) rather than dict.
+# Nothing consumes it today (ClinicalModule writes it; the site reads
+# `variants_long.parquet` and the `cmp_clinical_*` columns instead).
+_COUNT_MAP = pa.map_(pa.string(), pa.int64())
+CLINICAL_SUMMARY_TYPE = pa.struct([
+    ("total_variants", pa.int64()),
+    ("by_source", _COUNT_MAP),
+    ("by_consequence", _COUNT_MAP),
+    ("pathogenic_count", pa.int64()),
+])
+CLINICAL_SUMMARY_COLUMNS = ("canonical_clinical_summary", "isoform_clinical_summary")
+
+
+def paired_schema(df: pd.DataFrame) -> pa.Schema:
+    """Arrow schema for a paired frame, with the unstable columns declared.
+
+    Inference is per-frame, so it cannot be relied on for a sharded run: two
+    shards infer incompatible types for the same column, and a shard whose rows
+    are all empty infers a type Parquet refuses to write. Everything else is
+    inferred as before; only the columns known to degenerate are pinned.
+
+    Args:
+        df: The paired frame about to be written.
+
+    Returns:
+        The inferred schema with :data:`CLINICAL_SUMMARY_COLUMNS` overridden.
+    """
+    schema = pa.Table.from_pandas(df, preserve_index=False).schema
+    for name in CLINICAL_SUMMARY_COLUMNS:
+        idx = schema.get_field_index(name)
+        if idx >= 0:
+            schema = schema.set(idx, pa.field(name, CLINICAL_SUMMARY_TYPE))
+    return schema
+
 
 # Columns that map directly to TIS identity/protein fields
 _IDENTITY_COLS = [

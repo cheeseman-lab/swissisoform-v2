@@ -147,6 +147,8 @@ class StructureConfig:
 # writer or reader so runner (writer) and site.evidence (reader) share one name
 # without the core depending on the site layer.
 SCORING_SIDECAR = "scoring_config.json"
+# Which TIS population a run was computed over — see runner._write_population_sidecar.
+POPULATION_SIDECAR = "population.json"
 
 
 @dataclass

@@ -22,7 +22,7 @@ the repo (the gitignored ``sourceseq/`` tool); only the disambiguation science
 lives here, tested, in the filtering cascade.
 """
 
-from swissisoform.sourceresolve.collapse import collapse_to_source
+from swissisoform.sourceresolve.collapse import collapse_to_source, resolution_columns
 from swissisoform.sourceresolve.expression import (
     expressed_transcripts,
     load_isoquant_abundance,
@@ -51,6 +51,7 @@ __all__ = [
     "TisWindow",
     "build_transcript_mrna",
     "collapse_to_source",
+    "resolution_columns",
     "divergence_radius",
     "expressed_transcripts",
     "extract_tis_window",
