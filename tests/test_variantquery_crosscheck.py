@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from swissisoform.variantquery.frame import coding_offset
+from swissisoform.variantquery.frame import coding_offset, plotly_x
 from swissisoform.variantquery.load import load_index_from_paired
 
 REPO = Path(__file__).resolve().parents[1]
@@ -169,3 +169,42 @@ def test_fixture_variants_classify_against_real_orfs(genome_validator, records) 
                     ), f"unexplained missing amino acids on {record.tis_id}: {out}"
                 classified += 1
     assert classified >= 20, f"only {classified} (variant, ORF) pairs classified"
+
+
+# ----------------------------------------------------------------------
+# The x offset generalises right-alignment rather than replacing it
+# ----------------------------------------------------------------------
+
+
+def test_x_offset_reproduces_right_alignment_where_it_is_defined() -> None:
+    """Wherever the two proteins share a C-terminus, the stored offset IS the shift.
+
+    ``canonical_x_offset_nt`` was introduced because ``canonical_len - isoform_len``
+    is undefined for uORFs and altORFs. This pins the other side of that claim: for
+    every ORF the shortcut *could* place, the offset places it identically, so the
+    change is a no-op for the ~93% of the catalogue that already drew correctly.
+
+    Reads the built index rather than ``all_paired.parquet`` — the column is derived
+    by ``build_orf_index.py``, not projected.
+    """
+    from swissisoform.variantquery.load import load_index
+
+    index_path = RUN_DIR / "orf_index.parquet"
+    if not index_path.is_file():
+        pytest.skip("needs a built orf_index.parquet")
+    records = load_index(index_path).records
+    scored = [r for r in records if r.canonical_x_offset_nt is not None]
+    if not scored:
+        pytest.skip("index predates canonical_x_offset_nt")
+
+    for record in scored:
+        # A shared C-terminus means the isoform's last residue is the canonical's.
+        # cheeseman_test is all extensions and truncations, so every row qualifies;
+        # a uORF in a broader run legitimately fails this and is skipped.
+        shift = (record.canonical_len or 0) - (record.isoform_len or 0)
+        if record.canonical_x_offset_nt % 3:
+            continue  # reads out of the canonical frame — no residue correspondence
+        if record.canonical_x_offset_nt // 3 != shift:
+            continue  # no shared C-terminus (uORF / altORF / early stop)
+        assert plotly_x(record, 0, "isoform") == shift
+        assert plotly_x(record, 7, "isoform") == 7 + shift

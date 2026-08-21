@@ -10,7 +10,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from swissisoform.variantquery.index import CDS_COLUMNS, INDEX_COLUMNS, OrfIndex
+from swissisoform.variantquery.index import (
+    CDS_COLUMNS,
+    DERIVED_COLUMNS,
+    INDEX_COLUMNS,
+    OrfIndex,
+)
 
 #: Parquet key-value metadata key holding the index version.
 VERSION_METADATA_KEY = b"swissisoform_index_version"
@@ -47,7 +52,7 @@ def load_index(path: str | Path) -> OrfIndex:
     import pyarrow.parquet as pq
 
     path = Path(path)
-    columns = _present(path, INDEX_COLUMNS + CDS_COLUMNS)
+    columns = _present(path, INDEX_COLUMNS + CDS_COLUMNS + DERIVED_COLUMNS)
     table = pq.read_table(path, columns=columns)
     version = read_index_version(path)
     return OrfIndex.from_records(table.to_pylist(), version=version)

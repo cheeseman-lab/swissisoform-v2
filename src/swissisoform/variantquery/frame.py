@@ -78,15 +78,44 @@ def resolve_residue(record: OrfRecord, start: int, end: int) -> tuple[int | None
     return None, "", None
 
 
-def canonical_x(
-    residue: int, frame: str, canonical_len: int | None, isoform_len: int | None
-) -> int | None:
-    """Residue → the gene figure's x coordinate, given the two protein lengths.
+def x_offset_residues(x_offset_nt: int) -> int | float:
+    """``canonical_x_offset_nt`` → the figure's x shift in residues.
 
-    The combined gene figure draws everything in canonical-residue space with
-    isoforms right-aligned on the shared region, so an isoform-frame residue is
-    shifted by ``canonical_len - isoform_len``; a canonical-frame residue is already
-    in that space.
+    Exact ``int`` when the ORF reads in the canonical frame — which is every
+    extension and truncation, so residue arithmetic downstream is unchanged. A
+    ``float`` otherwise: a uORF three-quarters of a codon out of phase has no
+    canonical residue to be rounded onto, and inventing one would put its bar and
+    its markers half a residue apart.
+    """
+    shift, remainder = divmod(x_offset_nt, 3)
+    return shift if remainder == 0 else x_offset_nt / 3
+
+
+def canonical_x(
+    residue: int,
+    frame: str,
+    canonical_len: int | None,
+    isoform_len: int | None,
+    x_offset_nt: int | None = None,
+) -> int | float | None:
+    """Residue → the gene figure's x coordinate.
+
+    The combined gene figure draws everything in canonical-residue space, so a
+    canonical-frame residue passes through and an isoform-frame one is shifted by
+    the mRNA distance between the two start codons: ``x_offset_nt / 3``.
+
+    That offset comes from the index (``build_orf_index.derive_x_offsets``) and
+    is the same number the site's figure adapter uses to place the bar itself — one
+    stored value, so a marker cannot land off the bar it belongs to.
+
+    Falls back to ``canonical_len - isoform_len`` when the offset is absent (an
+    index built before the column existed). That shortcut is exact wherever the two
+    proteins share a C-terminus and undefined otherwise, which is the whole reason
+    the offset exists.
+
+    The result is an ``int`` unless the ORF reads out of the canonical frame, in
+    which case the offset is not a whole number of residues (see
+    :func:`x_offset_residues`).
 
     The figure adapter writes the same conversion as ``residue + 1 + offset``
     followed by a global ``-1`` that anchors canonical residue 1 at x = 0; those
@@ -94,11 +123,19 @@ def canonical_x(
     """
     if frame == FRAME_CANONICAL:
         return residue
+    if x_offset_nt is not None:
+        return residue + x_offset_residues(x_offset_nt)
     if canonical_len is None or isoform_len is None:
         return None
     return residue + (canonical_len - isoform_len)
 
 
-def plotly_x(record: OrfRecord, residue: int, frame: str) -> int | None:
-    """:func:`canonical_x` for a scan hit, reading both lengths off its ORF."""
-    return canonical_x(residue, frame, record.canonical_len, record.isoform_len)
+def plotly_x(record: OrfRecord, residue: int, frame: str) -> int | float | None:
+    """:func:`canonical_x` for a scan hit, reading the offset off its ORF."""
+    return canonical_x(
+        residue,
+        frame,
+        record.canonical_len,
+        record.isoform_len,
+        record.canonical_x_offset_nt,
+    )

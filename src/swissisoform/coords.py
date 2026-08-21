@@ -97,6 +97,63 @@ def coding_offset(exons: Sequence[tuple[int, int]], strand: str, pos: int) -> in
     return None
 
 
+def first_coding_base(exons: Sequence[tuple[int, int]], strand: str) -> int | None:
+    """1-based genomic position of an interval set's first base in mRNA order.
+
+    The base at coding offset 0 — the A of the start codon for an ORF exon set.
+    ``None`` for an empty set.
+    """
+    if not exons:
+        return None
+    ordered = sorted(exons)
+    return ordered[0][0] + 1 if strand == "+" else ordered[-1][1]
+
+
+def start_offset_nt(
+    transcript_exons: Sequence[tuple[int, int]],
+    strand: str,
+    orf_exons: Sequence[tuple[int, int]] | None,
+    canonical_orf_exons: Sequence[tuple[int, int]] | None,
+) -> int | None:
+    """mRNA nucleotides from the canonical start codon to this ORF's start codon.
+
+    Negative when the ORF initiates upstream of the canonical start (a uORF or an
+    N-terminal extension), positive when it initiates downstream (a truncation, an
+    internal or 3'UTR ORF). The walk is over the *transcript's* exons, so introns —
+    and the 5'UTR separating a uORF from the canonical ATG — are removed.
+
+    This is the general form of the figure's right-alignment shift. Where the two
+    proteins share a C-terminus the result is exactly ``(canonical_len -
+    isoform_len) * 3``, but unlike that shortcut it stays defined when there is no
+    shared region at all — the case the shortcut silently mishandles.
+
+    ``% 3`` is meaningful: a non-zero remainder means this ORF reads in a different
+    frame from the canonical, so its residues have no canonical counterpart.
+
+    Args:
+        transcript_exons: The **full** exon structure (5'UTR + CDS + 3'UTR), 0-based
+            half-open, ascending genomic order.
+        strand: ``"+"`` or ``"-"``.
+        orf_exons: The isoform ORF's exons, same convention.
+        canonical_orf_exons: The per-transcript canonical ORF's exons.
+
+    Returns:
+        Signed nucleotide offset, or ``None`` when either ORF is missing or either
+        start codon falls outside ``transcript_exons`` (a skeleton/ORF mismatch —
+        callers fall back rather than guessing).
+    """
+    orf_start = first_coding_base(orf_exons or [], strand)
+    canonical_start = first_coding_base(canonical_orf_exons or [], strand)
+    if orf_start is None or canonical_start is None:
+        return None
+
+    orf_offset = coding_offset(transcript_exons, strand, orf_start)
+    canonical_offset = coding_offset(transcript_exons, strand, canonical_start)
+    if orf_offset is None or canonical_offset is None:
+        return None
+    return orf_offset - canonical_offset
+
+
 def position_in_intervals(pos: int, intervals: Iterable[tuple[int, int]]) -> bool:
     """True when 1-based ``pos`` falls in any 0-based half-open interval."""
     return any(start < pos <= end for start, end in intervals)

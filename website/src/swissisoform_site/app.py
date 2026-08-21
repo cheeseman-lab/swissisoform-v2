@@ -42,6 +42,7 @@ from swissisoform.site.evidence import (
     format_metric,
     slice_criterion,
 )
+from swissisoform.variantquery.frame import x_offset_residues
 from swissisoform.variantquery.scan import scan
 from swissisoform_site import scanstore
 from swissisoform_site.data import (
@@ -1142,6 +1143,30 @@ def _uploaded_variant_records(hits: list[dict[str, Any]] | None) -> list[dict[st
     return list(merged.values())
 
 
+def _isoform_x_offset(
+    orf_index: Any, iso: Any, canonical_len: int, isoform_len: int, has_shared: bool
+) -> int | float:
+    """The isoform's shift into canonical-residue space, in residues.
+
+    ``canonical_x_offset_nt`` is the mRNA distance between the two start codons, so
+    dividing by 3 gives the shift for any ORF — including uORFs and altORFs, whose
+    lack of a shared C-terminus leaves the right-alignment shortcut undefined. It is
+    fractional when the ORF reads out of the canonical frame, which is honest: such a
+    residue has no canonical counterpart.
+
+    Falls back to right-alignment when the index is unstaged or predates the column.
+    That fallback anchors isoform residue ``isoform_len`` to canonical residue
+    ``canonical_len`` — deliberately not ``diff_end``, whose initiator-Met boundary is
+    off by one on truncations and would misplace shared variants by a residue. It is
+    exact wherever the two proteins share a C-terminus, and reverts to the old
+    ``offset = 0`` placeholder otherwise.
+    """
+    record = orf_index.by_tis_id(getattr(iso, "tis_id", "") or "") if orf_index else None
+    if record is not None and record.canonical_x_offset_nt is not None:
+        return x_offset_residues(record.canonical_x_offset_nt)
+    return canonical_len - isoform_len if has_shared and canonical_len else 0
+
+
 def _make_gene_protein_view(
     gene: Any, uploaded: list[dict[str, Any]] | None = None
 ) -> types.SimpleNamespace:
@@ -1174,6 +1199,7 @@ def _make_gene_protein_view(
     # a stable pick when isoforms map to different canonical Tids).
     canon_ie_by_sample: dict[str, float] = {}
     x_left = 1.0
+    orf_index = load_orf_index()
 
     for iso in gene.isoforms:
         raw = getattr(iso, "raw", None) or {}
@@ -1185,25 +1211,22 @@ def _make_gene_protein_view(
         is_trunc = diff_space == "canonical" or orf_type == "truncated"
         has_shared = is_trunc or 0 < diff_end < iso_len
 
-        if has_shared and can_len_i:
-            # Anchor the shared C-terminus (identical in both proteins) to the
-            # canonical C-terminus: isoform residue iso_len ↔ canonical residue
-            # canonical_len. This is exact for extensions AND truncations —
-            # unlike ``diff_end``, whose initiator-Met boundary is off by one on
-            # truncations and would misplace shared variants by a residue.
-            offset = can_len_i - iso_len
-            x0, x1 = 1 + offset, iso_len + offset
-            if is_trunc:
-                # Lost N-terminus = canonical residues [1, x0-1]; residue x0 is the
-                # FIRST retained (shared-core) residue where the isoform body begins,
-                # so the lost-region overlay ends at x0-1 and does not bleed one
-                # residue into the shared core on the canonical bar.
-                diff_x0, diff_x1, diff_on_canon = 1, x0 - 1, True
-            else:
-                diff_x0, diff_x1, diff_on_canon = x0, 0, False  # extension left of residue 1
-        else:  # uORF / altORF / no shared region — whole isoform differential
-            offset = 0
-            x0, x1 = 1, iso_len
+        # Where the isoform sits in canonical-residue space. Read from the ORF
+        # index, so the bar, everything anchored to it, and the uploaded variant
+        # markers (``variantquery.frame.plotly_x``) are all placed by the SAME
+        # stored number. Two formulas here is how uORF markers ended up hundreds
+        # of residues off their own bar.
+        offset = _isoform_x_offset(orf_index, iso, can_len_i, iso_len, has_shared)
+        x0, x1 = 1 + offset, iso_len + offset
+        if has_shared and is_trunc:
+            # Lost N-terminus = canonical residues [1, x0-1]; residue x0 is the
+            # FIRST retained (shared-core) residue where the isoform body begins,
+            # so the lost-region overlay ends at x0-1 and does not bleed one
+            # residue into the shared core on the canonical bar.
+            diff_x0, diff_x1, diff_on_canon = 1, x0 - 1, True
+        elif has_shared:
+            diff_x0, diff_x1, diff_on_canon = x0, 0, False  # extension left of residue 1
+        else:  # uORF / altORF — no shared region, so the whole isoform is differential
             diff_x0, diff_x1, diff_on_canon = x0, x1, False
 
         label = f"{iso.orf_type} · {iso.start_codon}"

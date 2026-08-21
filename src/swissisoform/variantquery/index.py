@@ -45,6 +45,11 @@ INDEX_COLUMNS = (
 #: classification then degrades to length-based classes only.
 CDS_COLUMNS = ("orf_cds", "canonical_cds")
 
+#: Likewise derived, from the GTF: the figure's isoform-to-canonical x shift.
+#: Optional for the same reason — without it the figure right-aligns, which is
+#: correct for extensions and truncations and undefined for uORFs / altORFs.
+DERIVED_COLUMNS = ("canonical_x_offset_nt",)
+
 
 def _as_intervals(raw: Any) -> tuple[Interval, ...]:
     """Coerce a nested list/array of pairs into a tuple of int 2-tuples."""
@@ -98,6 +103,12 @@ class OrfRecord:
     #: built without a genome — consequence then falls back to length-based classes.
     orf_cds: str = ""
     canonical_cds: str = ""
+    #: The figure's isoform→canonical x shift, in mRNA nucleotides: the distance
+    #: between the two start codons, expressed against the gene-level canonical the
+    #: figure draws. Divide by 3 for residues; negative means the ORF initiates
+    #: upstream. ``None`` when the index predates the column or the transcript
+    #: skeleton was unavailable, in which case callers right-align instead.
+    canonical_x_offset_nt: int | None = None
 
     def cds_for(self, frame: str) -> str:
         """The CDS matching a frame from ``resolve_residue`` (isoform/canonical)."""
@@ -132,6 +143,7 @@ class OrfRecord:
             canonical_start_codon=str(row.get("canonical_start_codon") or ""),
             orf_cds=str(row.get("orf_cds") or ""),
             canonical_cds=str(row.get("canonical_cds") or ""),
+            canonical_x_offset_nt=_int_or_none(row.get("canonical_x_offset_nt")),
         )
 
 

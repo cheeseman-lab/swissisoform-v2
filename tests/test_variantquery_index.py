@@ -201,6 +201,35 @@ def test_plotly_x_shifts_isoform_frame_only() -> None:
     assert plotly_x(record, 21, FRAME_CANONICAL) == 21
 
 
+def test_plotly_x_prefers_the_stored_offset() -> None:
+    """The index's offset wins over right-alignment — that is the whole point.
+
+    ``canonical_len - isoform_len`` assumes the two proteins share a C-terminus. A
+    uORF shares nothing, so only the stored mRNA offset can place it, and the site's
+    figure adapter reads the same column to place the bar it sits on.
+    """
+    record = replace(PLUS, canonical_len=185, isoform_len=17, canonical_x_offset_nt=-184)
+    # Right-alignment would say 21 + 168; the mRNA offset says 61.33 residues
+    # upstream of the canonical start.
+    assert plotly_x(record, 21, FRAME_ISOFORM) == 21 - 184 / 3
+    # A canonical-frame residue is already in the figure's space either way.
+    assert plotly_x(record, 21, FRAME_CANONICAL) == 21
+
+
+def test_plotly_x_is_fractional_when_the_orf_reads_out_of_frame() -> None:
+    """A uORF residue has no canonical counterpart; rounding would invent one."""
+    record = replace(PLUS, canonical_x_offset_nt=-29)
+    x = plotly_x(record, 3, FRAME_ISOFORM)
+    assert x == 3 - 29 / 3
+    assert x != int(x)
+
+
+def test_plotly_x_falls_back_when_the_index_predates_the_column() -> None:
+    """Older indexes carry no offset — right-align rather than fail."""
+    record = replace(PLUS, canonical_len=185, isoform_len=239, canonical_x_offset_nt=None)
+    assert plotly_x(record, 21, FRAME_ISOFORM) == -33
+
+
 # ----------------------------------------------------------------------
 # CDS columns: optional, and frame-matched
 # ----------------------------------------------------------------------

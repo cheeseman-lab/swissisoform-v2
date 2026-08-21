@@ -9,10 +9,16 @@ every real VCF returns zero hits.
 The read must be column-projected: ``all_paired.parquet`` is a single row group, so
 an unprojected ``pd.read_parquet`` materialises all 2 GB.
 
-The index also carries each ORF's **coding sequence**, extracted here from the
-genome, because the container has neither the 3 GB FASTA nor pysam and cannot tell
-missense from synonymous from stop_gained without the codon. Measured on
-``full_catalog``: 4.93 MB total, of which ~3.5 MB is sequence, built in ~77 s.
+The index also carries two things derived here from reference data the container
+does not have:
+
+* each ORF's **coding sequence**, read out of the genome — without the codon the
+  scan cannot tell missense from synonymous from stop_gained. Measured on
+  ``full_catalog``: 4.93 MB total, of which ~3.5 MB is sequence, built in ~77 s.
+* ``canonical_x_offset_nt``, the figure's isoform-to-canonical x shift in mRNA
+  nucleotides, walked over the GTF's transcript exons. Both drawing paths read it,
+  which is what stops the bar and its variant markers from being placed by two
+  formulas that disagree for ORFs with no shared region.
 
 Usage:
     python scripts/export/build_orf_index.py --run full_catalog
@@ -31,12 +37,14 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from swissisoform.coords import start_offset_nt
 from swissisoform.variantquery.index import INDEX_COLUMNS
 from swissisoform.variantquery.load import VERSION_METADATA_KEY
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_ROOT = ROOT / "data" / "output"
 DEFAULT_GENOME = ROOT / "data" / "reference" / "Gencode_v49_GRCh38.primary_assembly.genome.fa"
+DEFAULT_GTF = ROOT / "data" / "reference" / "gencode.v49.primary_assembly.annotation.gtf"
 
 logger = logging.getLogger("build_orf_index")
 
@@ -122,7 +130,108 @@ def extract_cds(table: pa.Table, genome_fasta: Path) -> tuple[pa.Table, int]:
     )
 
 
-def build(paired_path: Path, out_path: Path, genome_fasta: Path | None = None) -> tuple[int, str]:
+def derive_x_offsets(table: pa.Table, gtf_path: Path) -> tuple[pa.Table, int]:
+    """Add ``canonical_x_offset_nt`` — the figure's isoform→canonical x shift, in mRNA nt.
+
+    Derived here rather than projected because it is a *rendering* coordinate, not a
+    pipeline result: keeping it out of ``all_paired.parquet`` means no pipeline
+    re-run to deploy it. Same arrangement as ``orf_cds`` above, which is likewise
+    derived from reference data the container does not carry.
+
+    Both drawing paths read this one column — ``variantquery.frame.canonical_x`` for
+    uploaded VCF markers, the site's figure adapter for bars, domains and annotated
+    variants — replacing the two copies of ``canonical_len - isoform_len`` that
+    disagreed for ORFs with no shared region (uORFs, altORFs: 449 of 6,462).
+
+    Two coordinate facts are composed here:
+
+    1. :func:`~swissisoform.coords.start_offset_nt` — mRNA distance from the
+       **per-transcript** canonical start codon to this ORF's, walked over the
+       transcript's exons so the 5'UTR separating a uORF from the canonical ATG is
+       counted and the introns are not.
+    2. ``canonical_len - canonical_per_tid_length`` — the figure draws **one**
+       canonical bar per gene, the gene-level representative protein, which for
+       1,670 of 6,462 ORFs is not the canonical of that ORF's own transcript. Step 1
+       is exact in transcript space; this shifts it into the space of the bar
+       actually drawn.
+
+    The composition reproduces ``canonical_len - isoform_len`` for 6,006 of the
+    6,013 ORFs that share a C-terminus, so the figure is unchanged wherever it was
+    already right. The 7 exceptions are selenoprotein / readthrough genes (SELENOT,
+    TXNRD1/2, GPATCH4) whose isoform stops early: they have no shared C-terminus to
+    align on, and right-alignment was placing them flush against a canonical
+    C-terminus they never reach.
+
+    Only ``exons`` is taken from the skeletons — ``build_skeletons`` derives
+    ``cds_start`` as a plus-strand ``min()``, which is not the strand-aware start
+    codon, and the canonical anchor comes from ``canonical_orf_exons`` anyway.
+
+    Returns:
+        The table with the column appended, and the number of rows whose offset
+        differs from the old right-alignment shift.
+    """
+    from swissisoform.site.skeletons import build_skeletons
+
+    wanted = [
+        "transcript_id", "strand", "orf_exons", "canonical_orf_exons",
+        "canonical_len", "isoform_len",
+    ]
+    if "canonical_per_tid_length" in table.schema.names:
+        wanted.append("canonical_per_tid_length")
+    rows = table.select(wanted).to_pylist()
+    skeletons = build_skeletons(gtf_path, {r["transcript_id"] for r in rows})
+
+    offsets: list[int | None] = []
+    unresolved = 0
+    differs = 0
+    for row in rows:
+        skeleton = skeletons.get(row["transcript_id"])
+        offset = None
+        if skeleton is not None:
+            offset = start_offset_nt(
+                skeleton["exons"],
+                row["strand"],
+                [tuple(e) for e in (row["orf_exons"] or [])],
+                [tuple(e) for e in (row["canonical_orf_exons"] or [])],
+            )
+        if offset is None:
+            unresolved += 1
+        else:
+            gene_len = row.get("canonical_len") or 0
+            # Absent column (older parquet) means we cannot tell the two canonicals
+            # apart; assuming they agree leaves the offset in transcript space,
+            # which is what it already was.
+            per_tid_len = row.get("canonical_per_tid_length")
+            if per_tid_len is None:
+                per_tid_len = gene_len
+            offset += 3 * (int(gene_len) - int(per_tid_len))
+            if offset != 3 * (int(gene_len) - int(row.get("isoform_len") or 0)):
+                differs += 1
+        offsets.append(offset)
+
+    if unresolved:
+        logger.warning(
+            "%d ORFs have no canonical_x_offset_nt (missing skeleton, or a start "
+            "outside it) — the figure falls back to right-alignment for those",
+            unresolved,
+        )
+    logger.info(
+        "canonical_x_offset_nt: %d of %d rows differ from canonical_len - isoform_len "
+        "(the ORFs with no shared C-terminus, which right-alignment cannot place)",
+        differs, len(rows),
+    )
+    return (
+        table.append_column("canonical_x_offset_nt", pa.array(offsets, pa.int64())),
+        differs,
+    )
+
+
+def build(
+    paired_path: Path,
+    out_path: Path,
+    genome_fasta: Path | None = None,
+    gtf_path: Path | None = None,
+) -> tuple[int, str]:
     """Project the coordinate columns out of ``all_paired.parquet`` and write them."""
     available = set(pq.ParquetFile(paired_path).schema_arrow.names)
     missing = [c for c in INDEX_COLUMNS if c not in available]
@@ -132,11 +241,20 @@ def build(paired_path: Path, out_path: Path, genome_fasta: Path | None = None) -
             "It predates the ORF-interval writer (io/parquet.py) — re-run the pipeline."
         )
 
-    table = pq.read_table(paired_path, columns=list(INDEX_COLUMNS))
+    # ``canonical_per_tid_length`` is read but never shipped: derive_x_offsets needs
+    # it to express the offset against the gene-level canonical the figure draws,
+    # and nothing in the container does.
+    extra = ["canonical_per_tid_length"] if "canonical_per_tid_length" in available else []
+    table = pq.read_table(paired_path, columns=list(INDEX_COLUMNS) + extra)
     # Computed before the CDS is attached, so adding sequence does NOT change the
     # version: it fingerprints coordinates, and cached scan digests keyed on it stay
     # valid across this change.
     version = compute_index_version(table)
+
+    if gtf_path is not None:
+        table, _differs = derive_x_offsets(table, gtf_path)
+    if extra:
+        table = table.drop(extra)
 
     if genome_fasta is not None:
         table, mismatched = extract_cds(table, genome_fasta)
@@ -172,6 +290,21 @@ def main() -> int:
         ),
     )
     ap.add_argument(
+        "--gtf",
+        type=Path,
+        default=DEFAULT_GTF,
+        help=(
+            "GENCODE GTF. Adds start_offset_nt, the figure's isoform-to-canonical x "
+            "shift; without it uORF/altORF bars and markers fall back to "
+            "right-alignment, which is undefined for them."
+        ),
+    )
+    ap.add_argument(
+        "--no-x-offset",
+        action="store_true",
+        help="Skip canonical_x_offset_nt; the figure then right-aligns everything.",
+    )
+    ap.add_argument(
         "--no-cds",
         action="store_true",
         help="Skip sequence extraction; consequence then limited to length-based classes.",
@@ -194,15 +327,25 @@ def main() -> int:
             )
         genome = args.genome
 
-    n_rows, version = build(paired, out, genome)
+    gtf: Path | None = None
+    if not args.no_x_offset:
+        if not args.gtf.exists():
+            raise SystemExit(
+                f"GTF not found: {args.gtf}\n"
+                "  Pass --gtf, or --no-x-offset to build without the x offset."
+            )
+        gtf = args.gtf
+
+    n_rows, version = build(paired, out, genome, gtf)
     size_mb = out.stat().st_size / 1e6
     logger.info(
-        "wrote %s (%d isoforms, %.2f MB, index_version=%s, cds=%s)",
+        "wrote %s (%d isoforms, %.2f MB, index_version=%s, cds=%s, x_offset=%s)",
         out,
         n_rows,
         size_mb,
         version,
         "yes" if genome else "no",
+        "yes" if gtf else "no",
     )
     return 0
 
