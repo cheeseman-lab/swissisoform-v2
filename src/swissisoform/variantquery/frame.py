@@ -97,12 +97,23 @@ def canonical_x(
     canonical_len: int | None,
     isoform_len: int | None,
     x_offset_nt: int | None = None,
+    canonical_per_tid_length: int | None = None,
 ) -> int | float | None:
     """Residue → the gene figure's x coordinate.
 
-    The combined gene figure draws everything in canonical-residue space, so a
-    canonical-frame residue passes through and an isoform-frame one is shifted by
-    the mRNA distance between the two start codons: ``x_offset_nt / 3``.
+    The combined gene figure draws everything in canonical-residue space, so an
+    isoform-frame residue is shifted by the mRNA distance between the two start
+    codons: ``x_offset_nt / 3``.
+
+    A canonical-frame residue is *not* already in that space. ``resolve_residue``
+    numbers it against ``canonical_orf_exons``, the **per-transcript** canonical,
+    while the figure draws one bar per gene — the gene-level representative, of
+    length ``canonical_len``. Those are different proteins for 1,670 of 6,462 ORFs,
+    so the residue is shifted by ``canonical_len - canonical_per_tid_length``: the
+    same term ``derive_x_offsets`` folds into the isoform offset, on the assumption
+    the two canonicals share a C-terminus. Without it a variant in a truncation's
+    lost N-terminus — the only way canonical frame is reached, and the case this
+    whole path exists for — lands up to 3,230 residues from where it belongs.
 
     That offset comes from the index (``build_orf_index.derive_x_offsets``) and
     is the same number the site's figure adapter uses to place the bar itself — one
@@ -122,7 +133,9 @@ def canonical_x(
     cancel, so ``residue + offset`` is the same coordinate.
     """
     if frame == FRAME_CANONICAL:
-        return residue
+        if canonical_len is None or canonical_per_tid_length is None:
+            return residue
+        return residue + (canonical_len - canonical_per_tid_length)
     if x_offset_nt is not None:
         return residue + x_offset_residues(x_offset_nt)
     if canonical_len is None or isoform_len is None:
@@ -138,4 +151,5 @@ def plotly_x(record: OrfRecord, residue: int, frame: str) -> int | float | None:
         record.canonical_len,
         record.isoform_len,
         record.canonical_x_offset_nt,
+        record.canonical_per_tid_length,
     )

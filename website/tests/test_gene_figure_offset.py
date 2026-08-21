@@ -31,22 +31,27 @@ UORF_OFFSET_NT = -184
 UORF_TIS = "chr15:89088485:+:ATG:ENST1"
 EXT_LEN = 130
 EXT_TIS = "chr1:100:+:CTG:ENST2"
+#: A truncation on a transcript whose OWN canonical is shorter than the gene-level
+#: one the figure draws — 1,046 of 4,510 truncations in ``full_catalog``.
+TRUNC_TIS = "chr1:400:+:ATG:ENST3"
+TRUNC_LEN = 40
+TRUNC_CANON_LEN = 60
 
 
 class _FakeIndex:
     """Just enough ``OrfIndex`` for the adapter and ``plotly_x``."""
 
-    def __init__(self, records: dict[str, tuple[int, int | None]]):
+    def __init__(self, records: dict[str, dict[str, int | None]]):
         self._records = records
 
     def by_tis_id(self, tis_id: str):
         entry = self._records.get(tis_id)
         if entry is None:
             return None
-        isoform_len, offset_nt = entry
-        return SimpleNamespace(
-            canonical_len=CAN_LEN, isoform_len=isoform_len, canonical_x_offset_nt=offset_nt
-        )
+        # Defaults say the two canonicals agree, which is the common case; a record
+        # overrides canonical_per_tid_length to be the one where they do not.
+        fields = {"canonical_len": CAN_LEN, "canonical_per_tid_length": CAN_LEN, **entry}
+        return SimpleNamespace(**fields)
 
 
 def _isoform(orf_type, diff_space, isoform_len, diff_end, tis_id):
@@ -79,8 +84,16 @@ def _bar(view, orf_type):
 @pytest.fixture
 def index(monkeypatch):
     fake = _FakeIndex({
-        UORF_TIS: (UORF_LEN, UORF_OFFSET_NT),
-        EXT_TIS: (EXT_LEN, (CAN_LEN - EXT_LEN) * 3),
+        UORF_TIS: {"isoform_len": UORF_LEN, "canonical_x_offset_nt": UORF_OFFSET_NT},
+        EXT_TIS: {"isoform_len": EXT_LEN, "canonical_x_offset_nt": (CAN_LEN - EXT_LEN) * 3},
+        TRUNC_TIS: {
+            "isoform_len": TRUNC_LEN,
+            "canonical_per_tid_length": TRUNC_CANON_LEN,
+            # What derive_x_offsets computes: the 20 lost residues in transcript
+            # space, then + 3 * (gene_len - per_tid_len) to reach the drawn bar.
+            "canonical_x_offset_nt": (TRUNC_CANON_LEN - TRUNC_LEN) * 3
+            + 3 * (CAN_LEN - TRUNC_CANON_LEN),
+        },
     })
     monkeypatch.setattr("swissisoform_site.app.load_orf_index", lambda: fake)
     return fake
@@ -146,3 +159,37 @@ def test_uploaded_marker_lands_on_the_bar_it_belongs_to(index) -> None:
     marker = next(v for v in view.variants if v.get("source") == "uploaded")
     assert marker["pos"] == bar["x0"] + residue
     assert bar["x0"] <= marker["pos"] <= bar["x1"]
+
+
+def test_canonical_frame_marker_lands_in_the_lost_n_terminus(index) -> None:
+    """A truncation's lost N-terminus is numbered against the per-Tid canonical.
+
+    That region is absent from the isoform, so ``resolve_residue`` falls through to
+    canonical frame — and the residue is then in the space of a 60-residue protein
+    while the bar drawn is the gene-level 100-residue one. The marker belongs in
+    ``[bar.x0 - lost, bar.x0)``, immediately upstream of the isoform bar; unshifted
+    it would sit at x = 10, outside that window and 40 residues too far left.
+    """
+    residue = 10
+    hit = {
+        "tis_id": TRUNC_TIS,
+        "residue": residue,
+        "frame": "canonical",
+        "chrom": "chr1",
+        "pos": 380,
+        "ref": "G",
+        "alt": "A",
+        "consequence": "stop_gained",
+        "aa_ref": "W",
+        "aa_alt": "*",
+        "region": "unique",
+        "line_no": 1,
+    }
+    gene = _gene(_isoform("truncated", "canonical", TRUNC_LEN, 20, TRUNC_TIS))
+    view = _make_gene_protein_view(gene, uploaded=[hit])
+    bar = _bar(view, "truncated")
+    marker = next(v for v in view.variants if v.get("source") == "uploaded")
+
+    assert marker["pos"] == residue + (CAN_LEN - TRUNC_CANON_LEN)
+    lost = TRUNC_CANON_LEN - TRUNC_LEN
+    assert bar["x0"] - lost <= marker["pos"] < bar["x0"]

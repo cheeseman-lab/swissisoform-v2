@@ -38,7 +38,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from swissisoform.coords import start_offset_nt
-from swissisoform.variantquery.index import INDEX_COLUMNS
+from swissisoform.variantquery.index import INDEX_COLUMNS, OPTIONAL_COLUMNS
 from swissisoform.variantquery.load import VERSION_METADATA_KEY
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -83,16 +83,27 @@ def extract_cds(table: pa.Table, genome_fasta: Path) -> tuple[pa.Table, int]:
     (~108k slices for the full catalogue). Its sibling ``build_coding_sequence``
     fetches per base and would be 20 M calls for the same result.
 
+    Both sequences are length-checked, against **different** proteins:
+    ``orf_cds`` against ``isoform_len``, and ``canonical_cds`` against
+    ``canonical_per_tid_length`` — ``canonical_orf_exons`` describes that Tid's own
+    canonical, not the gene-level representative ``canonical_len`` counts.
+
     Returns:
         The table with both columns appended, and the number of rows whose
-        translated length disagreed with ``isoform_len`` (should be 0).
+        translated length disagreed with the protein it should encode (should be 0).
     """
     from swissisoform.clinical.validate import ConsequenceValidator
 
     validator = ConsequenceValidator(genome_fasta=str(genome_fasta))
-    rows = table.select(
-        ["tis_id", "chrom", "strand", "orf_exons", "canonical_orf_exons", "isoform_len"]
-    ).to_pylist()
+    wanted = ["tis_id", "chrom", "strand", "orf_exons", "canonical_orf_exons", "isoform_len"]
+    if "canonical_per_tid_length" in table.schema.names:
+        wanted.append("canonical_per_tid_length")
+    else:
+        logger.warning(
+            "canonical_per_tid_length is absent — canonical_cds cannot be length-checked, "
+            "so every canonical-frame residue number rests on an unverified exon walk"
+        )
+    rows = table.select(wanted).to_pylist()
 
     orf_cds: list[str] = []
     canonical_cds: list[str] = []
@@ -108,17 +119,26 @@ def extract_cds(table: pa.Table, genome_fasta: Path) -> tuple[pa.Table, int]:
         # The invariant that makes downstream translation trustworthy: an ORF is a
         # whole number of codons, and exactly as many as the protein has residues.
         # A mismatch means the exon walk and the recorded length disagree, which
-        # would silently shift every residue number for that isoform.
-        expected = row.get("isoform_len")
-        if orf and expected is not None and len(orf) != int(expected) * 3:
-            mismatched += 1
-            logger.error(
-                "%s: orf_cds is %d nt but isoform_len is %s (expected %d nt)",
-                row["tis_id"],
-                len(orf),
-                expected,
-                int(expected) * 3,
-            )
+        # would silently shift every residue number for that ORF. Checked on the
+        # canonical too: a truncation's lost N-terminus is classified against
+        # canonical_cds, so an unverified walk there mis-numbers exactly the
+        # variants this index exists to place.
+        for seq, length_key, column in (
+            (orf, "isoform_len", "orf_cds"),
+            (canon, "canonical_per_tid_length", "canonical_cds"),
+        ):
+            expected = row.get(length_key)
+            if seq and expected is not None and len(seq) != int(expected) * 3:
+                mismatched += 1
+                logger.error(
+                    "%s: %s is %d nt but %s is %s (expected %d nt)",
+                    row["tis_id"],
+                    column,
+                    len(seq),
+                    length_key,
+                    expected,
+                    int(expected) * 3,
+                )
         orf_cds.append(orf)
         canonical_cds.append(canon)
 
@@ -241,10 +261,11 @@ def build(
             "It predates the ORF-interval writer (io/parquet.py) — re-run the pipeline."
         )
 
-    # ``canonical_per_tid_length`` is read but never shipped: derive_x_offsets needs
-    # it to express the offset against the gene-level canonical the figure draws,
-    # and nothing in the container does.
-    extra = ["canonical_per_tid_length"] if "canonical_per_tid_length" in available else []
+    # ``canonical_per_tid_length`` is both used here and shipped: derive_x_offsets
+    # needs it to express the isoform offset against the gene-level canonical the
+    # figure draws, and frame.canonical_x needs it at render time to do the same for
+    # a canonical-frame residue, which is numbered against the per-transcript one.
+    extra = [c for c in OPTIONAL_COLUMNS if c in available]
     table = pq.read_table(paired_path, columns=list(INDEX_COLUMNS) + extra)
     # Computed before the CDS is attached, so adding sequence does NOT change the
     # version: it fingerprints coordinates, and cached scan digests keyed on it stay
@@ -253,15 +274,15 @@ def build(
 
     if gtf_path is not None:
         table, _differs = derive_x_offsets(table, gtf_path)
-    if extra:
-        table = table.drop(extra)
 
     if genome_fasta is not None:
         table, mismatched = extract_cds(table, genome_fasta)
         if mismatched:
             raise SystemExit(
-                f"{mismatched} ORFs have a CDS length inconsistent with isoform_len; "
-                "refusing to write an index that would mis-number residues."
+                f"{mismatched} ORFs have a CDS length inconsistent with the protein it "
+                "encodes (orf_cds vs isoform_len, or canonical_cds vs "
+                "canonical_per_tid_length); refusing to write an index that would "
+                "mis-number residues."
             )
 
     # Replace, not merge: the inherited pandas metadata describes all 533 columns

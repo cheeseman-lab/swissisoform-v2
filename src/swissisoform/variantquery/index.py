@@ -50,6 +50,12 @@ CDS_COLUMNS = ("orf_cds", "canonical_cds")
 #: correct for extensions and truncations and undefined for uORFs / altORFs.
 DERIVED_COLUMNS = ("canonical_x_offset_nt",)
 
+#: Projected like :data:`INDEX_COLUMNS`, but optional so an index built before the
+#: column existed still loads. ``canonical_per_tid_length`` is the length of the
+#: per-transcript canonical that ``canonical_orf_exons`` describes, which the figure
+#: needs to place a canonical-frame residue on the gene-level bar it draws.
+OPTIONAL_COLUMNS = ("canonical_per_tid_length",)
+
 
 def _as_intervals(raw: Any) -> tuple[Interval, ...]:
     """Coerce a nested list/array of pairs into a tuple of int 2-tuples."""
@@ -109,6 +115,13 @@ class OrfRecord:
     #: upstream. ``None`` when the index predates the column or the transcript
     #: skeleton was unavailable, in which case callers right-align instead.
     canonical_x_offset_nt: int | None = None
+    #: Residue count of the **per-transcript** canonical — the protein
+    #: ``canonical_orf_exons`` describes, and the one a canonical-frame residue is
+    #: numbered against. Differs from ``canonical_len`` (the gene-level
+    #: representative the figure draws) for 1,670 of 6,462 ORFs in ``full_catalog``.
+    #: ``None`` when the index predates the column; a canonical-frame residue is
+    #: then left unshifted, which is right only where the two canonicals agree.
+    canonical_per_tid_length: int | None = None
 
     def cds_for(self, frame: str) -> str:
         """The CDS matching a frame from ``resolve_residue`` (isoform/canonical)."""
@@ -144,6 +157,7 @@ class OrfRecord:
             orf_cds=str(row.get("orf_cds") or ""),
             canonical_cds=str(row.get("canonical_cds") or ""),
             canonical_x_offset_nt=_int_or_none(row.get("canonical_x_offset_nt")),
+            canonical_per_tid_length=_int_or_none(row.get("canonical_per_tid_length")),
         )
 
 

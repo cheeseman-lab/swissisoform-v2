@@ -195,7 +195,7 @@ def test_region_prefers_unique_when_a_span_straddles_the_boundary() -> None:
 
 
 def test_plotly_x_shifts_isoform_frame_only() -> None:
-    """Canonical-frame residues are already in the figure's coordinate space."""
+    """With no per-Tid length recorded, a canonical-frame residue passes through."""
     record = replace(PLUS, canonical_len=185, isoform_len=239)
     assert plotly_x(record, 21, FRAME_ISOFORM) == -33
     assert plotly_x(record, 21, FRAME_CANONICAL) == 21
@@ -212,7 +212,8 @@ def test_plotly_x_prefers_the_stored_offset() -> None:
     # Right-alignment would say 21 + 168; the mRNA offset says 61.33 residues
     # upstream of the canonical start.
     assert plotly_x(record, 21, FRAME_ISOFORM) == 21 - 184 / 3
-    # A canonical-frame residue is already in the figure's space either way.
+    # The canonical-frame shift is independent of the mRNA offset — it depends only
+    # on which canonical protein the residue was numbered against.
     assert plotly_x(record, 21, FRAME_CANONICAL) == 21
 
 
@@ -228,6 +229,43 @@ def test_plotly_x_falls_back_when_the_index_predates_the_column() -> None:
     """Older indexes carry no offset — right-align rather than fail."""
     record = replace(PLUS, canonical_len=185, isoform_len=239, canonical_x_offset_nt=None)
     assert plotly_x(record, 21, FRAME_ISOFORM) == -33
+
+
+def test_plotly_x_moves_canonical_frame_onto_the_gene_level_bar() -> None:
+    """A canonical-frame residue is numbered against the *per-transcript* canonical.
+
+    ``resolve_residue`` reaches canonical frame only through ``canonical_orf_exons``,
+    which describes that Tid's own canonical — but the figure draws one bar per gene,
+    of length ``canonical_len``. Modelled on DMD/ENST00000378723.7, where the two are
+    3,685 and 635 residues: without the shift a variant in the truncation's lost
+    N-terminus lands 3,050 residues from where it belongs.
+    """
+    record = replace(PLUS, canonical_len=3685, canonical_per_tid_length=635, isoform_len=316)
+    assert plotly_x(record, 100, FRAME_CANONICAL) == 100 + 3050
+    # The isoform path is unaffected: it reads the stored mRNA offset, which
+    # ``derive_x_offsets`` has already expressed against the same bar.
+    record = replace(record, canonical_x_offset_nt=-30)
+    assert plotly_x(record, 100, FRAME_ISOFORM) == 90
+
+
+def test_plotly_x_leaves_canonical_frame_alone_when_the_canonicals_agree() -> None:
+    """The common case — 4,792 of 6,462 ORFs — must be a no-op."""
+    record = replace(PLUS, canonical_len=185, canonical_per_tid_length=185)
+    assert plotly_x(record, 21, FRAME_CANONICAL) == 21
+
+
+def test_plotly_x_leaves_canonical_frame_alone_without_a_per_tid_length() -> None:
+    """An index built before the column: unshifted is the only defined answer."""
+    record = replace(PLUS, canonical_len=3685, canonical_per_tid_length=None)
+    assert plotly_x(record, 100, FRAME_CANONICAL) == 100
+
+
+def test_from_mapping_reads_the_per_tid_canonical_length() -> None:
+    record = OrfRecord.from_mapping(
+        {"tis_id": "chr1:1:+:ATG:T1", "canonical_len": 900, "canonical_per_tid_length": 300}
+    )
+    assert record.canonical_per_tid_length == 300
+    assert plotly_x(record, 10, FRAME_CANONICAL) == 610
 
 
 # ----------------------------------------------------------------------

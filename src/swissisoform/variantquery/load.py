@@ -14,6 +14,7 @@ from swissisoform.variantquery.index import (
     CDS_COLUMNS,
     DERIVED_COLUMNS,
     INDEX_COLUMNS,
+    OPTIONAL_COLUMNS,
     OrfIndex,
 )
 
@@ -52,7 +53,7 @@ def load_index(path: str | Path) -> OrfIndex:
     import pyarrow.parquet as pq
 
     path = Path(path)
-    columns = _present(path, INDEX_COLUMNS + CDS_COLUMNS + DERIVED_COLUMNS)
+    columns = _present(path, INDEX_COLUMNS + OPTIONAL_COLUMNS + CDS_COLUMNS + DERIVED_COLUMNS)
     table = pq.read_table(path, columns=columns)
     version = read_index_version(path)
     return OrfIndex.from_records(table.to_pylist(), version=version)
@@ -69,5 +70,5 @@ def load_index_from_paired(path: str | Path, *, version: str = "") -> OrfIndex:
     import pyarrow.parquet as pq
 
     path = Path(path)
-    table = pq.read_table(path, columns=_present(path, INDEX_COLUMNS))
+    table = pq.read_table(path, columns=_present(path, INDEX_COLUMNS + OPTIONAL_COLUMNS))
     return OrfIndex.from_records(table.to_pylist(), version=version)
