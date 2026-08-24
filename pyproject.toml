@@ -54,7 +54,15 @@ fold = [
 plm = [
     # torch <2.7 = CUDA-12 wheel (A6000 ≈ CUDA 12.6; cu13x needs a newer driver).
     "torch>=2.2.0,<2.7",
-    "fair-esm>=2.0",
+    # ESM-C embed + SAE encode, and the ESMFold2 backend. `esm` pulls the Biohub
+    # transformers fork, which is the ONLY source of transformers.models.esmc,
+    # modeling_esmc_sae and esmfold2 — mainline transformers ships none of them.
+    # Pinned to the commit whose numerics the cached embeddings and SAE features
+    # were produced with; moving it shifts the residual stream the SAE reads.
+    # (fair-esm, the ESM-2 package, was dropped here — nothing imports it since
+    # the ESM-C migration, and installing it is what left this env unable to run
+    # the embed at all.)
+    "esm @ git+https://github.com/evolutionaryscale/esm.git@14d382908b595cd4bfb19394ec8d0d6b4e4b9abb",
     # xformers = fused attention for ESM-C's LLR sweep (the GPU bottleneck),
     # ~1.3-2x faster embed vs pure-PyTorch fallback. Pinned to resolve against
     # torch 2.6.0. Never swap kernels mid-run — it shifts the residual stream the

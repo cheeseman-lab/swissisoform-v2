@@ -18,19 +18,27 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from swissisoform.assembly import assemble_genes
 from swissisoform.clinical.module import ClinicalModule
 from swissisoform.clinical.validate import ConsequenceValidator
 from swissisoform.combine import combine_filtered_samples, dedupe_unique_proteins
 from swissisoform.compare.comparator import compare_genes
-from swissisoform.config import SCORING_SIDECAR, PipelineConfig, ScoringConfig
+from swissisoform.config import (
+    POPULATION_SIDECAR,
+    SCORING_SIDECAR,
+    PipelineConfig,
+    ScoringConfig,
+)
 from swissisoform.conservation_frame.module import ConservationFrameModule
 from swissisoform.evidence.d3_mass_spec import (
     MassSpecModule,
@@ -38,14 +46,14 @@ from swissisoform.evidence.d3_mass_spec import (
     precompute_pepquery,
 )
 from swissisoform.evidence.l1_localization import LocalizationModule, precompute_deeploc
-from swissisoform.evidence.s1_domains import InterProScanModule, precompute_interproscan
 from swissisoform.evidence.l2_targeting import (
     SignalPModule,
     TargetPModule,
     precompute_signalp,
     precompute_targetp,
 )
-from swissisoform.io.parquet import paired_tis_dataframe
+from swissisoform.evidence.s1_domains import InterProScanModule, precompute_interproscan
+from swissisoform.io.parquet import paired_schema, paired_tis_dataframe
 from swissisoform.io.rnaseq import load_sample_manifest
 from swissisoform.modules.biophysics import BiophysicsModule
 from swissisoform.modules.conservation import ConservationModule
@@ -68,7 +76,7 @@ from swissisoform.references import (
     ROOT,
     build_config,
 )
-from swissisoform.sourceresolve import collapse_to_source
+from swissisoform.sourceresolve import collapse_to_source, resolution_columns
 from swissisoform.structure.fold import DEFAULT_BACKEND
 from swissisoform.structure.module import StructureModule
 
@@ -591,6 +599,7 @@ class PreparedRun:
     all_proteins: list[str]
     cfg: object          # PipelineConfig
     n_fasta_written: int = 0
+    population: dict = dataclasses.field(default_factory=dict)
 
 
 class _EmptyGenes(Exception):
@@ -599,6 +608,10 @@ class _EmptyGenes(Exception):
 
 class _BadCellLine(Exception):
     """Internal signal: single-sample with != 1 cell line (run() maps to exit code 2)."""
+
+
+class _MissingVerdicts(Exception):
+    """Internal signal: long-read filtering asked for but unavailable (exit code 3)."""
 
 
 def prepare(spec: RunSpec) -> PreparedRun:
@@ -643,7 +656,46 @@ def prepare(spec: RunSpec) -> PreparedRun:
     # source-resolution verdict columns are absent (cascade skipped/never ran);
     # otherwise keeps Annotated rows + each resolved site's source transcript,
     # so only resolved TIS — one mRNA each — advance to annotation.
+    #
+    # This step DEFINES the population everything downstream is computed over, so
+    # it is measured and stamped into population.json rather than left implicit.
+    pairs = resolution_columns(final)
+    if spec.drop_unsupported_tis and not pairs:
+        logger.error(
+            "--drop-unsupported-tis needs the source-resolution verdict columns, and "
+            "the catalog has none — the long-read filtering it selects cannot happen. "
+            "Rebuild the combined catalog with --rebuild-combined (or drop the flag). "
+            "Refusing to continue, because the run would record a population it does "
+            "not actually have."
+        )
+        raise _MissingVerdicts
+    rows_before = len(final)
+    evaluated = {
+        resolved_col.removesuffix("_resolved"): int(final[resolved_col].notna().sum())
+        for resolved_col, _ in pairs
+        if resolved_col != "resolved"
+    }
+    # What the flag costs RELATIVE to the production default — the number
+    # anything calibrated on this catalog needs to say how far its population
+    # sits from the full one. "Rows collapse removed" does not answer that,
+    # because collapse also drops non-source candidate rows either way.
+    rows_kept_default = (
+        len(collapse_to_source(final, keep_unevaluated=True))
+        if spec.drop_unsupported_tis and pairs
+        else None
+    )
     final = collapse_to_source(final, keep_unevaluated=not spec.drop_unsupported_tis)
+    population = {
+        "drop_unsupported_tis": spec.drop_unsupported_tis,
+        "collapse_applied": bool(pairs),
+        "rows_before_collapse": rows_before,
+        "rows_after_collapse": len(final),
+        "rows_dropped": rows_before - len(final),
+        "samples_evaluated_by_long_read": evaluated,
+    }
+    if rows_kept_default is not None:
+        population["rows_if_unevaluated_kept"] = rows_kept_default
+        population["rows_dropped_by_flag"] = rows_kept_default - len(final)
 
     logger.info("Stage 4: assembling gene + TIS domain objects")
     genes = assemble_genes(
@@ -666,7 +718,7 @@ def prepare(spec: RunSpec) -> PreparedRun:
 
     return PreparedRun(
         ref=ref, genes=genes, all_proteins=all_proteins, cfg=cfg,
-        n_fasta_written=n_written,
+        n_fasta_written=n_written, population=population,
     )
 
 
@@ -702,6 +754,77 @@ def annotate(prepared: PreparedRun, spec: RunSpec) -> pd.DataFrame:
     logger.info("Annotation + comparison + scoring complete")
 
     return paired_tis_dataframe(genes)
+
+
+def _write_parquet_atomic(df: pd.DataFrame, path: Path, schema: pa.Schema) -> None:
+    """Write a parquet against *schema* that is never observable half-finished.
+
+    A same-directory temp file plus ``os.replace`` means a reader sees either no
+    file or the complete one — a plain ``to_parquet`` into the final path leaves
+    a truncated file behind when the job is killed mid-write (Slurm timeout, OOM).
+    """
+    tmp = path.with_name(f".{path.name}.tmp")
+    try:
+        pq.write_table(pa.Table.from_pandas(df, schema=schema, preserve_index=False), tmp)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _write_population_sidecar(
+    out_dir: Path, spec: RunSpec, population: dict, cfg: object
+) -> Path:
+    """Record which TIS population this run was computed over, beside its parquet.
+
+    Scores, percentiles and any reference panel calibrated on a catalog are only
+    meaningful against the population it covers, and that population is decided
+    by flags and by whichever combined catalog happened to be on disk — none of
+    which the parquet itself reveals. Written so the two always travel together.
+    """
+    combined: dict[str, object] = {"rebuilt_this_run": bool(spec.rebuild_combined)}
+    if spec.single_sample:
+        combined["source"] = "single-sample mode (no combined catalog)"
+    else:
+        combined["path"] = str(COMBINED_PARQUET)
+        if COMBINED_PARQUET.exists():
+            stat = COMBINED_PARQUET.stat()
+            combined["size_bytes"] = stat.st_size
+            combined["modified_utc"] = datetime.fromtimestamp(
+                stat.st_mtime, tz=timezone.utc
+            ).isoformat(timespec="seconds")
+    selects = (
+        "long-read-supported TIS only (TIS no long-read sample scored are dropped)"
+        if population.get("drop_unsupported_tis")
+        else "all TIS (rows no long-read sample scored pass through)"
+    )
+    scoring = getattr(cfg, "scoring", None) or ScoringConfig()
+    path = out_dir / POPULATION_SIDECAR
+    path.write_text(
+        json.dumps(
+            {
+                "run_name": spec.run_name,
+                "written_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "cell_lines": list(spec.cell_lines or []),
+                "min_cell_lines": getattr(scoring, "min_cell_lines", None),
+                "source_resolution": {
+                    "skipped": bool(spec.skip_source_resolution),
+                    "divergence_threshold": spec.divergence_threshold,
+                    "window_upstream": spec.window_upstream,
+                    "window_downstream": spec.window_downstream,
+                },
+                "combined_catalog": combined,
+                "selects": selects,
+                **population,
+            },
+            indent=2,
+            default=str,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    dropped = population.get("rows_dropped")
+    print(f"wrote {path} (population this run covers; {dropped} rows dropped at collapse)")
+    return path
 
 
 def _write_scoring_sidecar(out_dir: Path, cfg: object, run_name: str) -> Path:
@@ -743,6 +866,8 @@ def run(spec: RunSpec) -> int:
         return 1
     except _BadCellLine:
         return 2
+    except _MissingVerdicts:
+        return 3
 
     if spec.emit_fasta:
         logger.info(
@@ -758,16 +883,30 @@ def run(spec: RunSpec) -> int:
     out_dir = spec.out_dir or (OUT / spec.run_name)
     out_dir.mkdir(parents=True, exist_ok=True)
     all_path = out_dir / "all_paired.parquet"
-    paired.to_parquet(all_path, index=False)
-    print(f"\nwrote {all_path} ({len(paired)} rows, {len(paired.columns)} cols)")
-    _write_scoring_sidecar(out_dir, prepared.cfg, spec.run_name)
+    # ONE schema for every file this run writes — the combined parquet and each
+    # per-gene slice. Per-frame inference breaks on a frame whose rows all hold
+    # an empty struct (no clinical hits => by_source == {}, which Parquet cannot
+    # represent), and that hazard is not specific to the small slices: a run with
+    # no clinical hits anywhere hits it on all_paired too. paired_schema also
+    # pins the clinical summaries to map types, so the schema no longer depends
+    # on which variant sources and consequence terms this frame happened to see
+    # — without that, two shards of one campaign disagree on the same column.
+    schema = paired_schema(paired)
     for gene_name, sub in paired.groupby("gene_name"):
         gpath = out_dir / f"{gene_name}_paired.parquet"
-        sub.to_parquet(gpath, index=False)
+        pq.write_table(pa.Table.from_pandas(sub, schema=schema, preserve_index=False), gpath)
         if len(prepared.genes) <= 50:
             print(f"  {gene_name}: {len(sub)} rows -> {gpath.name}")
     if len(prepared.genes) > 50:
         print(f"  (per-gene parquets written for {len(prepared.genes)} genes)")
+    _write_scoring_sidecar(out_dir, prepared.cfg, spec.run_name)
+    _write_population_sidecar(out_dir, spec, prepared.population, prepared.cfg)
+    # all_paired.parquet lands last, and atomically. The sharded genome-wide run
+    # treats its existence as "this shard finished", so writing it first (or in
+    # place) let a job killed mid-run leave a done-marker over a partial
+    # directory or a truncated file — skipped forever on every later resume.
+    _write_parquet_atomic(paired, all_path, schema)
+    print(f"\nwrote {all_path} ({len(paired)} rows, {len(paired.columns)} cols)")
 
     elapsed = time.perf_counter() - t_start
     logger.info("Total wall time: %.1f min", elapsed / 60)

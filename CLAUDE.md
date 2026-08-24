@@ -385,10 +385,10 @@ reads → mapping (minimap2 / IsoQuant)          │ aligned  │  unified casca
   `--skip-source-resolution` (disable cascade+collapse), `--divergence-threshold`
   (default 0.5), `--window-upstream` / `--window-downstream` (default 100). The
   divergent threshold is chosen empirically from
-  `figures/source_divergence/export_source_divergence_distribution.py` (per-site
+  `figures/mRNA_source_divergence/export_source_divergence_distribution.py` (per-site
   read distribution: CSV + quantiles + a 100%-stacked-bar plot, one bar per
   divergent TIS; CSV + PNG written alongside the script in
-  `figures/source_divergence/`).
+  `figures/mRNA_source_divergence/`).
 
 ## Development
 
@@ -449,6 +449,35 @@ The only persisted artifacts allowed are:
 2. **GPU precomputes** — ESM/PLM embeddings and Boltz structures, keyed by `protein_hash`. The *sole compute exception*, because they are prohibitively expensive inline; produced by the GPU sbatch scripts and treated as static inputs to the CPU run.
 
 Everything else — PepQuery search, all annotation, scoring, comparison — runs fresh each run.
+
+**Carve-out: intra-campaign shard resume.** The genome-wide harness
+(`scripts/slurm/full_run/`) is the one sanctioned exception. Its annotate array
+skips a shard whose `all_paired.parquet` already exists, which *is* a CPU result
+cache — so the boundary is drawn explicitly:
+
+- **The exception is scoped to one campaign.** A campaign is the unit of
+  freshness, not a single job: `$SWISSISO_CAMPAIGN` namespaces the inputs
+  (`data/output/$CAMPAIGN/`) and every shard output
+  (`data/output/${CAMPAIGN}_shard_<k>/`). Within one campaign, resuming a
+  117-shard multi-day array is resume, not caching — the alternative is losing
+  days of completed work to one preempted task.
+- **A fresh campaign gets a fresh name.** Any code, config, or gene-set change
+  means a new `SWISSISO_CAMPAIGN` (it defaults to `full_catalog_<UTC date>`);
+  never resubmit an old campaign's array after changing what the pipeline
+  computes. The marker is keyed only to shard *contents*
+  (`shard_meta.json`'s `shard_list_sha1`, checked by `merge.py`) — **not** to
+  code version, config, or GPU-cache completeness, so nothing detects a
+  stale-code or evidence-holed shard for you.
+- **The marker means finished, not complete.** `runner.run` writes the per-gene
+  slices and the scoring sidecar first, then renames `all_paired.parquet` into
+  place atomically, and the array revalidates the trailing `PAR1` magic before
+  skipping — so the marker cannot survive a job killed mid-write. But it attests
+  that the *CPU annotation* finished, not that the *GPU precompute it read* was
+  complete: under the `afterany` chain a shard whose embed/fold chunk died still
+  annotates successfully, recording `status="no_cache"` for structure/PLM/SAE. It
+  is then legitimately "done" and will be skipped forever. Those holes surface as
+  `frac_no_cache_*` in `merge_report.tsv`, and clearing them means deleting the
+  marker by hand — see the REFILL block in `00_prepare.sbatch`'s header.
 
 **PepQuery implication:** the only contract-legal prep is **pre-downloading the spectra library** (reference data) — the `pepquery-spectra` setup target mirrors the public PepQueryDB S3 library locally so runs can search it via local `-ms` instead of re-pulling (and deleting) spectra from S3 every search. The search input is already scoped to the differential region: `collect_unique_peptides` submits only isoform-unique peptides (the isoform tryptic digest minus the canonical digest — a sequence set-difference, not a `diff_region` coordinate intersection), so canonical/shared peptides are never searched. There is no caching shortcut: on top of that scoping, a real PepQuery *speedup* still requires **sharding the search**, a fundamental pipeline architecture change (per-protein Snakemake DAG + a fresh, peptide-sharded PepQuery stage over the local library), tracked as its own project — not a quick win. *Local `-ms` wiring (done 2026-07-10):* `precompute_pepquery` now auto-detects the staged mirror (`data/reference/pepquery/spectra/<dataset>/`, via `_pepquery_local_library_dirs`) and searches each dataset from disk with one `-ms <folder>` invocation (PepQuery reads the mass-binned `*.mgf.gz` index directly — verified: no re-index, no S3), aggregating per-dataset outputs exactly like the `-b` layout; it falls back to `-b` (on-demand download) only when a dataset isn't mirrored. This removes the per-shard re-download across the 117-shard annotate array once `setup_databases.py pepquery-spectra` has run. *Known deviation still to address:* `precompute_pepquery`'s on-disk result cache (`data/cache/pepquery/*.json`) is a CPU result cache that violates this contract.
 

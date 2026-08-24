@@ -354,7 +354,7 @@ def test_category_pass_dry_run_emits_one_call_per_category(monkeypatch, tmp_path
     )
     captured = capsys.readouterr().out
     assert rc == 0
-    # 6 CDLMPS categories × 1 isoform = 6 dry-run "category:" prints (all 15
+    # 6 CDLMPS categories × 1 isoform = 6 dry-run "category:" prints (all 16
     # criteria incl. S2/S3 are covered across the categories).
     assert captured.count("category:") == 6
 
@@ -474,7 +474,7 @@ def test_synthesis_input_record_pulls_category_reads(monkeypatch, tmp_path):
     assert loc["known_from_literature"] == "nucleus"
     assert loc["predicted_canonical"] == {"compartment": "Nucleus", "top_prob": 0.91}
     assert loc["predicted_isoform"] == {"compartment": "Cytoplasm", "top_prob": 0.83}
-    # The record states the isoform once at the top level; the 15 criteria
+    # The record states the isoform once at the top level; the 16 criteria
     # entries no longer each repeat it.
     assert rec["isoform"]["tis_id"] == "chr1:100:+:ATG:ENST_A"
     assert all("isoform" not in v for v in rec["criteria_evidence"].values())
@@ -483,7 +483,7 @@ def test_synthesis_input_record_pulls_category_reads(monkeypatch, tmp_path):
     assert rec_bare["gene"] == {
         "name": "GENE_A", "function": None, "keywords": None, "subcellular_location": None,
     }
-    # All 15 criteria (incl. S2/S3) are carried in the raw evidence for synthesis —
+    # All 16 criteria (incl. S2/S3) are carried in the raw evidence for synthesis —
     # S2/S3 tolerate the _raw-less fixture (empty evidence, never raise).
     assert "P2_shared_structural_change" in rec["criteria_evidence"]
     assert "S2_biophysics" in rec["criteria_evidence"]

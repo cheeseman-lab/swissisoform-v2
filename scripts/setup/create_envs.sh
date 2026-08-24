@@ -7,7 +7,7 @@
 # Each env is a fresh conda env + editable install of the matching extra:
 #
 #   base -> swissisoform-v2       .[dev]    CPU annotation pipeline + tests
-#   plm  -> swissisoform-v2-plm   .[plm]    ESM-C embed (torch + fair-esm + xformers)
+#   plm  -> swissisoform-v2-plm   .[plm]    ESM-C embed/SAE (torch + esm + xformers)
 #   fold -> swissisoform-v2-fold  .[fold]   ESMFold2 / Boltz-2 / Chai-1 structures
 #
 # Usage:
