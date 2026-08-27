@@ -412,30 +412,35 @@ def test_stop_gained_is_reached_on_real_data(result) -> None:
 
 
 def test_inframe_deletion_is_classified_and_placed(result) -> None:
-    """Class from the length delta, residue from the anchor — no sequence read.
+    """Class from the length delta, residues from splicing and translating.
 
-    Amino acids stay empty for indels, exactly as they do for an annotated variant:
-    the classifier resolves them by length rather than translating.
+    The class needs no sequence; naming what the deletion removes does, and the
+    classifier now does both. ``aa_alt`` is empty because a deletion replaces the
+    residues with nothing — that is the answer, not a missing one.
     """
     hits = [h for h in result.hits if h.pos == 531771]
     assert hits
     hit = hits[0]
     assert hit.consequence == "inframe_deletion"
-    assert (hit.aa_ref, hit.aa_alt) == ("", "")
+    assert hit.aa_ref and hit.aa_alt == ""
     assert hit.residue == 1, hit
 
 
 def test_a_span_leaving_the_exon_still_gets_its_class(result) -> None:
     """The length delta needs no sequence, so the row is still right.
 
-    Amino acids are absent because they are absent for every indel, not because this
-    one crosses an intron — the classifier never translates an indel.
+    Here the amino acids are absent *for a reason specific to this variant* — the
+    span crosses an intron, so splicing the ALT in would translate intronic bases —
+    and the note says so. Before the span walk covered indels this case was
+    invisible: the anchor mapped, the rest of the span was never looked at, and the
+    row read as a fully resolved frameshift.
     """
     hits = [h for h in result.hits if h.pos == 532107]
     assert hits
     hit = hits[0]
     assert hit.consequence == "frameshift_variant", hit
     assert (hit.aa_ref, hit.aa_alt) == ("", "")
+    assert "leaves the ORF" in hit.consequence_note, hit.consequence_note
     assert hit.residue is not None, "still placeable — pos itself is in the exon"
 
 

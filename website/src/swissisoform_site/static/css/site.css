@@ -1391,6 +1391,27 @@
 .vq-step-lbl { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.03em; }
 .vq-step.is-hit .vq-step-num { color: #3730a3; }
 .vq-drops { font-size: 12px; color: #94a3b8; margin: 2px 0 0; }
+.vq-partial {
+  font-size: 12.5px; color: #92400e; background: #fffbeb;
+  border: 1px solid #fcd34d; border-radius: 6px;
+  padding: 8px 10px; margin: 12px 0 0;
+}
+/* Louder than .vq-partial: a partial scan is still correct as far as it went,
+   where an assembly mismatch means everything on the page is wrong. */
+.vq-assembly {
+  font-size: 13px; color: #991b1b; background: #fef2f2;
+  border: 1px solid #fca5a5; border-left: 4px solid #dc2626; border-radius: 6px;
+  padding: 10px 12px; margin: 16px 0 0; line-height: 1.5;
+}
+/* Colour comes inline from CONSEQ_COLOR, the map the gene figure draws with;
+   the border follows it via currentColor, the same idiom as .orf-chip above. */
+.conseq-chip {
+  display: inline-block; white-space: nowrap;
+  font-size: 11px; font-weight: 600; line-height: 1.5;
+  padding: 1px 7px; border-radius: 10px;
+  border: 1px solid currentColor; background: white;
+}
+.conseq-note { display: block; font-size: 11px; color: #94a3b8; margin-top: 2px; }
 
 .vq-genes { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 0; }
 .vq-gene {

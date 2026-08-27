@@ -65,3 +65,45 @@ def test_every_refusal_and_class_carries_a_note() -> None:
     for ref, alt in (("A", "AG"), ("A", "AGGG"), ("ACACG", "AG"), ("G", "A")):
         _term, note = classify_without_sequence(ref, alt)
         assert note
+
+
+# ----------------------------------------------------------------------
+# The classifier's own note reaching a hit record (PR #29 gate 4)
+# ----------------------------------------------------------------------
+
+
+class TestHitNotes:
+    """``_hit_fields`` turns a classifier result into the four fields a hit records.
+
+    The note matters most where the term alone misleads: a near-cognate start
+    upgraded to ATG classifies as ordinary missense, and without the note the page
+    shows nothing to say the start got *stronger* rather than broken.
+    """
+
+    def test_the_classifier_note_wins_over_the_term_table(self):
+        from swissisoform.contract import START_STRENGTHENED_NOTE
+        from swissisoform.variantquery.scan import _hit_fields
+
+        term, aa_ref, aa_alt, note = _hit_fields(
+            {
+                "consequence": "missense_variant",
+                "aa_ref": "L",
+                "aa_alt": "M",
+                "note": START_STRENGTHENED_NOTE,
+            }
+        )
+        assert (term, aa_ref, aa_alt) == ("missense_variant", "L", "M")
+        assert note == START_STRENGTHENED_NOTE
+
+    def test_the_term_table_still_covers_notes_the_classifier_does_not_carry(self):
+        from swissisoform.variantquery.scan import _hit_fields
+
+        _term, _aa_ref, _aa_alt, note = _hit_fields({"consequence": "intronic", "note": ""})
+        assert note == "not inside this ORF's coding sequence"
+
+    def test_an_unclassifiable_result_still_explains_itself(self):
+        from swissisoform.variantquery.scan import _hit_fields
+
+        term, _aa_ref, _aa_alt, note = _hit_fields({"consequence": None})
+        assert term == "other"
+        assert "could not be classified" in note

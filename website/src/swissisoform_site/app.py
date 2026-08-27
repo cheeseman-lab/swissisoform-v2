@@ -37,15 +37,24 @@ from flask import (
     url_for,
 )
 from markupsafe import Markup, escape
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from swissisoform.site.evidence import (
     CRITERIA_METRIC_LABELS,
     format_metric,
     slice_criterion,
 )
+from swissisoform.variantquery.consequence import (
+    MISSENSE,
+    START_LOST,
+    STOP_GAINED,
+    STOP_LOST,
+    SYNONYMOUS,
+)
 from swissisoform.variantquery.frame import x_offset_residues
 from swissisoform.variantquery.scan import scan
-from swissisoform_site import scanstore
+from swissisoform.variantquery.vcf import VcfLimitExceeded
+from swissisoform_site import scanstore, throttle
 from swissisoform_site.data import (
     CARD_BADGES,
     CARD_GROUPS,
@@ -70,6 +79,7 @@ from swissisoform_site.data import (
 )
 from swissisoform_site.genomics import interval_intersection
 from swissisoform_site.plots import build_gene_protein_figure
+from swissisoform_site.plots.protein import CONSEQ_COLOR, CONSEQ_SHORT
 from swissisoform_site.scanstore import ScanStoreError
 
 # Cell line samples used by the transcript figure's bottom panel.
@@ -252,6 +262,72 @@ def _no_index(response: Any) -> Any:
     return response
 
 
+#: Reader caps → (error code, status). Both are 4xx and both are the uploader's
+#: file to fix; the codes stay distinct from the compressed-body ``too_large`` so
+#: a caller can tell which limit it hit.
+_LIMIT_RESPONSES = {
+    "decompressed_bytes": ("expands_too_large", 413),
+    "line_bytes": ("line_too_long", 422),
+}
+
+
+#: Terms whose hits actually had their REF compared against the reference. The
+#: classifier reaches ``reference_mismatch`` only on the substitution path
+#: (clinical/validate.py) — intronic spans and indels return before that check —
+#: so counting them in the denominator would dilute a real mismatch below the
+#: threshold on any VCF with many indels or intronic-in-ORF hits.
+_REF_CHECKED_TERMS = frozenset(
+    {
+        MISSENSE,
+        SYNONYMOUS,
+        STOP_GAINED,
+        STOP_LOST,
+        START_LOST,
+        # Lives as a literal in clinical/validate.py, like "intronic" does in
+        # variantquery/scan.py's note table; there is no constant to import.
+        "reference_mismatch",
+    }
+)
+
+#: A REF disagreement or two is ordinary — a miscalled base, a variant normalised
+#: against a different representation. A *majority* of them is what an hg19 file
+#: looks like scanned against GRCh38 coordinates, which is the one failure mode a
+#: user cannot see for themselves: the scan "succeeds" and reports plausible
+#: garbage. Below the floor the fraction is noise, so it stays a plain tally.
+_ASSEMBLY_MIN_CLASSIFIED = 10
+_ASSEMBLY_SUSPECT_FRACTION = 0.5
+
+
+def _assembly_check(counts: dict[str, Any]) -> dict[str, Any]:
+    """REF-mismatch tally, and whether it looks like the wrong genome build.
+
+    The classifier already computes ``reference_mismatch`` per hit; this only reads
+    the tally it was throwing away.
+    """
+    consequences = counts.get("consequences") or {}
+    mismatches = int(consequences.get("reference_mismatch") or 0)
+    checked = sum(int(n or 0) for term, n in consequences.items() if term in _REF_CHECKED_TERMS)
+    fraction = mismatches / checked if checked else 0.0
+    return {
+        "mismatches": mismatches,
+        "ref_checked": checked,
+        "fraction": fraction,
+        "percent": round(fraction * 100),
+        "suspect": (checked >= _ASSEMBLY_MIN_CLASSIFIED and fraction >= _ASSEMBLY_SUSPECT_FRACTION),
+    }
+
+
+def _human_delay(seconds: int) -> str:
+    """Render a retry delay the way a person would say it."""
+    if seconds < 60:
+        return f"{seconds} seconds"
+    minutes = round(seconds / 60)
+    if minutes < 60:
+        return f"{minutes} minute{'' if minutes == 1 else 's'}"
+    hours = round(seconds / 3600)
+    return f"{hours} hour{'' if hours == 1 else 's'}"
+
+
 def create_app() -> Flask:
     """Build the Flask app. Factory pattern so tests can re-create cleanly."""
     app = Flask(__name__)
@@ -259,6 +335,14 @@ def create_app() -> Flask:
     # Werkzeug rejects a larger body before reading it, so an oversized upload
     # costs nothing but the 413.
     app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
+
+    # Behind Railway's edge proxy ``remote_addr`` is the proxy hop, so every
+    # client would share one throttle bucket. ``x_for=1`` trusts exactly one hop
+    # and takes the rightmost X-Forwarded-For entry — the one the proxy itself
+    # appended — so a client cannot prepend a header to get a fresh bucket.
+    # Opt-in: with no proxy in front, trusting the header would let anyone spoof.
+    if os.environ.get("SWISSISOFORM_TRUST_PROXY") == "1":
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
     # Slugify filter — must match data.py::tis_slug and the LLM dispatcher's
     # _tis_slug so that landing-page dropdown links resolve to the right
@@ -318,6 +402,8 @@ def create_app() -> Flask:
         format_metric=format_metric,
         variant_url=variant_url,
         CARD_GROUPS=CARD_GROUPS,
+        CONSEQ_COLOR=CONSEQ_COLOR,
+        CONSEQ_SHORT=CONSEQ_SHORT,
     )
 
     # JSON-friendly NaN cleaner for the API endpoint
@@ -574,6 +660,26 @@ def create_app() -> Flask:
     @app.post("/api/variants/scan")
     def variants_scan() -> Any:
         """Accept a VCF upload, resolve it against the ORF index, return a token."""
+        # First, before the index load and the token check: it is the cheapest
+        # check, and it is the one that has to hold when the endpoint is hot.
+        client = request.remote_addr or "unknown"
+        verdict = throttle.check(client)
+        if not verdict.allowed:
+            logger.info(
+                "scan throttled scope=%s retry_after=%ds", verdict.scope, verdict.retry_after
+            )
+            response = jsonify(
+                {
+                    "error": "rate_limited",
+                    "message": (
+                        f"Too many scans from this address. Try again in "
+                        f"{_human_delay(verdict.retry_after)}."
+                    ),
+                }
+            )
+            response.headers["Retry-After"] = str(verdict.retry_after)
+            return response, 429
+
         index = load_orf_index()
         if index is None:
             return jsonify(
@@ -593,7 +699,9 @@ def create_app() -> Flask:
         required_token = os.environ.get("SWISSISOFORM_SCAN_TOKEN", "")
         if required_token:
             offered = request.headers.get("X-Scan-Token") or request.form.get("scan_token", "")
-            if not secrets.compare_digest(offered, required_token):
+            # Encoded: compare_digest on two str raises TypeError for non-ASCII,
+            # which would be a 500 on the very configuration this protects.
+            if not secrets.compare_digest(offered.encode("utf-8"), required_token.encode("utf-8")):
                 return jsonify(
                     {"error": "forbidden", "message": "missing or wrong scan token"}
                 ), 403
@@ -621,7 +729,17 @@ def create_app() -> Flask:
             # disk, so the parse is skipped entirely.
             logger.info("scan reused cached digest key=%s", saved.key)
         else:
-            result = scan(scanstore.source_path(saved.key), index)
+            # Charged here rather than at the top: a cache hit skips the parse
+            # entirely, so it costs nothing and should not spend anyone's budget.
+            throttle.record(client)
+            try:
+                result = scan(scanstore.source_path(saved.key), index)
+            except VcfLimitExceeded as exc:
+                logger.info("scan refused key=%s kind=%s", saved.key, exc.kind)
+                # The blob stays; the next sweep collects it, since no digest was
+                # written and nothing will resolve the token.
+                error, status = _LIMIT_RESPONSES[exc.kind]
+                return jsonify({"error": error, "message": str(exc)}), status
             digest = result.to_dict()
             digest["provenance"] = {
                 "vcf_sha256": saved.vcf_sha256,
@@ -718,6 +836,7 @@ def create_app() -> Flask:
                     token=token,
                     digest=digest,
                     counts=counts,
+                    assembly=_assembly_check(counts),
                     provenance=digest.get("provenance", {}) or {},
                     genes=digest.get("genes", []) or [],
                     hits=all_hits[:PAGE_MAX_HITS],
@@ -816,6 +935,16 @@ def create_app() -> Flask:
                 "message": f"VCF exceeds the {limit_mb} MB upload limit",
             }
         ), 413
+
+    @app.errorhandler(429)
+    def rate_limited(e: Any) -> tuple[Any, int]:
+        """JSON, like the 413 — the only client for a 429 here is the uploader."""
+        return jsonify(
+            {
+                "error": "rate_limited",
+                "message": "Too many scans from this address. Try again later.",
+            }
+        ), 429
 
     @app.errorhandler(404)
     def not_found(e: Any) -> tuple[Any, int]:

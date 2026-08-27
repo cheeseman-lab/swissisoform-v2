@@ -42,6 +42,11 @@ def client(data_dir, tmp_path, monkeypatch):
     monkeypatch.delenv("SWISSISOFORM_SCAN_TTL_HOURS", raising=False)
     monkeypatch.delenv("SWISSISOFORM_SCAN_TOKEN", raising=False)
     monkeypatch.delenv("SWISSISOFORM_SCAN_DEBUG", raising=False)
+    # The throttle is off for the rest of the suite: these tests post several
+    # uploads each, and only the throttle's own tests should feel it.
+    monkeypatch.setenv("SWISSISOFORM_SCAN_RATE_HOURLY", "0")
+    monkeypatch.setenv("SWISSISOFORM_SCAN_RATE_DAILY", "0")
+    monkeypatch.delenv("SWISSISOFORM_TRUST_PROXY", raising=False)
 
     from swissisoform_site import data as site_data
     from swissisoform_site.app import create_app
@@ -664,3 +669,237 @@ def test_stop_gained_and_inframe_deletion_reach_the_figure(client, scan_token) -
     cbx1 = uploaded_traces(gene_figure(client, f"/genes/CBX1?vcf={scan_token}"))
     cbx1_hovers = [h for t in cbx1 for h in t["hovertext"]]
     assert any("stop_gained" in h for h in cbx1_hovers), cbx1_hovers
+
+
+def test_a_partial_scan_says_so_on_the_results_page(client, monkeypatch) -> None:
+    """A budget stop qualifies every number in the funnel, so it has to be visible.
+
+    Rendered as its own banner above the funnel rather than appended to the
+    "Dropped" line: it is a caveat on all of those counts, not another one.
+    """
+    import swissisoform_site.app as site_app
+    from swissisoform.variantquery.scan import scan as real_scan
+
+    def stopped_scan(path, index, **kwargs):
+        result = real_scan(path, index, **kwargs)
+        result.counts.stopped = "time"
+        result.counts.lines = 12345
+        return result
+
+    monkeypatch.setattr(site_app, "scan", stopped_scan)
+
+    with FIXTURE_VCF.open("rb") as handle:
+        token = client.post(
+            "/api/variants/scan",
+            data={"vcf": (handle, "partial.vcf")},
+            content_type="multipart/form-data",
+        ).get_json()["vcf_id"]
+
+    page = client.get(f"/variants/{token}").data.decode()
+    assert "This scan did not finish" in page
+    assert "12,345 records" in page
+    assert "on its time budget" in page
+
+
+def test_a_complete_scan_shows_no_partial_banner(client, scan_token) -> None:
+    page = client.get(f"/variants/{scan_token}").data.decode()
+    assert "This scan did not finish" not in page
+
+
+# ----------------------------------------------------------------------
+# GRCh38 labelling, the REF-mismatch tally, and the classifier columns
+# (PR #29 gates 2 and 6)
+# ----------------------------------------------------------------------
+
+
+def test_the_drop_zone_names_the_assembly(client) -> None:
+    """An hg19 upload succeeds and reports nonsense, so the requirement is stated
+    where the file is chosen, not only in the methods prose."""
+    page = client.get("/").data.decode()
+    assert "GRCh38" in page
+
+
+def test_the_results_header_names_the_assembly(client, scan_token) -> None:
+    page = client.get(f"/variants/{scan_token}").data.decode()
+    assert "GRCh38" in page
+
+
+def test_a_high_ref_mismatch_fraction_warns_about_the_assembly(client, monkeypatch) -> None:
+    """The tally the classifier already computes is the only assembly check there is."""
+    import swissisoform_site.app as site_app
+    from swissisoform.variantquery.scan import scan as real_scan
+
+    def mismatching(path, index, **kwargs):
+        result = real_scan(path, index, **kwargs)
+        result.counts.consequences = {"reference_mismatch": 40, "missense_variant": 10}
+        return result
+
+    monkeypatch.setattr(site_app, "scan", mismatching)
+    with FIXTURE_VCF.open("rb") as handle:
+        token = client.post(
+            "/api/variants/scan",
+            data={"vcf": (handle, "hg19ish.vcf")},
+            content_type="multipart/form-data",
+        ).get_json()["vcf_id"]
+
+    page = client.get(f"/variants/{token}").data.decode()
+    assert "may not be GRCh38" in page
+    assert "80%" in page
+
+
+def test_a_low_ref_mismatch_count_is_reported_without_the_warning(client, monkeypatch) -> None:
+    """One or two mismatches are ordinary — reported, but not an alarm."""
+    import swissisoform_site.app as site_app
+    from swissisoform.variantquery.scan import scan as real_scan
+
+    def one_mismatch(path, index, **kwargs):
+        result = real_scan(path, index, **kwargs)
+        result.counts.consequences = {"reference_mismatch": 1, "missense_variant": 49}
+        return result
+
+    monkeypatch.setattr(site_app, "scan", one_mismatch)
+    with FIXTURE_VCF.open("rb") as handle:
+        token = client.post(
+            "/api/variants/scan",
+            data={"vcf": (handle, "one_off.vcf")},
+            content_type="multipart/form-data",
+        ).get_json()["vcf_id"]
+
+    page = client.get(f"/variants/{token}").data.decode()
+    assert "may not be GRCh38" not in page
+    assert "disagree with GRCh38" in page
+
+
+def test_a_tiny_scan_does_not_trigger_the_assembly_warning(client, monkeypatch) -> None:
+    """Two of two is 100% and means nothing — the floor exists to stop that alarm."""
+    import swissisoform_site.app as site_app
+    from swissisoform.variantquery.scan import scan as real_scan
+
+    def two_of_two(path, index, **kwargs):
+        result = real_scan(path, index, **kwargs)
+        result.counts.consequences = {"reference_mismatch": 2}
+        return result
+
+    monkeypatch.setattr(site_app, "scan", two_of_two)
+    with FIXTURE_VCF.open("rb") as handle:
+        token = client.post(
+            "/api/variants/scan",
+            data={"vcf": (handle, "tiny.vcf")},
+            content_type="multipart/form-data",
+        ).get_json()["vcf_id"]
+
+    assert "may not be GRCh38" not in client.get(f"/variants/{token}").data.decode()
+
+
+def test_the_hit_table_shows_the_classifier_output(client, scan_token) -> None:
+    """The shared classifier computes a term and amino acids for every hit; the page
+    that presents the scan has to show them."""
+    page = client.get(f"/variants/{scan_token}").data.decode()
+    hits = json.loads(client.get(f"/api/variants/{scan_token}.json").data)["hits"]
+
+    assert "<th>Consequence</th>" in page
+    assert "<th>AA change</th>" in page
+
+    terms = {h["consequence"] for h in hits}
+    assert terms, "fixture must produce at least one classified hit"
+    # Rendered with the figure's short labels, not the raw term.
+    from swissisoform_site.plots.protein import CONSEQ_SHORT
+
+    for term in terms:
+        assert CONSEQ_SHORT.get(term, term.replace("_", " ")) in page
+
+    changed = [h for h in hits if h.get("aa_ref") and h.get("aa_alt")]
+    if changed:
+        h = changed[0]
+        assert f"{h['aa_ref']}&rarr;{h['aa_alt']}" in page
+
+
+def test_a_per_hit_note_is_visible_not_only_a_tooltip(client, monkeypatch) -> None:
+    """The note is the reason the amino acids beside it are blank; a title= would be
+    unreachable on touch and invisible in print.
+
+    The note is forced rather than fished out of the fixture, which need not contain
+    one — a skip here would mean the rendering was never checked at all.
+    """
+    import dataclasses
+
+    from markupsafe import escape
+
+    import swissisoform_site.app as site_app
+    from swissisoform.variantquery.scan import _TERM_NOTES
+    from swissisoform.variantquery.scan import scan as real_scan
+
+    note = _TERM_NOTES["reference_mismatch"]
+
+    def with_a_note(path, index, **kwargs):
+        result = real_scan(path, index, **kwargs)
+        assert result.hits, "fixture must produce at least one hit to decorate"
+        result.hits[0] = dataclasses.replace(
+            result.hits[0],
+            consequence="reference_mismatch",
+            aa_ref="",
+            aa_alt="",
+            consequence_note=note,
+        )
+        return result
+
+    monkeypatch.setattr(site_app, "scan", with_a_note)
+    with FIXTURE_VCF.open("rb") as handle:
+        token = client.post(
+            "/api/variants/scan",
+            data={"vcf": (handle, "noted.vcf")},
+            content_type="multipart/form-data",
+        ).get_json()["vcf_id"]
+
+    page = client.get(f"/variants/{token}").data.decode()
+    # Compared escaped: the note contains an apostrophe, and rendering it raw
+    # would mean the template was not escaping hit text at all.
+    assert str(escape(note)) in page
+    assert "conseq-note" in page
+    # The term has no short label, so it falls back to the readable form.
+    assert "reference mismatch" in page
+
+
+def test_intronic_and_indel_hits_do_not_dilute_the_mismatch_fraction(client, monkeypatch) -> None:
+    """The classifier only reaches reference_mismatch on the substitution path.
+
+    Counting intronic spans and indels in the denominator would hide a real
+    assembly mismatch behind a pile of hits whose REF was never compared.
+    """
+    import swissisoform_site.app as site_app
+    from swissisoform.variantquery.scan import scan as real_scan
+
+    def diluted(path, index, **kwargs):
+        result = real_scan(path, index, **kwargs)
+        result.counts.consequences = {
+            "reference_mismatch": 8,
+            "missense_variant": 4,
+            # Neither of these ever had a REF comparison.
+            "intronic": 500,
+            "frameshift_variant": 300,
+        }
+        return result
+
+    monkeypatch.setattr(site_app, "scan", diluted)
+    with FIXTURE_VCF.open("rb") as handle:
+        token = client.post(
+            "/api/variants/scan",
+            data={"vcf": (handle, "diluted.vcf")},
+            content_type="multipart/form-data",
+        ).get_json()["vcf_id"]
+
+    page = client.get(f"/variants/{token}").data.decode()
+    # 8 of 12 REF-checked hits, not 8 of 812.
+    assert "may not be GRCh38" in page
+    assert "67%" in page
+
+
+def test_the_table_and_the_figure_name_consequences_identically(client, scan_token) -> None:
+    """One vocabulary: the table imports the map the figure draws with."""
+    import swissisoform_site.app as site_app
+    from swissisoform_site.plots.protein import CONSEQ_COLOR, CONSEQ_SHORT
+
+    assert site_app.CONSEQ_COLOR is CONSEQ_COLOR
+    assert site_app.CONSEQ_SHORT is CONSEQ_SHORT
+    page = client.get(f"/variants/{scan_token}").data.decode()
+    assert "conseq-chip" in page

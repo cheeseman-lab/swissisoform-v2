@@ -47,6 +47,11 @@ def client(data_dir, tmp_path, monkeypatch):
     monkeypatch.setenv("SWISSISOFORM_DATA_DIR", str(data_dir))
     monkeypatch.setenv("SWISSISOFORM_SCAN_DIR", str(tmp_path / "scans"))
     monkeypatch.delenv("SWISSISOFORM_SCAN_TTL_HOURS", raising=False)
+    # The throttle is off for the rest of the suite: these tests post several
+    # uploads each, and only the throttle's own tests should feel it.
+    monkeypatch.setenv("SWISSISOFORM_SCAN_RATE_HOURLY", "0")
+    monkeypatch.setenv("SWISSISOFORM_SCAN_RATE_DAILY", "0")
+    monkeypatch.delenv("SWISSISOFORM_TRUST_PROXY", raising=False)
 
     from swissisoform_site import data as site_data
     from swissisoform_site.app import create_app
@@ -284,3 +289,130 @@ def test_existing_pages_still_render(client) -> None:
     assert client.get("/healthz").status_code == 200
     assert client.get("/").status_code == 200
     assert client.get("/genes/CBX1").status_code == 200
+
+
+# ----------------------------------------------------------------------
+# Resource caps (PR #29 gate 1)
+# ----------------------------------------------------------------------
+
+
+def test_a_gzip_bomb_is_413_json_not_a_500(client, monkeypatch) -> None:
+    """The compressed body passes MAX_CONTENT_LENGTH; the decompressed cap catches it."""
+    monkeypatch.setenv("SWISSISOFORM_VCF_MAX_BYTES", str(64 * 1024))
+
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb") as handle:
+        handle.write(b"##fileformat=VCFv4.2\n")
+        handle.write(b"A" * (4 * 1024 * 1024))
+    body = buf.getvalue()
+    assert len(body) < 1024 * 1024, "the bomb must pass the upload limit to be a test"
+
+    response = _post(client, body, "bomb.vcf.gz")
+    assert response.status_code == 413
+    payload = response.get_json()
+    # Distinct from the compressed-body limit, so the uploader can tell them apart.
+    assert payload["error"] == "expands_too_large"
+    assert payload["message"]
+
+
+def test_a_newline_free_upload_is_422_json_not_a_500(client, monkeypatch) -> None:
+    monkeypatch.setenv("SWISSISOFORM_VCF_MAX_LINE_BYTES", str(4 * 1024))
+
+    response = _post(client, b"A" * (256 * 1024), "oneline.vcf")
+    assert response.status_code == 422
+    assert response.get_json()["error"] == "line_too_long"
+
+
+def test_a_refused_upload_leaves_no_resolvable_token(client, monkeypatch) -> None:
+    """No digest is written, so nothing should look like a finished scan."""
+    monkeypatch.setenv("SWISSISOFORM_VCF_MAX_LINE_BYTES", str(4 * 1024))
+    refused = _post(client, b"A" * (256 * 1024), "oneline.vcf")
+    assert refused.status_code == 422
+    assert "vcf_id" not in (refused.get_json() or {})
+
+
+# ----------------------------------------------------------------------
+# Per-IP throttle
+# ----------------------------------------------------------------------
+
+
+def test_uploads_are_throttled_per_ip(client, vcf_bytes, monkeypatch) -> None:
+    monkeypatch.setenv("SWISSISOFORM_SCAN_RATE_HOURLY", "2")
+
+    # Distinct bytes each time: an identical re-upload is a cache hit and free.
+    for i in range(2):
+        assert _post(client, vcf_bytes + f"\n#pad{i}\n".encode()).status_code == 200
+
+    response = _post(client, vcf_bytes + b"\n#pad-final\n")
+    assert response.status_code == 429
+    payload = response.get_json()
+    assert payload["error"] == "rate_limited"
+    # vcf_drop.js renders payload.message verbatim, so it has to read as English.
+    assert "Try again in" in payload["message"]
+    assert int(response.headers["Retry-After"]) > 0
+
+
+def test_a_cache_hit_does_not_spend_budget(client, vcf_bytes, monkeypatch) -> None:
+    """Identical bytes skip the parse entirely, so they cost nothing to serve."""
+    monkeypatch.setenv("SWISSISOFORM_SCAN_RATE_HOURLY", "2")
+
+    for _ in range(5):
+        assert _post(client, vcf_bytes).status_code == 200
+
+
+def test_the_throttle_answers_before_the_index_is_needed(client, vcf_bytes, monkeypatch) -> None:
+    """429 must not depend on the catalogue being loadable."""
+    monkeypatch.setenv("SWISSISOFORM_SCAN_RATE_HOURLY", "1")
+    assert _post(client, vcf_bytes).status_code == 200
+
+    monkeypatch.setattr("swissisoform_site.app.load_orf_index", lambda: None)
+    assert _post(client, vcf_bytes + b"\n#pad\n").status_code == 429
+
+
+def test_forwarded_for_is_ignored_without_the_proxy_opt_in(client, vcf_bytes, monkeypatch) -> None:
+    """Trusting the header unproxied would let anyone mint a fresh bucket."""
+    monkeypatch.setenv("SWISSISOFORM_SCAN_RATE_HOURLY", "1")
+    assert _post(client, vcf_bytes).status_code == 200
+
+    response = client.post(
+        "/api/variants/scan",
+        data={"vcf": (io.BytesIO(vcf_bytes + b"\n#pad\n"), "test.vcf")},
+        content_type="multipart/form-data",
+        headers={"X-Forwarded-For": "9.9.9.9"},
+    )
+    assert response.status_code == 429
+
+
+def test_forwarded_for_splits_buckets_when_the_proxy_is_trusted(
+    data_dir, tmp_path, vcf_bytes, monkeypatch
+) -> None:
+    monkeypatch.setenv("SWISSISOFORM_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("SWISSISOFORM_SCAN_DIR", str(tmp_path / "scans"))
+    monkeypatch.setenv("SWISSISOFORM_SCAN_RATE_HOURLY", "1")
+    monkeypatch.setenv("SWISSISOFORM_SCAN_RATE_DAILY", "0")
+    monkeypatch.setenv("SWISSISOFORM_TRUST_PROXY", "1")
+
+    from swissisoform_site import data as site_data
+    from swissisoform_site.app import create_app
+
+    site_data.load_all.cache_clear()
+    site_data.load_orf_index.cache_clear()
+    app = create_app()
+    app.config["TESTING"] = True
+
+    def post(body: bytes, forwarded: str):
+        return app.test_client().post(
+            "/api/variants/scan",
+            data={"vcf": (io.BytesIO(body), "test.vcf")},
+            content_type="multipart/form-data",
+            headers={"X-Forwarded-For": forwarded},
+        )
+
+    try:
+        assert post(vcf_bytes + b"\n#a\n", "9.9.9.9").status_code == 200
+        assert post(vcf_bytes + b"\n#b\n", "9.9.9.9").status_code == 429
+        # A different client is unaffected by the first one's budget.
+        assert post(vcf_bytes + b"\n#c\n", "8.8.8.8").status_code == 200
+    finally:
+        site_data.load_all.cache_clear()
+        site_data.load_orf_index.cache_clear()

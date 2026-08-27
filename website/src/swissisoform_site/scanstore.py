@@ -91,8 +91,15 @@ _SWEEP_MARKER = ".last_sweep"
 #: History: d1 initial · d2 per-gene n_hits split from n_variants ·
 #: d3 per-hit consequence / aa_ref / aa_alt / hgvsp · d4 hgvsp dropped, and hits now
 #: classified by the pipeline's own ConsequenceValidator (so a minus-strand
-#: multi-base variant's residue moves one codon, to the first one it changes).
-DIGEST_SCHEMA = "d4"
+#: multi-base variant's residue moves one codon, to the first one it changes) ·
+#: d5 counts gained ``stopped``, which says the scan ended on a record or
+#: wall-clock budget and every count below it is a partial · d6 the start-codon
+#: rule turned asymmetric, so an SNV destroying an annotated ATG is start_lost
+#: where it used to read as missense, and hits carry the classifier's own note ·
+#: d7 indels gained amino acids and their residue moved to the first *changed*
+#: base (the VCF padding base is not it), and a wrong-REF indel now reports
+#: reference_mismatch instead of a clean frameshift.
+DIGEST_SCHEMA = "d7"
 
 
 class ScanStoreError(RuntimeError):
@@ -415,6 +422,12 @@ def sweep(*, force: bool = False) -> dict[str, int]:
                 pass
 
     evicted = _evict_over_budget()
+
+    # Imported here, not at module scope: throttle reads scan_dir() from this
+    # module, so a top-level import would be circular.
+    from swissisoform_site import throttle
+
+    throttle.purge()
 
     try:
         marker.touch()

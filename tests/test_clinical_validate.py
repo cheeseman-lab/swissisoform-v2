@@ -9,6 +9,11 @@ from __future__ import annotations
 import pandas as pd
 
 from swissisoform.clinical.validate import ConsequenceValidator
+from swissisoform.contract import (
+    START_LOST_ATG_NOTE,
+    START_STILL_NEAR_COGNATE_NOTE,
+    START_STRENGTHENED_NOTE,
+)
 
 # ---------------------------------------------------------------------------
 # Synthetic CDS data
@@ -274,15 +279,31 @@ class TestValidateSNVWithSequence:
         result = validator.validate_variant("TX1", 100, "C", "G")
         assert result["codon_alt"] == "GTG"
         assert result["consequence"] == "missense_variant"  # Leu -> Val
+        # A lateral move between weak starts — the term alone would not say so.
+        assert result["note"] == START_STILL_NEAR_COGNATE_NOTE
 
-    def test_atg_start_is_never_ablated_by_an_snv(self):
-        """NEAR_COGNATE_STARTS is ATG's single-substitution neighbourhood, so no
-        SNV can drop an ATG start out of it — only near-cognate starts are fragile.
+    def test_an_snv_that_destroys_an_atg_start_is_start_lost(self):
+        """ATG -> ACG ablates the annotated initiator, so it is start-loss.
+
+        This is the case a membership test cannot see. NEAR_COGNATE_STARTS is exactly
+        ATG plus its nine single-base neighbours, so "is the mutated codon still in
+        the set?" is always true for an ATG start — which labelled every classic
+        pathogenic p.Met1? variant missense and kept it out of the LoF gate. Losing an
+        ATG and gaining one are different events, so the rule reads the direction.
         """
         validator = self._make_validator()  # ATG start
         result = validator.validate_variant("TX1", 101, "T", "C")
         assert result["codon_alt"] == "ACG"
-        assert result["consequence"] == "missense_variant"
+        assert result["consequence"] == "start_lost"
+        assert result["note"] == START_LOST_ATG_NOTE
+
+    def test_a_near_cognate_start_upgraded_to_atg_is_not_start_lost(self):
+        """CTG -> ATG makes initiation *stronger*; calling it start-loss is backwards."""
+        validator = self._make_near_cognate_validator()
+        result = validator.validate_variant("TX1", 100, "C", "A")
+        assert result["codon_alt"] == "ATG"
+        assert result["consequence"] != "start_lost"
+        assert result["note"] == START_STRENGTHENED_NOTE
 
     def test_start_lost_only_applies_to_codon_zero(self):
         """A downstream codon that happens to leave the set is untouched."""

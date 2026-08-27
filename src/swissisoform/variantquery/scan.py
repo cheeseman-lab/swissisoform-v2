@@ -9,6 +9,8 @@ covers at all. A bare zero is indistinguishable from a broken scan.
 
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -20,12 +22,26 @@ from swissisoform.variantquery.index import OrfIndex
 from swissisoform.variantquery.spec import Rejection, VariantSpec, parse_line
 from swissisoform.variantquery.vcf import iter_data_lines
 
+logger = logging.getLogger(__name__)
+
 #: Hard ceiling on stored hits, so a germline whole-exome VCF cannot fill the
 #: disk. Exceeding it sets ``truncated`` rather than failing the scan.
 DEFAULT_MAX_HITS = 20_000
 
+#: Ceiling on data lines read. The hit cap above bounds *output*; this bounds
+#: *work*, which is the thing that occupies a worker — the scan classifies every
+#: allele against every overlapping ORF whether or not the hit is stored.
+DEFAULT_MAX_RECORDS = 5_000_000
+
+#: Wall-clock ceiling, in seconds. Deliberately under the deployment's 60 s
+#: gunicorn timeout (``website/entrypoint.sh``): past that the worker is killed
+#: and the uploader gets a proxy error, where stopping here returns a partial
+#: answer that says so.
+DEFAULT_MAX_SECONDS = 45.0
+
 #: Classifier terms that carry no amino acids and read as a failure without a
-#: reason attached. Everything else explains itself.
+#: reason attached. Everything else explains itself, or carries its own ``note``
+#: from the classifier (start-codon calls do).
 _TERM_NOTES = {
     # Two ways to be intronic: the variant maps nowhere in this frame, or only part
     # of a multi-base span does. Neither can be translated, so one wording covers it.
@@ -49,7 +65,10 @@ def _hit_fields(result: dict[str, Any]) -> tuple[str, str, str, str]:
         term,
         result.get("aa_ref") or "",
         result.get("aa_alt") or "",
-        _TERM_NOTES.get(term, ""),
+        # The classifier's own note wins: it knows *why* — a start that got stronger
+        # rather than lost reads as ordinary missense without it. The table below is
+        # the fallback for terms it emits with nothing to add.
+        result.get("note") or _TERM_NOTES.get(term, ""),
     )
 
 
@@ -111,6 +130,11 @@ class ScanCounts:
     hits: int = 0
     genes_hit: int = 0
     truncated: bool = False
+    #: Why the scan stopped before EOF: ``""`` (it didn't), ``"records"`` or
+    #: ``"time"``. Distinct from ``truncated``, which means the hit *list* hit its
+    #: cap while the counts below stayed complete. When this is set the counts
+    #: themselves are partial, which is a different claim and has to read as one.
+    stopped: str = ""
     rejected: dict[str, int] = field(default_factory=dict)
     #: Hit records per consequence term — the figure's row breakdown, and the
     #: quickest way to see from the logs whether classification ran at all.
@@ -187,6 +211,8 @@ def scan(
     *,
     pass_only: bool = True,
     max_hits: int = DEFAULT_MAX_HITS,
+    max_records: int = DEFAULT_MAX_RECORDS,
+    max_seconds: float = DEFAULT_MAX_SECONDS,
 ) -> ScanResult:
     """Resolve every variant in ``path`` against ``index``.
 
@@ -195,12 +221,22 @@ def scan(
         index: The ORF interval index to resolve against.
         pass_only: Drop records whose FILTER is neither ``PASS`` nor ``.``.
         max_hits: Stop *recording* hits past this many; counting continues.
+        max_records: Stop the scan past this many data lines; ``0`` disables.
+        max_seconds: Stop the scan past this much wall clock; ``0`` disables.
 
     Returns:
         A :class:`ScanResult`. Distinct negatives are kept apart in the counts:
         ``off_catalog_contig`` means the chromosome is absent from the index
         (usually a naming mismatch or a scaffold), ``no_orf`` means the contig is
         covered but the position is intronic, UTR or intergenic.
+
+        When ``counts.stopped`` is set the scan ended before EOF and **every
+        count is a partial**, describing only the records that were read.
+
+    Raises:
+        VcfLimitExceeded: If the file breaches a reader cap (see :mod:`vcf`).
+            Not caught here — the caps are about the input, and only the caller
+            knows how to report a bad input.
     """
     counts = ScanCounts()
     hits: list[VariantHit] = []
@@ -209,8 +245,17 @@ def scan(
     # every variant that lands in the same ORF. Constructed with no ``cds_df`` and no
     # genome: the coding sequence comes from the index, so nothing here opens a FASTA.
     validator = ConsequenceValidator()
+    deadline = time.monotonic() + max_seconds if max_seconds else None
 
     for line_no, line in iter_data_lines(path):
+        # Checked per line, not per allele: at millions of records a clock read
+        # per allele is measurable, and one line of overshoot costs nothing.
+        if max_records and counts.lines >= max_records:
+            counts.stopped = "records"
+            break
+        if deadline is not None and time.monotonic() > deadline:
+            counts.stopped = "time"
+            break
         counts.lines += 1
         for parsed in parse_line(line):
             if isinstance(parsed, Rejection):
@@ -297,6 +342,12 @@ def scan(
                     counts.truncated = True
 
     counts.genes_hit = len(genes)
+    if counts.stopped:
+        logger.warning(
+            "scan stopped early (%s) after %d records — counts are partial",
+            counts.stopped,
+            counts.lines,
+        )
     # Rank by distinct variants first — that is what "most affected gene" means —
     # then by hit records, then alphabetically for a stable order.
     ordered = sorted(genes.values(), key=lambda g: (-g.n_variants, -g.n_hits, g.gene))

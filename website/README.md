@@ -130,6 +130,50 @@ plan-dependent and not readable from inside the container): 100 MB per upload
 budget with oldest-first eviction (`SWISSISOFORM_SCAN_BUDGET_BYTES`, default
 2 GiB).
 
+### The scan is bounded in time and size, not just on disk
+
+`MAX_CONTENT_LENGTH` caps the **compressed** body. Gzip expands ~1000:1, so a
+file that passes it can still be hundreds of gigabytes of parsing, and the scan
+runs synchronously on two sync workers. Four bounds close that, and the first two
+answer 4xx because they are the uploader's file to fix:
+
+| Bound | Default | Override | On breach |
+|---|---|---|---|
+| Decompressed bytes | 2 GiB | `SWISSISOFORM_VCF_MAX_BYTES` | JSON 413 `expands_too_large` |
+| Single line | 4 MiB | `SWISSISOFORM_VCF_MAX_LINE_BYTES` | JSON 422 `line_too_long` |
+| Records scanned | 5,000,000 | — (`scan(max_records=…)`) | partial result, `counts.stopped` |
+| Wall clock | 45 s | — (`scan(max_seconds=…)`) | partial result, `counts.stopped` |
+
+The last two deliberately sit under gunicorn's 60 s `--timeout`: past that the
+worker is killed and the uploader gets a proxy error, where stopping early
+returns a partial answer *that says on the page that it is partial*. `0` disables
+any of them; the CLI (`python -m swissisoform.variantquery scan`) is unbounded by
+default and takes `--max-records` / `--max-seconds`.
+
+### Per-IP throttling — set `SWISSISOFORM_TRUST_PROXY=1` in production
+
+The upload endpoint is unauthenticated on a public URL, so uploads are rate
+limited per client: **5 per hour and 20 per day** by default
+(`SWISSISOFORM_SCAN_RATE_HOURLY` / `SWISSISOFORM_SCAN_RATE_DAILY`; `0` disables
+either window). A cache hit — the same bytes re-uploaded — skips the parse
+entirely and is not charged. Over the limit is a JSON 429 with `Retry-After`.
+
+State is one marker file per request under the scan store, hashed by IP, counted
+by mtime, and cleaned up by the same hourly sweep. Files rather than a counter
+because two workers writing a counter lose updates; the same one-replica caveat
+above applies. It **fails open** — a disk that refuses the write logs a warning
+and lets the request through, since the per-request bounds above still hold.
+
+**Railway fronts the container with its own proxy, so `remote_addr` is the proxy
+hop and every client would share one bucket.** Set `SWISSISOFORM_TRUST_PROXY=1`
+on the deployment to read the client IP from `X-Forwarded-For` — without it the
+throttle is inert in production. It is off by default because trusting that
+header with no proxy in front would let anyone spoof their way to a fresh bucket.
+
+`SWISSISOFORM_SCAN_TOKEN` remains available and unset: it closes the endpoint to
+anyone without a shared secret, at the cost of the public drop zone on the
+landing page. Throttling is the configuration that keeps that form working.
+
 ### `orf_index.parquet` is staged separately from the displayed run
 
 `prepare_deploy.sh` stages `data/orf_index.parquet` from `ORF_INDEX_RUN`

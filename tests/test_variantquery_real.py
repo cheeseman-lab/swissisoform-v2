@@ -161,8 +161,35 @@ def test_amino_acids_match_the_published_notation(result, expectations, index) -
     assert checked >= 6, f"only {checked} rows carried an amino-acid oracle"
 
 
-def test_indel_rows_report_a_position_and_no_amino_acids(result, expectations) -> None:
-    """Indels are classified by length delta, so amino acids are absent by design."""
+#: Three-letter to one-letter, for reading the residue out of a source's HGVS
+#: protein string. Only the codes the fixture actually uses.
+_THREE_TO_ONE = {
+    "Ala": "A", "Arg": "R", "Asn": "N", "Asp": "D", "Cys": "C",
+    "Gln": "Q", "Glu": "E", "Gly": "G", "His": "H", "Ile": "I",
+    "Leu": "L", "Lys": "K", "Met": "M", "Phe": "F", "Pro": "P",
+    "Ser": "S", "Thr": "T", "Trp": "W", "Tyr": "Y", "Val": "V",
+}
+
+
+def test_indel_rows_name_the_residue_the_source_names(result, expectations) -> None:
+    """The class comes from the length delta; the residue from splicing and translating.
+
+    This is the external half of gate 5: the amino acid we derive ourselves is
+    checked against the one the source database published, so agreement is not us
+    agreeing with us. ``p.Asp183ThrfsTer29`` has to give ``D``, ``p.Lys11ValfsTer8``
+    a ``K``, and so on.
+
+    **Position is compared VCF-leftmost.** VCF normalises an indel to the lowest
+    genomic coordinate, HGVS to the 3'-most position in the transcript, so inside a
+    repeat the two name the same deletion at different residues — the three rows
+    whose ``note`` says so differ from their source string by one repeat unit.
+
+    Those rows are exempt from the amino-acid check, not just the position one.
+    Usually the shifted residue is the same letter (one D out of ``DDD``), but when
+    the shift crosses a codon boundary it is not: the ``GG>G`` row is a Gly
+    leftmost and the source's Leu 3'-most. Asserting the letter there would be
+    asserting a normalization convention, not a translation.
+    """
     checked = 0
     for row in expectations:
         if row["expect_consequence"] not in (
@@ -173,8 +200,20 @@ def test_indel_rows_report_a_position_and_no_amino_acids(result, expectations) -
             h for h in hits_for(result, row)
             if h.gene == row["expect_gene"] and h.residue == int(row["expect_residue"])
         )
-        assert (hit.aa_ref, hit.aa_alt) == ("", "")
         assert hit.residue is not None
+        # A deletion or frameshift names what it removes; an insertion what it adds.
+        assert hit.aa_ref or hit.aa_alt, hit
+
+        source = row["source_hgvsp"]
+        # A row whose note records the normalization difference cannot be compared
+        # letter-for-letter; the other eight still carry a real external oracle.
+        shifted = "3'-most representation" in (row.get("note") or "")
+        if hit.aa_ref and "p." in source and not shifted:
+            # ENSP…:p.Asp183ThrfsTer29 -> the three-letter code right after "p."
+            three = source.split("p.")[1][:3]
+            expected = _THREE_TO_ONE.get(three)
+            if expected:
+                assert hit.aa_ref == expected, f"{source}: got {hit.aa_ref}"
         checked += 1
     assert checked >= 3, f"only {checked} indel rows"
 

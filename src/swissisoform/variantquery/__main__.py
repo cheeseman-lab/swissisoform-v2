@@ -16,6 +16,7 @@ from pathlib import Path
 
 from swissisoform.variantquery.load import load_index, load_index_from_paired
 from swissisoform.variantquery.scan import scan
+from swissisoform.variantquery.vcf import VcfLimitExceeded
 
 DEFAULT_OUTPUT_ROOT = Path("data/output")
 
@@ -51,15 +52,39 @@ def main(argv: list[str] | None = None) -> int:
     )
     scan_parser.add_argument("--json", help="write the full result to this path")
     scan_parser.add_argument("--limit", type=int, default=20, help="hits to print (0 for all)")
+    # Unbounded by default: the budgets exist so a web request cannot outlive its
+    # worker, and a person at a terminal can interrupt a long scan themselves.
+    scan_parser.add_argument(
+        "--max-records", type=int, default=0, help="stop after N records (0 for no limit)"
+    )
+    scan_parser.add_argument(
+        "--max-seconds", type=float, default=0.0, help="stop after N seconds (0 for no limit)"
+    )
 
     args = parser.parse_args(argv)
 
     index, source = _resolve_index(args)
     print(f"[variantquery] index: {source}  {index!r}", file=sys.stderr)
 
-    result = scan(args.vcf, index, pass_only=not args.all_filters)
+    try:
+        result = scan(
+            args.vcf,
+            index,
+            pass_only=not args.all_filters,
+            max_records=args.max_records,
+            max_seconds=args.max_seconds,
+        )
+    except VcfLimitExceeded as exc:
+        print(f"[variantquery] {exc}", file=sys.stderr)
+        return 2
 
     counts = result.counts
+    if counts.stopped:
+        print(
+            f"[variantquery] stopped on the {counts.stopped} budget — "
+            "every count below is a partial",
+            file=sys.stderr,
+        )
     print(
         f"lines={counts.lines} alleles={counts.alleles} "
         f"non_pass={counts.skipped_non_pass} off_contig={counts.off_catalog_contig} "

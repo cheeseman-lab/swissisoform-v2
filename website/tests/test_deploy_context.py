@@ -47,6 +47,7 @@ KNOWN_UNREACHABLE = {
 GUARANTEED_BY = {
     "numpy": "pandas",
     "markupsafe": "flask",  # via jinja2
+    "werkzeug": "flask",  # Flask's own WSGI layer — it cannot be installed without it
 }
 
 

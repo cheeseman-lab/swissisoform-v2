@@ -33,6 +33,8 @@ _HOVER_FONT_FAMILY = "system-ui, sans-serif"
 _AXIS_CHARS = 140
 
 # Variant tracks, one row per consequence type, ordered most→least severe.
+# CONSEQ_COLOR / CONSEQ_SHORT are public: the scan results table renders the
+# same vocabulary, and two copies would drift the moment a term is added.
 _CONSEQ_ORDER = [
     "frameshift_variant",
     "stop_gained",
@@ -45,7 +47,7 @@ _CONSEQ_ORDER = [
     "inframe_insertion",
     "synonymous_variant",
 ]
-_CONSEQ_COLOR = {
+CONSEQ_COLOR = {
     "frameshift_variant": "#7f1d1d",
     "stop_gained": "#b91c1c",
     "stop_lost": "#b91c1c",
@@ -57,7 +59,7 @@ _CONSEQ_COLOR = {
     "inframe_insertion": "#7c3aed",
     "synonymous_variant": "#94a3b8",
 }
-_CONSEQ_SHORT = {
+CONSEQ_SHORT = {
     "frameshift_variant": "frameshift",
     "stop_gained": "stop-gain",
     "stop_lost": "stop-lost",
@@ -228,7 +230,7 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
             is_path = "pathogenic" in (v.get("significance") or "").lower()
             in_unique = bool(v.get("in_unique"))
             xs.append(v["pos"])
-            cols.append("#d62728" if is_path else _CONSEQ_COLOR.get(c, "#94a3b8"))
+            cols.append("#d62728" if is_path else CONSEQ_COLOR.get(c, "#94a3b8"))
             sizes.append((9 if is_path else 6) if in_unique else (7 if is_path else 4))
             opac.append(1.0 if in_unique else 0.4)
             hover.append(
@@ -258,7 +260,7 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                     "y": [ty] * len(up_xs),
                     "marker": {
                         "size": 11,
-                        "color": _CONSEQ_COLOR.get(c, "#94a3b8"),
+                        "color": CONSEQ_COLOR.get(c, "#94a3b8"),
                         "opacity": 1.0,
                         "symbol": "diamond",
                         # A dark outline is what separates these from the circles at
@@ -275,7 +277,7 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                 }
             )
             uploaded_drawn = True
-        _left_label(_CONSEQ_SHORT.get(c, c)[:14], ty, size=9)
+        _left_label(CONSEQ_SHORT.get(c, c)[:14], ty, size=9)
     if conseqs:
         mut_top = mut_base + (len(conseqs) - 1) * 0.26 + 0.22
 

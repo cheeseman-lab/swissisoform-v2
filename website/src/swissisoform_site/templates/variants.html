@@ -20,13 +20,44 @@
       <strong>{{ provenance.catalog_isoforms or "?" }}</strong> isoforms
       · index <code>{{ provenance.index_version or "unversioned" }}</code>
     </p>
+    {# Stated here, not only in the methods: an hg19 file does not fail, it
+       succeeds and reports plausible garbage, so the assumption has to be visible
+       next to the results it produced. #}
+    <p class="vq-sub">
+      Positions were read as <strong>GRCh38</strong> coordinates.
+    </p>
     <p class="vq-sub">
       {% if digest.expires_at %}Deleted after {{ digest.expires_at }}.{% endif %}
     </p>
   </header>
 
+  {% if assembly.suspect %}
+  {# The one failure this scan can detect on the user's behalf. Placed before the
+     funnel because it calls every number after it into question. #}
+  <p class="vq-assembly">
+    <b>These coordinates may not be GRCh38.</b>
+    {{ "{:,}".format(assembly.mismatches) }} of the
+    {{ "{:,}".format(assembly.ref_checked) }} hits whose REF base was checked
+    ({{ assembly.percent }}%) disagree with the GRCh38 reference at that position.
+    That is the signature of a VCF called against a different assembly — hg19/GRCh37
+    most often. Lift the file over to GRCh38 and scan it again; until then, treat
+    the residues and consequences below as unreliable.
+  </p>
+  {% endif %}
+
   <section class="about-sec">
     <h2>What was read</h2>
+    {# A budget stop makes every number below a partial. Said before the funnel,
+       not appended to the "Dropped" line, because it qualifies all of them. #}
+    {% if counts.stopped %}
+    <p class="vq-partial">
+      <b>This scan did not finish.</b> It stopped after
+      {{ "{:,}".format(counts.lines or 0) }} records
+      {%- if counts.stopped == "time" %} on its time budget{% else %} on its record budget{% endif %},
+      so every count below describes only the part of the file that was read.
+      Split the VCF and scan it in pieces for a complete answer.
+    </p>
+    {% endif %}
     <div class="vq-funnel">
       <div class="vq-step">
         <span class="vq-step-num">{{ "{:,}".format(counts.lines or 0) }}</span>
@@ -61,6 +92,17 @@
       {%- endfor %}
       {%- if counts.truncated %} · hit list truncated at the cap{% endif %}
     </p>
+    {% if assembly.mismatches and not assembly.suspect %}
+    {# Below the suspect threshold this is ordinary, but it is still the only
+       assembly signal available, so it is reported rather than hidden. #}
+    <p class="vq-drops">
+      {{ "{:,}".format(assembly.mismatches) }} of the
+      {{ "{:,}".format(assembly.ref_checked) }} hits whose REF base was checked
+      ({{ assembly.percent }}%) disagree with GRCh38 — normal at this rate, but a high
+      fraction would mean the file was called against another assembly. Intronic spans
+      and indels are excluded: the classifier never compares their REF.
+    </p>
+    {% endif %}
     {% if in_orf_alleles and counts.hits and counts.hits != in_orf_alleles %}
     {# A position can sit inside several isoforms of one gene, so hit records
        outnumber variants. Said explicitly, because the two numbers otherwise look
@@ -142,6 +184,8 @@
             <th>Isoform TIS</th>
             <th>ORF type</th>
             <th>Residue</th>
+            <th>Consequence</th>
+            <th>AA change</th>
             <th>Region</th>
             <th>VCF line</th>
           </tr>
@@ -167,6 +211,27 @@
             <td class="var-num">
               {# 0-based internally; +1 for display so it reads as p.N. #}
               {% if h.residue is not none %}{{ h.residue + 1 }} <span class="vq-gene-meta">({{ h.frame }})</span>{% else %}&mdash;{% endif %}
+            </td>
+            <td>
+              {# Same colours and short labels as the gene figure's variant rows —
+                 one vocabulary, so a term cannot read as two different things. #}
+              <span class="conseq-chip"
+                    style="color: {{ CONSEQ_COLOR.get(h.consequence, '#64748b') }}">
+                {{ CONSEQ_SHORT.get(h.consequence, h.consequence.replace("_", " ")) }}
+              </span>
+              {% if h.consequence_note %}
+              {# Shown, not hidden in a tooltip: the note is the reason the amino
+                 acids beside it are blank, and a tooltip is unreachable on touch
+                 and invisible in print. #}
+              <span class="conseq-note">{{ h.consequence_note }}</span>
+              {% endif %}
+            </td>
+            <td class="var-mono">
+              {# Plain letters, deliberately not p.-notation: the classifier derives
+                 no HGVS string, and inventing one here would look like a citation
+                 of something it never produced. More than one letter when a
+                 multi-base substitution straddles a codon boundary. #}
+              {% if h.aa_ref or h.aa_alt %}{{ h.aa_ref or "?" }}&rarr;{{ h.aa_alt or "?" }}{% else %}&mdash;{% endif %}
             </td>
             <td>{{ h.region }}</td>
             <td class="var-num">{{ h.line_no }}</td>

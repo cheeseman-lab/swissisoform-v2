@@ -78,6 +78,49 @@ def iter_coding_positions(
             coding_pos += 1
 
 
+def changed_bases(pos: int, ref: str, alt: str) -> tuple[int, str, str]:
+    """Strip the padding base VCF forces onto an indel; return what actually changed.
+
+    VCF cannot write "nothing", so an indel repeats the base *before* the event in
+    both REF and ALT: ``POS=107 REF=CGT ALT=C`` deletes the G and T at 108-109 and
+    leaves the C at 107 untouched. HGVS numbers the first *changed* base, so reading
+    POS as the position puts the variant one codon early whenever the padding base
+    and the first changed base straddle a codon boundary.
+
+    Returns the genomic position of the **first changed base** together with the
+    trimmed alleles — not a "new anchor". The distinction matters on the minus
+    strand: mRNA order there runs against genomic order, so the padding base is the
+    *last* base of the span in translation order, and "advance past the anchor" moves
+    the wrong way. Callers must map the whole changed span and take the lowest coding
+    offset (:func:`coding_offset`), which is correct on both strands. The recovered
+    predecessor of this function advanced the position instead, and was only ever
+    exercised on plus-strand fixtures.
+
+    A pure insertion trims to an empty REF: there are no changed reference bases, and
+    the returned position is the reference base immediately after the insertion point
+    in genomic terms. Substitutions pass through untouched.
+
+    Args:
+        pos: 1-based genomic position of the VCF record (the padding base for indels).
+        ref: REF allele, plus-strand.
+        alt: ALT allele, plus-strand.
+
+    Returns:
+        ``(first_changed_pos, trimmed_ref, trimmed_alt)``.
+    """
+    ref = ref.upper()
+    alt = alt.upper()
+    if len(ref) == len(alt):
+        # Substitutions carry no padding base — every base of REF is a changed base.
+        return pos, ref, alt
+
+    while len(ref) > 1 and len(alt) > 1 and ref[0] == alt[0]:
+        ref, alt, pos = ref[1:], alt[1:], pos + 1
+    if ref and alt and ref[0] == alt[0]:
+        ref, alt, pos = ref[1:], alt[1:], pos + 1
+    return pos, ref, alt
+
+
 def coding_offset(exons: Sequence[tuple[int, int]], strand: str, pos: int) -> int | None:
     """0-based coding offset of 1-based ``pos`` within an ORF, or None if outside.
 

@@ -32,7 +32,12 @@ from __future__ import annotations
 from swissisoform.variantquery.index import OrfIndex, OrfRecord
 from swissisoform.variantquery.scan import ScanResult, VariantHit, scan
 from swissisoform.variantquery.spec import Rejection, VariantSpec, normalize_chrom, parse_line
-from swissisoform.variantquery.vcf import iter_data_lines, open_vcf
+from swissisoform.variantquery.vcf import (
+    VcfLimitExceeded,
+    iter_data_lines,
+    iter_lines,
+    open_vcf,
+)
 
 __all__ = [
     "OrfIndex",
@@ -41,7 +46,9 @@ __all__ = [
     "ScanResult",
     "VariantHit",
     "VariantSpec",
+    "VcfLimitExceeded",
     "iter_data_lines",
+    "iter_lines",
     "normalize_chrom",
     "open_vcf",
     "parse_line",
