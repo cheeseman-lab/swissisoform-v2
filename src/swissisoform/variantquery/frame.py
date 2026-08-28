@@ -58,9 +58,19 @@ def resolve_residue(record: OrfRecord, start: int, end: int) -> tuple[int | None
     residue number exists for them — matching how the gene figure already places
     such variants.
 
-    For multi-base REFs the span is walked in ascending genomic order and the
-    first base that lands inside the ORF is used, so a deletion starting in an
-    intron and running into an exon still reports a residue.
+    For multi-base REFs every base of the span is mapped and the **lowest coding
+    offset** wins — the span's first base in *translation* order. Taking the first
+    base that maps while walking ascending genomic order would be the same thing on
+    the plus strand and a codon late on the minus, where mRNA runs against genomic
+    order and the lowest genomic coordinate is the span's *last* translated base.
+
+    A deletion starting in an intron and running into an exon still reports a
+    residue: unmapped bases are skipped rather than ending the walk.
+
+    This matters only where nothing better is available. When the index carries a
+    CDS, ``scan`` prefers the classifier's ``protein_pos`` (also a minimum over the
+    span) and uses this function for the frame alone; an index built with
+    ``--no-cds`` has no such override, and this number is what gets reported.
 
     Returns:
         ``(residue, frame, genomic_pos)`` with a **0-based** residue (p.R248 is
@@ -71,10 +81,14 @@ def resolve_residue(record: OrfRecord, start: int, end: int) -> tuple[int | None
         (record.orf_exons, FRAME_ISOFORM),
         (record.canonical_orf_exons, FRAME_CANONICAL),
     ):
-        for pos in range(start, end + 1):
-            offset = coding_offset(exons, record.strand, pos)
-            if offset is not None:
-                return offset // 3, frame, pos
+        mapped = [
+            (offset, pos)
+            for pos in range(start, end + 1)
+            if (offset := coding_offset(exons, record.strand, pos)) is not None
+        ]
+        if mapped:
+            offset, pos = min(mapped)
+            return offset // 3, frame, pos
     return None, "", None
 
 

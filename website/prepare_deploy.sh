@@ -108,12 +108,20 @@ done
 # module that exists in the repo but was never copied fails here instead of in
 # production. Without this check a missing vendored module produces a green build,
 # a dead gunicorn, and a healthcheck failure with no hint as to why.
+# Log beside the build context, not in /tmp: this script runs on the SHARED head
+# node, where a fixed /tmp filename is owned by whoever ran it first — the next
+# person's 2> redirect fails on permissions before python even starts, and the
+# failure reads as "the staged tree does not import", which is a lie. website/ is
+# gitignored build output (*.log already covered), so the log belongs here with the
+# thing it describes. The container's own /tmp default in scanstore.py is fine by
+# contrast: that path only ever exists inside one Railway container.
+IMPORT_LOG="$PWD/prepare_deploy_import.log"
 echo "[prepare_deploy] verifying the staged tree imports on its own"
 if ! (cd "$PWD" && env -u PYTHONPATH PYTHONPATH="$PWD/src" SWISSISOFORM_DATA_DIR="$PWD/data" \
-      python -c "import swissisoform_site.app" >/dev/null 2>/tmp/prepare_deploy_import.log); then
+      python -c "import swissisoform_site.app" >/dev/null 2>"$IMPORT_LOG"); then
   echo "[prepare_deploy] ERROR: the staged build context does not import." >&2
   echo "  Usually a module added under src/swissisoform/ that this script does not copy." >&2
-  tail -20 /tmp/prepare_deploy_import.log >&2
+  tail -20 "$IMPORT_LOG" >&2
   exit 1
 fi
 

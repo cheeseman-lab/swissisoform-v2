@@ -135,3 +135,27 @@ def test_dockerfile_pins_the_packages_the_site_needs(dist: str) -> None:
     ``clinical.validate`` — nothing under ``swissisoform_site`` mentions it.
     """
     assert dist in _installed_distributions()
+
+
+def test_the_deploy_script_writes_no_fixed_path_under_tmp() -> None:
+    """This script runs on the SHARED head node, unlike everything it stages.
+
+    A fixed ``/tmp/<name>`` there is owned by whoever ran it first; the next person's
+    redirect fails on permissions before the command starts, and the script reports
+    "the staged build context does not import" — sending them to hunt a missing
+    module that is not missing. The cluster convention (``/etc/claude-code/CLAUDE.md``)
+    is a user-specific subdirectory; better still here is the gitignored build context
+    the log describes.
+
+    Not a blanket ban on ``/tmp``: ``scanstore.DEFAULT_SCAN_DIR`` is ``/tmp`` and is
+    correct, because that path only ever exists inside one Railway container.
+    """
+    script = PREPARE_DEPLOY.read_text()
+    offenders = [
+        line.strip()
+        for line in script.splitlines()
+        if "/tmp/" in line and not line.strip().startswith("#")
+    ]
+    assert not offenders, (
+        "prepare_deploy.sh writes a fixed /tmp path on a shared node: " + "; ".join(offenders)
+    )

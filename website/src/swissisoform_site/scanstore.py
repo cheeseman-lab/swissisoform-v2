@@ -48,6 +48,7 @@ import shutil
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -316,6 +317,38 @@ def write_digest(key: str, digest: dict[str, Any]) -> None:
 # ----------------------------------------------------------------------
 
 
+#: Parsed digests held per worker, keyed by the file's identity rather than the
+#: token. A digest at the hit cap is ~4 MB of JSON, and ``resolve_scan`` memoises
+#: only per request — so every page view re-read and re-parsed it, making page
+#: latency a function of the uploader's VCF size on pages that consult the scan for
+#: nothing more than a breadcrumb. Deliberately small: the entries are large, and
+#: one active scan per worker is the ordinary case.
+_DIGEST_CACHE_SIZE = 4
+
+
+@lru_cache(maxsize=_DIGEST_CACHE_SIZE)
+def _read_digest_cached(path_str: str, _mtime: float, _size: int) -> dict[str, Any] | None:
+    """Parse a digest, keyed on the file's identity so a rewrite cannot be missed.
+
+    ``mtime`` and ``size`` are arguments purely to take part in the cache key: a
+    digest rewritten in place produces a different key and a fresh parse, where
+    keying on the path alone would serve the previous contents forever.
+
+    The returned dict is **shared between callers** — :func:`load` shallow-copies it
+    before stamping per-token fields, and nothing may mutate the nested hit list.
+    """
+    return _read_json(Path(path_str))
+
+
+def _read_digest(path: Path) -> dict[str, Any] | None:
+    """The digest at ``path``, from cache when the file has not changed."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return _read_digest_cached(str(path), stat.st_mtime, stat.st_size)
+
+
 def load(token: str) -> LoadedScan:
     """Resolve a token to its digest, or say why it cannot be resolved.
 
@@ -346,7 +379,7 @@ def load(token: str) -> LoadedScan:
         return LoadedScan(expired=True, token=token)
 
     key = str(pointer.get("key") or "")
-    digest = _read_json(digest_path(key)) if key else None
+    digest = _read_digest(digest_path(key)) if key else None
     if digest is None:
         # Token survived but the blob is gone — a partial sweep, or a crash
         # between minting the token and writing the digest.

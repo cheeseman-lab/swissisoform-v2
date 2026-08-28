@@ -294,11 +294,10 @@ def scan(
                         context=f"{record.tis_id}:{frame}",
                     )
                     term, aa_ref, aa_alt, note = _hit_fields(result)
-                    # One residue number, and it comes from the classifier.
-                    # ``resolve_residue`` walks the REF span in ascending *genomic*
-                    # order, which on the minus strand reaches the span's last
-                    # translated base first — so it lands a codon late on a
-                    # multi-base variant. It still decides the frame.
+                    # One residue number, and it comes from the classifier. Both now
+                    # take the minimum coding offset across the span, so the two
+                    # agree; the classifier's is preferred because it has the CDS and
+                    # can also say what the variant does, not only where it is.
                     if result["protein_pos"] is not None:
                         residue = result["protein_pos"]
                 else:

@@ -3,6 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  {# Belt-and-braces with the Referrer-Policy header in app.py: an active scan
+     puts ?vcf=<token> — a 24 h read capability — on every internal URL, and
+     this stops the browser offering that URL to doi.org / UniProt / PubMed or
+     the CDN subresources below. #}
+  <meta name="referrer" content="same-origin">
   <title>{% block title %}SwissIsoform v2{% endblock %}</title>
   <meta name="description" content="{% block description %}SwissIsoform v2 — alternative protein isoforms from translation initiation sequencing, with evidence-axis scoring and per-isoform interpretation.{% endblock %}">
 

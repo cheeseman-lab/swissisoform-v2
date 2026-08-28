@@ -9,6 +9,8 @@ from __future__ import annotations
 import gzip
 import io
 import json
+import os
+import time
 
 import pytest
 
@@ -316,3 +318,53 @@ def test_a_token_with_no_schema_field_reads_as_expired() -> None:
     without = {k: v for k, v in json.loads(pointer.read_text()).items() if k != "schema"}
     pointer.write_text(json.dumps(without))
     assert scanstore.load(saved.token).expired is True
+
+
+# ----------------------------------------------------------------------
+# Digest parse cache
+# ----------------------------------------------------------------------
+
+
+def test_a_repeat_load_does_not_re_read_the_digest() -> None:
+    """``resolve_scan`` memoises per *request*, so every page view re-parsed this.
+
+    A digest at the hit cap is ~4 MB of JSON, and the scan token rides on every
+    gene/isoform URL — so page latency tracked the uploader's VCF size even on pages
+    that consult the scan only for a breadcrumb.
+    """
+    saved = _save()
+    scanstore.write_digest(saved.key, {"counts": {}, "hits": []})
+
+    scanstore._read_digest_cached.cache_clear()
+    first = scanstore.load(saved.token)
+    misses = scanstore._read_digest_cached.cache_info().misses
+
+    second = scanstore.load(saved.token)
+    assert first.ok and second.ok
+    assert scanstore._read_digest_cached.cache_info().misses == misses, "re-parsed on repeat load"
+    assert scanstore._read_digest_cached.cache_info().hits >= 1
+
+
+def test_a_rewritten_digest_is_not_served_from_cache() -> None:
+    """Keyed on the file's identity, not the path — a stale parse would be silent."""
+    saved = _save()
+    scanstore.write_digest(saved.key, {"counts": {"lines": 1}, "hits": []})
+    assert scanstore.load(saved.token).digest["counts"]["lines"] == 1
+
+    # Rewrite with different content and a moved mtime, as a re-scan would.
+    scanstore.write_digest(saved.key, {"counts": {"lines": 999}, "hits": []})
+    path = scanstore.digest_path(saved.key)
+    os.utime(path, (time.time() + 10, time.time() + 10))
+
+    assert scanstore.load(saved.token).digest["counts"]["lines"] == 999
+
+
+def test_the_cache_does_not_outlive_a_deleted_digest() -> None:
+    """A swept blob must read as missing, not as whatever was parsed last."""
+    saved = _save()
+    scanstore.write_digest(saved.key, {"counts": {}, "hits": []})
+    assert scanstore.load(saved.token).ok
+
+    scanstore.digest_path(saved.key).unlink()
+    loaded = scanstore.load(saved.token)
+    assert not loaded.ok and loaded.missing

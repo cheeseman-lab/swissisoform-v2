@@ -405,3 +405,32 @@ class TestSpanClassification:
         out = self.classify(105, "G", "T")  # offset 4 is really 'C'
         assert out["consequence"] == "reference_mismatch"
         assert not out["validated"]
+
+    def test_a_multibase_ref_mismatch_is_caught_across_the_whole_span(self):
+        """The check has to cover every base of the span, not just the first.
+
+        Offsets 3-5 really read ACA; this supplies AAA, wrong only in the middle. A
+        check anchored on the first base alone would translate the mutant happily and
+        report a missense that never existed.
+        """
+        out = self.classify(104, "AAA", "GGG")
+        assert out["consequence"] == "reference_mismatch"
+        assert not out["validated"]
+        # The codon it disagreed with is still reported — that is the evidence.
+        assert out["codon_ref"] == "ACA"
+
+    def test_a_minus_strand_mnv_straddling_a_codon_boundary_reports_both_residues(self):
+        """The plus-strand twin of this exists; the minus-strand cell did not.
+
+        Genomic 108-110 map to offsets 7, 6, 5, so in mRNA order the change starts at
+        offset **5** — the last base of codon 1 — and runs into codon 2. Plus-strand
+        CGT/AAA reverse-complement to ACG/TTT in mRNA sense, leaving Thr unchanged
+        (ACA to ACT) and turning Arg into Phe.
+        """
+        out = self.classify(108, "CGT", "AAA", strand="-")
+        assert (out["consequence"], out["aa_ref"], out["aa_alt"], out["protein_pos"]) == (
+            "missense_variant",
+            "TR",
+            "TF",
+            1,
+        )

@@ -175,6 +175,27 @@ def test_span_walks_to_the_first_base_inside_the_orf() -> None:
     assert (residue, frame, gpos) == (10, FRAME_ISOFORM, 201)
 
 
+def test_a_minus_strand_span_numbers_from_the_first_translated_base() -> None:
+    """Ascending genomic order is mRNA order on the plus strand only.
+
+    Genomic 227-229 map to coding offsets 3, 2, 1, so in translation order the span
+    begins at offset **1** — codon 0. Taking the first base that maps while walking
+    ascending genomic coordinates would take 227, offset 3, and report codon 1: a
+    codon late, the same defect the CDS path fixed by preferring the classifier's
+    ``protein_pos``.
+
+    Only reachable on a ``--no-cds`` index, where no coding sequence exists to
+    override this number — which is why it outlived the CDS-path fix.
+    """
+    residue, frame, gpos = resolve_residue(MINUS, 227, 229)
+    assert (residue, frame, gpos) == (0, FRAME_ISOFORM, 229)
+
+
+def test_a_minus_strand_snv_is_unaffected_by_the_span_rule() -> None:
+    """One base means first and lowest are the same base; nothing should move."""
+    assert resolve_residue(MINUS, 227, 227) == (1, FRAME_ISOFORM, 227)
+
+
 def test_position_outside_both_orfs_has_no_residue() -> None:
     assert resolve_residue(PLUS, 165, 165) == (None, "", None)
 

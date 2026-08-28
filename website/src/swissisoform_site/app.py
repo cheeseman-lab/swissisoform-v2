@@ -251,14 +251,23 @@ def _log_scan(body: dict[str, Any], saved: Any) -> None:
         )
 
 
-def _no_index(response: Any) -> Any:
-    """Stamp a response as off-limits to crawlers.
+def _private_scan(response: Any) -> Any:
+    """Stamp a token-addressed scan response as neither crawlable nor storable.
 
-    Every token-addressed scan response carries this, HTML and JSON alike: a token
-    pasted anywhere a URL gets scanned — chat, an issue tracker, browser sync —
-    would otherwise make somebody's variant positions crawlable.
+    Two separate controls, both needed, on every scan response — HTML and JSON alike:
+
+    ``X-Robots-Tag: noindex`` keeps it out of search indexes. A token pasted anywhere
+    a URL gets scanned — chat, an issue tracker, browser sync — would otherwise make
+    somebody's variant positions crawlable.
+
+    ``Cache-Control: no-store`` keeps it off disk. The page renders uploaded variant
+    positions, and a browser cache entry on a shared machine outlives the 24 h
+    server-side TTL entirely — the store deletes the scan and the copy in the cache
+    does not care. It also stops Back re-rendering a scan that has since expired
+    instead of the page saying so.
     """
     response.headers["X-Robots-Tag"] = "noindex, nofollow"
+    response.headers["Cache-Control"] = "no-store"
     return response
 
 
@@ -343,6 +352,28 @@ def create_app() -> Flask:
     # Opt-in: with no proxy in front, trusting the header would let anyone spoof.
     if os.environ.get("SWISSISOFORM_TRUST_PROXY") == "1":
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
+
+    @app.after_request
+    def _referrer_policy(response: Any) -> Any:
+        """Never hand the scan token to another site in a ``Referer`` header.
+
+        With a scan active, ``_keep_scan_token`` puts ``?vcf=<token>`` on every
+        gene/isoform URL, and that token is a 24-hour read capability over someone's
+        uploaded variant data — not an identifier. The pages carry outbound links
+        (doi.org, UniProt, PubMed) and CDN subresources that load without a click, so
+        the full URL would otherwise be offered to each of them.
+
+        Current browsers default to ``strict-origin-when-cross-origin``, which already
+        strips the query cross-origin — but that is a default we do not control and
+        any per-link override reinstates the leak. ``same-origin`` sends nothing at
+        all to another origin and keeps same-origin referrers intact.
+
+        Set here rather than only in the base template so it covers every response,
+        including the JSON digest route, which is not an HTML document and cannot
+        carry a meta tag.
+        """
+        response.headers.setdefault("Referrer-Policy", "same-origin")
+        return response
 
     # Slugify filter — must match data.py::tis_slug and the LLM dispatcher's
     # _tis_slug so that landing-page dropdown links resolve to the right
@@ -787,7 +818,7 @@ def create_app() -> Flask:
         """
         loaded = scanstore.load(token)
         if loaded.expired:
-            return _no_index(
+            return _private_scan(
                 make_response(
                     render_template(
                         "variants_gone.html",
@@ -801,7 +832,7 @@ def create_app() -> Flask:
                 )
             )
         if not loaded.ok:
-            return _no_index(
+            return _private_scan(
                 make_response(
                     render_template(
                         "variants_gone.html",
@@ -829,7 +860,7 @@ def create_app() -> Flask:
         # index deliberately covers the whole catalogue, so a hit in a gene this
         # build has no page for is expected, not an error.
         known_genes = set(load_all().keys())
-        return _no_index(
+        return _private_scan(
             make_response(
                 render_template(
                     "variants.html",
@@ -909,19 +940,22 @@ def create_app() -> Flask:
     def variants_digest(token: str) -> Any:
         """Return one scan's digest: 200, 404 if unknown, 410 if past its TTL."""
         loaded = scanstore.load(token)
+        # All three exits go through _private_scan, matching the HTML route: the 404
+        # and 410 are reached by token too, so they are as token-addressed as the 200
+        # and get the same headers. Marking only the success path is how the two
+        # controls drift apart.
         if loaded.expired:
-            return jsonify(
-                {
-                    "error": "expired",
-                    "message": "this scan has expired; upload the VCF again",
-                }
+            return _private_scan(
+                jsonify(
+                    {
+                        "error": "expired",
+                        "message": "this scan has expired; upload the VCF again",
+                    }
+                )
             ), 410
         if not loaded.ok:
-            return jsonify({"error": "not_found", "message": "unknown scan id"}), 404
-        response = jsonify(_clean(loaded.digest))
-        # Uploaded variant data must never be indexed.
-        response.headers["X-Robots-Tag"] = "noindex, nofollow"
-        return response
+            return _private_scan(jsonify({"error": "not_found", "message": "unknown scan id"})), 404
+        return _private_scan(jsonify(_clean(loaded.digest)))
 
     @app.errorhandler(413)
     def upload_too_large(e: Any) -> tuple[Any, int]:
@@ -1186,6 +1220,27 @@ def _frame_domain_clusters(occurrences: list[dict[str, Any]]) -> list[dict[str, 
     return out
 
 
+def with_frame(protein_change: str | None, frame: str) -> str:
+    """Name the frame a residue number counts against, in the same breath as the number.
+
+    Both variant populations on the gene figure carry protein notation, and the two
+    are numbered in **different coordinate systems**: a scan hit is numbered against
+    one ORF, while an annotated variant's HGVSp is copied from ClinVar / gnomAD /
+    COSMIC and numbered against that source's canonical transcript. For an
+    alternative-TIS isoform those disagree — the isoform starts elsewhere, so
+    canonical residue N is not the isoform's residue N.
+
+    They previously hedged asymmetrically, and the wrong way round: the scan side
+    named its frame while the annotated string beside it appeared bare and therefore
+    more authoritative, when it is the one whose numbering does not apply to the
+    isoform being drawn. Routing both through here means neither can be rendered
+    without saying which protein it counts against.
+    """
+    if not protein_change or not frame:
+        return protein_change or ""
+    return f"{protein_change} · {frame} frame"
+
+
 def hgvsp_from_hit(aa_ref: str, aa_alt: str, residue: int, consequence: str) -> str:
     """HGVS protein notation for one scan hit, or ``""`` when none is derivable.
 
@@ -1301,13 +1356,7 @@ def _uploaded_variant_records(hits: list[dict[str, Any]] | None) -> list[dict[st
             note = hit.get("consequence_note") or ""
             if note:
                 protein_change += f" ({note})"
-        # Name the frame in the same breath as the number. An uploaded variant is
-        # numbered against one ORF, while the ClinVar string beside it on the tooltip
-        # counts against a transcript — identical-looking notations, different
-        # coordinate systems, and nothing else on the mark says so.
-        frame = hit.get("frame") or ""
-        if frame:
-            protein_change += f" · {frame} frame"
+        protein_change = with_frame(protein_change, hit.get("frame") or "")
 
         merged[key] = {
             "variant_id": variant_id,
@@ -1498,7 +1547,10 @@ def _make_gene_protein_view(
                 "pos": fr,
                 "consequence": v.get("isoform_consequence") or v.get("consequence") or "other",
                 "significance": v.get("clinical_significance"),
-                "protein_change": v.get("hgvsp"),
+                # Canonical whatever placed the mark: hgvsp is the source database's
+                # own string, numbered against its canonical transcript, even where
+                # the x above came from the isoform-frame position.
+                "protein_change": with_frame(v.get("hgvsp"), "canonical"),
                 "source": v.get("source"),
                 "in_unique": bool(v.get("in_isoform_unique")),
             }

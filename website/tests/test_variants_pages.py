@@ -903,3 +903,123 @@ def test_the_table_and_the_figure_name_consequences_identically(client, scan_tok
     assert site_app.CONSEQ_SHORT is CONSEQ_SHORT
     page = client.get(f"/variants/{scan_token}").data.decode()
     assert "conseq-chip" in page
+
+
+# ----------------------------------------------------------------------
+# Referrer policy — the scan token must not leak to third parties
+# ----------------------------------------------------------------------
+
+
+def test_every_response_carries_a_same_origin_referrer_policy(client) -> None:
+    """The scan token rides in ``?vcf=`` on every internal URL, and it is a 24 h read
+    capability rather than an identifier.
+
+    Browsers default to stripping the query cross-origin, but that is a default we do
+    not control; ``same-origin`` sends no ``Referer`` to another origin at all. The
+    header covers responses a meta tag cannot — the JSON digest route is not an HTML
+    document.
+    """
+    for path in ("/", "/genes/CBX1", "/healthz"):
+        response = client.get(path)
+        assert response.headers.get("Referrer-Policy") == "same-origin", path
+
+
+def test_the_json_digest_route_is_covered_too(client, scan_token) -> None:
+    response = client.get(f"/api/variants/{scan_token}.json")
+    assert response.headers.get("Referrer-Policy") == "same-origin"
+
+
+def test_the_base_template_carries_the_meta_tag(client) -> None:
+    """Belt-and-braces: a page saved to disk keeps the policy the header set."""
+    page = client.get("/").data.decode()
+    assert '<meta name="referrer" content="same-origin">' in page
+
+
+def test_the_policy_survives_on_a_page_carrying_a_scan_token(client, scan_token) -> None:
+    """The case that matters: outbound links are rendered beside the token."""
+    response = client.get(f"/variants/{scan_token}")
+    assert response.headers.get("Referrer-Policy") == "same-origin"
+    assert '<meta name="referrer" content="same-origin">' in response.data.decode()
+
+
+def test_scan_pages_are_not_written_to_a_disk_cache(client, scan_token) -> None:
+    """``noindex`` keeps the page out of search results; ``no-store`` keeps it off disk.
+
+    The scan store deletes an upload after 24 h, but a browser cache entry on a shared
+    machine outlives that entirely — the server-side TTL becomes a promise the client
+    silently does not keep. Both controls travel together on every token-addressed
+    response, which is why one helper sets them.
+    """
+    for path in (f"/variants/{scan_token}", f"/api/variants/{scan_token}.json"):
+        response = client.get(path)
+        assert response.headers.get("Cache-Control") == "no-store", path
+        assert response.headers.get("X-Robots-Tag") == "noindex, nofollow", path
+
+
+def test_dead_scan_pages_are_uncacheable_too(client) -> None:
+    """A 404/410 is reached by token as well, and says which token was asked for."""
+    for response in (
+        client.get("/variants/definitelynotarealtoken"),
+        client.get("/api/variants/definitelynotarealtoken.json"),
+    ):
+        assert response.headers.get("Cache-Control") == "no-store"
+
+
+def test_the_methods_do_not_promise_a_consequence_the_code_cannot_assign(client) -> None:
+    """``stop_lost`` is unreachable by construction, so the methods must not list it.
+
+    The stored CDS carries no trailing stop and an ORF's exons span exactly
+    ``aa_len * 3`` nucleotides, so the stop codon sits one base past the last mapped
+    position: a variant there maps nowhere in the ORF and is counted ``intronic``.
+    Measured on cheeseman_test — zero ``stop_lost`` rows across 10,764 variants in
+    both frames.
+
+    The classifier keeps the branch for a CDS with an *internal* stop, which a
+    well-formed ORF does not have; what changes here is the published description,
+    which promised a term no reader will ever see.
+    """
+    page = client.get("/about").data.decode()
+    assert "Annotated ORFs exclude their stop codon" in page
+    # Named only as the thing that is *not* assigned, never in the assignable list.
+    assignable = page.split("assign one of")[1].split(".")[0]
+    assert "stop_lost" not in assignable, assignable
+    assert "start_lost" in assignable
+
+
+def test_both_variant_populations_name_their_frame(client, scan_token) -> None:
+    """The hedge used to run one way only, and the wrong way.
+
+    Scan hits named their frame; the annotated variants beside them showed bare
+    HGVSp — which is the string whose numbering does *not* apply to an
+    alternative-TIS isoform, since it counts against the source's canonical
+    transcript. Unhedged, it read as the more authoritative of the two.
+
+    Both populations now carry the qualifier, so a reader comparing adjacent
+    tooltips can see they are different coordinate systems.
+    """
+    figure = gene_figure(client, f"/genes/CBX1?vcf={scan_token}")
+    hovers = [
+        h
+        for trace in figure["data"]
+        for h in (trace.get("hovertext") or [])
+        if isinstance(h, str)
+    ]
+    with_notation = [h for h in hovers if re.search(r"p\.[A-Z][a-z]{2}\d+", h)]
+    assert with_notation, "no protein notation on any mark"
+
+    unhedged = [h for h in with_notation if "frame" not in h]
+    assert not unhedged, f"protein notation without a frame qualifier: {unhedged[:3]}"
+
+    # Both qualifiers are actually in use — a page where everything said the same
+    # thing would pass the check above while hiding the distinction it exists for.
+    assert any("canonical frame" in h for h in with_notation)
+
+
+def test_the_frame_helper_leaves_an_absent_notation_alone(client) -> None:
+    """No notation means nothing to qualify; a bare '· canonical frame' would be noise."""
+    from swissisoform_site.app import with_frame
+
+    assert with_frame("", "canonical") == ""
+    assert with_frame(None, "canonical") == ""
+    assert with_frame("p.Met1Val", "") == "p.Met1Val"
+    assert with_frame("p.Met1Val", "isoform") == "p.Met1Val · isoform frame"
