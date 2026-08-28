@@ -1,0 +1,17 @@
+{# Expired or unknown scan. Same centred-message idiom as 404.html; rendered with
+   410 for an expired token and 404 for one we never issued (or whose blob has
+   been swept), so the two are distinguishable from the status code alone. #}
+{% extends "base.html" %}
+{% block title %}{{ heading }} — SwissIsoform v2{% endblock %}
+
+{% block head_extra %}
+<meta name="robots" content="noindex, nofollow">
+{% endblock %}
+
+{% block content %}
+<section class="max-w-xl mx-auto py-12 text-center">
+  <h1 class="text-2xl font-semibold mb-2">{{ heading }}</h1>
+  <p class="text-sm text-slate-600 mb-4">{{ message }}</p>
+  <a href="{{ url_for('index') }}" class="text-indigo-600 hover:underline text-sm">&larr; Back to gene index</a>
+</section>
+{% endblock %}

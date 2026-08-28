@@ -5,8 +5,19 @@
 {% block content %}
 <div class="iso-shell">
   <nav class="crumbs">
-    <a href="/">Index</a> /
+    <a href="{{ url_for('index') }}">Index</a> /
+    {# ?vcf carries the scan token, so the trail back to the results survives the
+       hop into a gene. The token is opaque by design — a coordinate here would be
+       written into the platform's retained request logs. #}
+    {% if scan_token %}
+    <a href="{{ url_for('variants_page', token=scan_token) }}">Variant scan</a> /
+    {% endif %}
     <span class="crumb-current">{{ gene.name }}</span>
+    {% if scan_token and scan_gene_hits is not none %}
+    <span class="vq-gene-meta">
+      &middot; {{ scan_gene_hits }} variant{{ "" if scan_gene_hits == 1 else "s" }} from the uploaded VCF
+    </span>
+    {% endif %}
   </nav>
 
   <header class="iso-head">
@@ -91,14 +102,20 @@
     });
   }
   // Click an isoform's bar → open that isoform's page (customdata carries the slug).
-  const GENE_BASE = "{{ url_for('gene_page', gene_name=gene.name) }}";
+  // GENE_PATH is rendered WITHOUT the scan token and SCAN_QS holds it separately:
+  // this builds the URL by concatenation, so a base already carrying "?vcf=..."
+  // would put the path after the query string and land back on the gene page.
+  const GENE_PATH = "{{ gene_path }}";
+  const SCAN_QS = "{{ scan_qs }}";
   function swissWireGeneClick() {
     const gd = document.getElementById("graph-gene");
     if (!gd || !gd.on) return;
     gd.on("plotly_click", function (e) {
       const pt = e && e.points && e.points[0];
       const slug = pt && pt.customdata;
-      if (slug) window.location = GENE_BASE + "/isoforms/" + encodeURIComponent(slug);
+      if (slug) {
+        window.location = GENE_PATH + "/isoforms/" + encodeURIComponent(slug) + SCAN_QS;
+      }
     });
   }
   function swissInitGeneProtein() {

@@ -612,6 +612,35 @@ def load_all() -> dict[str, GeneRecord]:
     return out
 
 
+@lru_cache(maxsize=1)
+def load_orf_index():
+    """Load ``orf_index.parquet`` for variant→ORF resolution.
+
+    A separate artifact from ``all_paired.parquet`` on purpose: it carries the
+    *whole* catalogue's ORF coordinates in ~1.4 MB, so a VCF can be scanned
+    against every annotated gene even when the deployed run displays only a
+    handful. Built by ``scripts/export/build_orf_index.py``.
+
+    Returns None when the file is absent, so the scan endpoint can report a clear
+    "index not staged" error instead of silently matching nothing.
+    """
+    from swissisoform.variantquery.load import load_index
+
+    path = data_dir() / "orf_index.parquet"
+    if not path.is_file():
+        logger.warning("orf_index.parquet missing from %s — variant scan disabled", data_dir())
+        return None
+    index = load_index(path)
+    logger.info(
+        "loaded ORF index: %d isoforms, %d genes, %d intervals, version=%s",
+        index.n_isoforms,
+        index.n_genes,
+        index.n_intervals,
+        index.version,
+    )
+    return index
+
+
 @dataclass(frozen=True)
 class TranscriptSkeleton:
     """Slim view of a transcript's exon structure for the V2 transcript graph."""

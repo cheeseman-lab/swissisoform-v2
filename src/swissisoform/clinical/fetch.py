@@ -29,6 +29,7 @@ import pandas as pd
 import requests
 
 from swissisoform.clinical.module import parse_hgvsp_position
+from swissisoform.coords import normalize_chrom
 
 logger = logging.getLogger(__name__)
 
@@ -256,9 +257,7 @@ class VariantFetcher:
                 {
                     "source": "gnomAD",
                     "variant_id": str(v["variant_id"]),
-                    "chrom": f"chr{v['chrom']}"
-                    if not str(v["chrom"]).startswith("chr")
-                    else str(v["chrom"]),
+                    "chrom": normalize_chrom(str(v["chrom"])),
                     "genomic_pos": int(v["pos"]),
                     "ref": str(v["ref"]),
                     "alt": str(v["alt"]),
@@ -316,7 +315,7 @@ class VariantFetcher:
                 {
                     "source": "gnomAD",
                     "variant_id": v.get("variant_id", ""),
-                    "chrom": f"chr{v.get('variant_id', '').split('-')[0]}"
+                    "chrom": normalize_chrom(v["variant_id"].split("-")[0])
                     if v.get("variant_id")
                     else "",
                     "genomic_pos": v.get("pos", 0),
@@ -396,9 +395,7 @@ class VariantFetcher:
                     alt = alt or parsed_alt
                 genomic_pos = int(r["Start"]) if r.get("Start") else 0
             chrom_raw = _str_or_empty(r.get("Chromosome"))
-            chrom = (
-                f"chr{chrom_raw}" if chrom_raw and not chrom_raw.startswith("chr") else chrom_raw
-            )
+            chrom = normalize_chrom(chrom_raw) if chrom_raw else chrom_raw
             clin_sig = _str_or_empty(r.get("ClinicalSignificance")) or None
             review_status = _str_or_empty(r.get("ReviewStatus")) or None
 
@@ -498,7 +495,7 @@ class VariantFetcher:
             locs = variation_sets[0].get("variation_loc") or []
             for loc in locs:
                 if loc.get("assembly_name") == "GRCh38":
-                    chrom = f"chr{loc.get('chr', '')}"
+                    chrom = normalize_chrom(str(loc.get("chr", "")))
                     genomic_pos = loc.get("start", 0)
                     break
 
@@ -594,7 +591,7 @@ class VariantFetcher:
                 {
                     "source": "COSMIC",
                     "variant_id": str(row.get("GENOMIC_MUTATION_ID", "")),
-                    "chrom": f"chr{chrom}" if chrom and not chrom.startswith("chr") else chrom,
+                    "chrom": normalize_chrom(chrom) if chrom else chrom,
                     "genomic_pos": genomic_pos,
                     "ref": ref,
                     "alt": alt,

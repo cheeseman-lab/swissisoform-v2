@@ -67,6 +67,74 @@ NEAR_COGNATE_STARTS = frozenset(
     {"ATG", "CTG", "GTG", "TTG", "ACG", "AGG", "AAG", "ATA", "ATC", "ATT"}
 )
 
+#: Notes explaining a codon-0 call whose term alone does not say what happened.
+#: A start that got *stronger* and a start that merely moved sideways both come
+#: out of the amino-acid branches looking like ordinary missense, which is true
+#: but not the interesting part.
+START_STRENGTHENED_NOTE = "near-cognate start replaced by ATG — initiation strengthened"
+START_STILL_NEAR_COGNATE_NOTE = "start remains a near-cognate; initiation is not ablated"
+START_LOST_ATG_NOTE = "annotated ATG start destroyed"
+START_LOST_NEAR_COGNATE_NOTE = "near-cognate start left the initiating set"
+START_NOT_AN_INITIATOR_NOTE = "annotated start is not an initiating codon"
+
+
+def start_codon_effect(ref_codon: str, alt_codon: str) -> tuple[str | None, str]:
+    """Decide what a substitution does to an ORF's start codon.
+
+    **The direction of the change carries the meaning, and a membership test throws
+    it away.** ``NEAR_COGNATE_STARTS`` is exactly ATG plus its nine single-base
+    neighbours, so asking only "is the mutated codon still in the set?" can never
+    fire for an ATG start: every SNV of ATG lands on another member. That labelled
+    the classic pathogenic ``p.Met1?`` variants missense and kept them out of the
+    loss-of-function gate entirely.
+
+    Losing an ATG and gaining one are not the same event, so the rule is asymmetric:
+
+    * ATG → anything else: the annotated initiator is gone. A near-cognate in its
+      place initiates far less efficiently, so this is ``start_lost`` even when the
+      replacement is itself a near-cognate.
+    * near-cognate → outside the set: ``start_lost``, as before. A third-base change
+      can do this while translating to the same residue, which is why the codon and
+      not the amino acid decides.
+    * near-cognate → ATG: the start got *stronger*. Calling that start-loss would be
+      backwards, so the amino-acid classification stands and carries a note.
+    * near-cognate → another near-cognate: a lateral move between weak starts. Note,
+      no override.
+
+    Args:
+        ref_codon: The ORF's reference start trinucleotide.
+        alt_codon: The same position after the substitution.
+
+    Returns:
+        ``(consequence_override, note)``. The override is ``None`` when the caller
+        should keep its amino-acid-derived term; the note may be set either way, and
+        is ``""`` only when the start is untouched.
+    """
+    ref = ref_codon[:3].upper()
+    alt = alt_codon[:3].upper()
+
+    if ref == alt:
+        # A multi-base substitution can touch codon 0's span while leaving the
+        # trinucleotide itself intact, changing only the codon after it.
+        return None, ""
+
+    if ref == "ATG":
+        return "start_lost", START_LOST_ATG_NOTE
+
+    if ref not in NEAR_COGNATE_STARTS:
+        # Not reachable for a well-formed ORF — the annotated start is by
+        # construction an initiator. Said out loud rather than silently treated as
+        # a near-cognate, because it means the annotation and the sequence disagree.
+        return None, START_NOT_AN_INITIATOR_NOTE
+
+    if alt not in NEAR_COGNATE_STARTS:
+        return "start_lost", START_LOST_NEAR_COGNATE_NOTE
+
+    if alt == "ATG":
+        return None, START_STRENGTHENED_NOTE
+
+    return None, START_STILL_NEAR_COGNATE_NOTE
+
 
 def orf_type_from_ribotish(tis_type: str) -> ORFType:
     """Map a Ribo-TISH TisType string to an ORFType enum value.

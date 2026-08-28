@@ -1,7 +1,15 @@
 """Flask routes for the SwissIsoform v2 viewer.
 
-Read-only — every payload comes from ``data.load_all()`` which is cached at
-the first request. There is no DB.
+Almost entirely read-only — the gene/isoform payloads come from
+``data.load_all()``, cached per worker at the first request. There is no DB.
+
+The exception is the variant query: ``POST /api/variants/scan`` stores an uploaded
+VCF under ``scanstore``'s temp directory, resolves it against the ORF index and
+writes a digest beside the blob — the app's only write path. ``GET
+/variants/<token>`` renders that digest, ``GET /api/variants/<token>.json`` returns
+it raw, and ``GET /api/variants/status`` reports whether the scan path is
+functional in this deployment (the index staged, the disk writable) since there is
+no shell into the container.
 """
 
 from __future__ import annotations
@@ -11,6 +19,7 @@ import logging
 import math
 import os
 import re
+import secrets
 import types
 from pathlib import Path
 from typing import Any
@@ -18,17 +27,34 @@ from typing import Any
 from flask import (
     Flask,
     abort,
+    g,
+    has_request_context,
     jsonify,
+    make_response,
     render_template,
+    request,
     send_from_directory,
+    url_for,
 )
 from markupsafe import Markup, escape
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from swissisoform.site.evidence import (
     CRITERIA_METRIC_LABELS,
     format_metric,
     slice_criterion,
 )
+from swissisoform.variantquery.consequence import (
+    MISSENSE,
+    START_LOST,
+    STOP_GAINED,
+    STOP_LOST,
+    SYNONYMOUS,
+)
+from swissisoform.variantquery.frame import x_offset_residues
+from swissisoform.variantquery.scan import scan
+from swissisoform.variantquery.vcf import VcfLimitExceeded
+from swissisoform_site import scanstore, throttle
 from swissisoform_site.data import (
     CARD_BADGES,
     CARD_GROUPS,
@@ -45,6 +71,7 @@ from swissisoform_site.data import (
     data_dir,
     llm_synthesis_for_isoform,
     load_all,
+    load_orf_index,
     sae_card_for_isoform,
     tis_slug,
     variant_rows_for_isoform,
@@ -52,9 +79,21 @@ from swissisoform_site.data import (
 )
 from swissisoform_site.genomics import interval_intersection
 from swissisoform_site.plots import build_gene_protein_figure
+from swissisoform_site.plots.protein import CONSEQ_COLOR, CONSEQ_SHORT
+from swissisoform_site.scanstore import ScanStoreError
 
 # Cell line samples used by the transcript figure's bottom panel.
 _CELL_LINE_SAMPLES = ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen")
+
+#: Upload ceiling. The real somatic VCFs are ~13 MB gzipped; 100 MB accepts
+#: exome/somatic files while rejecting germline WGS, which has no business being
+#: parsed synchronously inside a request.
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+
+#: Hit rows rendered on the results page. The scan records up to
+#: ``scan.DEFAULT_MAX_HITS`` (20,000), and the page is rebuilt on every view of the
+#: token — so the table is capped here and the full list served from the JSON route.
+PAGE_MAX_HITS = 1000
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -93,9 +132,248 @@ def _log_llm_coverage(genes: dict, llm_dir: Path) -> None:
     )
 
 
+#: Endpoints that participate in the variant-scan breadcrumb, and so should keep
+#: ``?vcf=`` alive when one is active. Deliberately a whitelist: appending the token
+#: to ``static`` or the structure-file routes would bust asset caching and write the
+#: token into asset request logs for no benefit.
+_SCAN_AWARE_ENDPOINTS = frozenset({"index", "gene_page", "isoform_page", "variants_page"})
+
+
+def resolve_scan() -> tuple[str, dict[str, Any]]:
+    """The request's active scan as ``(token, digest)``, resolved **once**.
+
+    Memoised on ``g`` for two reasons. It is consulted by both the view and the URL
+    injector, and the injector fires for every ``url_for`` — 17+ per page — so an
+    un-cached lookup would mean that many disk reads per render.
+
+    A token naming a scan that has expired or been swept resolves to ``("", {})``,
+    which is what keeps a dead token from following the user around the site and lets
+    every page render normally minus the breadcrumb. Scan context is always
+    supplementary; it never fails a page.
+    """
+    if not has_request_context():
+        return "", {}
+
+    cached = getattr(g, "_swiss_scan", None)
+    if cached is not None:
+        return cached
+
+    token = request.args.get("vcf") or ""
+    # On the results page the token is a path segment, not a query arg — without
+    # this that page's own outbound links would go out bare.
+    if not token and request.endpoint == "variants_page":
+        token = (request.view_args or {}).get("token") or ""
+
+    digest: dict[str, Any] = {}
+    if token:
+        loaded = scanstore.load(token)
+        if loaded.ok:
+            digest = loaded.digest or {}
+        else:
+            token = ""
+
+    cached = (token, digest)
+    g._swiss_scan = cached
+    return cached
+
+
+def scan_hits(hits_key: str, hits_value: str) -> tuple[str, list[dict[str, Any]]]:
+    """Active scan token plus the hits matching one field.
+
+    Shared by the gene and isoform pages so their graceful-degradation behaviour
+    cannot drift apart.
+
+    Args:
+        hits_key: Field of each hit to match on (``"gene"`` or ``"tis_id"``).
+        hits_value: Value it must equal.
+
+    Returns:
+        ``(token, hits)``; ``("", [])`` when there is no usable scan.
+    """
+    token, digest = resolve_scan()
+    if not token:
+        return "", []
+    hits = digest.get("hits", []) or []
+    return token, [h for h in hits if h.get(hits_key) == hits_value]
+
+
+def scan_context(hits_key: str, hits_value: str) -> tuple[str, int | None]:
+    """As :func:`scan_hits`, but only the count — for the breadcrumb chips."""
+    token, hits = scan_hits(hits_key, hits_value)
+    return token, (len(hits) if token else None)
+
+
+def _scan_debug_enabled() -> bool:
+    """True when the full scan payload may be logged.
+
+    Off by default on purpose. The digest carries variant positions and residues,
+    and container logs are retained by the platform outside our control — the same
+    reason coordinates never appear in a URL. Set
+    ``SWISSISOFORM_SCAN_DEBUG=1`` only while testing with a synthetic VCF.
+    """
+    return os.environ.get("SWISSISOFORM_SCAN_DEBUG", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def _log_scan(body: dict[str, Any], saved: Any) -> None:
+    """Log a scan to stdout — i.e. to the platform's log console.
+
+    The default line is deliberately redacted: counts, gene *names*, and ids, but
+    no positions, no residues and no filename. That is enough to confirm from the
+    logs that a scan ran and roughly what it found, without persisting variant
+    coordinates anywhere we do not control.
+    """
+    counts = body.get("counts", {}) or {}
+    logger.info(
+        "scan token=%s key=%s cached=%s lines=%s alleles=%s non_pass=%s "
+        "no_orf=%s off_contig=%s hits=%s genes=%s index=%s rejected=%s genes_hit=%s",
+        body.get("vcf_id"),
+        saved.key,
+        saved.was_cached,
+        counts.get("lines"),
+        counts.get("alleles"),
+        counts.get("skipped_non_pass"),
+        counts.get("no_orf"),
+        counts.get("off_catalog_contig"),
+        counts.get("hits"),
+        counts.get("genes_hit"),
+        (body.get("provenance", {}) or {}).get("index_version"),
+        counts.get("rejected"),
+        [g.get("gene") for g in body.get("genes", []) or []],
+    )
+    if _scan_debug_enabled():
+        logger.info(
+            "scan response payload (SWISSISOFORM_SCAN_DEBUG=1)\n%s",
+            json.dumps(body, indent=2, sort_keys=True, default=str),
+        )
+
+
+def _private_scan(response: Any) -> Any:
+    """Stamp a token-addressed scan response as neither crawlable nor storable.
+
+    Two separate controls, both needed, on every scan response — HTML and JSON alike:
+
+    ``X-Robots-Tag: noindex`` keeps it out of search indexes. A token pasted anywhere
+    a URL gets scanned — chat, an issue tracker, browser sync — would otherwise make
+    somebody's variant positions crawlable.
+
+    ``Cache-Control: no-store`` keeps it off disk. The page renders uploaded variant
+    positions, and a browser cache entry on a shared machine outlives the 24 h
+    server-side TTL entirely — the store deletes the scan and the copy in the cache
+    does not care. It also stops Back re-rendering a scan that has since expired
+    instead of the page saying so.
+    """
+    response.headers["X-Robots-Tag"] = "noindex, nofollow"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+#: Reader caps → (error code, status). Both are 4xx and both are the uploader's
+#: file to fix; the codes stay distinct from the compressed-body ``too_large`` so
+#: a caller can tell which limit it hit.
+_LIMIT_RESPONSES = {
+    "decompressed_bytes": ("expands_too_large", 413),
+    "line_bytes": ("line_too_long", 422),
+}
+
+
+#: Terms whose hits actually had their REF compared against the reference. The
+#: classifier reaches ``reference_mismatch`` only on the substitution path
+#: (clinical/validate.py) — intronic spans and indels return before that check —
+#: so counting them in the denominator would dilute a real mismatch below the
+#: threshold on any VCF with many indels or intronic-in-ORF hits.
+_REF_CHECKED_TERMS = frozenset(
+    {
+        MISSENSE,
+        SYNONYMOUS,
+        STOP_GAINED,
+        STOP_LOST,
+        START_LOST,
+        # Lives as a literal in clinical/validate.py, like "intronic" does in
+        # variantquery/scan.py's note table; there is no constant to import.
+        "reference_mismatch",
+    }
+)
+
+#: A REF disagreement or two is ordinary — a miscalled base, a variant normalised
+#: against a different representation. A *majority* of them is what an hg19 file
+#: looks like scanned against GRCh38 coordinates, which is the one failure mode a
+#: user cannot see for themselves: the scan "succeeds" and reports plausible
+#: garbage. Below the floor the fraction is noise, so it stays a plain tally.
+_ASSEMBLY_MIN_CLASSIFIED = 10
+_ASSEMBLY_SUSPECT_FRACTION = 0.5
+
+
+def _assembly_check(counts: dict[str, Any]) -> dict[str, Any]:
+    """REF-mismatch tally, and whether it looks like the wrong genome build.
+
+    The classifier already computes ``reference_mismatch`` per hit; this only reads
+    the tally it was throwing away.
+    """
+    consequences = counts.get("consequences") or {}
+    mismatches = int(consequences.get("reference_mismatch") or 0)
+    checked = sum(int(n or 0) for term, n in consequences.items() if term in _REF_CHECKED_TERMS)
+    fraction = mismatches / checked if checked else 0.0
+    return {
+        "mismatches": mismatches,
+        "ref_checked": checked,
+        "fraction": fraction,
+        "percent": round(fraction * 100),
+        "suspect": (checked >= _ASSEMBLY_MIN_CLASSIFIED and fraction >= _ASSEMBLY_SUSPECT_FRACTION),
+    }
+
+
+def _human_delay(seconds: int) -> str:
+    """Render a retry delay the way a person would say it."""
+    if seconds < 60:
+        return f"{seconds} seconds"
+    minutes = round(seconds / 60)
+    if minutes < 60:
+        return f"{minutes} minute{'' if minutes == 1 else 's'}"
+    hours = round(seconds / 3600)
+    return f"{hours} hour{'' if hours == 1 else 's'}"
+
+
 def create_app() -> Flask:
     """Build the Flask app. Factory pattern so tests can re-create cleanly."""
     app = Flask(__name__)
+
+    # Werkzeug rejects a larger body before reading it, so an oversized upload
+    # costs nothing but the 413.
+    app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
+
+    # Behind Railway's edge proxy ``remote_addr`` is the proxy hop, so every
+    # client would share one throttle bucket. ``x_for=1`` trusts exactly one hop
+    # and takes the rightmost X-Forwarded-For entry — the one the proxy itself
+    # appended — so a client cannot prepend a header to get a fresh bucket.
+    # Opt-in: with no proxy in front, trusting the header would let anyone spoof.
+    if os.environ.get("SWISSISOFORM_TRUST_PROXY") == "1":
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
+
+    @app.after_request
+    def _referrer_policy(response: Any) -> Any:
+        """Never hand the scan token to another site in a ``Referer`` header.
+
+        With a scan active, ``_keep_scan_token`` puts ``?vcf=<token>`` on every
+        gene/isoform URL, and that token is a 24-hour read capability over someone's
+        uploaded variant data — not an identifier. The pages carry outbound links
+        (doi.org, UniProt, PubMed) and CDN subresources that load without a click, so
+        the full URL would otherwise be offered to each of them.
+
+        Current browsers default to ``strict-origin-when-cross-origin``, which already
+        strips the query cross-origin — but that is a default we do not control and
+        any per-link override reinstates the leak. ``same-origin`` sends nothing at
+        all to another origin and keeps same-origin referrers intact.
+
+        Set here rather than only in the base template so it covers every response,
+        including the JSON digest route, which is not an HTML document and cannot
+        carry a meta tag.
+        """
+        response.headers.setdefault("Referrer-Policy", "same-origin")
+        return response
 
     # Slugify filter — must match data.py::tis_slug and the LLM dispatcher's
     # _tis_slug so that landing-page dropdown links resolve to the right
@@ -108,6 +386,29 @@ def create_app() -> Flask:
     @app.template_filter("slugify")
     def slugify(value: Any) -> str:
         return _slug_re.sub("-", str(value or "unknown"))
+
+    @app.url_defaults
+    def _keep_scan_token(endpoint: str, values: dict[str, Any]) -> None:
+        """Carry ``?vcf=`` through every navigation link automatically.
+
+        Without this, the token has to be threaded by hand through 17 ``url_for``
+        calls across 15 templates, and the breadcrumb breaks the moment one is
+        missed. ``url_for`` puts any key absent from the URL rule into the query
+        string, so this needs no route changes.
+
+        Only a token that actually resolves is propagated — see ``resolve_scan``.
+        Forwarding a dead one would make a stale ``?vcf=`` trail the user around the
+        whole site, decorating every link with a scan that no longer exists.
+        """
+        if endpoint not in _SCAN_AWARE_ENDPOINTS:
+            return
+        # Never override an explicit value: a call site may pass vcf=None precisely
+        # to drop the token, which gene.html does for its JS base.
+        if "vcf" in values:
+            return
+        token, _digest = resolve_scan()
+        if token:
+            values["vcf"] = token
 
     # Linkify ``PMID:NNN`` citations in the gene mechanistic narrative. Match each
     # PMID token (not the enclosing bracket) so multi-PMID brackets like
@@ -132,6 +433,8 @@ def create_app() -> Flask:
         format_metric=format_metric,
         variant_url=variant_url,
         CARD_GROUPS=CARD_GROUPS,
+        CONSEQ_COLOR=CONSEQ_COLOR,
+        CONSEQ_SHORT=CONSEQ_SHORT,
     )
 
     # JSON-friendly NaN cleaner for the API endpoint
@@ -185,7 +488,8 @@ def create_app() -> Flask:
         if gene is None or not gene.isoforms:
             abort(404)
 
-        view = _make_gene_protein_view(gene)
+        scan_token, gene_scan_hits = scan_hits("gene", gene.name)
+        view = _make_gene_protein_view(gene, uploaded=gene_scan_hits)
         gene_fig = build_gene_protein_figure(view)
         gene_fig_collapsed = build_gene_protein_figure(view, collapse_domains=True)
 
@@ -194,8 +498,16 @@ def create_app() -> Flask:
         truncations = [i for i in gene.isoforms if i.orf_type == "truncated"]
         others = [i for i in gene.isoforms if i.orf_type not in ("extended", "truncated")]
 
+        scan_gene_hits = len(gene_scan_hits) if scan_token else None
+
         return render_template(
             "gene.html",
+            scan_token=scan_token,
+            scan_gene_hits=scan_gene_hits,
+            # The click handler concatenates a path onto the base, so the query
+            # string has to be kept separate — see gene.html.
+            gene_path=url_for("gene_page", gene_name=gene.name, vcf=None),
+            scan_qs=f"?vcf={scan_token}" if scan_token else "",
             gene=gene,
             extensions=extensions,
             truncations=truncations,
@@ -276,9 +588,15 @@ def create_app() -> Flask:
         sae = sae_card_for_isoform(iso)
         bio = biophysics_card_for_isoform(iso)
 
+        # Same helper the gene page uses, keyed on this isoform rather than the
+        # gene, so the breadcrumb survives one level deeper.
+        scan_token, scan_isoform_hits = scan_context("tis_id", iso.tis_id)
+
         return render_template(
             "isoform.html",
             isoform=_isoform_view(iso, gene),
+            scan_token=scan_token,
+            scan_isoform_hits=scan_isoform_hits,
             sae=sae,
             bio=bio,
             criterion_evidence=criterion_evidence_for(iso),
@@ -314,18 +632,19 @@ def create_app() -> Flask:
         """
         genes = load_all()
         payload: dict[str, Any] = {}
-        for name, g in genes.items():
+        # Named `record`, not `g` — `g` is Flask's request-global, imported above.
+        for name, record in genes.items():
             payload[name] = {
-                "name": g.name,
-                "uniprot_id": g.uniprot_id,
-                "uniprot_url": g.uniprot_url,
-                "function": g.function,
-                "location": g.location,
-                "keywords": g.keywords,
-                "canonical_len": g.canonical_len,
-                "canonical_cif": g.canonical_cif,
-                "llm": g.llm,
-                "isoforms": [_isoform_to_dict(i) for i in g.isoforms],
+                "name": record.name,
+                "uniprot_id": record.uniprot_id,
+                "uniprot_url": record.uniprot_url,
+                "function": record.function,
+                "location": record.location,
+                "keywords": record.keywords,
+                "canonical_len": record.canonical_len,
+                "canonical_cif": record.canonical_cif,
+                "llm": record.llm,
+                "isoforms": [_isoform_to_dict(i) for i in record.isoforms],
             }
         return jsonify(_clean(payload))
 
@@ -362,6 +681,304 @@ def create_app() -> Flask:
         if not (root / filename).is_file():
             abort(404)
         return send_from_directory(root, filename, mimetype="application/json")
+
+    # ---------- Variant query ----------
+    # The app's only write path. An uploaded VCF is stored under scanstore's temp
+    # directory, resolved against the ORF index, and its digest written beside the
+    # blob. The token returned here is what threads through the results and gene
+    # pages so a scan survives navigation.
+
+    @app.post("/api/variants/scan")
+    def variants_scan() -> Any:
+        """Accept a VCF upload, resolve it against the ORF index, return a token."""
+        # First, before the index load and the token check: it is the cheapest
+        # check, and it is the one that has to hold when the endpoint is hot.
+        client = request.remote_addr or "unknown"
+        verdict = throttle.check(client)
+        if not verdict.allowed:
+            logger.info(
+                "scan throttled scope=%s retry_after=%ds", verdict.scope, verdict.retry_after
+            )
+            response = jsonify(
+                {
+                    "error": "rate_limited",
+                    "message": (
+                        f"Too many scans from this address. Try again in "
+                        f"{_human_delay(verdict.retry_after)}."
+                    ),
+                }
+            )
+            response.headers["Retry-After"] = str(verdict.retry_after)
+            return response, 429
+
+        index = load_orf_index()
+        if index is None:
+            return jsonify(
+                {
+                    "error": "index_unavailable",
+                    "message": (
+                        "orf_index.parquet is not staged in this deployment; "
+                        "run scripts/export/build_orf_index.py and re-stage."
+                    ),
+                }
+            ), 503
+
+        # Optional shared secret. Unset (the default, and every local dev run)
+        # leaves the endpoint open; setting SWISSISOFORM_SCAN_TOKEN on a public
+        # deployment closes it, since this is an unauthenticated upload path on a
+        # world-reachable URL.
+        required_token = os.environ.get("SWISSISOFORM_SCAN_TOKEN", "")
+        if required_token:
+            offered = request.headers.get("X-Scan-Token") or request.form.get("scan_token", "")
+            # Encoded: compare_digest on two str raises TypeError for non-ASCII,
+            # which would be a 500 on the very configuration this protects.
+            if not secrets.compare_digest(offered.encode("utf-8"), required_token.encode("utf-8")):
+                return jsonify(
+                    {"error": "forbidden", "message": "missing or wrong scan token"}
+                ), 403
+
+        upload = request.files.get("vcf")
+        if upload is None or not upload.filename:
+            return jsonify(
+                {"error": "no_file", "message": "attach a VCF as the 'vcf' form field"}
+            ), 400
+
+        # Sweeping here (rather than on a timer) keeps expiry enforcement off the
+        # read path and out of background threads; it is rate-limited internally.
+        scanstore.sweep()
+
+        try:
+            saved = scanstore.save(
+                upload.stream, index_version=index.version, filename=upload.filename
+            )
+        except ScanStoreError as exc:
+            logger.exception("scan upload failed")
+            return jsonify({"error": "storage_failed", "message": str(exc)}), 507
+
+        if saved.was_cached:
+            # Same file, same index version — the finished digest is already on
+            # disk, so the parse is skipped entirely.
+            logger.info("scan reused cached digest key=%s", saved.key)
+        else:
+            # Charged here rather than at the top: a cache hit skips the parse
+            # entirely, so it costs nothing and should not spend anyone's budget.
+            throttle.record(client)
+            try:
+                result = scan(scanstore.source_path(saved.key), index)
+            except VcfLimitExceeded as exc:
+                logger.info("scan refused key=%s kind=%s", saved.key, exc.kind)
+                # The blob stays; the next sweep collects it, since no digest was
+                # written and nothing will resolve the token.
+                error, status = _LIMIT_RESPONSES[exc.kind]
+                return jsonify({"error": error, "message": str(exc)}), status
+            digest = result.to_dict()
+            digest["provenance"] = {
+                "vcf_sha256": saved.vcf_sha256,
+                "index_version": index.version,
+                "catalog_genes": index.n_genes,
+                "catalog_isoforms": index.n_isoforms,
+            }
+            # Deliberately NOT digest["filename"]: the blob is keyed by content and
+            # shared by every uploader of the same bytes, so a filename written here
+            # is served to whoever uploads it next. It lives on the token instead,
+            # and scanstore.load() reads it from there.
+            scanstore.write_digest(saved.key, digest)
+
+        loaded = scanstore.load(saved.token)
+        if not loaded.ok:
+            # Only reachable if the blob vanished between write and read.
+            return jsonify({"error": "storage_failed", "message": "digest disappeared"}), 507
+
+        payload = loaded.digest or {}
+        # ``was_cached`` is deliberately absent. Blobs are content-addressed and
+        # shared across uploaders, so reporting a cache hit tells the caller that
+        # SOMEONE ELSE already scanned those exact bytes — the confirm-by-upload
+        # oracle this module's capability tokens exist to prevent (scanstore.py
+        # docstring). It stays in the server log, which is ours.
+        response_body = {
+            "vcf_id": saved.token,
+            "redirect": f"/variants/{saved.token}",
+            "counts": payload.get("counts", {}),
+            "genes": payload.get("genes", []),
+            "provenance": payload.get("provenance", {}),
+            "expires_at": payload.get("expires_at", ""),
+        }
+        _log_scan(response_body, saved)
+        return jsonify(response_body)
+
+    @app.get("/variants/<token>")
+    def variants_page(token: str) -> Any:
+        """Render one scan's results: the funnel, the genes hit, and the hit table.
+
+        The hit list is capped at :data:`PAGE_MAX_HITS` rows and left out of the raw
+        JSON block. ``scan.DEFAULT_MAX_HITS`` is 20,000, and both the table and a
+        pretty-printed digest are rebuilt on *every* view of the token, not just the
+        first — a germline exome reaching that cap would render a multi-MB page each
+        time. The full list stays one request away, on the JSON route.
+        """
+        loaded = scanstore.load(token)
+        if loaded.expired:
+            return _private_scan(
+                make_response(
+                    render_template(
+                        "variants_gone.html",
+                        heading="Scan expired",
+                        message=(
+                            "Uploaded VCFs are deleted after 24 hours. Upload the file "
+                            "again to run a fresh scan."
+                        ),
+                    ),
+                    410,
+                )
+            )
+        if not loaded.ok:
+            return _private_scan(
+                make_response(
+                    render_template(
+                        "variants_gone.html",
+                        heading="Scan not found",
+                        message=(
+                            "That scan id is unknown — it may have expired, or the "
+                            "deployment may have restarted since the upload."
+                        ),
+                    ),
+                    404,
+                )
+            )
+
+        digest = _clean(loaded.digest) or {}
+        counts = digest.get("counts", {}) or {}
+        all_hits = digest.get("hits", []) or []
+        # Structurally honest: the key is dropped rather than truncated in place, so
+        # nothing reads a short list as if it were the whole one.
+        preview = {k: v for k, v in digest.items() if k != "hits"}
+        preview["hits_omitted"] = {
+            "count": len(all_hits),
+            "full_digest": url_for("variants_digest", token=token),
+        }
+        # Only genes the *displayed* catalogue knows about can be linked. The scan
+        # index deliberately covers the whole catalogue, so a hit in a gene this
+        # build has no page for is expected, not an error.
+        known_genes = set(load_all().keys())
+        return _private_scan(
+            make_response(
+                render_template(
+                    "variants.html",
+                    token=token,
+                    digest=digest,
+                    counts=counts,
+                    assembly=_assembly_check(counts),
+                    provenance=digest.get("provenance", {}) or {},
+                    genes=digest.get("genes", []) or [],
+                    hits=all_hits[:PAGE_MAX_HITS],
+                    hits_total=len(all_hits),
+                    hits_capped=len(all_hits) > PAGE_MAX_HITS,
+                    digest_url=url_for("variants_digest", token=token),
+                    known_genes=known_genes,
+                    passing=max(
+                        (counts.get("alleles") or 0) - (counts.get("skipped_non_pass") or 0), 0
+                    ),
+                    # Alleles that landed in an ORF, derived by subtraction so the funnel
+                    # stays monotonic. counts["hits"] is NOT usable here: it counts
+                    # (variant, isoform) pairs, so one allele in three isoforms is 3 hits
+                    # and the last step would appear to grow. Subtraction is also
+                    # independent of the hit-list cap.
+                    in_orf_alleles=max(
+                        (counts.get("alleles") or 0)
+                        - (counts.get("skipped_non_pass") or 0)
+                        - (counts.get("off_catalog_contig") or 0)
+                        - (counts.get("no_orf") or 0),
+                        0,
+                    ),
+                    raw_json=json.dumps(preview, indent=2, sort_keys=True),
+                )
+            )
+        )
+
+    @app.get("/api/variants/status")
+    def variants_status() -> Any:
+        """Report whether the scan path is actually functional in this deployment.
+
+        Exists because the two things most likely to differ between local and the
+        Railway container — was ``orf_index.parquet`` staged, and is the ephemeral
+        disk writable — cannot be told apart from a failed upload, and there is no
+        shell into the container.
+        """
+        index = load_orf_index()
+        probe_dir = scanstore.scan_dir()
+        writable = False
+        write_error = ""
+        try:
+            probe_dir.mkdir(parents=True, exist_ok=True)
+            probe = probe_dir / f".writeprobe-{os.getpid()}"
+            probe.write_text("ok")
+            writable = probe.read_text() == "ok"
+            probe.unlink(missing_ok=True)
+        except OSError as exc:
+            write_error = str(exc)
+
+        return jsonify(
+            {
+                "index_loaded": index is not None,
+                "index_version": index.version if index else "",
+                "catalog_genes": index.n_genes if index else 0,
+                "catalog_isoforms": index.n_isoforms if index else 0,
+                "catalog_intervals": index.n_intervals if index else 0,
+                "displayed_genes": len(load_all()),
+                "scan_dir": str(probe_dir),
+                "scan_dir_writable": writable,
+                "scan_dir_error": write_error,
+                "ttl_hours": scanstore.ttl_hours(),
+                "budget_bytes": scanstore.budget_bytes(),
+                "max_upload_bytes": app.config.get("MAX_CONTENT_LENGTH"),
+                "scan_token_required": bool(os.environ.get("SWISSISOFORM_SCAN_TOKEN")),
+                "debug_logging": _scan_debug_enabled(),
+            }
+        )
+
+    @app.get("/api/variants/<token>.json")
+    def variants_digest(token: str) -> Any:
+        """Return one scan's digest: 200, 404 if unknown, 410 if past its TTL."""
+        loaded = scanstore.load(token)
+        # All three exits go through _private_scan, matching the HTML route: the 404
+        # and 410 are reached by token too, so they are as token-addressed as the 200
+        # and get the same headers. Marking only the success path is how the two
+        # controls drift apart.
+        if loaded.expired:
+            return _private_scan(
+                jsonify(
+                    {
+                        "error": "expired",
+                        "message": "this scan has expired; upload the VCF again",
+                    }
+                )
+            ), 410
+        if not loaded.ok:
+            return _private_scan(jsonify({"error": "not_found", "message": "unknown scan id"})), 404
+        return _private_scan(jsonify(_clean(loaded.digest)))
+
+    @app.errorhandler(413)
+    def upload_too_large(e: Any) -> tuple[Any, int]:
+        """JSON rather than HTML — the only client for this is the uploader."""
+        # Read the live config, not the module constant, so the message stays
+        # truthful if the limit is overridden.
+        limit_mb = (app.config.get("MAX_CONTENT_LENGTH") or MAX_UPLOAD_BYTES) // (1024 * 1024)
+        return jsonify(
+            {
+                "error": "too_large",
+                "message": f"VCF exceeds the {limit_mb} MB upload limit",
+            }
+        ), 413
+
+    @app.errorhandler(429)
+    def rate_limited(e: Any) -> tuple[Any, int]:
+        """JSON, like the 413 — the only client for a 429 here is the uploader."""
+        return jsonify(
+            {
+                "error": "rate_limited",
+                "message": "Too many scans from this address. Try again later.",
+            }
+        ), 429
 
     @app.errorhandler(404)
     def not_found(e: Any) -> tuple[Any, int]:
@@ -473,7 +1090,9 @@ def _classify_interproscan_hits(ips_hits: Any) -> dict[str, list[dict[str, Any]]
             members = reg["members"]
             mapped = [m for m in members if m.get("interpro_id")]
             best = mapped[0] if mapped else members[0]
-            name = best.get("interpro_description") or best.get("name") or best.get("db") or "domain"
+            name = (
+                best.get("interpro_description") or best.get("name") or best.get("db") or "domain"
+            )
             if name in ("-", "—"):
                 name = best.get("name") or best.get("db") or "domain"
             domains.append(
@@ -601,7 +1220,191 @@ def _frame_domain_clusters(occurrences: list[dict[str, Any]]) -> list[dict[str, 
     return out
 
 
-def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
+def with_frame(protein_change: str | None, frame: str) -> str:
+    """Name the frame a residue number counts against, in the same breath as the number.
+
+    Both variant populations on the gene figure carry protein notation, and the two
+    are numbered in **different coordinate systems**: a scan hit is numbered against
+    one ORF, while an annotated variant's HGVSp is copied from ClinVar / gnomAD /
+    COSMIC and numbered against that source's canonical transcript. For an
+    alternative-TIS isoform those disagree — the isoform starts elsewhere, so
+    canonical residue N is not the isoform's residue N.
+
+    They previously hedged asymmetrically, and the wrong way round: the scan side
+    named its frame while the annotated string beside it appeared bare and therefore
+    more authoritative, when it is the one whose numbering does not apply to the
+    isoform being drawn. Routing both through here means neither can be rendered
+    without saying which protein it counts against.
+    """
+    if not protein_change or not frame:
+        return protein_change or ""
+    return f"{protein_change} · {frame} frame"
+
+
+def hgvsp_from_hit(aa_ref: str, aa_alt: str, residue: int, consequence: str) -> str:
+    """HGVS protein notation for one scan hit, or ``""`` when none is derivable.
+
+    An uploaded variant has no upstream annotator — the pipeline's own variants carry
+    whatever VEP / ClinVar / COSMIC wrote — so the notation is built here from the
+    classifier's amino acids. Three-letter codes and the same conventions those
+    sources use, since both kinds share a tooltip:
+
+    ========================  ==========================
+    missense                  ``p.Arg253Glu``
+    synonymous                ``p.Arg253=``
+    stop gained               ``p.Arg253Ter``
+    stop lost                 ``p.Ter253Arg``
+    start lost                ``p.Leu1?``
+    multi-residue (MNV)       ``p.Phe225_Glu226delinsSerLys``
+    ========================  ==========================
+
+    **The residue is numbered against the ORF the hit names, not a transcript.** The
+    same nucleotide is a different residue in every ORF containing it, so the caller
+    must show the frame alongside — a bare ``p.Arg253Glu`` next to a ClinVar string
+    would otherwise read as the same coordinate system when it is not.
+
+    Args:
+        aa_ref: Reference residue(s), one letter each; empty for indels, which the
+            classifier resolves by length without reading sequence.
+        aa_alt: Alternate residue(s), same length as *aa_ref*.
+        residue: 0-based residue of the first affected codon.
+        consequence: The classifier's term, which decides the notation's shape.
+
+    Returns:
+        The notation, or ``""`` when there are no amino acids to name.
+    """
+    from Bio.Data.IUPACData import protein_letters_1to3
+
+    def three(one: str) -> str:
+        return "Ter" if one == "*" else protein_letters_1to3.get(one.upper(), one)
+
+    if not aa_ref or len(aa_ref) != len(aa_alt):
+        return ""
+
+    first = residue + 1
+    if consequence == "start_lost":
+        # What changed is whether the codon still initiates, not the residue — the
+        # same "?" VEP writes for p.Met1?.
+        return f"p.{three(aa_ref[0])}{first}?"
+    if len(aa_ref) > 1:
+        last = first + len(aa_ref) - 1
+        inserted = "".join(three(a) for a in aa_alt)
+        return f"p.{three(aa_ref[0])}{first}_{three(aa_ref[-1])}{last}delins{inserted}"
+    if aa_ref == aa_alt:
+        return f"p.{three(aa_ref)}{first}="
+    return f"p.{three(aa_ref)}{first}{three(aa_alt)}"
+
+
+def _uploaded_variant_records(hits: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Scan hits → figure records, in the same shape the ClinVar variants use.
+
+    Sharing the shape means they land on the same consequence rows, so an uploaded
+    variant can be read against where the known pathogenics cluster. ``source`` is
+    what the figure keys the distinct marker off.
+
+    ``x`` comes from ``frame.plotly_x``, the same conversion the fixture's
+    ``expect_x`` column pins — the residue is meaningless without the frame, since
+    a truncation's lost region is numbered against the canonical protein.
+    """
+    if not hits:
+        return []
+
+    from swissisoform.variantquery.frame import plotly_x
+
+    index = load_orf_index()
+    # Keyed by (variant, x, consequence): one variant inside N isoforms yields N
+    # hits, and shared-region hits all map to the SAME canonical x — so without this
+    # they stack into one visible diamond with only one reachable hover. Distinct
+    # variants that happen to collide at an x stay separate.
+    merged: dict[tuple[str, int, str], dict[str, Any]] = {}
+    isoform_counts: dict[tuple[str, int, str], set[str]] = {}
+
+    for hit in hits:
+        residue = hit.get("residue")
+        if residue is None:
+            # Classified but unplaceable (e.g. an indel crossing an intron). It has
+            # no residue, so it has nowhere to sit on a protein axis.
+            continue
+        record = index.by_tis_id(hit.get("tis_id", "")) if index else None
+        if record is None:
+            continue
+        x = plotly_x(record, int(residue), hit.get("frame", ""))
+        if x is None:
+            continue
+
+        change = f"{hit.get('ref', '')}>{hit.get('alt', '')}"
+        # Namespaced so it can never collide with a ClinVar/gnomAD id.
+        variant_id = f"vcf:{hit.get('chrom')}:{hit.get('pos')}:{change}"
+        consequence = hit.get("consequence") or "other"
+        key = (variant_id, x, consequence)
+        isoform_counts.setdefault(key, set()).add(hit.get("tis_id", ""))
+
+        if key in merged:
+            # A hit in the unique region of ANY isoform makes the mark prominent.
+            merged[key]["in_unique"] |= hit.get("region") == "unique"
+            continue
+        # HGVS protein notation, in the same three-letter style the annotated
+        # variants carry, so both read alike on the same tooltip.
+        protein_change = hgvsp_from_hit(
+            hit.get("aa_ref") or "", hit.get("aa_alt") or "", residue, consequence
+        )
+        if not protein_change:
+            # Absent is a real answer for an indel — the classifier resolves those by
+            # length without reading sequence — so say which, rather than leaving a
+            # blank line in the tooltip that reads as a bug.
+            protein_change = f"residue {residue + 1} — no amino-acid change resolved"
+            note = hit.get("consequence_note") or ""
+            if note:
+                protein_change += f" ({note})"
+        protein_change = with_frame(protein_change, hit.get("frame") or "")
+
+        merged[key] = {
+            "variant_id": variant_id,
+            "pos": x + 1,  # the caller applies the global -1 shift
+            "consequence": consequence,
+            "significance": None,
+            "protein_change": protein_change,
+            "source": "uploaded",
+            "in_unique": hit.get("region") == "unique",
+            "uploaded_detail": (
+                f"{hit.get('chrom')}:{hit.get('pos'):,} {change} · line {hit.get('line_no')}"
+            ),
+        }
+
+    for key, record in merged.items():
+        n = len(isoform_counts[key])
+        if n > 1:
+            record["uploaded_detail"] += f" · in {n} isoforms"
+    return list(merged.values())
+
+
+def _isoform_x_offset(
+    orf_index: Any, iso: Any, canonical_len: int, isoform_len: int, has_shared: bool
+) -> int | float:
+    """The isoform's shift into canonical-residue space, in residues.
+
+    ``canonical_x_offset_nt`` is the mRNA distance between the two start codons, so
+    dividing by 3 gives the shift for any ORF — including uORFs and altORFs, whose
+    lack of a shared C-terminus leaves the right-alignment shortcut undefined. It is
+    fractional when the ORF reads out of the canonical frame, which is honest: such a
+    residue has no canonical counterpart.
+
+    Falls back to right-alignment when the index is unstaged or predates the column.
+    That fallback anchors isoform residue ``isoform_len`` to canonical residue
+    ``canonical_len`` — deliberately not ``diff_end``, whose initiator-Met boundary is
+    off by one on truncations and would misplace shared variants by a residue. It is
+    exact wherever the two proteins share a C-terminus, and reverts to the old
+    ``offset = 0`` placeholder otherwise.
+    """
+    record = orf_index.by_tis_id(getattr(iso, "tis_id", "") or "") if orf_index else None
+    if record is not None and record.canonical_x_offset_nt is not None:
+        return x_offset_residues(record.canonical_x_offset_nt)
+    return canonical_len - isoform_len if has_shared and canonical_len else 0
+
+
+def _make_gene_protein_view(
+    gene: Any, uploaded: list[dict[str, Any]] | None = None
+) -> types.SimpleNamespace:
     """Residue-frame combined view consumed by ``build_gene_protein_figure``.
 
     One canonical bar (residues ``1..canonical_len``) plus one bar per isoform,
@@ -631,6 +1434,7 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
     # a stable pick when isoforms map to different canonical Tids).
     canon_ie_by_sample: dict[str, float] = {}
     x_left = 1.0
+    orf_index = load_orf_index()
 
     for iso in gene.isoforms:
         raw = getattr(iso, "raw", None) or {}
@@ -642,33 +1446,36 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
         is_trunc = diff_space == "canonical" or orf_type == "truncated"
         has_shared = is_trunc or 0 < diff_end < iso_len
 
-        if has_shared and can_len_i:
-            # Anchor the shared C-terminus (identical in both proteins) to the
-            # canonical C-terminus: isoform residue iso_len ↔ canonical residue
-            # canonical_len. This is exact for extensions AND truncations —
-            # unlike ``diff_end``, whose initiator-Met boundary is off by one on
-            # truncations and would misplace shared variants by a residue.
-            offset = can_len_i - iso_len
-            x0, x1 = 1 + offset, iso_len + offset
-            if is_trunc:
-                # Lost N-terminus = canonical residues [1, x0-1]; residue x0 is the
-                # FIRST retained (shared-core) residue where the isoform body begins,
-                # so the lost-region overlay ends at x0-1 and does not bleed one
-                # residue into the shared core on the canonical bar.
-                diff_x0, diff_x1, diff_on_canon = 1, x0 - 1, True
-            else:
-                diff_x0, diff_x1, diff_on_canon = x0, 0, False  # extension left of residue 1
-        else:  # uORF / altORF / no shared region — whole isoform differential
-            offset = 0
-            x0, x1 = 1, iso_len
+        # Where the isoform sits in canonical-residue space. Read from the ORF
+        # index, so the bar, everything anchored to it, and the uploaded variant
+        # markers (``variantquery.frame.plotly_x``) are all placed by the SAME
+        # stored number. Two formulas here is how uORF markers ended up hundreds
+        # of residues off their own bar.
+        offset = _isoform_x_offset(orf_index, iso, can_len_i, iso_len, has_shared)
+        x0, x1 = 1 + offset, iso_len + offset
+        if has_shared and is_trunc:
+            # Lost N-terminus = canonical residues [1, x0-1]; residue x0 is the
+            # FIRST retained (shared-core) residue where the isoform body begins,
+            # so the lost-region overlay ends at x0-1 and does not bleed one
+            # residue into the shared core on the canonical bar.
+            diff_x0, diff_x1, diff_on_canon = 1, x0 - 1, True
+        elif has_shared:
+            diff_x0, diff_x1, diff_on_canon = x0, 0, False  # extension left of residue 1
+        else:  # uORF / altORF — no shared region, so the whole isoform is differential
             diff_x0, diff_x1, diff_on_canon = x0, x1, False
 
         label = f"{iso.orf_type} · {iso.start_codon}"
         bars.append(
             {
-                "label": label, "x0": x0, "x1": x1, "orf_type": iso.orf_type,
-                "is_trunc": is_trunc, "diff_x0": diff_x0, "diff_x1": diff_x1,
-                "diff_on_canonical": diff_on_canon, "slug": tis_slug(iso.tis_id),
+                "label": label,
+                "x0": x0,
+                "x1": x1,
+                "orf_type": iso.orf_type,
+                "is_trunc": is_trunc,
+                "diff_x0": diff_x0,
+                "diff_x1": diff_x1,
+                "diff_on_canonical": diff_on_canon,
+                "slug": tis_slug(iso.tis_id),
             }
         )
         x_left = min(x_left, float(x0))
@@ -696,7 +1503,7 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
             coil_iv.append((int(seg["start"]) + offset, int(seg["end"]) + offset))
         # Motifs come straight off the raw hit column (0-based pos/end → 1-based).
         motif_hits = raw.get("isoform_motifs_hits")
-        for m in (list(motif_hits)[:30] if motif_hits is not None else []):
+        for m in list(motif_hits)[:30] if motif_hits is not None else []:
             if not isinstance(m, dict):
                 continue
             ms = m.get("start", m.get("pos"))
@@ -708,7 +1515,9 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
             except (TypeError, ValueError):
                 continue
             motifs[(m.get("name"), mx0, mx1)] = {
-                "name": m.get("name", "motif"), "x0": mx0, "x1": mx1,
+                "name": m.get("name", "motif"),
+                "x0": mx0,
+                "x1": mx1,
             }
 
         # Variants → canonical frame, deduped by variant_id (pathogenic wins).
@@ -734,10 +1543,16 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
                 f"{v.get('chrom')}-{v.get('genomic_pos')}-{v.get('ref')}-{v.get('alt')}"
             )
             rec = {
-                "variant_id": vid, "pos": fr,
+                "variant_id": vid,
+                "pos": fr,
                 "consequence": v.get("isoform_consequence") or v.get("consequence") or "other",
-                "significance": v.get("clinical_significance"), "hgvsp": v.get("hgvsp"),
-                "source": v.get("source"), "in_unique": bool(v.get("in_isoform_unique")),
+                "significance": v.get("clinical_significance"),
+                # Canonical whatever placed the mark: hgvsp is the source database's
+                # own string, numbered against its canonical transcript, even where
+                # the x above came from the isoform-frame position.
+                "protein_change": with_frame(v.get("hgvsp"), "canonical"),
+                "source": v.get("source"),
+                "in_unique": bool(v.get("in_isoform_unique")),
             }
             prev = var_by_id.get(vid)
             if prev is None:
@@ -780,8 +1595,12 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
     # x=0 after the global shift below), sized by the canonical IE.
     for sample, cval in canon_ie_by_sample.items():
         cell_by_sample.setdefault(sample, []).append(
-            {"residue": 1, "log2_ie": math.log2(cval), "label": "canonical start",
-             "canonical": True}
+            {
+                "residue": 1,
+                "log2_ie": math.log2(cval),
+                "label": "canonical start",
+                "canonical": True,
+            }
         )
 
     disorder = [{"x0": s, "x1": e} for s, e in _union_intervals([disorder_iv])]
@@ -799,6 +1618,10 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
         for s in _depth_segments([{"start": d["x0"], "end": d["x1"]} for d in domains])
     ]
     variants = list(var_by_id.values())
+    # Uploaded VCF hits are appended AFTER the dedupe, never through it: var_by_id
+    # merges by variant_id with pathogenic-wins, which would absorb an uploaded hit
+    # into a ClinVar record (or be absorbed by one) and lose its provenance.
+    variants.extend(_uploaded_variant_records(uploaded))
     motif_list = list(motifs.values())
 
     # Anchor the canonical start at x=0 (residue 1 → 0) so extensions read as

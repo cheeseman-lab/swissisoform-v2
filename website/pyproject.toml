@@ -35,6 +35,12 @@ swissisoform_site = [
     "static/js/*.js",
 ]
 
+[tool.pytest.ini_options]
+# tests/conftest.py puts src/ and ../src/ on sys.path, so the suite runs without
+# prepare_deploy.sh having staged the vendored backend modules first.
+testpaths = ["tests"]
+addopts = "--tb=short -q"
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

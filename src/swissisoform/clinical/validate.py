@@ -18,16 +18,14 @@ from typing import Any
 import pandas as pd
 from Bio.Seq import Seq
 
-from swissisoform.contract import NEAR_COGNATE_STARTS
+from swissisoform import coords
+from swissisoform.contract import start_codon_effect
 
 logger = logging.getLogger(__name__)
 
-COMPLEMENT = {"A": "T", "T": "A", "G": "C", "C": "G"}
-
-
-def _revcomp(seq: str) -> str:
-    """Reverse-complement an A/C/G/T/N sequence; non-ACGT bases pass through."""
-    return "".join(COMPLEMENT.get(b, b) for b in reversed(seq))
+# The reverse complement lives in coords, which the website image also vendors;
+# aliased here because this module's own callers grew up importing it from here.
+_revcomp = coords.revcomp
 
 
 class ConsequenceValidator:
@@ -49,7 +47,7 @@ class ConsequenceValidator:
     Both paths share the codon-level classification helper
     :meth:`_analyze_variant`, so consequence semantics (synonymous /
     missense / stop_gained / stop_lost / inframe_insertion /
-    inframe_deletion / frameshift_variant / mnv / intronic /
+    inframe_deletion / frameshift_variant / intronic /
     reference_mismatch) are identical regardless of which frame is used.
 
     When no genome FASTA is provided, validation falls back to position
@@ -88,90 +86,94 @@ class ConsequenceValidator:
     # Canonical-CDS path (transcript_id-based; original API)
     # ------------------------------------------------------------------
 
-    def build_position_map(self, transcript_id: str) -> dict[int, int]:
-        """Build genomic_pos -> coding_pos map for a transcript's CDS.
+    def _canonical_cds_exons(self, transcript_id: str) -> tuple[list[tuple[int, int]], str, str]:
+        """The transcript's CDS as an ORF exon list: 0-based half-open, ascending.
 
-        Walks through CDS exon regions in strand-aware order, assigning
-        each genomic position a linear 0-indexed coding position starting
-        from the canonical start codon.
+        The one thing the canonical-transcript path needs that the ORF path does not
+        — turning GTF rows into exons. Everything after it (the coding-position walk,
+        the sequence fetch) is shared, so the canonical frame stops being a special
+        implementation and becomes just another exon list.
 
-        Args:
-            transcript_id: GENCODE transcript ID (e.g. ``"ENST00000269305.9"``).
+        GTF coordinates are 1-based inclusive (``io/gtf.py:164-165``), so a row
+        becomes ``(start - 1, end)``. CDS bases upstream of the ``start_codon``
+        feature are clipped away: counting them would shift every coding position.
 
         Returns:
-            Dict mapping genomic positions (1-based, inclusive) to coding
-            positions (0-based).
+            ``(exons, strand, chrom)``, or ``([], "", "")`` when the transcript has
+            no CDS rows.
         """
-        if transcript_id in self._position_map_cache:
-            return self._position_map_cache[transcript_id]
-
         if self._cds_df is None or self._cds_df.empty:
-            return {}
+            return [], "", ""
 
-        tx_cds = self._cds_df[
-            (self._cds_df["transcript_id"] == transcript_id)
-            & (self._cds_df["feature_type"] == "CDS")
-        ].copy()
-
+        tx = self._cds_df[self._cds_df["transcript_id"] == transcript_id]
+        tx_cds = tx[tx["feature_type"] == "CDS"]
         if tx_cds.empty:
-            return {}
+            return [], "", ""
 
-        strand = tx_cds.iloc[0]["strand"]
-        self._strand_cache[transcript_id] = strand
+        strand = str(tx_cds.iloc[0]["strand"])
+        chrom = str(tx_cds.iloc[0]["chromosome"])
 
-        # Find canonical start from start_codon feature
-        start_codons = self._cds_df[
-            (self._cds_df["transcript_id"] == transcript_id)
-            & (self._cds_df["feature_type"] == "start_codon")
-        ]
-
+        start_codons = tx[tx["feature_type"] == "start_codon"]
         if not start_codons.empty:
             canonical_start = (
                 start_codons.iloc[0]["start"] if strand == "+" else start_codons.iloc[0]["end"]
             )
         else:
             canonical_start = tx_cds["start"].min() if strand == "+" else tx_cds["end"].max()
+        canonical_start = int(canonical_start)
 
-        # Sort CDS regions in mRNA order
-        if strand == "+":
-            tx_cds = tx_cds.sort_values("start")
-        else:
-            tx_cds = tx_cds.sort_values("start", ascending=False)
-
-        pos_map: dict[int, int] = {}
-        coding_pos = 0
-
+        exons: list[tuple[int, int]] = []
         for _, cds in tx_cds.iterrows():
-            cds_start = int(cds["start"])
-            cds_end = int(cds["end"])
-
+            cds_start, cds_end = int(cds["start"]), int(cds["end"])
             if strand == "+":
                 effective_start = max(cds_start, canonical_start)
                 if effective_start <= cds_end:
-                    for gpos in range(effective_start, cds_end + 1):
-                        pos_map[gpos] = coding_pos
-                        coding_pos += 1
+                    exons.append((effective_start - 1, cds_end))
             else:
                 effective_end = min(cds_end, canonical_start)
                 if cds_start <= effective_end:
-                    for gpos in range(effective_end, cds_start - 1, -1):
-                        pos_map[gpos] = coding_pos
-                        coding_pos += 1
+                    exons.append((cds_start - 1, effective_end))
 
+        # Ascending genomic order whatever the strand — the shared walkers reverse
+        # for the minus strand themselves.
+        exons.sort()
+        return exons, strand, chrom
+
+    def build_position_map(self, transcript_id: str) -> dict[int, int]:
+        """Build genomic_pos -> coding_pos map for a transcript's CDS.
+
+        Args:
+            transcript_id: GENCODE transcript ID (e.g. ``"ENST00000269305.9"``).
+
+        Returns:
+            Dict mapping genomic positions (1-based, inclusive) to coding
+            positions (0-based), empty when the transcript has no CDS.
+        """
+        if transcript_id in self._position_map_cache:
+            return self._position_map_cache[transcript_id]
+
+        exons, strand, _chrom = self._canonical_cds_exons(transcript_id)
+        if not exons:
+            return {}
+        self._strand_cache[transcript_id] = strand
+
+        pos_map = dict(coords.iter_coding_positions(exons, strand))
         self._position_map_cache[transcript_id] = pos_map
         return pos_map
 
     def build_coding_sequence(self, transcript_id: str) -> str:
-        """Extract the coding sequence from genome FASTA using the position map.
+        """Extract the transcript's coding sequence from the genome FASTA.
 
-        Requires a genome FASTA path to have been set at init time. Bases are
-        complemented for minus-strand transcripts.
+        Requires a genome FASTA path at init. Delegates to
+        :meth:`build_coding_sequence_from_orf` once the CDS rows have been turned
+        into exons, so there is one sequence-extraction implementation rather than a
+        second one that fetches per base.
 
         Args:
             transcript_id: GENCODE transcript ID.
 
         Returns:
-            Coding sequence string, or empty string if no genome is available.
+            Coding sequence in mRNA order, or empty string if no genome is available.
         """
         if transcript_id in self._coding_seq_cache:
             return self._coding_seq_cache[transcript_id]
@@ -179,36 +181,16 @@ class ConsequenceValidator:
         if self._genome_path is None:
             return ""
 
-        if self._genome is None:
-            import pysam
-
-            self._genome = pysam.FastaFile(self._genome_path)
-
-        pos_map = self.build_position_map(transcript_id)
-        if not pos_map:
+        exons, strand, chrom = self._canonical_cds_exons(transcript_id)
+        if not exons:
             return ""
+        self._strand_cache[transcript_id] = strand
 
-        strand = self._strand_cache.get(transcript_id, "+")
-
-        tx_cds = self._cds_df[
-            (self._cds_df["transcript_id"] == transcript_id)
-            & (self._cds_df["feature_type"] == "CDS")
-        ]
-        if tx_cds.empty:
-            return ""
-        chrom = tx_cds.iloc[0]["chromosome"]
-
-        # Sort genomic positions by coding position (i.e. mRNA order)
-        sorted_positions = sorted(pos_map.items(), key=lambda x: x[1])
-
-        coding_bases: list[str] = []
-        for gpos, _cpos in sorted_positions:
-            base = self._genome.fetch(chrom, gpos - 1, gpos)
-            if strand == "-":
-                base = COMPLEMENT.get(base.upper(), base)
-            coding_bases.append(base.upper())
-
-        seq = "".join(coding_bases)
+        # Tuple key so a transcript can never collide with an ORF key, which is what
+        # the two separate caches were originally guarding against.
+        seq = self.build_coding_sequence_from_orf(
+            exons, strand, chrom, orf_key=("transcript", transcript_id)
+        )
         self._coding_seq_cache[transcript_id] = seq
         return seq
 
@@ -249,22 +231,10 @@ class ConsequenceValidator:
         if key in self._orf_position_map_cache:
             return self._orf_position_map_cache[key]
 
-        intervals = list(orf_exons)
-        if strand == "-":
-            intervals = list(reversed(intervals))
-
-        pos_map: dict[int, int] = {}
-        coding_pos = 0
-        for start, end in intervals:
-            if strand == "+":
-                for gpos in range(start + 1, end + 1):
-                    pos_map[gpos] = coding_pos
-                    coding_pos += 1
-            else:
-                for gpos in range(end, start, -1):
-                    pos_map[gpos] = coding_pos
-                    coding_pos += 1
-
+        # One traversal, shared with ``coords.coding_offset`` — which answers the same
+        # question for a single position without building the map. Materialising it
+        # here is worth it because the pipeline asks about many variants per ORF.
+        pos_map = dict(coords.iter_coding_positions(orf_exons, strand))
         self._orf_position_map_cache[key] = pos_map
         return pos_map
 
@@ -328,14 +298,65 @@ class ConsequenceValidator:
         instead of a transcript_id + canonical CDS lookup. Used to re-call
         each variant in the *isoform* reading frame for the isoform-unique
         region.
+
+        Reads the coding sequence out of the genome; callers that already hold it
+        (the VCF scan, whose ORF index ships ``orf_cds``) should use
+        :meth:`classify_against_orf` instead and skip the FASTA entirely.
         """
-        pos_map = self.build_position_map_from_orf(orf_exons, strand, orf_key=orf_key)
         coding_seq = self.build_coding_sequence_from_orf(
             orf_exons, strand, chrom, orf_key=orf_key
         )
+        return self.classify_against_orf(
+            orf_exons=orf_exons,
+            strand=strand,
+            cds=coding_seq,
+            genomic_pos=genomic_pos,
+            ref=ref,
+            alt=alt,
+            orf_key=orf_key,
+            context=context,
+        )
+
+    def classify_against_orf(
+        self,
+        *,
+        orf_exons: list[tuple[int, int]],
+        strand: str,
+        cds: str,
+        genomic_pos: int,
+        ref: str,
+        alt: str,
+        orf_key: Any = None,
+        context: str = "",
+    ) -> dict[str, Any]:
+        """Classify a variant against an ORF whose coding sequence the caller has.
+
+        The same analysis as :meth:`validate_variant_against_orf` with the one
+        difference that matters outside this process: the sequence is *given*, not
+        fetched. Position mapping needs only the exons, so nothing here touches
+        pysam or the genome FASTA — which is what lets the deployed website vendor
+        this module and classify an uploaded VCF against the coding sequence stored
+        in ``orf_index.parquet``.
+
+        Args:
+            orf_exons: 0-based half-open plus-strand intervals, ascending.
+            strand: ``"+"`` or ``"-"``.
+            cds: That ORF's coding sequence in mRNA order, no trailing stop. Must
+                be the sequence *these* exons describe — pairing one ORF's exons
+                with another's sequence shifts every residue silently.
+            genomic_pos: 1-based genomic position of the variant.
+            ref: Reference allele, plus-strand.
+            alt: Alternate allele, plus-strand.
+            orf_key: Optional hashable cache key for the position map.
+            context: Label used in warning messages.
+
+        Returns:
+            The same dict as :meth:`_analyze_variant`.
+        """
+        pos_map = self.build_position_map_from_orf(orf_exons, strand, orf_key=orf_key)
         return self._analyze_variant(
             pos_map=pos_map,
-            coding_seq=coding_seq,
+            coding_seq=cds,
             strand=strand,
             genomic_pos=genomic_pos,
             ref=ref,
@@ -375,129 +396,239 @@ class ConsequenceValidator:
                 "aa_alt": None,
                 "codon_ref": None,
                 "codon_alt": None,
+                "note": "",
                 "validated": True,
             }
 
-        coding_pos = pos_map[genomic_pos]
+        anchor_pos = pos_map[genomic_pos]
 
-        # Indels
-        if len(ref) != len(alt):
-            length_diff = abs(len(alt) - len(ref))
-            if length_diff % 3 == 0:
-                consequence = "inframe_insertion" if len(alt) > len(ref) else "inframe_deletion"
-            else:
-                consequence = "frameshift_variant"
+        # One walk for every class. VCF pads an indel with the base *before* the
+        # event, and that base is unchanged — HGVS numbers the first changed one, so
+        # reading POS as the position reports a codon the variant never touches.
+        # ``changed_bases`` strips the padding; for a pure insertion nothing in the
+        # reference changes, so the span is the base after the insertion point.
+        span_start, ref_changed, alt_changed = coords.changed_bases(genomic_pos, ref, alt)
+        span_len = max(len(ref_changed), 1)
+
+        # A multi-base change can straddle a codon boundary and alter two residues,
+        # so the walk covers every codon the span touches rather than one.
+        #
+        # On the minus strand mRNA order runs against genomic order, so the span's
+        # first *translated* base is the one with the lowest coding offset — POS is
+        # its last. Taking the minimum is a no-op for an SNV and for the plus strand,
+        # and it is why the padding base is trimmed into a span rather than into a
+        # new anchor: "advance past the anchor" is a plus-strand-only reading.
+        # The class comes from the length delta and needs no sequence at all, so an
+        # indel stays classified even where the amino acids cannot be worked out.
+        # ``None`` for a substitution, whose term is decided by translation below.
+        indel_term = _indel_term(ref_changed, alt_changed)
+
+        if ref_changed:
+            span_offsets = [pos_map.get(p) for p in range(span_start, span_start + span_len)]
+        else:
+            # A pure insertion changes no reference base, so there is no span to walk
+            # — it lands *between* two adjacent mRNA positions. Which two depends on
+            # the strand: VCF inserts after the anchor in plus-strand terms, and on
+            # the minus strand that puts the new material before the anchor in mRNA
+            # order. Taking the lower of the two neighbouring offsets and stepping
+            # one past it is correct on both strands, where mapping the genomic
+            # successor alone lands a codon early on the minus strand.
+            neighbours = [pos_map.get(genomic_pos), pos_map.get(genomic_pos + 1)]
+            known = [offset for offset in neighbours if offset is not None]
+            span_offsets = [min(known) + 1] if known else [None]
+
+        if any(offset is None for offset in span_offsets):
+            # Part of the span lies outside this ORF's coding sequence, so splicing
+            # the ALT in would translate intronic bases.
+            #
+            # An indel keeps its class here where a substitution cannot: the length
+            # delta needs no sequence, so "frameshift" stays true even though the
+            # residues cannot be named. Previously this case was invisible — the
+            # anchor-only mapping never looked at the rest of the span — so the note
+            # is the whole point: the overrun is now reported rather than silently
+            # producing a call that looks fully resolved.
+            #
+            # For a substitution the class *depends* on translation, so a span that
+            # leaves the coding sequence leaves nothing to say: it is intronic. That
+            # is the second of the two ways a variant is called intronic — the first
+            # (above) is an anchor that maps nowhere and carries no residue.
             return {
-                "consequence": consequence,
-                "protein_pos": coding_pos // 3,
+                "consequence": indel_term or "intronic",
+                "protein_pos": anchor_pos // 3,
                 "aa_ref": None,
                 "aa_alt": None,
                 "codon_ref": None,
                 "codon_alt": None,
+                "note": (
+                    "span leaves the ORF's coding sequence, so the residues cannot "
+                    "be named"
+                )
+                if indel_term
+                else "",
                 "validated": True,
             }
+        coding_pos = min(span_offsets)  # type: ignore[arg-type]
 
-        # MNV — skip codon walk to avoid reference_mismatch spam.
-        if len(ref) > 1:
-            return {
-                "consequence": "mnv",
-                "protein_pos": coding_pos // 3,
-                "aa_ref": None,
-                "aa_alt": None,
-                "codon_ref": None,
-                "codon_alt": None,
-                "validated": True,
-            }
-
-        # SNV
         if not coding_seq:
             return {
-                "consequence": None,
+                "consequence": indel_term,
                 "protein_pos": coding_pos // 3,
                 "aa_ref": None,
                 "aa_alt": None,
                 "codon_ref": None,
                 "codon_alt": None,
-                "validated": False,
+                "note": "no coding sequence available to name the residues"
+                if indel_term
+                else "",
+                # An indel's class is a real answer; a substitution's is not, and
+                # only the substitution path needs the sequence it did not get.
+                "validated": bool(indel_term),
             }
 
-        codon_start = (coding_pos // 3) * 3
-        offset = coding_pos % 3
+        first_codon = coding_pos // 3
+        last_codon = (coding_pos + max(len(ref_changed), 1) - 1) // 3
+        codon_start = first_codon * 3
+        codon_end = (last_codon + 1) * 3
+        offset = coding_pos - codon_start
 
-        if codon_start + 3 > len(coding_seq):
+        if codon_end > len(coding_seq):
             logger.warning(
                 "Codon extends beyond coding sequence for %s at gpos %d",
                 context or "<unknown-orf>",
                 genomic_pos,
             )
             return {
-                "consequence": None,
-                "protein_pos": coding_pos // 3,
+                "consequence": indel_term,
+                "protein_pos": first_codon,
                 "aa_ref": None,
                 "aa_alt": None,
                 "codon_ref": None,
                 "codon_alt": None,
+                "note": "codon runs past the end of the coding sequence"
+                if indel_term
+                else "",
                 "validated": False,
             }
 
-        codon_ref = coding_seq[codon_start : codon_start + 3]
+        codon_ref = coding_seq[codon_start:codon_end]
 
+        # Whole-string reverse complement, not per base: a multi-base allele is
+        # written on the plus strand in genomic order, so it needs reversing as well
+        # as complementing to read in mRNA sense. Identical to a per-base complement
+        # when the allele is one base.
+        ref_bases = ref_changed
+        alt_bases = alt_changed
         if strand == "-":
-            ref_base = COMPLEMENT.get(ref.upper(), ref.upper())
-            alt_base = COMPLEMENT.get(alt.upper(), alt.upper())
-        else:
-            ref_base = ref.upper()
-            alt_base = alt.upper()
+            ref_bases = _revcomp(ref_bases)
+            alt_bases = _revcomp(alt_bases)
 
-        if codon_ref[offset] != ref_base:
+        # Reached by every class now. An indel used to return before this, so a REF
+        # that disagreed with the reference was reported as an ordinary frameshift.
+        if codon_ref[offset : offset + len(ref_bases)] != ref_bases:
             logger.warning(
                 "Reference mismatch at %s gpos=%d — expected %s at offset %d of codon %s, got %s",
                 context or "<unknown-orf>",
                 genomic_pos,
-                ref_base,
+                ref_bases,
                 offset,
                 codon_ref,
-                codon_ref[offset],
+                codon_ref[offset : offset + len(ref_bases)],
             )
             return {
                 "consequence": "reference_mismatch",
-                "protein_pos": coding_pos // 3,
+                "protein_pos": first_codon,
                 "aa_ref": None,
                 "aa_alt": None,
                 "codon_ref": codon_ref,
                 "codon_alt": None,
+                "note": "",
                 "validated": False,
             }
 
-        codon_alt = codon_ref[:offset] + alt_base + codon_ref[offset + 1 :]
+        if len(ref_bases) != len(alt_bases):
+            # The REF check above covers the *changed* bases; the padding base is
+            # trimmed off before it and would otherwise never be verified, so a
+            # record whose anchor disagrees with the reference would read as a clean
+            # indel. Check the whole supplied REF when all of it maps — it does not
+            # when the padding base sits outside the ORF, which is legitimate for an
+            # indel at the very start.
+            full_offsets = [pos_map.get(p) for p in range(genomic_pos, genomic_pos + len(ref))]
+            if all(o is not None for o in full_offsets):
+                low = min(full_offsets)  # type: ignore[type-var]
+                supplied = ref.upper() if strand != "-" else _revcomp(ref.upper())
+                found = coding_seq[low : low + len(supplied)]
+                if found != supplied:
+                    logger.warning(
+                        "Reference mismatch at %s gpos=%d — indel REF %s, found %s",
+                        context or "<unknown-orf>",
+                        genomic_pos,
+                        supplied,
+                        found,
+                    )
+                    return {
+                        "consequence": "reference_mismatch",
+                        "protein_pos": first_codon,
+                        "aa_ref": None,
+                        "aa_alt": None,
+                        "codon_ref": codon_ref,
+                        "codon_alt": None,
+                        "note": "",
+                        "validated": False,
+                    }
+
+            # Indels need the whole coding sequence, not a codon window: splicing a
+            # length-changing allele into three bases cannot express a frameshift,
+            # and the residues gained or lost are only visible against the full
+            # translation. The codon-local path below stays exact for substitutions.
+            return _indel_result(
+                coding_seq=coding_seq,
+                coding_pos=coding_pos,
+                first_codon=first_codon,
+                codon_ref=codon_ref,
+                ref_bases=ref_bases,
+                alt_bases=alt_bases,
+            )
+
+        codon_alt = (
+            codon_ref[:offset] + alt_bases + codon_ref[offset + len(ref_bases) :]
+        )
         aa_ref = str(Seq(codon_ref).translate())
         aa_alt = str(Seq(codon_alt).translate())
 
-        if coding_pos // 3 == 0 and codon_alt not in NEAR_COGNATE_STARTS:
-            # Codon 0 is this ORF's start. What matters is whether the trinucleotide
-            # still initiates, not what it translates to: dropping out of
-            # NEAR_COGNATE_STARTS ablates the start and the proteoform with it, and
-            # a third-base change can do that while keeping the residue identical.
-            # "start_lost" is already in varianteffect's LOF_CONSEQUENCES, so this
-            # reaches the loss-of-function branch that AlphaMissense and ESM-C —
-            # both missense-only, and both blind here — cannot express.
-            consequence = "start_lost"
+        # Codon 0 is this ORF's start, and what matters there is whether the
+        # trinucleotide still initiates — not what it translates to. The rule is
+        # asymmetric (see start_codon_effect): destroying an ATG is start-loss,
+        # while gaining one strengthens initiation and is not. "start_lost" is
+        # already in varianteffect's LOF_CONSEQUENCES, so an override reaches the
+        # loss-of-function branch that AlphaMissense and ESM-C — both missense-only,
+        # and both blind here — cannot express.
+        start_override, note = (
+            start_codon_effect(codon_ref[:3], codon_alt[:3])
+            if first_codon == 0
+            else (None, "")
+        )
+
+        if start_override:
+            consequence = start_override
         elif aa_ref == aa_alt:
             consequence = "synonymous_variant"
-        elif aa_alt == "*":
+        elif "*" in aa_alt:
+            # Membership, not equality: a substitution spanning two codons can turn
+            # the second one into a stop while leaving the first a normal residue.
             consequence = "stop_gained"
-        elif aa_ref == "*":
+        elif "*" in aa_ref:
             consequence = "stop_lost"
         else:
             consequence = "missense_variant"
 
         return {
             "consequence": consequence,
-            "protein_pos": coding_pos // 3,
+            "protein_pos": first_codon,
             "aa_ref": aa_ref,
             "aa_alt": aa_alt,
             "codon_ref": codon_ref,
             "codon_alt": codon_alt,
+            "note": note,
             "validated": True,
         }
 
@@ -651,6 +782,117 @@ class ConsequenceValidator:
         return variants
 
 
+def _indel_term(ref_changed: str, alt_changed: str) -> str | None:
+    """The consequence class of a length-changing variant, from the delta alone.
+
+    Needs no sequence, so it is the one answer available even when the coding
+    sequence is missing or the codon window runs off its end. ``None`` for an
+    equal-length allele, whose class only translation can decide.
+    """
+    delta = len(alt_changed) - len(ref_changed)
+    if delta == 0:
+        return None
+    if delta % 3 != 0:
+        return "frameshift_variant"
+    return "inframe_insertion" if delta > 0 else "inframe_deletion"
+
+
+def _translate(seq: str, *, stop_at_first: bool = False) -> str:
+    """Translate a coding sequence, dropping any trailing partial codon.
+
+    A frameshifted sequence is rarely a multiple of three, and the residues past the
+    last whole codon are not knowable from the CDS alone.
+
+    Args:
+        seq: Coding sequence in mRNA order.
+        stop_at_first: Truncate at the first stop, which is what the mutant protein
+            actually is — nothing downstream of a premature stop is translated.
+    """
+    whole = seq[: len(seq) - len(seq) % 3]
+    protein = str(Seq(whole).translate())
+    if stop_at_first and "*" in protein:
+        return protein[: protein.index("*") + 1]
+    return protein
+
+
+def _indel_result(
+    *,
+    coding_seq: str,
+    coding_pos: int,
+    first_codon: int,
+    codon_ref: str,
+    ref_bases: str,
+    alt_bases: str,
+) -> dict[str, Any]:
+    """Classify a length-changing variant and name the residues it gains or loses.
+
+    Splices the ALT into the coding sequence and translates both, which is what makes
+    the amino acids available at all — the codon-window path cannot, because a
+    frameshift changes every residue after the event and an in-frame indel changes
+    the length of the protein.
+
+    ``aa_ref`` and ``aa_alt`` read as "removed" and "gained": a deletion reports the
+    residues it takes out and no replacement, an insertion the reverse. For an indel
+    that is not codon-aligned this is an approximation — the residues at the seam are
+    rewritten rather than cleanly removed — so the note says which residues the call
+    is anchored on rather than implying a tidy excision.
+
+    Frameshifts report the first affected residue and, when a premature stop falls
+    inside the coding sequence, the distance to it. The new frame usually runs past
+    the annotated stop into 3'UTR the CDS does not contain, so a stop distance is
+    only quoted when one is genuinely reachable.
+    """
+    delta = len(alt_bases) - len(ref_bases)
+    mutant = coding_seq[:coding_pos] + alt_bases + coding_seq[coding_pos + len(ref_bases) :]
+    ref_prot = _translate(coding_seq)
+    alt_prot = _translate(mutant, stop_at_first=True)
+
+    if delta % 3 != 0:
+        consequence = "frameshift_variant"
+        aa_ref = ref_prot[first_codon] if first_codon < len(ref_prot) else ""
+        note = f"frameshift from residue {first_codon + 1}"
+        if alt_prot.endswith("*"):
+            note += f"; premature stop {len(alt_prot) - first_codon} residues downstream"
+        else:
+            note += "; no premature stop inside the coding sequence"
+        return {
+            "consequence": consequence,
+            "protein_pos": first_codon,
+            "aa_ref": aa_ref,
+            "aa_alt": "",
+            "codon_ref": codon_ref,
+            "codon_alt": None,
+            "note": note,
+            "validated": True,
+        }
+
+    n_codons = abs(delta) // 3
+    if delta < 0:
+        removed = ref_prot[first_codon : first_codon + n_codons]
+        return {
+            "consequence": "inframe_deletion",
+            "protein_pos": first_codon,
+            "aa_ref": removed,
+            "aa_alt": "",
+            "codon_ref": codon_ref,
+            "codon_alt": None,
+            "note": f"{n_codons} residue(s) removed from {first_codon + 1}",
+            "validated": True,
+        }
+
+    gained = alt_prot[first_codon : first_codon + n_codons]
+    return {
+        "consequence": "inframe_insertion",
+        "protein_pos": first_codon,
+        "aa_ref": "",
+        "aa_alt": gained,
+        "codon_ref": codon_ref,
+        "codon_alt": None,
+        "note": f"{n_codons} residue(s) inserted at {first_codon + 1}",
+        "validated": True,
+    }
+
+
 def _null_result(validated: bool) -> dict[str, Any]:
     return {
         "consequence": None,
@@ -659,5 +901,6 @@ def _null_result(validated: bool) -> dict[str, Any]:
         "aa_alt": None,
         "codon_ref": None,
         "codon_alt": None,
+        "note": "",
         "validated": validated,
     }

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from swissisoform.coords import (
+    first_coding_base,
     interval_difference,
     interval_intersection,
     interval_length,
     orf_exons_from_skeleton,
+    start_offset_nt,
 )
 from swissisoform.models import TranscriptCoordinates
 
@@ -89,3 +91,59 @@ class TestIntervalAlgebra:
         a = [(0, 10), (20, 30)]
         b = [(5, 25)]
         assert interval_intersection(a, b) == [(5, 10), (20, 25)]
+
+
+class TestStartOffsetNt:
+    """The figure's isoform→canonical x shift, in mRNA nucleotides.
+
+    ``start_offset_nt / 3`` is the shift; unlike ``canonical_len - isoform_len`` it
+    stays defined when the two proteins share no C-terminus (uORFs, altORFs), which
+    is the case the old shortcut placed at the canonical N-terminus instead.
+    """
+
+    # Two exons, one intron: mRNA is [100,200) + [300,400).
+    TX = [(100, 200), (300, 400)]
+
+    def test_first_base_is_strand_aware(self):
+        # The A of the start codon: lowest coordinate on +, highest on -.
+        assert first_coding_base([(100, 200)], "+") == 101
+        assert first_coding_base([(100, 200)], "-") == 200
+        assert first_coding_base([], "+") is None
+
+    def test_upstream_orf_is_negative(self):
+        # uORF at 110 vs canonical at 150, both in the first exon.
+        assert start_offset_nt(self.TX, "+", [(110, 140)], [(150, 200), (300, 340)]) == -40
+
+    def test_downstream_orf_is_positive_and_skips_the_intron(self):
+        # 150 is mRNA offset 50; 310 is 100 + 10 = 110. The 100 nt of intron
+        # between them must not be counted.
+        assert start_offset_nt(self.TX, "+", [(310, 340)], [(150, 200), (300, 340)]) == 60
+
+    def test_minus_strand_walks_the_other_way(self):
+        # mRNA order is [300,400) high→low, then [100,200). The ORF starting at
+        # 400 is 50 nt upstream of the canonical starting at 350.
+        assert start_offset_nt(self.TX, "-", [(370, 400)], [(150, 200), (300, 350)]) == -50
+
+    def test_out_of_frame_offset_is_not_a_multiple_of_three(self):
+        # A uORF need not read in the canonical frame. Canonical starts at mRNA
+        # offset 50; this ORF starts at 12, so it is 38 nt upstream — not a whole
+        # number of codons. That remainder is what makes the x coordinate
+        # fractional rather than something to round away.
+        offset = start_offset_nt(self.TX, "+", [(112, 142)], [(150, 200)])
+        assert offset == -38
+        assert offset % 3 != 0
+
+    def test_generalises_right_alignment(self):
+        # Where both proteins share a C-terminus, the answer IS the old shortcut:
+        # a 10-residue N-terminal extension starts 30 nt upstream.
+        canonical = [(160, 200), (300, 400)]
+        extension = [(130, 200), (300, 400)]
+        assert start_offset_nt(self.TX, "+", extension, canonical) == -30
+
+    def test_missing_orf_returns_none(self):
+        assert start_offset_nt(self.TX, "+", [], [(150, 200)]) is None
+        assert start_offset_nt(self.TX, "+", [(110, 140)], None) is None
+
+    def test_start_outside_the_transcript_returns_none(self):
+        # A skeleton/ORF mismatch. None so callers fall back rather than guess.
+        assert start_offset_nt(self.TX, "+", [(1000, 1030)], [(150, 200)]) is None
