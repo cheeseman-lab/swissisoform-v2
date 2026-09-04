@@ -71,6 +71,9 @@ ALL_SITE_MODULES = [
     "variant_intersection", "plm_vep", "varianteffect", "structure",
 ]
 ALL_GENE_MODULES = ["generef"]
+# Modules that run after AnnotationPipeline, over the finished paired frame
+# rather than over Gene objects. Skippable by the same --skip-modules names.
+ALL_POST_MODULES = ["tags"]
 
 
 # ── Configuration ────────────────────────────────────────────────────────

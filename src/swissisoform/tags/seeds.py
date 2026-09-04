@@ -154,6 +154,41 @@ CRITERION_SEEDS: tuple[CriterionSeed, ...] = (
 )
 
 
+# Sidebar label for the criterion as a whole, one per criterion — distinct from
+# the per-seed labels above, which name a single *branch* (M1 has two, S2 three).
+#
+# A criterion enters the tag registry as one `derived` tag, because a bare
+# `metric >= cutoff` provably cannot reproduce it: measured on cheeseman50, 5 of
+# the 13 the sweep can express disagreed with the scorer. The scorers carry gates
+# no cutoff expresses — P1 is not-evaluable when the fold status is `too_long`
+# even though the pLDDT column is populated; M1 is undefined for separate ORFs;
+# M2/P2 gate on their own status fields; M1/S2 are either-or roll-ups. Turning
+# "could not evaluate" into "evidence absent" is the failure issue #30 removes.
+CRITERION_LABELS: dict[str, str] = {
+    "C1_primate_conservation": "Conserved in primates",
+    "C2_mammalian_conservation": "Conserved in mammals",
+    "C3_phylop_coding_selection": "Unique region under selection",
+    "D1_multi_cell_line": "Seen in multiple cell lines",
+    "D2_initiation_efficiency": "Efficient start site",
+    "D3_mass_spec": "Mass-spec validated",
+    "L1_localization_change": "Predicted localization changes",
+    "L2_targeting_change": "N-terminal targeting changes",
+    "M1_pathogenic_variant_enrichment": "Germline variation constrained",
+    "M2_clinical_variant_overlap": "Disease variants concentrated",
+    "P1_structured_extension": "Differential region folds",
+    "P2_shared_structural_change": "Shared core refolds",
+    "P3_secondary_structure": "Secondary structure gained or lost",
+    "S1_domain_change": "Domain gained or lost",
+    "S2_biophysics": "Biophysical shift",
+    "S3_sae": "Interpretable features shift",
+}
+
+
+def seeds_for_criterion(criterion_id: str) -> tuple[CriterionSeed, ...]:
+    """Every seed belonging to one criterion — several, for the either-or ones."""
+    return tuple(s for s in CRITERION_SEEDS if s.criterion_id == criterion_id)
+
+
 # ---------------------------------------------------------------------------
 # Cutoff anchors — real zero-points, preferred over any percentile
 # ---------------------------------------------------------------------------
