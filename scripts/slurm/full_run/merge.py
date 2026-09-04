@@ -57,6 +57,9 @@ MERGEABLE = ("ok", "unverified")
 NEEDS_REFILL = ("stale", "missing", "unreadable")
 
 
+TAG_VERSION_COLUMN = "isoform_tags_registry_version"
+
+
 def read_manifest(path: Path) -> dict[str, str]:
     """Parse the tab-separated key/value ``split_manifest.txt``."""
     out: dict[str, str] = {}
@@ -223,6 +226,22 @@ def merge_campaign(
         any(counts.get(s) for s in NEEDS_REFILL) or orphans or duplicates or unexpected
     )
     df = pd.concat(frames, ignore_index=True)
+
+    # Tag vocabularies must match across shards. The states/citations columns are
+    # structs whose FIELDS are the registry's tag ids, so concatenating two
+    # registry versions unions their fields and back-fills the difference with
+    # nulls — indistinguishable, downstream, from tags that were genuinely
+    # not-evaluable. Never publish that; a mixed campaign has to be re-run.
+    if TAG_VERSION_COLUMN in df.columns:
+        versions = sorted(set(df[TAG_VERSION_COLUMN].dropna().astype(str)))
+        if len(versions) > 1:
+            print(
+                f"ERROR: shards carry {len(versions)} tag-registry versions "
+                f"({', '.join(versions)}). Merging them would union two vocabularies "
+                "into one struct and null-fill the difference. Re-run the campaign "
+                "under a single --tag-registry."
+            )
+            return 1, report
 
     if complete or allow_partial:
         target = out / "all_paired.parquet"

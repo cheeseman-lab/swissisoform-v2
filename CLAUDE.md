@@ -86,6 +86,7 @@ Shortcuts removed and made honest:
 | Assembly | `assembly.py` | DataFrame → Gene objects: canonical selection, ORF type mapping, DifferentialRegion via sequence comparison |
 | Pipeline | `pipeline.py` | `AnnotationPipeline` wiring — runs ProteinModules on canonical + isoform, SiteModules per TIS, GeneModules per gene |
 | Comparator | `compare/paired.py` | Shared canonical-vs-isoform delta logic (needs positional subset extension) |
+| Tag layer | `tags/registry.py`, `tags/evaluate.py`, `tags/derived.py`, `setup/tags.py`, `modules/tags.py` | Frozen tag vocabulary + cutoffs → tri-state `isoform_tags_*` columns, **additive beside** `isoform_scoring_*` |
 
 ### What's Built — Modules
 
@@ -265,6 +266,73 @@ any of them, so nothing user-facing moved and the parquet schema is unchanged.
 criterion, `EXISTENCE_CRITERIA` (C+D) / `FUNCTIONAL_CRITERIA` (L+M+P+S), and the
 six `isoform_scoring_{existence,functional}_{score,evaluable,high_confidence}`
 columns. Existence-vs-functional is the two-score framing the site renders.
+
+### Tag layer (2026-09-03) — additive, beside the criteria
+
+Issue #30's per-category tags, wired into the pipeline **without touching
+`EvidenceScoringModule`**. Both axes now travel in the same parquet and each
+consumer picks; retiring either is a later, separate decision.
+
+| column | type | contents |
+|---|---|---|
+| `isoform_tags_states` | `struct<52 x bool>` | `True` / `False` / **null = not-evaluable** |
+| `isoform_tags_citations` | `struct<52 x double>` | the one number each tag rests on |
+| `isoform_tags_registry_version` | `string` | which frozen vocabulary fired |
+
+**The registry is provisioned reference data**, `data/reference/tags/<version>/`,
+built by `python scripts/setup/build_tag_registry.py --version v1 --cutoffs config`
+(mirrors `setup/distributions.py`: same `--version` / `--force` /
+refuse-to-clobber discipline and `_setup.json` provenance). It re-runs the sweep's
+own `propose → apply_filters → choose_cutoff` against distributions `v3` and keeps
+the rows `figures/tag_vocab/tag_candidates.csv` does not mark `remove` — nothing is
+recovered by parsing the CSV's `test` string. `v1` = 56 tags, 52 code-fired.
+
+**Four kinds, and only one of them is code.** Adding a tag is adding a row:
+
+| kind | n in v1 | what it is |
+|---|---|---|
+| `threshold` | 30 | `metric ⋈ cutoff` via `metrics.resolve` |
+| `derived` | 16 | runs the criterion's own `evidence/<crit>/score` fn |
+| `bool` | 6 | an existing boolean column, tri-stated |
+| `llm` | 4 | M/P tool-loop judgment; never fired by code |
+
+**Why all sixteen criteria are `derived`, not thresholds.** Measured on
+cheeseman50, the threshold form disagreed with the scorer on **5 of the 13**
+criteria the sweep can express, every time by dropping a gate: P1 reads a populated
+`plddt_diffregion_mean` on a protein whose fold status is `too_long` (scorer:
+not-evaluable, threshold: `False`); M1 is undefined for separate ORFs; M2/P2 gate
+on their own status fields; M1/S2 are either-or roll-ups over two and three inputs.
+Turning "could not evaluate" into "evidence absent" is the exact failure #30 exists
+to remove. A `derived` tag calls the scorer, so it equals the criterion **by
+construction** — and its cutoffs still come from the registry, as
+`cutoff_overrides` (`{ScoringConfig field: value}`) folded into the config the
+scorer is handed. Only the numbers move; the gates stay. Multi-threshold criteria
+override only their headline cutoff — P2's `p2_min_shared_len` / `p2_plddt_min` and
+P3's `p3_min_sse_plddt` are gates, not cutoffs, and stay at their config values.
+
+`--cutoffs config` reproduces today's scoring exactly (verified:
+`effective_scoring(v1, ScoringConfig()) == ScoringConfig()`, and
+`scripts/tags/check_tag_parity.py` shows 16/16 criteria agreeing row-for-row);
+`--cutoffs distribution` cuts where the frozen distribution put each criterion.
+Build the config one first — a calibration finding must never be confusable with a
+wiring bug. **Two distribution cutoffs are not usable as-is**: swept percentiles on
+counting thresholds land between integers, putting `min_cell_lines` at 1.12 and
+`massspec_unique_peptides_min` at 0.07 (i.e. "at least zero peptides"). The builder
+warns; D1/D3 need their cutoffs chosen on the integers.
+
+*Side-effect worth knowing:* M1's `blocked` ESM-C branch disappears under this
+design. It was blocked because the frozen `full_catalog` distribution carries the
+stale `constraint_enrichment` column — but a derived M1 asks the scorer, which
+reads `constraint_delta` from the run in front of it. No cutoff is derived from the
+stale column, so nothing is blocked.
+
+**Runs last, over the finished frame** (`runner.annotate` → `_attach_tags`), because
+a threshold's cutoff was derived from a named parquet column and evaluating it
+against a rebuilt one is how the two silently disagree. Derived tags additionally
+need the TIS objects, aligned by row order. Skippable with `--skip-modules tags`
+(`ALL_POST_MODULES`); `--tag-registry <version>` selects the vocabulary. **A missing
+registry warns and emits nothing rather than failing the run** — the layer is
+additive, so a fresh clone that has not built one still produces every other column.
 
 ## Documentation
 
