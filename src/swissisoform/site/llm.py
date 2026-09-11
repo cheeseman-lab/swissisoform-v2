@@ -43,6 +43,9 @@ SYSTEM_PROMPT_PATH = PROMPTS_DIR / "system.txt"
 OUTPUT_SCHEMA_PATH = PROMPTS_DIR / "output_schema.json"
 
 DEFAULT_MODEL = "claude-sonnet-5"
+# Optional per-run override: the schema a TOOL LOOP validates its verdict
+# against, when it differs from the one the single-shot path decodes against.
+TOOL_VERDICT_SCHEMA = Path("output_schemas") / "category_read_tools.json"
 DEFAULT_TEMPERATURE = 0.0
 DEFAULT_MAX_TOKENS = 4000
 
@@ -1967,8 +1970,24 @@ def _tool_categories(args, prompts_root: Path, records=None) -> dict[str, dict[s
             "system": prompt_path.read_text(encoding="utf-8").strip(),
             "tools": tools,
             "dispatch_for": dispatch_for,
+            # A tool loop may validate its verdict against a different schema than
+            # the single-shot path decodes against. They are not the same problem:
+            # the single-shot schema drives constrained decoding, so anything it
+            # declares is a slot the model will fill, while the tool loop only ever
+            # has its payload checked with jsonschema afterwards. A pass that gives
+            # its loop an extra field therefore cannot express that in the shared
+            # file without also offering the field to every single-shot category.
+            # Optional: absent, the shared schema is used, which is today's behaviour.
+            "verdict_schema": _optional_schema(prompts_root / TOOL_VERDICT_SCHEMA),
         }
     return out
+
+
+def _optional_schema(path: Path) -> dict[str, Any] | None:
+    """Load a schema file if it exists, else ``None``."""
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 # Evidence columns a category's readers SUPERSEDE, dropped from that category's
@@ -2138,7 +2157,7 @@ def _run_tool_category(
             api_key=api_key,
             temperature=args.temperature,
             max_turns=getattr(args, "max_tool_turns", DEFAULT_MAX_TOOL_TURNS),
-            verdict_schema=output_schema,
+            verdict_schema=config.get("verdict_schema") or output_schema,
         )
     except ToolLoopError as e:
         _persist(e.trace)
