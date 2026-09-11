@@ -16,7 +16,7 @@ import json
 import logging
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -90,6 +90,35 @@ def use_scoring_config(source: Path | str | ScoringConfig | None) -> ScoringConf
 def active_scoring() -> ScoringConfig:
     """The thresholds in force for this process."""
     return _ACTIVE_SCORING
+
+
+# An alternative body for :func:`slice_category`, installed by an experiment that
+# wants to ground the LLM in something other than the scored criteria. Stored as a
+# *callable this module never constructs*, deliberately: the alternative payloads
+# need pandas, the frozen distributions and the tag registry, and this file is
+# staged into the website deploy (website/prepare_deploy.sh) with only config.py
+# for company — importing any of them here would break the deploy at import time.
+_CATEGORY_BODY: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] | None = None
+
+
+def use_category_body(
+    builder: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] | None = None,
+) -> Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] | None:
+    """Install an alternative body builder for :func:`slice_category`.
+
+    ``None`` (the default) is today's scored-criteria body, byte for byte. The
+    builder receives ``(isoform_record, category)`` and returns the dict that
+    *replaces* ``{"members": [...]}`` — the identity block above it is fixed, so a
+    grounding variant cannot quietly drop ``differential_region_location`` and
+    confound itself with a directionality change.
+
+    Returns the previous builder so a caller can restore it in a ``finally``.
+    Process-global, like :func:`use_scoring_config` three lines up; set it once per
+    run at the same lifetime scope, not per call.
+    """
+    global _CATEGORY_BODY
+    previous, _CATEGORY_BODY = _CATEGORY_BODY, builder
+    return previous
 
 
 def p3_min_sse_length() -> int:
@@ -2459,6 +2488,14 @@ def slice_category(isoform_record: dict[str, Any], category: dict[str, Any]) -> 
         website UI tiles, the synthesis pass), which have no outer block to
         inherit from; only the bundled form drops it.
     """
+    if _CATEGORY_BODY is not None:
+        return {
+            "category": category["letter"],
+            "name": category["name"],
+            "isoform": _iso_identity_block(isoform_record),
+            **_CATEGORY_BODY(isoform_record, category),
+        }
+
     members: list[dict[str, Any]] = []
     for member in category["members"]:
         if member not in CRITERIA:  # pragma: no cover - guards a stale CATEGORIES entry
