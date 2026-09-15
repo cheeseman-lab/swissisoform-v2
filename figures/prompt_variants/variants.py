@@ -54,11 +54,30 @@ VARIANTS: tuple[Variant, ...] = tuple(
     for h in (True, False)
 )
 
-BY_ID: dict[str, Variant] = {v.arm_id: v for v in VARIANTS}
+# The noise-floor arm: `criteria_hint` re-run under an identical framing, so its
+# disagreement with `criteria_hint` measures sampling variance alone. `--temperature`
+# is silently dropped on claude-sonnet-5 and thinking is force-disabled, so there is
+# no knob for this — the only way to get the number is to run the arm twice.
+#
+# Kept out of `VARIANTS` on purpose: `select(None)` returns `VARIANTS`, so appending
+# here would silently turn every existing "run all arms" command into a 9-arm run.
+# It is reachable only by name.
+REPLICATES: tuple[Variant, ...] = (
+    Variant(
+        arm_id="criteria_hint_rep",
+        grounding="criteria",
+        hints=True,
+        note="noise-floor replicate of criteria_hint",
+    ),
+)
+
+BY_ID: dict[str, Variant] = {v.arm_id: v for v in VARIANTS + REPLICATES}
 
 
 def select(names: list[str] | None) -> list[Variant]:
-    """The named arms, or every arm when *names* is empty.
+    """The named arms, or every arm of the matrix when *names* is empty.
+
+    "Every arm" is `VARIANTS` — the 8 real arms — never the replicates.
 
     Raises:
         KeyError: An unknown arm id — a typo would otherwise silently run nothing.
@@ -71,4 +90,4 @@ def select(names: list[str] | None) -> list[Variant]:
     return [BY_ID[n] for n in names]
 
 
-__all__ = ["BY_ID", "GROUNDINGS", "VARIANTS", "Variant", "select"]
+__all__ = ["BY_ID", "GROUNDINGS", "REPLICATES", "VARIANTS", "Variant", "select"]

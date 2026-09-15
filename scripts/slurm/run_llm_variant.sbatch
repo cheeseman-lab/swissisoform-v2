@@ -27,7 +27,14 @@
 #     sbatch --job-name=${USER}_llm_$a scripts/slurm/run_llm_variant.sbatch "$a"
 #   done
 #
-# Extra args after the arm id are forwarded verbatim (e.g. --gene CBX1).
+# Extra args after the arm id are forwarded verbatim (e.g. --gene CBX1), which is
+# how the synthesis pass and the noise-floor replicate are run:
+#
+#   sbatch ... scripts/slurm/run_llm_variant.sbatch criteria_hint_rep
+#   sbatch ... scripts/slurm/run_llm_variant.sbatch tags_hint --pass synthesis --batch
+#
+# Synthesis consumes that arm's categories.json, so it runs after the arm's
+# category pass, not alongside it.
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-.}"
@@ -57,17 +64,15 @@ printf '[%s] arm=%s done in %ds (%dm%02ds)\n' \
     "$(date -u +%FT%TZ)" "$ARM" "$took" $((took / 60)) $((took % 60))
 
 # The usage report is where the real cost lands — print it so the log carries it.
-usage="data/output/cheeseman50_${ARM}/llm/_usage_category.json"
-[[ -f "$usage" ]] && python - "$usage" <<'PY'
-import json, sys
+# Which _usage_*.json exist depends on --pass (category writes two, synthesis one),
+# so glob rather than naming them.
+shopt -s nullglob
+for usage in "data/output/cheeseman50_${ARM}/llm"/_usage_*.json; do
+    python - "$usage" <<'USAGE'
+import json, os, sys
 d = json.load(open(sys.argv[1]))["total"]
-print(f"  single-shot: {d['calls']} calls, {d['input']:,} in / {d['output']:,} out, "
-      f"${d['cost_usd']:.2f}")
-PY
-usage_tools="data/output/cheeseman50_${ARM}/llm/_usage_category_tools.json"
-[[ -f "$usage_tools" ]] && python - "$usage_tools" <<'PY'
-import json, sys
-d = json.load(open(sys.argv[1]))["total"]
-print(f"  tool loops:  {d['calls']} calls, {d['input']:,} in / {d['output']:,} out, "
-      f"${d['cost_usd']:.2f}")
-PY
+name = os.path.basename(sys.argv[1])[len("_usage_"):-len(".json")]
+print(f"  {name + ':':14s} {d['calls']} calls, {d['input']:,} in / "
+      f"{d['output']:,} out, ${d['cost_usd']:.2f}")
+USAGE
+done
