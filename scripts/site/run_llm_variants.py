@@ -1,4 +1,4 @@
-r"""Run the category pass under each prompt-variant arm, capturing inputs + outputs.
+r"""Run one LLM pass under each prompt-variant arm, capturing inputs + outputs.
 
 Eight arms: four groundings (criteria / raw / tags / dist) x hints on/off. Each
 gets its own prompt root, its own output directory and its own capture corpus, so
@@ -22,6 +22,12 @@ Usage:
 
     # one arm, full corpus (submit eight of these, one per Slurm job)
     python scripts/site/run_llm_variants.py --arm dist_nohint
+
+    # the synthesis pass over an arm's finished category verdicts (batchable)
+    python scripts/site/run_llm_variants.py --pass synthesis --arm dist_nohint --batch
+
+    # the noise-floor replicate — reachable only by name, never by `select(None)`
+    python scripts/site/run_llm_variants.py --arm criteria_hint_rep
 """
 
 from __future__ import annotations
@@ -59,6 +65,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="append",
         dest="arms",
         help="Arm id to run; repeatable. Default: every arm.",
+    )
+    p.add_argument(
+        "--pass",
+        dest="pass_name",
+        default="category",
+        choices=("category", "synthesis"),
+        help=(
+            "Which pass to run. `synthesis` consumes each arm's categories.json "
+            "and is arm-invariant by construction (see run_synthesis_arm)."
+        ),
     )
     p.add_argument("--gene", default=None, help="Restrict to one gene (smoke test)")
     p.add_argument("--model", default=None, help="Override the model")
@@ -112,8 +128,8 @@ def _install_tool_extras(extras: dict[str, dict]) -> list:
     return restores
 
 
-def run_arm(variant: variants_mod.Variant, args: argparse.Namespace) -> int:
-    """Assemble one arm's prompts, install its grounding, and run the pass."""
+def _arm_paths(variant: variants_mod.Variant, args: argparse.Namespace) -> tuple[Path, Path, Path]:
+    """``(out_dir, records, variants_long)`` for one arm, records checked."""
     out_dir = ROOT / "data" / "output" / f"{args.corpus}_{variant.out_run}" / "llm"
     records = ROOT / "data" / "output" / args.corpus / "llm_evidence"
     variants_long = ROOT / "data" / "output" / args.corpus / "variants_long.parquet"
@@ -124,6 +140,79 @@ def run_arm(variant: variants_mod.Variant, args: argparse.Namespace) -> int:
             f"--parquet data/output/{args.corpus}/all_paired.parquet "
             f"--out {records}/ --variants-long-out {variants_long}"
         )
+    return out_dir, records, variants_long
+
+
+def _common_argv(
+    out_dir: Path, records: Path, variants_long: Path, capture: str, args: argparse.Namespace
+) -> list[str]:
+    """The argv flags every pass shares, including the capture namespacing."""
+    argv = [
+        "--records",
+        str(records),
+        "--out",
+        str(out_dir),
+        "--save-prompts",
+        # Explicit, not `_default_prompt_dir`: that derives the name from the run
+        # alone, so two corpora would collide and the second would truncate the
+        # first's index (llm.py:513-517).
+        "--save-prompts-dir",
+        str(llm.DEFAULT_PROMPT_DIR / capture),
+        "--variants-long",
+        str(variants_long),
+    ]
+    if args.gene:
+        argv += ["--gene", args.gene]
+    if args.model:
+        argv += ["--model", args.model]
+    if args.max_tokens:
+        argv += ["--max-tokens", str(args.max_tokens)]
+    for letter in args.only_category or []:
+        argv += ["--only-category", letter]
+    if args.dry_run:
+        argv.append("--dry-run")
+    if args.batch:
+        argv.append("--batch")
+    # A re-run after a prompt edit would otherwise skip every isoform whose output
+    # exists and print "0/0 successful" (llm.py:2211).
+    if args.force or args.dry_run:
+        argv.append("--force")
+    return argv
+
+
+def run_synthesis_arm(variant: variants_mod.Variant, args: argparse.Namespace) -> int:
+    """Run the synthesis pass over one arm's category verdicts.
+
+    Deliberately installs **nothing**. `_build_synthesis_record` (llm.py:2508)
+    reads `categories.json` off disk plus `slice_criterion` payloads, and
+    `slice_criterion` is untouched by the grounding hook — so the synthesis prompt
+    and its evidence are identical across arms and only the inherited verdicts
+    differ. That invariance is what makes the pass judgeable, so it is kept
+    structural: no `use_category_body`, no `install_verdict_extras`, and no
+    `prompts_dir` override.
+
+    The last one matters most. `assemble.materialize` writes only the three
+    `category-pass*.txt` files and the two schemas, so an arm root has no
+    `synthesis-pass.txt`; falling through to the repo default is both correct and
+    impossible to let drift.
+    """
+    out_dir, records, variants_long = _arm_paths(variant, args)
+    if not any(out_dir.glob("*/categories.json")):
+        raise SystemExit(
+            f"no categories.json under {out_dir} — run the category pass for "
+            f"{variant.arm_id} first; synthesis consumes its verdicts."
+        )
+
+    argv = ["--pass", "synthesis"]
+    argv += _common_argv(out_dir, records, variants_long, variant.capture_dir(args.corpus), args)
+
+    logger.info("arm %s: synthesis over %s", variant.arm_id, out_dir)
+    return llm.main(argv) or 0
+
+
+def run_arm(variant: variants_mod.Variant, args: argparse.Namespace) -> int:
+    """Assemble one arm's prompts, install its grounding, and run the category pass."""
+    out_dir, records, variants_long = _arm_paths(variant, args)
 
     reg = reg_mod.load(args.tag_registry)
     extras = _verdict_extras(reg) if variant.grounding == "tags" else {}
@@ -159,35 +248,8 @@ def run_arm(variant: variants_mod.Variant, args: argparse.Namespace) -> int:
                 if k not in ("category", "name", "isoform")
             }
 
-    argv = [
-        "--pass",
-        "category",
-        "--records",
-        str(records),
-        "--out",
-        str(out_dir),
-        "--save-prompts",
-        "--save-prompts-dir",
-        str(llm.DEFAULT_PROMPT_DIR / variant.capture_dir(args.corpus)),
-        "--variants-long",
-        str(variants_long),
-    ]
-    if args.gene:
-        argv += ["--gene", args.gene]
-    if args.model:
-        argv += ["--model", args.model]
-    if args.max_tokens:
-        argv += ["--max-tokens", str(args.max_tokens)]
-    for letter in args.only_category or []:
-        argv += ["--only-category", letter]
-    if args.dry_run:
-        argv.append("--dry-run")
-    if args.batch:
-        argv.append("--batch")
-    # A re-run after a prompt edit would otherwise skip every isoform whose
-    # categories.json exists and print "0/0 successful" (llm.py:2211).
-    if args.force or args.dry_run:
-        argv.append("--force")
+    argv = ["--pass", "category"]
+    argv += _common_argv(out_dir, records, variants_long, variant.capture_dir(args.corpus), args)
 
     logger.info(
         "arm %s: grounding=%s hints=%s -> %s",
@@ -214,10 +276,11 @@ def main(argv: list[str] | None = None) -> int:
     except KeyError as exc:
         raise SystemExit(str(exc)) from exc
 
+    runner = run_synthesis_arm if args.pass_name == "synthesis" else run_arm
     rc = 0
     for variant in selected:
-        rc |= run_arm(variant, args)
-    print(f"\n{len(selected)} arm(s) complete (rc={rc})")
+        rc |= runner(variant, args)
+    print(f"\n{len(selected)} arm(s) complete, pass={args.pass_name} (rc={rc})")
     return rc
 
 
