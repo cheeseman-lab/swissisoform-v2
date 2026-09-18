@@ -59,6 +59,51 @@ fold = [
     "boltz>=2.2",
     "chai_lab>=0.6",  # second structure backend (run_fold.sbatch <fasta> chai)
 ]
+judge = [
+    # Serving Prometheus-8x7B (Mixtral 8x7B) as a local judge for the
+    # prompt-variant evaluation. Its own env because vLLM pins its own torch:
+    # this env runs torch 2.10 while the annotation envs pin 2.6.0, and moving
+    # theirs would shift the residual stream the cached SAE features were
+    # produced with.
+    #
+    # Pinned, not floated. `vllm>=0.6.0` resolves to 0.29.0, which pins
+    # torch==2.13.0 and nvidia-cutlass-dsl[cu13]; CUDA 13 wheels need driver
+    # >=580 and the A6000s/A100s here report 560.35.03 (CUDA 12.6), so the env
+    # installs and then cannot load a model. Every vllm from 0.20.0 up sits on a
+    # cu13 torch; 0.19.1 is the newest on a cu12 torch (2.10.0) with no cu13
+    # dependency anywhere. Raise only after the driver moves.
+    "vllm==0.19.1",
+    # Served in bf16 on 2x A100-80: 88 GB of weights across 160 GB leaves ~68 GB
+    # for KV cache, and Mixtral's KV is 128 KB/token, so ~34 concurrent 16k
+    # requests. No quantization -- 4-bit on one A6000 would give ~10, and the
+    # collaborator who has run this model on this cluster ran bf16 with
+    # tensor_parallel_size=2.
+    #
+    # The official prompt templates, so prompts.py can be pinned against them
+    # rather than trusted. Not used at runtime -- the request builder runs in the
+    # base env -- but a test asserts equality wherever this package is
+    # importable, and it caught a paraphrase on the first run.
+    "prometheus-eval>=0.1.20",
+    # pytest so those assertions can run in *this* env; the base env's [dev]
+    # extra cannot see prometheus_eval.
+    "pytest>=8.0.0",
+    # Produces the optional 4-bit copy (judge/quantize.py). It lives here rather
+    # than in its own env for two measured reasons:
+    #
+    #   1. A separate env resolves torch 2.14.0+cu130, which cannot initialise on
+    #      this driver ("NVIDIA driver too old (found version 12060)") -- so it
+    #      could not have quantized on a GPU at all. Here it inherits this env's
+    #      working torch 2.10.0+cu128.
+    #   2. vLLM pins compressed-tensors==0.15.0.1 and llmcompressor wants >=0.18,
+    #      which looks irreconcilable -- but vLLM imports and registers
+    #      `compressed-tensors` fine at 0.18.0 (verified on an A6000). Sharing one
+    #      env means the same library writes and reads the weights, which removes
+    #      the format-compatibility question a split env would have created.
+    #
+    # It does drag transformers to 5.14.1 (from 5.17.0); still inside vLLM's
+    # >=4.56.0, and the sanity anchors were re-run to confirm the judge is unchanged.
+    "llmcompressor>=0.13.0",
+]
 plm = [
     # torch <2.7 = CUDA-12 wheel (A6000 ≈ CUDA 12.6; cu13x needs a newer driver).
     "torch>=2.2.0,<2.7",

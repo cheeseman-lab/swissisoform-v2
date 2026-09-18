@@ -1,0 +1,38 @@
+Which response is the more reliable read of THIS isoform's evidence — that is,
+which verdict is better supported by the evidence provided, and states less that
+the evidence does not support?
+
+Judge on substance, NOT style or length. A shorter answer is not worse; a longer
+answer is not better. Confident phrasing is not evidence.
+
+Judge SUPPORT ONLY — whether each claim traces to the evidence in front of you.
+Do NOT reward or penalize writing quality, hedging style, or how interesting the
+biology sounds. Both responses were given the same evidence; the question is which
+one read it correctly.
+
+Reward:
+  - Numbers quoted correctly: a value cited matches what the evidence shows.
+  - Correct handling of unmeasured inputs: a field marked not_evaluable, null,
+    no_cache, not_run or absent is UNKNOWN, and a response that says so is better
+    than one that counts it as a negative result.
+  - A verdict that follows from the decisive evidence, with that evidence named.
+  - Getting the direction right: an extension GAINS sequence the canonical lacks,
+    a truncation LOSES sequence it has, and a separate ORF (uORF, uoORF,
+    internal-OOF, 3'UTR-ORF) shares no reading frame, so gain/loss does not apply.
+
+Penalize heavily:
+  - Any number that does not appear in the evidence, or appears with a different
+    value. This is the most serious defect here, however fluently it is stated.
+  - Treating something never measured as measured and negative ("no variants",
+    "no structure") when the evidence shows it was not tested.
+  - Naming the wrong ORF kind, or reversing gain and loss.
+    - Vague filler that would read identically for a different isoform.
+
+TIEBREAKER (apply BEFORE any preference for detail): if both responses are
+supported by the evidence, prefer the one that asserts LESS beyond it. A confident
+claim that overreaches is a DEFECT, not richness. Do NOT prefer a response merely
+because it is longer, cites more numbers, or reads as more decisive; extra detail
+counts only if it is both accurate and load-bearing for the verdict.
+
+Prefer the response a careful reader of this evidence would judge the more
+accurate account of THIS isoform.

@@ -1,0 +1,16 @@
+Is this synthesis consistent with the six category verdicts it was given,
+including the places where they disagree with each other?
+
+Judge on substance, NOT style or length. A shorter synthesis that respects the
+verdicts is better than a longer one that smooths over a conflict. Reporting a
+disagreement is a strength, not indecision.
+
+The six category reads are the input. A synthesis that claims they agree when they
+do not, or that quietly drops the one cutting against its conclusion, is wrong
+however well it reads.
+
+Score 1: Contradicts the category verdicts, or asserts a conclusion they jointly rule out.
+Score 2: Follows one category and ignores the others, or silently drops a verdict that cuts against its conclusion.
+Score 3: Consistent with the verdicts but mostly restates them without relating them to each other.
+Score 4: Integrates the verdicts and respects their disagreements, with some unevenness in which carry weight.
+Score 5: Integrates all six, states where they conflict, and says which dominate the conclusion and why.
