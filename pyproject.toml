@@ -45,9 +45,17 @@ dev = [
     "matplotlib>=3.7",
 ]
 fold = [
-    # chai_lab pins torch>=2.3.1,<2.7; boltz needs >=2.2 — this satisfies both.
+    # Pinned to base's exact torch; chai_lab wants >=2.3.1,<2.7 and boltz >=2.2,
+    # so the range allowed drift — a rebuild landed 2.14+cu130, past both.
     # Single forward pass per protein → no fused kernel; don't add xformers here.
-    "torch>=2.3.1,<2.7",
+    "torch==2.6.0",
+    # The ESMFold2 stack, previously undeclared here: esm supplies the featurizer
+    # and mmCIF decoder, and pulls the Biohub transformers fork that owns
+    # ESMFold2Model. Mainline transformers renamed it EsmFold2Model and changed
+    # forward's signature, so an unpinned resolve breaks structure/esmfold2.py —
+    # and Biohub still publishes fork-format checkpoints, so there is nothing to
+    # upgrade to. Same pin as [plm]: one env's structures must match the other's.
+    "esm @ git+https://github.com/evolutionaryscale/esm.git@14d382908b595cd4bfb19394ec8d0d6b4e4b9abb",
     "boltz>=2.2",
     "chai_lab>=0.6",  # second structure backend (run_fold.sbatch <fasta> chai)
 ]

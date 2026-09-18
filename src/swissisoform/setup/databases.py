@@ -13,6 +13,7 @@ expensive annotation modules depend on:
                (clinical module, COSMIC source)
     gencode  — delegates to scripts/setup/download_references.sh
     pepquery        — PepQuery2 jar (mass-spec module)
+    pepquery-db     — UniProt human reference proteome for PepQuery's -db
     pepquery-spectra — mirror PepQueryDB MS/MS library to a local store
                (~196 GiB, opt-in; lets runs search via local `-ms`, no per-run S3)
 
@@ -29,6 +30,7 @@ Driven by the thin CLI at ``scripts/setup/setup_databases.py``.
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import logging
 import os
@@ -864,6 +866,28 @@ PEPQUERY_TARBALL_URL = f"http://pepquery.org/data/pepquery-{PEPQUERY_VERSION}.ta
 PEPQUERY_TARBALL = PEPQUERY_DIR / f"pepquery-{PEPQUERY_VERSION}.tar.gz"
 PEPQUERY_JAR = PEPQUERY_DIR / f"pepquery-{PEPQUERY_VERSION}" / f"pepquery-{PEPQUERY_VERSION}.jar"
 
+# PepQuery resolves `-db swissprot:human` by downloading this exact file over
+# FTP (hardcoded in its Database.java:33). UniProt has since retired its FTP
+# service — ftp.uniprot.org refuses port 21 but serves the identical path on
+# 80/443 — so the alias now fails everywhere, for everyone. Upstream has not
+# reacted: pepquery.org offers no build past 2.0.2, and master still carries the
+# ftp:// URL as of its last push in 2024.
+#
+# Staging the same file over HTTPS removes the dependency entirely rather than
+# moving it to another protocol that could also be retired, and pins WHICH
+# release was searched — the alias silently follows current_release.
+#
+# Note the name is UniProt's: `swissprot:human` means the human REFERENCE
+# PROTEOME (UP000005640), which is mostly but not entirely reviewed — ~20.3k
+# `sp|` plus ~320 `tr|`. A "reviewed:true AND organism_id:9606" query returns a
+# different set and would change PepQuery's search background.
+PEPQUERY_DB_URL = (
+    "https://ftp.uniprot.org/pub/databases/uniprot/current_release/"
+    "knowledgebase/reference_proteomes/Eukaryota/UP000005640/UP000005640_9606.fasta.gz"
+)
+PEPQUERY_DB_GZ = PEPQUERY_DIR / "UP000005640_9606.fasta.gz"
+PEPQUERY_DB_FASTA = PEPQUERY_DIR / "UP000005640_9606.fasta"
+
 
 def setup_pepquery(refresh: bool = False) -> None:
     """Download the PepQuery2 standalone jar from pepquery.org.
@@ -926,6 +950,59 @@ def setup_pepquery(refresh: bool = False) -> None:
         extra={"install_mode": "direct-jar", "java_version": _java_version()},
     )
     logger.info("pepquery: jar staged + sidecar written (%s)", PEPQUERY_JAR)
+
+
+def setup_pepquery_db(refresh: bool = False) -> None:
+    """Stage the reference proteome PepQuery's ``swissprot:human`` alias points at.
+
+    Fetches UniProt's human reference proteome (UP000005640) over HTTPS and
+    decompresses it, so ``precompute_pepquery`` can pass ``-db <path>`` instead
+    of the alias that triggers a now-dead FTP download.
+
+    Decompressed rather than left gzipped: PepQuery reads ``.gz`` for spectra,
+    but its ``-db`` handling is unverified on compressed input and the file is
+    only ~14 MB open.
+    """
+    if is_built(PEPQUERY_DB_FASTA, refresh):
+        logger.info("pepquery-db: %s already exists — skipping", PEPQUERY_DB_FASTA)
+        return
+
+    PEPQUERY_DIR.mkdir(parents=True, exist_ok=True)
+    logger.info("pepquery-db: downloading %s", PEPQUERY_DB_URL)
+    run(["wget", "-q", "--show-progress", PEPQUERY_DB_URL, "-O", str(PEPQUERY_DB_GZ)])
+
+    logger.info("pepquery-db: decompressing -> %s", PEPQUERY_DB_FASTA)
+    with gzip.open(PEPQUERY_DB_GZ, "rb") as src, open(PEPQUERY_DB_FASTA, "wb") as dst:
+        shutil.copyfileobj(src, dst)
+    PEPQUERY_DB_GZ.unlink()
+
+    # Entry counts go in the sidecar because the URL tracks `current_release`:
+    # without them a later re-run would search a different proteome than an
+    # earlier one with no visible difference anywhere.
+    headers = [ln for ln in PEPQUERY_DB_FASTA.read_text().splitlines() if ln.startswith(">")]
+    n_reviewed = sum(1 for h in headers if h.startswith(">sp|"))
+    if not headers:
+        raise RuntimeError(f"pepquery-db: {PEPQUERY_DB_FASTA} has no FASTA headers")
+    logger.info(
+        "pepquery-db: %d entries (%d reviewed sp|, %d unreviewed tr|)",
+        len(headers),
+        n_reviewed,
+        len(headers) - n_reviewed,
+    )
+
+    write_sidecar(
+        PEPQUERY_DIR,
+        source_url=PEPQUERY_DB_URL,
+        version="UP000005640_9606",
+        artifact=PEPQUERY_DB_FASTA,
+        extra={
+            "n_entries": len(headers),
+            "n_reviewed": n_reviewed,
+            "n_unreviewed": len(headers) - n_reviewed,
+            "replaces": "pepquery -db swissprot:human (FTP, retired by UniProt)",
+        },
+    )
+    logger.info("pepquery-db: staged + sidecar written (%s)", PEPQUERY_DB_FASTA)
 
 
 # Local PepQuery MS/MS spectra library — provisioned reference data per the
@@ -1553,6 +1630,7 @@ _HANDLERS: dict[str, Any] = {
     "alphamissense": setup_alphamissense,
     "deeploc": setup_deeploc,
     "pepquery": setup_pepquery,
+    "pepquery-db": setup_pepquery_db,
     "pepquery-spectra": setup_pepquery_spectra,
     "hal": setup_hal,
     "gencode": setup_gencode,
