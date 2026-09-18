@@ -13,6 +13,7 @@ expensive annotation modules depend on:
                (clinical module, COSMIC source)
     gencode  — delegates to scripts/setup/download_references.sh
     pepquery        — PepQuery2 jar (mass-spec module)
+    pepquery-db     — UniProt human reference proteome for PepQuery's -db
     pepquery-spectra — mirror PepQueryDB MS/MS library to a local store
                (~196 GiB, opt-in; lets runs search via local `-ms`, no per-run S3)
 
@@ -29,6 +30,7 @@ Driven by the thin CLI at ``scripts/setup/setup_databases.py``.
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import json
 import logging
@@ -870,6 +872,28 @@ PEPQUERY_TARBALL_URL = f"http://pepquery.org/data/pepquery-{PEPQUERY_VERSION}.ta
 PEPQUERY_TARBALL = PEPQUERY_DIR / f"pepquery-{PEPQUERY_VERSION}.tar.gz"
 PEPQUERY_JAR = PEPQUERY_DIR / f"pepquery-{PEPQUERY_VERSION}" / f"pepquery-{PEPQUERY_VERSION}.jar"
 
+# PepQuery resolves `-db swissprot:human` by downloading this exact file over
+# FTP (hardcoded in its Database.java:33). UniProt has since retired its FTP
+# service — ftp.uniprot.org refuses port 21 but serves the identical path on
+# 80/443 — so the alias now fails everywhere, for everyone. Upstream has not
+# reacted: pepquery.org offers no build past 2.0.2, and master still carries the
+# ftp:// URL as of its last push in 2024.
+#
+# Staging the same file over HTTPS removes the dependency entirely rather than
+# moving it to another protocol that could also be retired, and pins WHICH
+# release was searched — the alias silently follows current_release.
+#
+# Note the name is UniProt's: `swissprot:human` means the human REFERENCE
+# PROTEOME (UP000005640), which is mostly but not entirely reviewed — ~20.3k
+# `sp|` plus ~320 `tr|`. A "reviewed:true AND organism_id:9606" query returns a
+# different set and would change PepQuery's search background.
+PEPQUERY_DB_URL = (
+    "https://ftp.uniprot.org/pub/databases/uniprot/current_release/"
+    "knowledgebase/reference_proteomes/Eukaryota/UP000005640/UP000005640_9606.fasta.gz"
+)
+PEPQUERY_DB_GZ = PEPQUERY_DIR / "UP000005640_9606.fasta.gz"
+PEPQUERY_DB_FASTA = PEPQUERY_DIR / "UP000005640_9606.fasta"
+
 
 def setup_pepquery(refresh: bool = False) -> None:
     """Download the PepQuery2 standalone jar from pepquery.org.
@@ -891,8 +915,16 @@ def setup_pepquery(refresh: bool = False) -> None:
         if not PEPQUERY_TARBALL.exists() or refresh:
             logger.info("pepquery: downloading %s", PEPQUERY_TARBALL_URL)
             subprocess.run(
-                ["curl", "--fail", "--location", "--retry", "3",
-                 "--output", str(PEPQUERY_TARBALL), PEPQUERY_TARBALL_URL],
+                [
+                    "curl",
+                    "--fail",
+                    "--location",
+                    "--retry",
+                    "3",
+                    "--output",
+                    str(PEPQUERY_TARBALL),
+                    PEPQUERY_TARBALL_URL,
+                ],
                 check=True,
             )
         logger.info("pepquery: extracting to %s", PEPQUERY_DIR)
@@ -913,7 +945,10 @@ def setup_pepquery(refresh: bool = False) -> None:
     else:
         proc = subprocess.run(
             ["java", "-jar", str(PEPQUERY_JAR)],
-            capture_output=True, text=True, check=False, timeout=60,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
         )
         help_blob = (proc.stdout or "") + (proc.stderr or "")
         if "pepquery" in help_blob.lower() or "Options" in help_blob:
@@ -921,7 +956,8 @@ def setup_pepquery(refresh: bool = False) -> None:
         else:
             logger.warning(
                 "pepquery: jar ran but output looks wrong (exit=%d); stderr tail=%s",
-                proc.returncode, (proc.stderr or "")[-400:],
+                proc.returncode,
+                (proc.stderr or "")[-400:],
             )
 
     write_sidecar(
@@ -940,6 +976,61 @@ def setup_pepquery(refresh: bool = False) -> None:
 # deleting) the spectra from S3 on every search. ~196 GiB for the two datasets
 # below; opt-in (not part of `all`).
 PEPQUERY_SPECTRA_DIR = PEPQUERY_DIR / "spectra"
+
+
+def setup_pepquery_db(refresh: bool = False) -> None:
+    """Stage the reference proteome PepQuery's ``swissprot:human`` alias points at.
+
+    Fetches UniProt's human reference proteome (UP000005640) over HTTPS and
+    decompresses it, so ``precompute_pepquery`` can pass ``-db <path>`` instead
+    of the alias that triggers a now-dead FTP download.
+
+    Decompressed rather than left gzipped: PepQuery reads ``.gz`` for spectra,
+    but its ``-db`` handling is unverified on compressed input and the file is
+    only ~14 MB open.
+    """
+    if is_built(PEPQUERY_DB_FASTA, refresh):
+        logger.info("pepquery-db: %s already exists — skipping", PEPQUERY_DB_FASTA)
+        return
+
+    PEPQUERY_DIR.mkdir(parents=True, exist_ok=True)
+    logger.info("pepquery-db: downloading %s", PEPQUERY_DB_URL)
+    run(["wget", "-q", "--show-progress", PEPQUERY_DB_URL, "-O", str(PEPQUERY_DB_GZ)])
+
+    logger.info("pepquery-db: decompressing -> %s", PEPQUERY_DB_FASTA)
+    with gzip.open(PEPQUERY_DB_GZ, "rb") as src, open(PEPQUERY_DB_FASTA, "wb") as dst:
+        shutil.copyfileobj(src, dst)
+    PEPQUERY_DB_GZ.unlink()
+
+    # Entry counts go in the sidecar because the URL tracks `current_release`:
+    # without them a later re-run would search a different proteome than an
+    # earlier one with no visible difference anywhere.
+    headers = [ln for ln in PEPQUERY_DB_FASTA.read_text().splitlines() if ln.startswith(">")]
+    n_reviewed = sum(1 for h in headers if h.startswith(">sp|"))
+    if not headers:
+        raise RuntimeError(f"pepquery-db: {PEPQUERY_DB_FASTA} has no FASTA headers")
+    logger.info(
+        "pepquery-db: %d entries (%d reviewed sp|, %d unreviewed tr|)",
+        len(headers),
+        n_reviewed,
+        len(headers) - n_reviewed,
+    )
+
+    write_sidecar(
+        PEPQUERY_DIR,
+        source_url=PEPQUERY_DB_URL,
+        version="UP000005640_9606",
+        artifact=PEPQUERY_DB_FASTA,
+        extra={
+            "n_entries": len(headers),
+            "n_reviewed": n_reviewed,
+            "n_unreviewed": len(headers) - n_reviewed,
+            "replaces": "pepquery -db swissprot:human (FTP, retired by UniProt)",
+        },
+    )
+    logger.info("pepquery-db: staged + sidecar written (%s)", PEPQUERY_DB_FASTA)
+
+
 # Must match the datasets precompute_pepquery searches (the runner's -b list).
 PEPQUERY_DATASETS = (
     "Deep_29_healthy_human_tissues_PXD010154",
@@ -962,9 +1053,7 @@ def _pepquery_msms_s3_prefix(dataset: str) -> str:
             "jar's msms.json catalog"
         ) from exc
     if not ms_file or not str(ms_file).startswith("s3://"):
-        raise ValueError(
-            f"pepquery-spectra: {dataset!r} ms_file is not an S3 prefix: {ms_file!r}"
-        )
+        raise ValueError(f"pepquery-spectra: {dataset!r} ms_file is not an S3 prefix: {ms_file!r}")
     return str(ms_file).rstrip("/")
 
 
@@ -997,11 +1086,17 @@ def setup_pepquery_spectra(refresh: bool = False) -> None:
         dest = PEPQUERY_SPECTRA_DIR / dataset
         dest.mkdir(parents=True, exist_ok=True)
         logger.info("pepquery-spectra: syncing %s/ -> %s", prefix, dest)
-        run([
-            "aws", "s3", "sync", "--no-sign-request",
-            *(["--delete"] if refresh else []),
-            prefix + "/", str(dest),
-        ])
+        run(
+            [
+                "aws",
+                "s3",
+                "sync",
+                "--no-sign-request",
+                *(["--delete"] if refresh else []),
+                prefix + "/",
+                str(dest),
+            ]
+        )
     logger.info("pepquery-spectra: done -> %s", PEPQUERY_SPECTRA_DIR)
 
 
@@ -1009,7 +1104,11 @@ def _java_version() -> str:
     """Short Java version string for the provenance sidecar."""
     try:
         proc = subprocess.run(
-            ["java", "-version"], capture_output=True, text=True, check=False, timeout=10,
+            ["java", "-version"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
         )
         text = proc.stderr or proc.stdout or ""
         return text.splitlines()[0] if text else "unknown"
@@ -1100,8 +1199,7 @@ def setup_hal(refresh: bool = False) -> None:
     output = (probe.stdout or "") + (probe.stderr or "")
     if "hal2maf" not in output.lower() and "usage" not in output.lower():
         raise RuntimeError(
-            f"hal: wrapper smoke-test failed exit={probe.returncode} "
-            f"output_head={output[:300]}"
+            f"hal: wrapper smoke-test failed exit={probe.returncode} output_head={output[:300]}"
         )
     logger.info("hal: wrapper smoke-test ok (exit=%d)", probe.returncode)
 
@@ -1170,7 +1268,9 @@ def setup_signalp(refresh: bool = False) -> None:
         logger.warning(
             "signalp: no tarball matching %s found in %s.  Download from "
             "%s (DTU academic license) and drop it there.",
-            SIGNALP_TARBALL_GLOB, SIGNALP_DIR, SIGNALP_URL,
+            SIGNALP_TARBALL_GLOB,
+            SIGNALP_DIR,
+            SIGNALP_URL,
         )
         return
     tarball = matches[-1]
@@ -1193,8 +1293,17 @@ def setup_signalp(refresh: bool = False) -> None:
     if not _conda_env_exists(SIGNALP_ENV_NAME):
         logger.info("signalp: creating conda env %s (python=3.10)", SIGNALP_ENV_NAME)
         subprocess.run(
-            ["conda", "create", "-n", SIGNALP_ENV_NAME, "-c", "conda-forge",
-             "python=3.10", "pip", "-y"],
+            [
+                "conda",
+                "create",
+                "-n",
+                SIGNALP_ENV_NAME,
+                "-c",
+                "conda-forge",
+                "python=3.10",
+                "pip",
+                "-y",
+            ],
             check=True,
         )
     else:
@@ -1224,9 +1333,18 @@ def setup_signalp(refresh: bool = False) -> None:
 
     # Step 3 — copy model weights into the installed package
     proc = subprocess.run(
-        ["conda", "run", "-n", SIGNALP_ENV_NAME, "python", "-c",
-         "import signalp, os; print(os.path.dirname(signalp.__file__))"],
-        capture_output=True, text=True, check=True,
+        [
+            "conda",
+            "run",
+            "-n",
+            SIGNALP_ENV_NAME,
+            "python",
+            "-c",
+            "import signalp, os; print(os.path.dirname(signalp.__file__))",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
     )
     signalp_pkg_dir = Path(proc.stdout.strip())
     model_weights_dir = signalp_pkg_dir / "model_weights"
@@ -1245,15 +1363,23 @@ def setup_signalp(refresh: bool = False) -> None:
     smoke_dir = SIGNALP_DIR / ".smoke_test"
     smoke_dir.mkdir(exist_ok=True)
     smoke_fa = smoke_dir / "input.fa"
-    smoke_fa.write_text(
-        ">test\nMRAPGCVLLLGLCLLSQAALAGGEHSGEILVGGLFPMHSRGSEGKPCGDIKREGG\n"
-    )
+    smoke_fa.write_text(">test\nMRAPGCVLLLGLCLLSQAALAGGEHSGEILVGGLFPMHSRGSEGKPCGDIKREGG\n")
     try:
         _conda_run(
             SIGNALP_ENV_NAME,
-            ["signalp6", "--fastafile", str(smoke_fa), "--organism", "eukarya",
-             "--mode", "fast", "--format", "txt",
-             "--output_dir", str(smoke_dir / "out")],
+            [
+                "signalp6",
+                "--fastafile",
+                str(smoke_fa),
+                "--organism",
+                "eukarya",
+                "--mode",
+                "fast",
+                "--format",
+                "txt",
+                "--output_dir",
+                str(smoke_dir / "out"),
+            ],
         )
     except subprocess.CalledProcessError as exc:
         logger.error("signalp: smoke test failed: %s", exc)
@@ -1302,7 +1428,9 @@ def setup_targetp(refresh: bool = False) -> None:
         logger.warning(
             "targetp: no tarball matching %s found in %s.  Download from "
             "%s (DTU academic license) and drop it there.",
-            TARGETP_TARBALL_GLOB, TARGETP_DIR, TARGETP_URL,
+            TARGETP_TARBALL_GLOB,
+            TARGETP_DIR,
+            TARGETP_URL,
         )
         return
     tarball = matches[-1]
@@ -1337,10 +1465,14 @@ def setup_targetp(refresh: bool = False) -> None:
         )
         cmd = [
             str(TARGETP_BIN),
-            "-fasta", str(test_fa),
-            "-org", "non-pl",
-            "-format", "short",
-            "-prefix", str(prefix),
+            "-fasta",
+            str(test_fa),
+            "-org",
+            "non-pl",
+            "-format",
+            "short",
+            "-prefix",
+            str(prefix),
         ]
         logger.info("targetp: smoke-test %s", " ".join(cmd))
         try:
@@ -1348,7 +1480,8 @@ def setup_targetp(refresh: bool = False) -> None:
         except subprocess.CalledProcessError as exc:
             logger.error(
                 "targetp: smoke test failed (exit %d). stderr=%s",
-                exc.returncode, (exc.stderr or "")[-400:],
+                exc.returncode,
+                (exc.stderr or "")[-400:],
             )
             return
         summaries = list(smoke_dir.glob("example_short*summary*"))
@@ -1428,20 +1561,29 @@ def setup_interproscan(refresh: bool = False) -> None:
     # full default (non-ML) application set, which avoids the single-app
     # COMBINE_MATCHES bug that triggers when sequences have null matches.
     cmd = [
-        "nextflow", "run", INTERPROSCAN_NF_REPO,
-        "-r", INTERPROSCAN_VERSION,
+        "nextflow",
+        "run",
+        INTERPROSCAN_NF_REPO,
+        "-r",
+        INTERPROSCAN_VERSION,
         "-resume",
-        "-profile", "singularity,test",
-        "--datadir", str(INTERPROSCAN_DATADIR),
-        "--interpro", INTERPROSCAN_DATA_VERSION,
-        "--outdir", str(smoke_out),
+        "-profile",
+        "singularity,test",
+        "--datadir",
+        str(INTERPROSCAN_DATADIR),
+        "--interpro",
+        INTERPROSCAN_DATA_VERSION,
+        "--outdir",
+        str(smoke_out),
         # Force container-based COMBINE_MATCHES path — the LOCAL variant
         # fails under Nextflow 25.x due to a Groovy classpath regression
         # around `lib/uk/ac/ebi/interpro/ProcessCombine.groovy`.
-        "--batchSize", "50000",
+        "--batchSize",
+        "50000",
         # Never use the online EBI Matches API precalc — a release mismatch
         # vs our local datadir nulls the lookup path and crashes combine.
-        "--noMatchesApi", "true",
+        "--noMatchesApi",
+        "true",
     ]
     logger.info(
         "interproscan: first run (auto-downloads DBs + member images, 30–60 min): %s",
@@ -1459,7 +1601,8 @@ def setup_interproscan(refresh: bool = False) -> None:
         return
     logger.info(
         "interproscan: smoke test ok (%s, %d bytes)",
-        tsv_candidates[0].name, tsv_candidates[0].stat().st_size,
+        tsv_candidates[0].name,
+        tsv_candidates[0].stat().st_size,
     )
 
     # Sidecar artifact is the smoke-test TSV (small + reproducible); we
@@ -1516,8 +1659,16 @@ def setup_alphamissense(refresh: bool = False) -> None:
         logger.info("alphamissense: downloading %s", ALPHAMISSENSE_URL)
         partial = ALPHAMISSENSE_GZ.with_suffix(ALPHAMISSENSE_GZ.suffix + ".partial")
         subprocess.run(
-            ["curl", "--fail", "--location", "--retry", "3",
-             "--output", str(partial), ALPHAMISSENSE_URL],
+            [
+                "curl",
+                "--fail",
+                "--location",
+                "--retry",
+                "3",
+                "--output",
+                str(partial),
+                ALPHAMISSENSE_URL,
+            ],
             check=True,
         )
         partial.rename(ALPHAMISSENSE_GZ)
@@ -1559,6 +1710,7 @@ _HANDLERS: dict[str, Any] = {
     "alphamissense": setup_alphamissense,
     "deeploc": setup_deeploc,
     "pepquery": setup_pepquery,
+    "pepquery-db": setup_pepquery_db,
     "pepquery-spectra": setup_pepquery_spectra,
     "hal": setup_hal,
     "gencode": setup_gencode,
@@ -1600,8 +1752,14 @@ def main() -> int:
         # last so lighter DBs finish first and are available for
         # downstream work.
         targets = [
-            "gencode", "diamond", "clinvar", "cosmic", "alphamissense",
-            "deeploc", "hal", "gnomad",
+            "gencode",
+            "diamond",
+            "clinvar",
+            "cosmic",
+            "alphamissense",
+            "deeploc",
+            "hal",
+            "gnomad",
         ]
     else:
         targets = [args.target]
