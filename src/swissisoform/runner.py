@@ -117,11 +117,17 @@ def load_single_sample(cell_line: str, reference: UpstreamReference) -> pd.DataF
             "Use the multi-sample mode (default for non-preset runs)."
         )
     final, dropped = run_sample(
-        HELA_PREDICT, HELA_RNASEQ, GTF, sample="HeLa", reference=reference,
+        HELA_PREDICT,
+        HELA_RNASEQ,
+        GTF,
+        sample="HeLa",
+        reference=reference,
     )
     logger.info(
         "Single-sample (HeLa): %d kept, %d dropped, %d imputed",
-        len(final), len(dropped), final["Imputed"].sum(),
+        len(final),
+        len(dropped),
+        final["Imputed"].sum(),
     )
     return final
 
@@ -131,9 +137,7 @@ def _write_unique_tis(combined: pd.DataFrame) -> None:
     unique = dedupe_unique_proteins(combined)
     UNIQUE_TIS_PARQUET.parent.mkdir(parents=True, exist_ok=True)
     unique.to_parquet(UNIQUE_TIS_PARQUET, index=False)
-    logger.info(
-        "Wrote unique-protein parquet: %s (%d proteins)", UNIQUE_TIS_PARQUET, len(unique)
-    )
+    logger.info("Wrote unique-protein parquet: %s (%d proteins)", UNIQUE_TIS_PARQUET, len(unique))
 
 
 def _manifest_single_path(row: pd.Series, col: str) -> Path | None:
@@ -175,8 +179,7 @@ def load_combined(
             _write_unique_tis(combined)
         if set(cell_lines) != set(ALL_CELL_LINES):
             present_cols = [
-                f"present_{cl}" for cl in cell_lines
-                if f"present_{cl}" in combined.columns
+                f"present_{cl}" for cl in cell_lines if f"present_{cl}" in combined.columns
             ]
             if present_cols:
                 mask = combined[present_cols].any(axis=1)
@@ -195,7 +198,12 @@ def load_combined(
         rnaseq_files = [ROOT / f for f in row["rnaseq_count_files"]]
         t0 = time.perf_counter()
         final_df, _ = run_sample(
-            predict, rnaseq_files, GTF, sample=sample, config=cfg, reference=reference,
+            predict,
+            rnaseq_files,
+            GTF,
+            sample=sample,
+            config=cfg,
+            reference=reference,
             genome_fasta=GENOME,
             isoquant_table=_manifest_single_path(row, "isoquant_table"),
         )
@@ -204,7 +212,9 @@ def load_combined(
         final_df.to_csv(filtered_out, index=False)
         per_sample[sample] = final_df
         logger.info(
-            "%s: %d filtered rows (%.1fs)", sample, len(final_df),
+            "%s: %d filtered rows (%.1fs)",
+            sample,
+            len(final_df),
             time.perf_counter() - t0,
         )
 
@@ -261,7 +271,8 @@ def load_isoform_picks(source: Path | str | list[dict]) -> pd.DataFrame:
 
 
 def restrict_to_isoforms(
-    df: pd.DataFrame, isos: pd.DataFrame,
+    df: pd.DataFrame,
+    isos: pd.DataFrame,
 ) -> tuple[pd.DataFrame, list[str]]:
     """Restrict the combined catalog to specific TIS picks.
 
@@ -295,12 +306,17 @@ def restrict_to_isoforms(
     logger.info(
         "Isoform restriction: %d requested, %d matched, %d canonical Annotated rows "
         "across %d genes (total %d rows)",
-        n_isos_requested, n_picked_matched, n_annotated, len(gene_names), len(restricted),
+        n_isos_requested,
+        n_picked_matched,
+        n_annotated,
+        len(gene_names),
+        len(restricted),
     )
     if n_picked_matched < n_isos_requested:
         logger.warning(
             "%d of %d requested isoforms did not match the combined catalog",
-            n_isos_requested - n_picked_matched, n_isos_requested,
+            n_isos_requested - n_picked_matched,
+            n_isos_requested,
         )
 
     return restricted, gene_names
@@ -405,12 +421,8 @@ def run_precompute(
     else:
         preds["pepquery"] = {}
 
-    preds["signalp"] = (
-        precompute_signalp(all_proteins) if "signalp" not in skip else {}
-    )
-    preds["targetp"] = (
-        precompute_targetp(all_proteins) if "targetp" not in skip else {}
-    )
+    preds["signalp"] = precompute_signalp(all_proteins) if "signalp" not in skip else {}
+    preds["targetp"] = precompute_targetp(all_proteins) if "targetp" not in skip else {}
     preds["interproscan"] = (
         precompute_interproscan(all_proteins) if "interproscan" not in skip else {}
     )
@@ -419,14 +431,11 @@ def run_precompute(
     from swissisoform.plm.embed import precompute_plm
     from swissisoform.structure.fold import precompute_fold
 
-    preds["plm"] = (
-        precompute_plm(all_proteins, inline=False) if "plm_vep" not in skip else {}
-    )
+    preds["plm"] = precompute_plm(all_proteins, inline=False) if "plm_vep" not in skip else {}
     preds["structure"] = (
-        precompute_fold(
-            all_proteins, backend=structure_backend or DEFAULT_BACKEND, inline=False
-        )
-        if "structure" not in skip else {}
+        precompute_fold(all_proteins, backend=structure_backend or DEFAULT_BACKEND, inline=False)
+        if "structure" not in skip
+        else {}
     )
 
     return preds
@@ -514,9 +523,7 @@ def build_pipeline(cfg, preds, ref, genes, skip: set[str]) -> AnnotationPipeline
         # min_prevalence=2 drops single-residue (noise) features from the feature
         # universe BEFORE ranking + the top-30 slice, so the stored top-30 is a
         # true top-30 of >=2-AA features (and the counts match what's displayed).
-        site_mods.append(
-            SAEFeatureModule(cfg, top_k=30, unique_top_n=30, min_prevalence=2)
-        )
+        site_mods.append(SAEFeatureModule(cfg, top_k=30, unique_top_n=30, min_prevalence=2))
     if "varianteffect" not in skip:
         site_mods.append(
             VariantEffectModule(
@@ -572,9 +579,7 @@ def print_spot_check(genes, limit: int | None = 5) -> None:
             istr = ia.get("structure", {}) or {}
             ilen = len(site.isoform_protein.rstrip("*"))
             kozak = site.kozak_context or "—"
-            print(
-                f"    TIS {site.tis_id} ({site.orf_type.value}, {ilen} aa, kozak={kozak})"
-            )
+            print(f"    TIS {site.tis_id} ({site.orf_type.value}, {ilen} aa, kozak={kozak})")
             print(
                 f"      score: "
                 f"existence={isc.get('existence_score')}/{isc.get('existence_evaluable')} "
@@ -597,8 +602,8 @@ def print_spot_check(genes, limit: int | None = 5) -> None:
 class RunSpec:
     """Declarative specification for a single pipeline run."""
 
-    gene_names: list[str] | None          # None = all genes
-    restricted_df: pd.DataFrame | None     # pre-filtered combined (isoform picks), else None
+    gene_names: list[str] | None  # None = all genes
+    restricted_df: pd.DataFrame | None  # pre-filtered combined (isoform picks), else None
     cell_lines: list[str]
     single_sample: bool
     min_cell_lines: int
@@ -609,7 +614,7 @@ class RunSpec:
     gtf: Path = GTF
     genome: Path = GENOME
     protein_fasta: Path = PROTEIN
-    out_dir: Path | None = None            # default OUT / run_name
+    out_dir: Path | None = None  # default OUT / run_name
     spot_check_limit: int | None = 5
     rebuild_combined: bool = False
     # Source-transcript resolution (cascade + collapse to one mRNA per TIS).
@@ -630,10 +635,10 @@ class RunSpec:
 class PreparedRun:
     """Result of Stages 1–5: references + assembled genes + proteins + config."""
 
-    ref: object          # UpstreamReference
-    genes: list          # assembled Gene objects
+    ref: object  # UpstreamReference
+    genes: list  # assembled Gene objects
     all_proteins: list[str]
-    cfg: object          # PipelineConfig
+    cfg: object  # PipelineConfig
     n_fasta_written: int = 0
     population: dict = dataclasses.field(default_factory=dict)
 
@@ -662,9 +667,7 @@ def prepare(spec: RunSpec) -> PreparedRun:
         final = spec.restricted_df
     elif spec.single_sample:
         if len(spec.cell_lines) != 1:
-            logger.error(
-                "--single-sample requires exactly one cell line; got %s", spec.cell_lines
-            )
+            logger.error("--single-sample requires exactly one cell line; got %s", spec.cell_lines)
             raise _BadCellLine
         logger.info("Stage 2: single-sample mode (%s)", spec.cell_lines[0])
         final = load_single_sample(spec.cell_lines[0], ref)
@@ -673,7 +676,8 @@ def prepare(spec: RunSpec) -> PreparedRun:
     else:
         logger.info("Stage 2: multi-sample mode (%s)", ",".join(spec.cell_lines))
         final = load_combined(
-            spec.cell_lines, ref,
+            spec.cell_lines,
+            ref,
             build_config(
                 source_resolution=not spec.skip_source_resolution,
                 divergence_threshold=spec.divergence_threshold,
@@ -753,8 +757,12 @@ def prepare(spec: RunSpec) -> PreparedRun:
     logger.info("proteins.fa: %d unique sequences -> %s", n_written, spec.fasta_out)
 
     return PreparedRun(
-        ref=ref, genes=genes, all_proteins=all_proteins, cfg=cfg,
-        n_fasta_written=n_written, population=population,
+        ref=ref,
+        genes=genes,
+        all_proteins=all_proteins,
+        cfg=cfg,
+        n_fasta_written=n_written,
+        population=population,
     )
 
 
@@ -765,14 +773,20 @@ def annotate(prepared: PreparedRun, spec: RunSpec) -> pd.DataFrame:
     all_proteins = prepared.all_proteins
 
     preds = run_precompute(
-        genes, all_proteins, spec.skip,
+        genes,
+        all_proteins,
+        spec.skip,
         structure_backend=cfg.structure.backend if cfg.structure else None,
         scoring=cfg.scoring,
     )
     logger.info(
         "Precompute done: deeploc=%d signalp=%d targetp=%d ips=%d plm=%d struct=%d",
-        len(preds["deeploc"]), len(preds["signalp"]), len(preds["targetp"]),
-        len(preds["interproscan"]), len(preds["plm"]), len(preds["structure"]),
+        len(preds["deeploc"]),
+        len(preds["signalp"]),
+        len(preds["targetp"]),
+        len(preds["interproscan"]),
+        len(preds["plm"]),
+        len(preds["structure"]),
     )
 
     logger.info("Stage 6: annotate + compare + score")
@@ -857,9 +871,7 @@ def _write_parquet_atomic(df: pd.DataFrame, path: Path, schema: pa.Schema) -> No
         tmp.unlink(missing_ok=True)
 
 
-def _write_population_sidecar(
-    out_dir: Path, spec: RunSpec, population: dict, cfg: object
-) -> Path:
+def _write_population_sidecar(out_dir: Path, spec: RunSpec, population: dict, cfg: object) -> Path:
     """Record which TIS population this run was computed over, beside its parquet.
 
     Scores, percentiles and any reference panel calibrated on a catalog are only
@@ -958,7 +970,8 @@ def run(spec: RunSpec) -> int:
     if spec.emit_fasta:
         logger.info(
             "--emit-fasta: wrote %d seqs to %s; stopping before precompute/annotate",
-            prepared.n_fasta_written, spec.fasta_out,
+            prepared.n_fasta_written,
+            spec.fasta_out,
         )
         return 0
 
