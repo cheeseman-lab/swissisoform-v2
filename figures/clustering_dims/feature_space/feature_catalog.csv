@@ -1,0 +1,748 @@
+feature,module,pane,category,category_source,criteria,scored,dtype,fill_rate,n_unique,include_in_plot,exclude_reason,encodable_as,transform,label,derived_from,duplicate_of,null_pattern,fill_separate_orfs
+canonical_conservation_phastcons_at_tis,conservation,canonical,C,module_map,,False,float,1.0,528,True,,numeric,linear,,,,,1.0
+canonical_conservation_phastcons_kozak_mean,conservation,canonical,C,module_map,,False,float,1.0,2805,True,,numeric,linear,,,,,1.0
+canonical_conservation_phylop_at_tis,conservation,canonical,C,module_map,,False,float,1.0,2721,True,,numeric,linear,,,,,1.0
+canonical_conservation_phylop_kozak_mean,conservation,canonical,C,module_map,,False,float,1.0,3474,True,,numeric,linear,,,,,1.0
+isoform_conservation_phastcons_at_tis,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,False,float,1.0,1561,True,,numeric,linear,phastCons at TIS,,,,1.0
+isoform_conservation_phastcons_kozak_mean,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,False,float,1.0,4067,True,,numeric,linear,phastCons mean over Kozak window,,,,1.0
+isoform_conservation_phastcons_shared_region_mean,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,False,float,0.9511,5811,True,,numeric,linear,phastCons mean over shared region,,,depleted_for_separate_orfs,0.2883
+isoform_conservation_phastcons_unique_region_mean,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,False,float,0.9944,6185,True,,numeric,linear,phastCons mean over unique region,,,,0.9189
+isoform_conservation_phylop_at_tis,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,False,float,0.9998,6203,True,,numeric,linear,PhyloP score at TIS,,,,1.0
+isoform_conservation_phylop_enrichment,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,False,float,0.9454,6109,True,,numeric,signed_log,PhyloP enrichment (unique vs shared),,,depleted_for_separate_orfs,0.2072
+isoform_conservation_phylop_kozak_mean,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,False,float,0.9998,6459,True,,numeric,linear,PhyloP mean over Kozak window,,,,1.0
+isoform_conservation_phylop_shared_region_mean,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,False,float,0.9509,5819,True,,numeric,linear,PhyloP mean over shared region,,,depleted_for_separate_orfs,0.2883
+isoform_conservation_phylop_unique_region_mean,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,True,float,0.9944,6420,True,,numeric,linear,PhyloP mean over unique region,,,,0.9189
+isoform_conservation_summary.phastcons_bigwig,conservation,isoform,C,module_map,,False,str,1.0,1,False,status_string,-,-,,,,,
+isoform_conservation_summary.phastcons_status,conservation,isoform,C,module_map,,False,str,1.0,1,False,status_string,-,-,,,,,
+isoform_conservation_summary.phylop_bigwig,conservation,isoform,C,module_map,,False,str,1.0,1,False,status_string,-,-,,,,,
+isoform_conservation_summary.phylop_status,conservation,isoform,C,module_map,,False,str,1.0,1,False,status_string,-,-,,,,,
+isoform_conservation_summary.region_status,conservation,isoform,C,module_map,,False,str,1.0,1,False,status_string,-,-,,,,,
+isoform_conservation_summary.shared_region_nt,conservation,isoform,C,module_map,,False,int,1.0,1319,False,redundant,numeric,log1p,,,isoform_variant_intersection_shared_region_nt,,1.0
+isoform_conservation_summary.unique_region_nt,conservation,isoform,C,module_map,,False,int,1.0,1083,False,redundant,numeric,log1p,,,isoform_variant_intersection_unique_region_nt,,1.0
+isoform_conservation_summary.unique_space,conservation,isoform,C,module_map,,False,str,1.0,2,False,status_string,one_hot,-,,,,,
+isoform_conservation_frame_mammalian_canonical_deepest_species,conservation_frame,isoform,C,module_map,,False,str,0.9827,20,False,free_text,text_embedding,-,,,,,
+isoform_conservation_frame_mammalian_canonical_frac_intact,conservation_frame,isoform,C,module_map,,False,float,0.9944,78,True,,numeric,linear,Canonical fraction of mammals with intact ORF,,,,0.9189
+isoform_conservation_frame_mammalian_canonical_max_depth,conservation_frame,isoform,C,module_map,,False,float,0.9827,7,True,,numeric,linear,,,,,0.9144
+isoform_conservation_frame_mammalian_canonical_mean_pident,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,float,0.9944,3562,True,,numeric,linear,Canonical mean % identity to mammalian orthologs,,,,0.9189
+isoform_conservation_frame_mammalian_canonical_n_species_aligned,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,float,0.9944,13,True,,numeric,linear,Canonical mammalian species aligned,,,,0.9189
+isoform_conservation_frame_mammalian_canonical_n_species_intact_frame,conservation_frame,isoform,C,module_map,,False,float,0.9944,21,True,,numeric,linear,,,,,0.9189
+isoform_conservation_frame_mammalian_canonical_start_codon_conserved,conservation_frame,isoform,C,module_map,,False,float,0.9943,104,True,,numeric,linear,,,,,0.9189
+isoform_conservation_frame_mammalian_deepest_species,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,str,0.9834,20,False,free_text,text_embedding,-,Deepest mammal with intact frame,,,,
+isoform_conservation_frame_mammalian_frac_intact,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,float,0.9944,123,True,,numeric,linear,Fraction of mammals with intact ORF,,,,0.9189
+isoform_conservation_frame_mammalian_max_depth,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,float,0.9834,7,True,,numeric,linear,Max evolutionary depth (mammals),,,,0.8671
+isoform_conservation_frame_mammalian_mean_pident,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,True,float,0.9944,5698,True,,numeric,linear,Mean % identity to mammalian orthologs,,,,0.9189
+isoform_conservation_frame_mammalian_n_species_aligned,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,float,0.9944,19,True,,numeric,linear,Mammalian species aligned,,,,0.9189
+isoform_conservation_frame_mammalian_n_species_intact_frame,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,float,0.9944,21,True,,numeric,linear,Mammalian species with intact frame,,,,0.9189
+isoform_conservation_frame_mammalian_start_codon_conserved,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,float,0.9938,129,True,,numeric,linear,Mammals with conserved start codon,,,,0.9189
+isoform_conservation_frame_primate_canonical_deepest_species,conservation_frame,isoform,C,module_map,,False,str,0.9881,24,False,free_text,text_embedding,-,,,,,
+isoform_conservation_frame_primate_canonical_frac_intact,conservation_frame,isoform,C,module_map,,False,float,0.9944,60,True,,numeric,linear,Canonical fraction of primates with intact ORF,,,,0.9189
+isoform_conservation_frame_primate_canonical_max_depth,conservation_frame,isoform,C,module_map,,False,float,0.9881,7,True,,numeric,linear,,,,,0.9144
+isoform_conservation_frame_primate_canonical_mean_pident,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,float,0.9944,3536,True,,numeric,linear,Canonical mean % identity to primate orthologs,,,,0.9189
+isoform_conservation_frame_primate_canonical_n_species_aligned,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,float,0.9944,9,True,,numeric,linear,Canonical primate species aligned,,,,0.9189
+isoform_conservation_frame_primate_canonical_n_species_intact_frame,conservation_frame,isoform,C,module_map,,False,float,0.9944,26,True,,numeric,linear,,,,,0.9189
+isoform_conservation_frame_primate_canonical_start_codon_conserved,conservation_frame,isoform,C,module_map,,False,float,0.9943,78,True,,numeric,linear,,,,,0.9189
+isoform_conservation_frame_primate_deepest_species,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,str,0.9867,23,False,free_text,text_embedding,-,Deepest primate with intact frame,,,,
+isoform_conservation_frame_primate_frac_intact,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,float,0.9944,123,True,,numeric,linear,Fraction of primates with intact ORF,,,,0.9189
+isoform_conservation_frame_primate_max_depth,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,float,0.9867,7,True,,numeric,linear,Max evolutionary depth (primates),,,,0.8671
+isoform_conservation_frame_primate_mean_pident,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,True,float,0.9944,5045,True,,numeric,linear,Mean % identity to primate orthologs,,,,0.9189
+isoform_conservation_frame_primate_n_species_aligned,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,float,0.9944,16,True,,numeric,linear,Primate species aligned,,,,0.9189
+isoform_conservation_frame_primate_n_species_intact_frame,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,float,0.9944,26,True,,numeric,linear,Primate species with intact frame,,,,0.9189
+isoform_conservation_frame_primate_start_codon_conserved,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,float,0.9938,145,True,,numeric,linear,Primates with conserved start codon,,,,0.9189
+isoform_conservation_frame_summary.canonical_region_nt,conservation_frame,isoform,C,module_map,,False,float,0.9944,1213,True,,numeric,log1p,,,,,0.9189
+isoform_conservation_frame_summary.canonical_status,conservation_frame,isoform,C,module_map,,False,str,0.9944,1,False,status_string,-,-,,,,,
+isoform_conservation_frame_summary.hal_path,conservation_frame,isoform,C,module_map,,False,str,0.9944,1,False,status_string,-,-,,,,,
+isoform_conservation_frame_summary.status,conservation_frame,isoform,C,module_map,,False,str,1.0,2,False,status_string,one_hot,-,,,,,
+isoform_conservation_frame_summary.tree_loaded,conservation_frame,isoform,C,module_map,,False,bool,0.9944,1,False,binary,binary_0_1,-,,,,,
+isoform_conservation_frame_summary.unique_region_nt,conservation_frame,isoform,C,module_map,,False,float,0.9944,1082,True,,numeric,log1p,,,,,0.9189
+isoform_conservation_frame_summary.unique_space,conservation_frame,isoform,C,module_map,,False,str,0.9944,2,False,status_string,one_hot,-,,,,,
+canonical_expr_HeLa_cpm,expr,canonical,D,module_map,,False,float,0.5755,326,True,,numeric,log1p,,,,,0.3829
+canonical_expr_HeLa_initiation_efficiency,expr,canonical,D,evidence_cols,D2_initiation_efficiency,False,float,0.5707,1753,True,,numeric,linear,HeLa: canonical initiation efficiency,,,,0.3784
+canonical_expr_HeLa_p_value,expr,canonical,D,module_map,,False,float,0.5755,1972,True,,numeric,neglog10,,,,,0.3829
+canonical_expr_HeLa_raw_count,expr,canonical,D,module_map,,False,float,0.5755,326,True,,numeric,log1p,,,,,0.3829
+canonical_expr_K562_cpm,expr,canonical,D,module_map,,False,float,0.7275,451,True,,numeric,log1p,,,,,0.5923
+canonical_expr_K562_initiation_efficiency,expr,canonical,D,evidence_cols,D2_initiation_efficiency,False,float,0.7233,2360,True,,numeric,linear,K562: canonical initiation efficiency,,,,0.5856
+canonical_expr_K562_p_value,expr,canonical,D,module_map,,False,float,0.7275,2590,True,,numeric,neglog10,,,,,0.5923
+canonical_expr_K562_raw_count,expr,canonical,D,module_map,,False,float,0.7275,451,True,,numeric,log1p,,,,,0.5923
+canonical_expr_RPE1_Async_cpm,expr,canonical,D,module_map,,False,float,0.4058,267,True,,numeric,log1p,,,,,0.2162
+canonical_expr_RPE1_Async_initiation_efficiency,expr,canonical,D,evidence_cols,D2_initiation_efficiency,False,float,0.4044,1322,True,,numeric,linear,RPE1 Async: canonical initiation efficiency,,,,0.214
+canonical_expr_RPE1_Async_p_value,expr,canonical,D,module_map,,False,float,0.4058,1378,True,,numeric,neglog10,,,,,0.2162
+canonical_expr_RPE1_Async_raw_count,expr,canonical,D,module_map,,False,float,0.4058,267,True,,numeric,log1p,,,,,0.2162
+canonical_expr_RPE1_Que_cpm,expr,canonical,D,module_map,,False,float,0.5489,250,True,,numeric,log1p,,,,,0.3671
+canonical_expr_RPE1_Que_initiation_efficiency,expr,canonical,D,evidence_cols,D2_initiation_efficiency,False,float,0.5455,1785,True,,numeric,linear,RPE1 Que: canonical initiation efficiency,,,,0.3626
+canonical_expr_RPE1_Que_p_value,expr,canonical,D,module_map,,False,float,0.5489,1931,True,,numeric,neglog10,,,,,0.3671
+canonical_expr_RPE1_Que_raw_count,expr,canonical,D,module_map,,False,float,0.5489,250,True,,numeric,log1p,,,,,0.3671
+canonical_expr_RPE1_Sen_cpm,expr,canonical,D,module_map,,False,float,0.4288,278,True,,numeric,log1p,,,,,0.25
+canonical_expr_RPE1_Sen_initiation_efficiency,expr,canonical,D,evidence_cols,D2_initiation_efficiency,False,float,0.426,1381,True,,numeric,linear,RPE1 Sen: canonical initiation efficiency,,,,0.2477
+canonical_expr_RPE1_Sen_p_value,expr,canonical,D,module_map,,False,float,0.4288,1447,True,,numeric,neglog10,,,,,0.25
+canonical_expr_RPE1_Sen_raw_count,expr,canonical,D,module_map,,False,float,0.4288,278,True,,numeric,log1p,,,,,0.25
+canonical_expr_U2OS_cpm,expr,canonical,D,module_map,,False,float,0.5864,224,True,,numeric,log1p,,,,,0.3446
+canonical_expr_U2OS_initiation_efficiency,expr,canonical,D,evidence_cols,D2_initiation_efficiency,False,float,0.5834,1848,True,,numeric,linear,U2OS: canonical initiation efficiency,,,,0.3423
+canonical_expr_U2OS_p_value,expr,canonical,D,module_map,,False,float,0.5864,2037,True,,numeric,neglog10,,,,,0.3446
+canonical_expr_U2OS_raw_count,expr,canonical,D,module_map,,False,float,0.5864,224,True,,numeric,log1p,,,,,0.3446
+expr_HeLa_cpm,expr,isoform,D,evidence_cols,D1_multi_cell_line,False,float,1.0,267,True,,numeric,log1p,HeLa: CPM,,,,1.0
+expr_HeLa_initiation_efficiency,expr,isoform,D,evidence_cols,D1_multi_cell_line;D2_initiation_efficiency,True,float,0.9923,3799,True,,numeric,linear,HeLa: initiation efficiency,,,,0.9775
+expr_HeLa_p_value,expr,isoform,D,evidence_cols,D1_multi_cell_line,False,float,1.0,6438,True,,numeric,neglog10,HeLa: p-value,,,,1.0
+expr_HeLa_raw_count,expr,isoform,D,evidence_cols,D1_multi_cell_line,True,int,1.0,267,True,,numeric,log1p,HeLa: raw count,,,,1.0
+expr_K562_cpm,expr,isoform,D,evidence_cols,D1_multi_cell_line,False,float,0.2298,241,True,,numeric,log1p,K562: CPM,,,,0.3198
+expr_K562_initiation_efficiency,expr,isoform,D,evidence_cols,D1_multi_cell_line;D2_initiation_efficiency,True,float,0.2292,1428,True,,numeric,linear,K562: initiation efficiency,,,,0.3198
+expr_K562_p_value,expr,isoform,D,evidence_cols,D1_multi_cell_line,False,float,0.2298,1485,True,,numeric,neglog10,K562: p-value,,,,0.3198
+expr_K562_raw_count,expr,isoform,D,evidence_cols,D1_multi_cell_line,True,float,0.2298,241,True,,numeric,log1p,K562: raw count,,,,0.3198
+expr_RPE1_Async_cpm,expr,isoform,D,evidence_cols,D1_multi_cell_line,False,float,0.1335,169,True,,numeric,log1p,RPE1 Async: CPM,,,,0.0495
+expr_RPE1_Async_initiation_efficiency,expr,isoform,D,evidence_cols,D1_multi_cell_line;D2_initiation_efficiency,True,float,0.1331,844,True,,numeric,linear,RPE1 Async: initiation efficiency,,,,0.0473
+expr_RPE1_Async_p_value,expr,isoform,D,evidence_cols,D1_multi_cell_line,False,float,0.1335,861,True,,numeric,neglog10,RPE1 Async: p-value,,,,0.0495
+expr_RPE1_Async_raw_count,expr,isoform,D,evidence_cols,D1_multi_cell_line,True,float,0.1335,169,True,,numeric,log1p,RPE1 Async: raw count,,,,0.0495
+expr_RPE1_Que_cpm,expr,isoform,D,evidence_cols,D1_multi_cell_line,False,float,0.1565,139,True,,numeric,log1p,RPE1 Que: CPM,,,,0.1689
+expr_RPE1_Que_initiation_efficiency,expr,isoform,D,evidence_cols,D1_multi_cell_line;D2_initiation_efficiency,True,float,0.156,967,True,,numeric,linear,RPE1 Que: initiation efficiency,,,,0.1667
+expr_RPE1_Que_p_value,expr,isoform,D,evidence_cols,D1_multi_cell_line,False,float,0.1565,1011,True,,numeric,neglog10,RPE1 Que: p-value,,,,0.1689
+expr_RPE1_Que_raw_count,expr,isoform,D,evidence_cols,D1_multi_cell_line,True,float,0.1565,139,True,,numeric,log1p,RPE1 Que: raw count,,,,0.1689
+expr_RPE1_Sen_cpm,expr,isoform,D,evidence_cols,D1_multi_cell_line,False,float,0.1283,160,True,,numeric,log1p,RPE1 Sen: CPM,,,,0.0743
+expr_RPE1_Sen_initiation_efficiency,expr,isoform,D,evidence_cols,D1_multi_cell_line;D2_initiation_efficiency,True,float,0.1278,814,True,,numeric,linear,RPE1 Sen: initiation efficiency,,,,0.0743
+expr_RPE1_Sen_p_value,expr,isoform,D,evidence_cols,D1_multi_cell_line,False,float,0.1283,829,True,,numeric,neglog10,RPE1 Sen: p-value,,,,0.0743
+expr_RPE1_Sen_raw_count,expr,isoform,D,evidence_cols,D1_multi_cell_line,True,float,0.1283,160,True,,numeric,log1p,RPE1 Sen: raw count,,,,0.0743
+expr_U2OS_cpm,expr,isoform,D,evidence_cols,D1_multi_cell_line,False,float,0.1834,143,True,,numeric,log1p,U2OS: CPM,,,,0.1892
+expr_U2OS_initiation_efficiency,expr,isoform,D,evidence_cols,D1_multi_cell_line;D2_initiation_efficiency,True,float,0.1828,1107,True,,numeric,linear,U2OS: initiation efficiency,,,,0.1869
+expr_U2OS_p_value,expr,isoform,D,evidence_cols,D1_multi_cell_line,False,float,0.1834,1185,True,,numeric,neglog10,U2OS: p-value,,,,0.1892
+expr_U2OS_raw_count,expr,isoform,D,evidence_cols,D1_multi_cell_line,True,float,0.1834,143,True,,numeric,log1p,U2OS: raw count,,,,0.1892
+canonical_initiation_context_kozak_context,initiation_context,canonical,D,module_map,,False,str,1.0,3355,False,free_text,text_embedding,-,,,,,
+canonical_initiation_context_kozak_hamming_full,initiation_context,canonical,D,module_map,,False,int,1.0,11,True,,numeric,linear,,,,,1.0
+canonical_initiation_context_kozak_hamming_major,initiation_context,canonical,D,module_map,,False,int,1.0,4,True,,numeric,linear,,,,,1.0
+canonical_initiation_context_kozak_hamming_partial,initiation_context,canonical,D,module_map,,False,float,1.0,36,True,,numeric,linear,,,,,1.0
+canonical_initiation_context_kozak_window_gc_content,initiation_context,canonical,D,module_map,,False,float,1.0,11,True,,numeric,linear,,,,,1.0
+isoform_initiation_context_kozak_context,initiation_context,isoform,D,module_map,,False,str,1.0,6435,False,free_text,text_embedding,-,,,,,
+isoform_initiation_context_kozak_hamming_full,initiation_context,isoform,D,module_map,,False,int,1.0,11,True,,numeric,linear,,,,,1.0
+isoform_initiation_context_kozak_hamming_major,initiation_context,isoform,D,module_map,,False,int,1.0,5,True,,numeric,linear,,,,,1.0
+isoform_initiation_context_kozak_hamming_partial,initiation_context,isoform,D,module_map,,False,float,1.0,47,True,,numeric,linear,,,,,1.0
+isoform_initiation_context_kozak_window_gc_content,initiation_context,isoform,D,module_map,,False,float,1.0,13,True,,numeric,linear,,,,,1.0
+canonical_massspec_hits,massspec,canonical,D,module_map,,False,list,1.0,319,False,list,count,-,,,,,
+canonical_massspec_summary.best_hyperscore,massspec,canonical,D,module_map,,False,float,0.0037,14,False,sparse,numeric,linear,,,,,
+canonical_massspec_summary.max_peptide_length,massspec,canonical,D,module_map,,False,float,0.9995,18,True,,numeric,log1p,,,,,0.9977
+canonical_massspec_summary.min_peptide_length,massspec,canonical,D,module_map,,False,float,0.9995,12,True,,numeric,log1p,,,,,0.9977
+canonical_massspec_summary.min_pvalue,massspec,canonical,D,module_map,,False,float,0.0037,6,False,sparse,numeric,neglog10,,,,,
+canonical_massspec_summary.pepquery_run,massspec,canonical,D,module_map,,False,bool,1.0,2,False,binary,binary_0_1,-,,,,,
+canonical_massspec_summary.total_peptides,massspec,canonical,D,module_map,,False,int,1.0,319,True,,numeric,log1p,,,,,1.0
+canonical_massspec_summary.total_psms,massspec,canonical,D,module_map,,False,float,0.0037,7,False,sparse,numeric,log1p,,,,,
+canonical_massspec_summary.unique_peptides,massspec,canonical,D,module_map,,False,null,0.0,0,False,all_null,-,-,,,,,
+canonical_massspec_summary.validated_peptides,massspec,canonical,D,module_map,,False,float,0.942,5,True,,numeric,linear,,,,,0.9685
+n_canonical_massspec_hits,massspec,canonical,D,module_map,,False,int,1.0,319,False,redundant,numeric,log1p,,canonical_massspec_hits,canonical_massspec_summary.total_peptides,,1.0
+cmp_massspec_hits_canonical_status,massspec,cmp,D,module_map,,False,null,0.0,0,False,all_null,-,-,,,,,
+cmp_massspec_hits_in_diff_region,massspec,cmp,D,module_map,,False,list,1.0,64,False,list,count,-,,,,,
+cmp_massspec_hits_isoform_status,massspec,cmp,D,module_map,,False,null,0.0,0,False,all_null,-,-,,,,,
+cmp_massspec_hits_source_pane,massspec,cmp,D,module_map,,False,str,1.0,1,False,constant,-,-,,,,,
+cmp_massspec_n_hits_in_diff_region,massspec,cmp,D,evidence_cols,D3_mass_spec,False,int,1.0,64,True,,numeric,linear,MS peptides in diff region,,,,1.0
+n_cmp_massspec_hits_in_diff_region,massspec,cmp,D,module_map,,False,int,1.0,64,False,redundant,numeric,log1p,,cmp_massspec_hits_in_diff_region,cmp_massspec_n_hits_in_diff_region,,1.0
+isoform_massspec_hits,massspec,isoform,D,evidence_cols,D3_mass_spec,True,list,1.0,64,False,list,count,-,,,,,
+isoform_massspec_summary.best_hyperscore,massspec,isoform,D,evidence_cols,D3_mass_spec,False,float,0.2026,1237,True,,numeric,linear,,,,,0.3694
+isoform_massspec_summary.max_peptide_length,massspec,isoform,D,evidence_cols,D3_mass_spec,False,float,0.8389,24,True,,numeric,log1p,,,,,0.9482
+isoform_massspec_summary.min_peptide_length,massspec,isoform,D,evidence_cols,D3_mass_spec,False,float,0.8389,25,True,,numeric,log1p,,,,,0.9482
+isoform_massspec_summary.min_pvalue,massspec,isoform,D,evidence_cols,D3_mass_spec,False,float,0.2026,290,True,,numeric,neglog10,,,,,0.3694
+isoform_massspec_summary.pepquery_run,massspec,isoform,D,evidence_cols,D3_mass_spec,False,bool,1.0,2,False,binary,binary_0_1,-,,,,,
+isoform_massspec_summary.total_peptides,massspec,isoform,D,evidence_cols,D3_mass_spec,False,int,1.0,64,True,,numeric,log1p,,,,,1.0
+isoform_massspec_summary.total_psms,massspec,isoform,D,evidence_cols,D3_mass_spec,False,float,0.2026,32,True,,numeric,log1p,,,,,0.3694
+isoform_massspec_summary.unique_peptides,massspec,isoform,D,evidence_cols,D3_mass_spec,False,int,1.0,61,True,,numeric,linear,,,,,1.0
+isoform_massspec_summary.validated_peptides,massspec,isoform,D,evidence_cols,D3_mass_spec,False,float,0.942,8,True,,numeric,linear,,,,,0.9685
+n_isoform_massspec_hits,massspec,isoform,D,evidence_cols,D3_mass_spec,False,int,1.0,64,False,redundant,numeric,log1p,,isoform_massspec_hits,isoform_massspec_summary.total_peptides,,1.0
+fisher_qvalue,site,site,D,evidence_cols,D2_initiation_efficiency,False,float,1.0,6444,True,,numeric,neglog10,Fisher combined q-value,,,,1.0
+ribo_pvalue,site,site,D,evidence_cols,D2_initiation_efficiency,False,float,1.0,6459,True,,numeric,neglog10,Ribo-TISH p-value,,,,1.0
+tis_pvalue,site,site,D,evidence_cols,D2_initiation_efficiency,False,float,1.0,1353,True,,numeric,neglog10,TIS detection p-value,,,,1.0
+canonical_localization_deeploc_membrane,localization,canonical,L,evidence_cols,L1_localization_change,False,str,1.0,12,False,categorical,one_hot,-,Membrane state (canonical),,,,
+canonical_localization_deeploc_prediction,localization,canonical,L,evidence_cols,L1_localization_change,False,str,1.0,48,False,categorical,-,-,DeepLoc prediction (canonical),,,,
+canonical_localization_deeploc_prob_cell_membrane,localization,canonical,L,evidence_cols,L1_localization_change,False,float,1.0,2344,True,,numeric,linear,DeepLoc P(Cell membrane) (canonical),,,,1.0
+canonical_localization_deeploc_prob_cytoplasm,localization,canonical,L,evidence_cols,L1_localization_change,False,float,1.0,2692,True,,numeric,linear,DeepLoc P(Cytoplasm) (canonical),,,,1.0
+canonical_localization_deeploc_prob_endoplasmic_reticulum,localization,canonical,L,evidence_cols,L1_localization_change,False,float,1.0,2418,True,,numeric,linear,DeepLoc P(Endoplasmic reticulum) (canonical),,,,1.0
+canonical_localization_deeploc_prob_extracellular,localization,canonical,L,evidence_cols,L1_localization_change,False,float,1.0,1567,True,,numeric,linear,DeepLoc P(Extracellular) (canonical),,,,1.0
+canonical_localization_deeploc_prob_golgi_apparatus,localization,canonical,L,evidence_cols,L1_localization_change,False,float,1.0,2469,True,,numeric,linear,DeepLoc P(Golgi apparatus) (canonical),,,,1.0
+canonical_localization_deeploc_prob_lysosome_vacuole,localization,canonical,L,evidence_cols,L1_localization_change,False,float,1.0,2429,True,,numeric,linear,DeepLoc P(Lysosome/Vacuole) (canonical),,,,1.0
+canonical_localization_deeploc_prob_mitochondrion,localization,canonical,L,evidence_cols,L1_localization_change,False,float,1.0,2266,True,,numeric,linear,DeepLoc P(Mitochondrion) (canonical),,,,1.0
+canonical_localization_deeploc_prob_nucleus,localization,canonical,L,evidence_cols,L1_localization_change,False,float,1.0,2788,True,,numeric,linear,DeepLoc P(Nucleus) (canonical),,,,1.0
+canonical_localization_deeploc_prob_peroxisome,localization,canonical,L,evidence_cols,L1_localization_change,False,float,1.0,1058,True,,numeric,linear,DeepLoc P(Peroxisome) (canonical),,,,1.0
+canonical_localization_deeploc_signals,localization,canonical,L,evidence_cols,L1_localization_change,False,str,0.8759,15,False,categorical,one_hot,-,DeepLoc signals (canonical),,,,
+canonical_localization_deeploc_top_prob,localization,canonical,L,evidence_cols,L1_localization_change,False,float,1.0,2344,True,,numeric,linear,DeepLoc top-class probability (canonical),,,,1.0
+cmp_localization_deeploc_membrane_canonical,localization,cmp,L,evidence_cols,L1_localization_change,False,str,1.0,12,False,categorical,one_hot,-,Canonical membrane state,,,,
+cmp_localization_deeploc_membrane_changed,localization,cmp,L,evidence_cols,L1_localization_change,True,bool,1.0,2,False,binary,binary_0_1,-,Membrane association changes,,,,
+cmp_localization_deeploc_membrane_isoform,localization,cmp,L,evidence_cols,L1_localization_change,False,str,1.0,12,False,categorical,one_hot,-,Isoform membrane state,,,,
+cmp_localization_deeploc_prediction_canonical,localization,cmp,L,evidence_cols,L1_localization_change,False,str,1.0,48,False,categorical,-,-,Canonical prediction,,,,
+cmp_localization_deeploc_prediction_changed,localization,cmp,L,evidence_cols,L1_localization_change,True,bool,1.0,2,False,binary,binary_0_1,-,Predicted localization changes,,,,
+cmp_localization_deeploc_prediction_isoform,localization,cmp,L,evidence_cols,L1_localization_change,False,str,1.0,62,False,categorical,-,-,Isoform prediction,,,,
+cmp_localization_deeploc_prob_cell_membrane_delta,localization,cmp,L,module_map,,False,float,1.0,5327,True,,numeric,signed_log,,,,,1.0
+cmp_localization_deeploc_prob_cytoplasm_delta,localization,cmp,L,module_map,,False,float,1.0,4775,True,,numeric,signed_log,,,,,1.0
+cmp_localization_deeploc_prob_endoplasmic_reticulum_delta,localization,cmp,L,module_map,,False,float,1.0,5323,True,,numeric,signed_log,,,,,1.0
+cmp_localization_deeploc_prob_extracellular_delta,localization,cmp,L,module_map,,False,float,1.0,5132,True,,numeric,signed_log,,,,,1.0
+cmp_localization_deeploc_prob_golgi_apparatus_delta,localization,cmp,L,module_map,,False,float,1.0,5444,True,,numeric,signed_log,,,,,1.0
+cmp_localization_deeploc_prob_lysosome_vacuole_delta,localization,cmp,L,module_map,,False,float,1.0,5483,True,,numeric,signed_log,,,,,1.0
+cmp_localization_deeploc_prob_mitochondrion_delta,localization,cmp,L,module_map,,False,float,1.0,5423,True,,numeric,signed_log,,,,,1.0
+cmp_localization_deeploc_prob_nucleus_delta,localization,cmp,L,module_map,,False,float,1.0,4959,True,,numeric,signed_log,,,,,1.0
+cmp_localization_deeploc_prob_peroxisome_delta,localization,cmp,L,module_map,,False,float,1.0,4485,True,,numeric,signed_log,,,,,1.0
+cmp_localization_deeploc_signals_canonical,localization,cmp,L,evidence_cols,L1_localization_change,False,str,0.8759,15,False,categorical,one_hot,-,Canonical sorting signals,,,,
+cmp_localization_deeploc_signals_changed,localization,cmp,L,evidence_cols,L1_localization_change,True,bool,0.8336,2,False,binary,binary_0_1,-,Sorting signals change,,,,
+cmp_localization_deeploc_signals_isoform,localization,cmp,L,evidence_cols,L1_localization_change,False,str,0.7912,20,False,categorical,one_hot,-,Isoform sorting signals,,,,
+cmp_localization_deeploc_top_prob_delta,localization,cmp,L,module_map,,False,float,1.0,3710,True,,numeric,signed_log,,,,,1.0
+isoform_localization_deeploc_membrane,localization,isoform,L,evidence_cols,L1_localization_change,False,str,1.0,12,False,categorical,one_hot,-,Membrane state (isoform),,,,
+isoform_localization_deeploc_prediction,localization,isoform,L,evidence_cols,L1_localization_change,False,str,1.0,62,False,categorical,-,-,DeepLoc prediction (isoform),,,,
+isoform_localization_deeploc_prob_cell_membrane,localization,isoform,L,evidence_cols,L1_localization_change,False,float,1.0,3539,True,,numeric,linear,DeepLoc P(Cell membrane) (isoform),,,,1.0
+isoform_localization_deeploc_prob_cytoplasm,localization,isoform,L,evidence_cols,L1_localization_change,False,float,1.0,4280,True,,numeric,linear,DeepLoc P(Cytoplasm) (isoform),,,,1.0
+isoform_localization_deeploc_prob_endoplasmic_reticulum,localization,isoform,L,evidence_cols,L1_localization_change,False,float,1.0,3613,True,,numeric,linear,DeepLoc P(Endoplasmic reticulum) (isoform),,,,1.0
+isoform_localization_deeploc_prob_extracellular,localization,isoform,L,evidence_cols,L1_localization_change,False,float,1.0,2510,True,,numeric,linear,DeepLoc P(Extracellular) (isoform),,,,1.0
+isoform_localization_deeploc_prob_golgi_apparatus,localization,isoform,L,evidence_cols,L1_localization_change,False,float,1.0,3775,True,,numeric,linear,DeepLoc P(Golgi apparatus) (isoform),,,,1.0
+isoform_localization_deeploc_prob_lysosome_vacuole,localization,isoform,L,evidence_cols,L1_localization_change,False,float,1.0,3748,True,,numeric,linear,DeepLoc P(Lysosome/Vacuole) (isoform),,,,1.0
+isoform_localization_deeploc_prob_mitochondrion,localization,isoform,L,evidence_cols,L1_localization_change,False,float,1.0,3548,True,,numeric,linear,DeepLoc P(Mitochondrion) (isoform),,,,1.0
+isoform_localization_deeploc_prob_nucleus,localization,isoform,L,evidence_cols,L1_localization_change,False,float,1.0,4544,True,,numeric,linear,DeepLoc P(Nucleus) (isoform),,,,1.0
+isoform_localization_deeploc_prob_peroxisome,localization,isoform,L,evidence_cols,L1_localization_change,False,float,1.0,1609,True,,numeric,linear,DeepLoc P(Peroxisome) (isoform),,,,1.0
+isoform_localization_deeploc_signals,localization,isoform,L,evidence_cols,L1_localization_change,False,str,0.7912,20,False,categorical,one_hot,-,DeepLoc signals (isoform),,,,
+isoform_localization_deeploc_top_prob,localization,isoform,L,evidence_cols,L1_localization_change,False,float,1.0,3523,True,,numeric,linear,DeepLoc top-class probability (isoform),,,,1.0
+canonical_signalp_signalp_cleavage_site,signalp,canonical,L,module_map,,False,str,0.0622,218,False,categorical,-,-,,,,,
+canonical_signalp_signalp_prediction,signalp,canonical,L,evidence_cols,L2_targeting_change,False,str,1.0,2,False,categorical,one_hot,-,SignalP prediction (canonical),,,,
+canonical_signalp_signalp_probability,signalp,canonical,L,module_map,,False,float,1.0,446,True,,numeric,linear,,,,,1.0
+cmp_signalp_signalp_cleavage_site_canonical,signalp,cmp,L,evidence_cols,L2_targeting_change,False,str,0.0622,218,False,categorical,-,-,Canonical SignalP cleavage site,,,,
+cmp_signalp_signalp_cleavage_site_changed,signalp,cmp,L,evidence_cols,L2_targeting_change,True,bool,0.9475,2,False,binary,binary_0_1,-,Signal-peptide cleavage site changes,,,,
+cmp_signalp_signalp_cleavage_site_isoform,signalp,cmp,L,evidence_cols,L2_targeting_change,False,str,0.0181,117,False,categorical,-,-,Isoform SignalP cleavage site,,,,
+cmp_signalp_signalp_prediction_canonical,signalp,cmp,L,evidence_cols,L2_targeting_change,False,str,1.0,2,False,categorical,one_hot,-,Canonical SignalP prediction,,,,
+cmp_signalp_signalp_prediction_changed,signalp,cmp,L,evidence_cols,L2_targeting_change,True,bool,1.0,2,False,binary,binary_0_1,-,Signal-peptide prediction changes,,,,
+cmp_signalp_signalp_prediction_isoform,signalp,cmp,L,evidence_cols,L2_targeting_change,False,str,1.0,2,False,categorical,one_hot,-,Isoform SignalP prediction,,,,
+cmp_signalp_signalp_probability_delta,signalp,cmp,L,evidence_cols,L2_targeting_change,False,float,1.0,1225,True,,numeric,signed_log,Δ SignalP probability (isoform − canonical),,,,1.0
+isoform_signalp_signalp_cleavage_site,signalp,isoform,L,module_map,,False,str,0.0181,117,False,categorical,-,-,,,,,
+isoform_signalp_signalp_prediction,signalp,isoform,L,evidence_cols,L2_targeting_change,False,str,1.0,2,False,categorical,one_hot,-,SignalP prediction (isoform),,,,
+isoform_signalp_signalp_probability,signalp,isoform,L,module_map,,False,float,1.0,850,True,,numeric,linear,,,,,1.0
+canonical_targetp_targetp_cleavage_site,targetp,canonical,L,module_map,,False,str,0.1261,461,False,categorical,-,-,,,,,
+canonical_targetp_targetp_ctp_prob,targetp,canonical,L,module_map,,False,null,0.0,0,False,all_null,-,-,,,,,
+canonical_targetp_targetp_mtp_prob,targetp,canonical,L,module_map,,False,float,1.0,1531,True,,numeric,linear,,,,,1.0
+canonical_targetp_targetp_prediction,targetp,canonical,L,evidence_cols,L2_targeting_change,False,str,1.0,3,False,categorical,one_hot,-,TargetP prediction (canonical),,,,
+canonical_targetp_targetp_probability,targetp,canonical,L,module_map,,False,float,1.0,1945,True,,numeric,linear,,,,,1.0
+canonical_targetp_targetp_sp_prob,targetp,canonical,L,module_map,,False,float,1.0,1456,True,,numeric,linear,,,,,1.0
+cmp_targetp_targetp_cleavage_site_canonical,targetp,cmp,L,module_map,,False,str,0.1261,461,False,categorical,-,-,,,,,
+cmp_targetp_targetp_cleavage_site_changed,targetp,cmp,L,evidence_cols,L2_targeting_change,True,bool,0.861,2,False,binary,binary_0_1,-,Transit-peptide cleavage site changes,,,,
+cmp_targetp_targetp_cleavage_site_isoform,targetp,cmp,L,module_map,,False,str,0.0754,424,False,categorical,-,-,,,,,
+cmp_targetp_targetp_ctp_prob_canonical,targetp,cmp,L,module_map,,False,null,0.0,0,False,all_null,-,-,,,,,
+cmp_targetp_targetp_ctp_prob_changed,targetp,cmp,L,evidence_cols,L2_targeting_change,True,bool,1.0,1,False,binary,binary_0_1,-,,,,,
+cmp_targetp_targetp_ctp_prob_isoform,targetp,cmp,L,module_map,,False,null,0.0,0,False,all_null,-,-,,,,,
+cmp_targetp_targetp_mtp_prob_delta,targetp,cmp,L,evidence_cols,L2_targeting_change,False,float,1.0,4830,True,,numeric,signed_log,Δ TargetP mitochondrial-transit prob,,,,1.0
+cmp_targetp_targetp_prediction_canonical,targetp,cmp,L,evidence_cols,L2_targeting_change,False,str,1.0,3,False,categorical,one_hot,-,Canonical TargetP prediction,,,,
+cmp_targetp_targetp_prediction_changed,targetp,cmp,L,evidence_cols,L2_targeting_change,True,bool,1.0,2,False,binary,binary_0_1,-,Transit-peptide prediction changes,,,,
+cmp_targetp_targetp_prediction_isoform,targetp,cmp,L,evidence_cols,L2_targeting_change,False,str,1.0,3,False,categorical,one_hot,-,Isoform TargetP prediction,,,,
+cmp_targetp_targetp_probability_delta,targetp,cmp,L,evidence_cols,L2_targeting_change,False,float,1.0,5234,True,,numeric,signed_log,Δ TargetP probability (isoform − canonical),,,,1.0
+cmp_targetp_targetp_sp_prob_delta,targetp,cmp,L,evidence_cols,L2_targeting_change,False,float,1.0,4471,True,,numeric,signed_log,Δ TargetP signal-peptide prob,,,,1.0
+isoform_targetp_targetp_cleavage_site,targetp,isoform,L,module_map,,False,str,0.0754,424,False,categorical,-,-,,,,,
+isoform_targetp_targetp_ctp_prob,targetp,isoform,L,module_map,,False,null,0.0,0,False,all_null,-,-,,,,,
+isoform_targetp_targetp_mtp_prob,targetp,isoform,L,module_map,,False,float,1.0,3145,True,,numeric,linear,,,,,1.0
+isoform_targetp_targetp_prediction,targetp,isoform,L,evidence_cols,L2_targeting_change,False,str,1.0,3,False,categorical,one_hot,-,TargetP prediction (isoform),,,,
+isoform_targetp_targetp_probability,targetp,isoform,L,module_map,,False,float,1.0,3905,True,,numeric,linear,,,,,1.0
+isoform_targetp_targetp_sp_prob,targetp,isoform,L,module_map,,False,float,1.0,2909,True,,numeric,linear,,,,,1.0
+canonical_clinical_hits,clinical,canonical,M,module_map,,False,list,1.0,2773,False,list,count,-,,,,,
+canonical_clinical_summary.by_consequence.3_prime_UTR_variant,clinical,canonical,M,module_map,,False,float,0.0003,1,False,constant,-,linear,,,,,
+canonical_clinical_summary.by_consequence.Complex,clinical,canonical,M,module_map,,False,float,0.0006,1,False,constant,-,linear,,,,,
+canonical_clinical_summary.by_consequence.Deletion,clinical,canonical,M,module_map,,False,float,0.0563,20,False,redundant,numeric,linear,,,isoform_clinical_summary.by_consequence.Deletion,,0.0743
+canonical_clinical_summary.by_consequence.Duplication,clinical,canonical,M,module_map,,False,float,0.0248,13,False,sparse,numeric,linear,,,,,
+canonical_clinical_summary.by_consequence.Indel,clinical,canonical,M,module_map,,False,float,0.002,2,False,binary,binary_0_1,linear,,,,,
+canonical_clinical_summary.by_consequence.Insertion,clinical,canonical,M,module_map,,False,float,0.004,2,False,binary,binary_0_1,linear,,,,,
+canonical_clinical_summary.by_consequence.Inversion,clinical,canonical,M,module_map,,False,float,0.0009,1,False,constant,-,linear,,,,,
+canonical_clinical_summary.by_consequence.Microsatellite,clinical,canonical,M,module_map,,False,float,0.0014,2,False,binary,binary_0_1,linear,,,,,
+canonical_clinical_summary.by_consequence.Translocation,clinical,canonical,M,module_map,,False,float,0.0002,1,False,constant,-,linear,,,,,
+canonical_clinical_summary.by_consequence.copy number gain,clinical,canonical,M,module_map,,False,float,0.0111,6,False,sparse,numeric,linear,,,,,
+canonical_clinical_summary.by_consequence.copy number loss,clinical,canonical,M,module_map,,False,float,0.0142,5,False,sparse,numeric,linear,,,,,
+canonical_clinical_summary.by_consequence.frameshift_variant,clinical,canonical,M,module_map,,False,float,0.9992,273,True,,numeric,linear,,,,,1.0
+canonical_clinical_summary.by_consequence.inframe_deletion,clinical,canonical,M,module_map,,False,float,0.9735,122,True,,numeric,linear,,,,,0.9707
+canonical_clinical_summary.by_consequence.inframe_insertion,clinical,canonical,M,module_map,,False,float,0.8333,71,True,,numeric,linear,,,,,0.8536
+canonical_clinical_summary.by_consequence.intronic,clinical,canonical,M,module_map,,False,float,0.9995,2627,True,,numeric,linear,,,,,1.0
+canonical_clinical_summary.by_consequence.missense_variant,clinical,canonical,M,module_map,,False,float,0.9995,1582,True,,numeric,linear,,,,,1.0
+canonical_clinical_summary.by_consequence.mnv,clinical,canonical,M,module_map,,False,float,0.6509,44,True,,numeric,linear,,,,,0.6577
+canonical_clinical_summary.by_consequence.single nucleotide variant,clinical,canonical,M,module_map,,False,float,0.0003,1,False,constant,-,linear,,,,,
+canonical_clinical_summary.by_consequence.stop_gained,clinical,canonical,M,module_map,,False,float,0.9988,214,True,,numeric,linear,,,,,1.0
+canonical_clinical_summary.by_consequence.stop_lost,clinical,canonical,M,module_map,,False,float,0.0006,2,False,binary,binary_0_1,linear,,,,,
+canonical_clinical_summary.by_consequence.synonymous_variant,clinical,canonical,M,module_map,,False,float,0.9995,961,True,,numeric,linear,,,,,1.0
+canonical_clinical_summary.by_source.COSMIC,clinical,canonical,M,module_map,,False,float,0.9711,1304,False,redundant,numeric,linear,,,isoform_clinical_summary.by_source.COSMIC,,0.9437
+canonical_clinical_summary.by_source.ClinVar,clinical,canonical,M,module_map,,False,float,0.993,769,False,redundant,numeric,linear,,,isoform_clinical_summary.by_source.ClinVar,,0.9685
+canonical_clinical_summary.by_source.gnomAD,clinical,canonical,M,module_map,,False,float,0.9995,2716,False,redundant,numeric,linear,,,isoform_clinical_summary.by_source.gnomAD,,1.0
+canonical_clinical_summary.pathogenic_count,clinical,canonical,M,module_map,,False,int,1.0,264,False,redundant,numeric,log1p,,,isoform_clinical_summary.pathogenic_count,,1.0
+canonical_clinical_summary.total_variants,clinical,canonical,M,module_map,,False,int,1.0,2773,False,redundant,numeric,log1p,,,isoform_clinical_summary.total_variants,,1.0
+n_canonical_clinical_hits,clinical,canonical,M,module_map,,False,int,1.0,2773,False,redundant,numeric,log1p,,canonical_clinical_hits,isoform_clinical_summary.total_variants,,1.0
+cmp_clinical_hits_canonical_status,clinical,cmp,M,module_map,,False,null,0.0,0,False,all_null,-,-,,,,,
+cmp_clinical_hits_in_diff_region,clinical,cmp,M,module_map,,False,list,1.0,1573,False,list,count,-,,,,,
+cmp_clinical_hits_isoform_status,clinical,cmp,M,module_map,,False,null,0.0,0,False,all_null,-,-,,,,,
+cmp_clinical_hits_source_pane,clinical,cmp,M,module_map,,False,str,1.0,2,False,categorical,one_hot,-,,,,,
+cmp_clinical_n_hits_in_diff_region,clinical,cmp,M,module_map,,False,int,1.0,1573,True,,numeric,linear,,,,,1.0
+n_cmp_clinical_hits_in_diff_region,clinical,cmp,M,module_map,,False,int,1.0,1573,False,redundant,numeric,log1p,,cmp_clinical_hits_in_diff_region,cmp_clinical_n_hits_in_diff_region,,1.0
+isoform_clinical_hits,clinical,isoform,M,module_map,,False,list,1.0,2205,False,list,count,-,,,,,
+isoform_clinical_summary.by_consequence.3_prime_UTR_variant,clinical,isoform,M,module_map,,False,float,0.0003,1,False,constant,-,linear,,,,,
+isoform_clinical_summary.by_consequence.Complex,clinical,isoform,M,module_map,,False,float,0.0006,1,False,constant,-,linear,,,,,
+isoform_clinical_summary.by_consequence.Deletion,clinical,isoform,M,module_map,,False,float,0.0563,20,True,,numeric,linear,,,,,0.0743
+isoform_clinical_summary.by_consequence.Duplication,clinical,isoform,M,module_map,,False,float,0.0248,13,False,sparse,numeric,linear,,,,,
+isoform_clinical_summary.by_consequence.Indel,clinical,isoform,M,module_map,,False,float,0.002,2,False,binary,binary_0_1,linear,,,,,
+isoform_clinical_summary.by_consequence.Insertion,clinical,isoform,M,module_map,,False,float,0.004,2,False,binary,binary_0_1,linear,,,,,
+isoform_clinical_summary.by_consequence.Inversion,clinical,isoform,M,module_map,,False,float,0.0009,1,False,constant,-,linear,,,,,
+isoform_clinical_summary.by_consequence.Microsatellite,clinical,isoform,M,module_map,,False,float,0.0014,2,False,binary,binary_0_1,linear,,,,,
+isoform_clinical_summary.by_consequence.Translocation,clinical,isoform,M,module_map,,False,float,0.0002,1,False,constant,-,linear,,,,,
+isoform_clinical_summary.by_consequence.copy number gain,clinical,isoform,M,module_map,,False,float,0.0111,6,False,sparse,numeric,linear,,,,,
+isoform_clinical_summary.by_consequence.copy number loss,clinical,isoform,M,module_map,,False,float,0.0142,5,False,sparse,numeric,linear,,,,,
+isoform_clinical_summary.by_consequence.frameshift_variant,clinical,isoform,M,module_map,,False,float,0.9992,278,True,,numeric,linear,,,,,1.0
+isoform_clinical_summary.by_consequence.inframe_deletion,clinical,isoform,M,module_map,,False,float,0.9746,123,True,,numeric,linear,,,,,0.973
+isoform_clinical_summary.by_consequence.inframe_insertion,clinical,isoform,M,module_map,,False,float,0.8336,72,True,,numeric,linear,,,,,0.8536
+isoform_clinical_summary.by_consequence.intronic,clinical,isoform,M,module_map,,False,float,0.9995,2756,True,,numeric,linear,,,,,1.0
+isoform_clinical_summary.by_consequence.missense_variant,clinical,isoform,M,module_map,,False,float,0.9995,1636,True,,numeric,linear,,,,,1.0
+isoform_clinical_summary.by_consequence.mnv,clinical,isoform,M,module_map,,False,float,0.6518,45,True,,numeric,linear,,,,,0.6577
+isoform_clinical_summary.by_consequence.single nucleotide variant,clinical,isoform,M,module_map,,False,float,0.0003,1,False,constant,-,linear,,,,,
+isoform_clinical_summary.by_consequence.stop_gained,clinical,isoform,M,module_map,,False,float,0.9988,222,True,,numeric,linear,,,,,1.0
+isoform_clinical_summary.by_consequence.stop_lost,clinical,isoform,M,module_map,,False,float,0.0006,2,False,binary,binary_0_1,linear,,,,,
+isoform_clinical_summary.by_consequence.synonymous_variant,clinical,isoform,M,module_map,,False,float,0.9995,988,True,,numeric,linear,,,,,1.0
+isoform_clinical_summary.by_source.COSMIC,clinical,isoform,M,module_map,,False,float,0.9711,1304,True,,numeric,linear,,,,,0.9437
+isoform_clinical_summary.by_source.ClinVar,clinical,isoform,M,module_map,,False,float,0.993,769,True,,numeric,linear,,,,,0.9685
+isoform_clinical_summary.by_source.gnomAD,clinical,isoform,M,module_map,,False,float,0.9995,2716,True,,numeric,linear,,,,,1.0
+isoform_clinical_summary.pathogenic_count,clinical,isoform,M,module_map,,False,int,1.0,264,True,,numeric,log1p,,,,,1.0
+isoform_clinical_summary.total_variants,clinical,isoform,M,module_map,,False,int,1.0,2773,True,,numeric,log1p,,,,,1.0
+n_isoform_clinical_hits,clinical,isoform,M,module_map,,False,int,1.0,2205,False,redundant,numeric,log1p,,isoform_clinical_hits,isoform_variant_intersection_n_total,,1.0
+isoform_plm_vep_constraint_enrichment,plm_vep,isoform,M,evidence_cols,M1_pathogenic_variant_enrichment,True,float,0.9305,6002,True,,numeric,signed_log,,,,absent_for_separate_orfs,0.0
+isoform_plm_vep_mean_llr_canonical,plm_vep,isoform,M,module_map,,False,float,1.0,3571,True,,numeric,linear,,,,,1.0
+isoform_plm_vep_mean_llr_isoform,plm_vep,isoform,M,module_map,,False,float,1.0,6458,True,,numeric,linear,,,,,1.0
+isoform_plm_vep_mean_llr_shared_region,plm_vep,isoform,M,evidence_cols,M1_pathogenic_variant_enrichment,False,float,0.9305,6002,True,,numeric,linear,Mean ESM-C logP(wt) over shared region,,,absent_for_separate_orfs,0.0
+isoform_plm_vep_mean_llr_unique_region,plm_vep,isoform,M,evidence_cols,M1_pathogenic_variant_enrichment,False,float,1.0,6443,True,,numeric,linear,Mean ESM-C logP(wt) over unique region,,,,1.0
+isoform_plm_vep_n_constrained_positions_shared,plm_vep,isoform,M,evidence_cols,M1_pathogenic_variant_enrichment,False,int,1.0,50,True,,numeric,linear,ESM-C conserved positions (shared),,,,1.0
+isoform_plm_vep_n_constrained_positions_unique,plm_vep,isoform,M,evidence_cols,M1_pathogenic_variant_enrichment,False,int,1.0,49,True,,numeric,linear,ESM-C conserved positions (unique),,,,1.0
+isoform_plm_vep_status,plm_vep,isoform,M,evidence_cols,M1_pathogenic_variant_enrichment,False,str,1.0,1,False,status_string,-,-,PLM VEP status,,,,
+isoform_variant_intersection_disease_enrichment_ratio,variant_intersection,isoform,M,evidence_cols,M2_clinical_variant_overlap,True,float,0.9415,5659,True,,numeric,signed_log,Disease enrichment ratio (unique/shared density),,,depleted_for_separate_orfs,0.1802
+isoform_variant_intersection_gnomad_depletion_ratio,variant_intersection,isoform,M,evidence_cols,M1_pathogenic_variant_enrichment,True,float,0.9441,6057,True,,numeric,signed_log,gnomAD depletion ratio (unique/shared density),,,depleted_for_separate_orfs,0.1937
+isoform_variant_intersection_hits,variant_intersection,isoform,M,module_map,,False,list,1.0,2205,False,list,count,-,,,,,
+isoform_variant_intersection_n_disease_in_shared_region,variant_intersection,isoform,M,evidence_cols,M2_clinical_variant_overlap,False,int,1.0,1063,True,,numeric,linear,Disease variants in shared region,,,,1.0
+isoform_variant_intersection_n_disease_in_unique_region,variant_intersection,isoform,M,evidence_cols,M2_clinical_variant_overlap,False,int,1.0,856,True,,numeric,linear,Disease variants in unique region,,,,1.0
+isoform_variant_intersection_n_dropped_outside_coding,variant_intersection,isoform,M,evidence_cols,M2_clinical_variant_overlap,False,int,1.0,3273,True,,numeric,linear,Variants dropped outside coding,,,,1.0
+isoform_variant_intersection_n_gnomad_in_shared_region,variant_intersection,isoform,M,evidence_cols,M1_pathogenic_variant_enrichment,False,int,1.0,1773,True,,numeric,linear,gnomAD variants in shared region,,,,1.0
+isoform_variant_intersection_n_gnomad_in_unique_region,variant_intersection,isoform,M,evidence_cols,M1_pathogenic_variant_enrichment,False,int,1.0,1322,True,,numeric,linear,gnomAD variants in unique region,,,,1.0
+isoform_variant_intersection_n_in_shared_region,variant_intersection,isoform,M,module_map,,False,int,1.0,2227,True,,numeric,linear,Variants in shared region,,,,1.0
+isoform_variant_intersection_n_in_unique_region,variant_intersection,isoform,M,module_map,,False,int,1.0,1558,True,,numeric,linear,Variants in unique region,,,,1.0
+isoform_variant_intersection_n_pathogenic_in_shared_region,variant_intersection,isoform,M,evidence_cols,M2_clinical_variant_overlap,False,int,1.0,242,True,,numeric,linear,Pathogenic in shared region,,,,1.0
+isoform_variant_intersection_n_pathogenic_in_unique_region,variant_intersection,isoform,M,evidence_cols,M2_clinical_variant_overlap,False,int,1.0,175,True,,numeric,linear,Pathogenic in unique region,,,,1.0
+isoform_variant_intersection_n_total,variant_intersection,isoform,M,evidence_cols,M2_clinical_variant_overlap,False,int,1.0,2205,True,,numeric,linear,Total clinical variants over isoform,,,,1.0
+isoform_variant_intersection_shared_region_nt,variant_intersection,isoform,M,evidence_cols,M1_pathogenic_variant_enrichment;M2_clinical_variant_overlap,False,int,1.0,1319,True,,numeric,log1p,Shared region length (nt),,,,1.0
+isoform_variant_intersection_summary.disease_enrichment_ratio,variant_intersection,isoform,M,module_map,,False,float,0.9415,5659,False,redundant,numeric,signed_log,,,isoform_variant_intersection_disease_enrichment_ratio,depleted_for_separate_orfs,0.1802
+isoform_variant_intersection_summary.gnomad_depletion_ratio,variant_intersection,isoform,M,module_map,,False,float,0.9441,6057,False,redundant,numeric,signed_log,,,isoform_variant_intersection_gnomad_depletion_ratio,depleted_for_separate_orfs,0.1937
+isoform_variant_intersection_summary.n_scored,variant_intersection,isoform,M,module_map,,False,int,1.0,2205,False,redundant,numeric,log1p,,,isoform_variant_intersection_n_total,,1.0
+isoform_variant_intersection_summary.n_unscored,variant_intersection,isoform,M,module_map,,False,int,1.0,1,False,constant,-,log1p,,,,,
+isoform_variant_intersection_summary.shared_region_nt,variant_intersection,isoform,M,module_map,,False,int,1.0,1319,False,redundant,numeric,log1p,,,isoform_variant_intersection_shared_region_nt,,1.0
+isoform_variant_intersection_summary.status,variant_intersection,isoform,M,module_map,,False,str,1.0,1,False,status_string,-,-,,,,,
+isoform_variant_intersection_summary.unique_region_nt,variant_intersection,isoform,M,module_map,,False,int,1.0,1083,False,redundant,numeric,log1p,,,isoform_variant_intersection_unique_region_nt,,1.0
+isoform_variant_intersection_summary.unique_space,variant_intersection,isoform,M,module_map,,False,str,1.0,2,False,status_string,one_hot,-,,,,,
+isoform_variant_intersection_unique_region_nt,variant_intersection,isoform,M,evidence_cols,M1_pathogenic_variant_enrichment;M2_clinical_variant_overlap,False,int,1.0,1083,True,,numeric,log1p,Unique region length (nt),,,,1.0
+n_isoform_variant_intersection_hits,variant_intersection,isoform,M,module_map,,False,int,1.0,2205,False,redundant,numeric,log1p,,isoform_variant_intersection_hits,isoform_variant_intersection_n_total,,1.0
+isoform_varianteffect_hits,varianteffect,isoform,M,module_map,,False,list,1.0,2205,False,list,count,-,,,,,
+isoform_varianteffect_max_am_pathogenicity_shared,varianteffect,isoform,M,module_map,,False,float,0.9344,449,True,,numeric,linear,,,,depleted_for_separate_orfs,0.2545
+isoform_varianteffect_max_am_pathogenicity_unique,varianteffect,isoform,M,module_map,,False,float,0.667,1416,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+isoform_varianteffect_mean_am_pathogenicity_shared,varianteffect,isoform,M,module_map,,False,float,0.9344,5681,True,,numeric,linear,,,,depleted_for_separate_orfs,0.2545
+isoform_varianteffect_mean_am_pathogenicity_shared_disease,varianteffect,isoform,M,module_map,,False,float,0.9318,5593,True,,numeric,linear,,,,depleted_for_separate_orfs,0.241
+isoform_varianteffect_mean_am_pathogenicity_shared_gnomad,varianteffect,isoform,M,module_map,,False,float,0.9336,5662,True,,numeric,linear,,,,depleted_for_separate_orfs,0.2545
+isoform_varianteffect_mean_am_pathogenicity_unique,varianteffect,isoform,M,module_map,,False,float,0.667,4291,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+isoform_varianteffect_mean_am_pathogenicity_unique_disease,varianteffect,isoform,M,module_map,,False,float,0.6444,4102,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+isoform_varianteffect_mean_am_pathogenicity_unique_gnomad,varianteffect,isoform,M,module_map,,False,float,0.665,4265,True,,numeric,linear,"Mean AlphaMissense pathogenicity, germline (unique)",,,absent_for_separate_orfs,0.0
+isoform_varianteffect_mean_delta_llr_shared,varianteffect,isoform,M,module_map,,False,float,0.9497,5809,True,,numeric,linear,,,,depleted_for_separate_orfs,0.2748
+isoform_varianteffect_mean_delta_llr_shared_disease,varianteffect,isoform,M,module_map,,False,float,0.9468,5723,True,,numeric,linear,,,,depleted_for_separate_orfs,0.259
+isoform_varianteffect_mean_delta_llr_shared_gnomad,varianteffect,isoform,M,module_map,,False,float,0.9492,5801,True,,numeric,linear,,,,depleted_for_separate_orfs,0.2725
+isoform_varianteffect_mean_delta_llr_unique,varianteffect,isoform,M,module_map,,False,float,0.9855,6281,True,,numeric,linear,,,,,0.8604
+isoform_varianteffect_mean_delta_llr_unique_disease,varianteffect,isoform,M,module_map,,False,float,0.907,5254,True,,numeric,linear,,,,,0.6509
+isoform_varianteffect_mean_delta_llr_unique_gnomad,varianteffect,isoform,M,module_map,,False,float,0.9817,6221,True,,numeric,linear,"Mean ESM-C ΔLLR, germline (unique)",,,,0.8378
+isoform_varianteffect_min_delta_llr_shared,varianteffect,isoform,M,module_map,,False,float,0.9497,4015,True,,numeric,linear,,,,depleted_for_separate_orfs,0.2748
+isoform_varianteffect_min_delta_llr_shared_disease,varianteffect,isoform,M,module_map,,False,float,0.9468,3975,True,,numeric,linear,,,,depleted_for_separate_orfs,0.259
+isoform_varianteffect_min_delta_llr_shared_gnomad,varianteffect,isoform,M,module_map,,False,float,0.9492,4005,True,,numeric,linear,,,,depleted_for_separate_orfs,0.2725
+isoform_varianteffect_min_delta_llr_unique,varianteffect,isoform,M,module_map,,False,float,0.9855,4109,True,,numeric,linear,,,,,0.8604
+isoform_varianteffect_min_delta_llr_unique_disease,varianteffect,isoform,M,module_map,,False,float,0.907,3664,True,,numeric,linear,,,,,0.6509
+isoform_varianteffect_min_delta_llr_unique_gnomad,varianteffect,isoform,M,module_map,,False,float,0.9817,4075,True,,numeric,linear,"Min ESM-C ΔLLR, germline (unique)",,,,0.8378
+isoform_varianteffect_n_am_pathogenic_in_shared,varianteffect,isoform,M,module_map,,False,int,1.0,711,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_n_am_pathogenic_in_shared_disease,varianteffect,isoform,M,module_map,,False,int,1.0,395,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_n_am_pathogenic_in_shared_gnomad,varianteffect,isoform,M,module_map,,False,int,1.0,488,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_n_am_pathogenic_in_unique,varianteffect,isoform,M,module_map,,False,int,1.0,575,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_n_am_pathogenic_in_unique_disease,varianteffect,isoform,M,module_map,,False,int,1.0,320,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_n_am_pathogenic_in_unique_gnomad,varianteffect,isoform,M,module_map,,False,int,1.0,427,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_n_damaging_in_shared,varianteffect,isoform,M,module_map,,False,int,1.0,932,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_n_damaging_in_shared_disease,varianteffect,isoform,M,module_map,,False,int,1.0,528,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_n_damaging_in_shared_gnomad,varianteffect,isoform,M,module_map,,False,int,1.0,642,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_n_damaging_in_unique,varianteffect,isoform,M,module_map,,False,int,1.0,750,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_n_damaging_in_unique_disease,varianteffect,isoform,M,module_map,,False,int,1.0,427,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_n_damaging_in_unique_gnomad,varianteffect,isoform,M,module_map,,False,int,1.0,551,True,,numeric,linear,Damaging germline predictions (AM+PLM),,,,1.0
+isoform_varianteffect_n_lof_in_shared,varianteffect,isoform,M,module_map,,False,int,1.0,361,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_n_lof_in_shared_disease,varianteffect,isoform,M,module_map,,False,int,1.0,242,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_n_lof_in_shared_gnomad,varianteffect,isoform,M,module_map,,False,int,1.0,232,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_n_lof_in_unique,varianteffect,isoform,M,module_map,,False,int,1.0,299,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_n_lof_in_unique_disease,varianteffect,isoform,M,module_map,,False,int,1.0,187,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_n_lof_in_unique_gnomad,varianteffect,isoform,M,module_map,,False,int,1.0,195,True,,numeric,linear,LoF germline variants (unique),,,,1.0
+isoform_varianteffect_n_scorable_in_shared,varianteffect,isoform,M,module_map,,False,int,1.0,2186,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_n_scorable_in_shared_disease,varianteffect,isoform,M,module_map,,False,int,1.0,1069,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_n_scorable_in_shared_gnomad,varianteffect,isoform,M,module_map,,False,int,1.0,1722,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_n_scorable_in_unique,varianteffect,isoform,M,module_map,,False,int,1.0,1561,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_n_scorable_in_unique_disease,varianteffect,isoform,M,module_map,,False,int,1.0,830,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_n_scorable_in_unique_gnomad,varianteffect,isoform,M,module_map,,False,int,1.0,1299,True,,numeric,linear,Scorable germline variants (unique),,,,1.0
+isoform_varianteffect_n_scored_am,varianteffect,isoform,M,module_map,,False,int,1.0,1589,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_n_scored_plm,varianteffect,isoform,M,module_map,,False,int,1.0,2102,True,,numeric,linear,,,,,1.0
+isoform_varianteffect_summary.alphamissense_available,varianteffect,isoform,M,module_map,,False,bool,1.0,1,False,binary,binary_0_1,-,,,,,
+isoform_varianteffect_summary.llr_damaging_threshold,varianteffect,isoform,M,module_map,,False,float,1.0,1,False,constant,-,linear,,,,,
+isoform_varianteffect_summary.n_total,varianteffect,isoform,M,module_map,,False,int,1.0,2205,False,redundant,numeric,log1p,,,isoform_variant_intersection_n_total,,1.0
+isoform_varianteffect_summary.plm_available,varianteffect,isoform,M,module_map,,False,bool,1.0,1,False,binary,binary_0_1,-,,,,,
+isoform_varianteffect_summary.status,varianteffect,isoform,M,module_map,,False,str,1.0,1,False,status_string,-,-,,,,,
+n_isoform_varianteffect_hits,varianteffect,isoform,M,module_map,,False,int,1.0,2205,False,redundant,numeric,log1p,,isoform_varianteffect_hits,isoform_variant_intersection_n_total,,1.0
+isoform_structure_backend,structure,isoform,P,module_map,,False,str,1.0,1,False,status_string,-,-,,,,,
+isoform_structure_canonical_hash,structure,isoform,P,module_map,,False,str,1.0,3571,False,identifier,-,-,,,,,
+isoform_structure_extension_contacts,structure,isoform,P,evidence_cols,P1_structured_extension,False,float,0.2149,66,True,,numeric,linear,Extension↔body Cα contacts (<8 Å),,,,0.0
+isoform_structure_isoform_hash,structure,isoform,P,module_map,,False,str,1.0,6459,False,identifier,-,-,,,,,
+isoform_structure_pae_body_vs_body,structure,isoform,P,evidence_cols,P1_structured_extension;P2_shared_structural_change,False,float,0.7919,5107,True,,numeric,linear,Mean PAE within fold body (Å),,,absent_for_separate_orfs,0.0
+isoform_structure_pae_diff_vs_body,structure,isoform,P,evidence_cols,P1_structured_extension;P2_shared_structural_change,False,float,0.7919,5107,True,,numeric,linear,Mean PAE differential↔body (Å; high = dangling),,,absent_for_separate_orfs,0.0
+isoform_structure_pae_diff_vs_diff,structure,isoform,P,evidence_cols,P1_structured_extension,False,float,0.8603,5531,True,,numeric,linear,Mean PAE within differential region (Å),,,,0.9842
+isoform_structure_pae_status,structure,isoform,P,evidence_cols,P1_structured_extension;P2_shared_structural_change,False,str,1.0,3,False,status_string,one_hot,-,PAE availability,,,,
+isoform_structure_plddt_canonical_mean,structure,isoform,P,evidence_cols,P1_structured_extension,False,float,0.8567,3147,True,,numeric,linear,Mean pLDDT (canonical),,,,0.8919
+isoform_structure_plddt_delta_shared,structure,isoform,P,evidence_cols,P1_structured_extension,False,float,0.7919,5116,True,,numeric,linear,"Δ pLDDT (isoform vs canonical, shared region)",,,absent_for_separate_orfs,0.0
+isoform_structure_plddt_diffregion_mean,structure,isoform,P,evidence_cols,P1_structured_extension;P3_secondary_structure,True,float,0.8603,5549,True,,numeric,linear,Mean pLDDT (differential region),,,,0.9842
+isoform_structure_plddt_diffregion_std,structure,isoform,P,evidence_cols,P1_structured_extension,False,float,0.8603,5523,True,,numeric,linear,pLDDT std (differential region),,,,0.9842
+isoform_structure_plddt_isoform_mean,structure,isoform,P,evidence_cols,P1_structured_extension,False,float,0.9321,6020,True,,numeric,linear,Mean pLDDT (isoform),,,,0.9842
+isoform_structure_plddt_shared_mean_canonical,structure,isoform,P,evidence_cols,P2_shared_structural_change,True,float,0.7919,4823,True,,numeric,linear,Mean shared-region pLDDT (canonical),,,absent_for_separate_orfs,0.0
+isoform_structure_plddt_shared_mean_isoform,structure,isoform,P,evidence_cols,P2_shared_structural_change,True,float,0.7919,5115,True,,numeric,linear,Mean shared-region pLDDT (isoform),,,absent_for_separate_orfs,0.0
+isoform_structure_ptm_canonical,structure,isoform,P,evidence_cols,P1_structured_extension;P3_secondary_structure;P2_shared_structural_change,False,float,0.8567,3147,True,,numeric,linear,pTM (canonical fold),,,,0.8919
+isoform_structure_ptm_isoform,structure,isoform,P,evidence_cols,P1_structured_extension;P3_secondary_structure;P2_shared_structural_change,False,float,0.9321,6019,True,,numeric,linear,pTM (isoform fold),,,,0.9842
+isoform_structure_rmsd_global,structure,isoform,P,evidence_cols,P2_shared_structural_change,False,float,0.8528,5510,True,,numeric,linear,Global Cα RMSD (tm-align),,,,0.8761
+isoform_structure_rmsd_shared,structure,isoform,P,evidence_cols,P2_shared_structural_change,True,float,0.7914,5113,True,,numeric,linear,Shared-region Cα RMSD,,,absent_for_separate_orfs,0.0
+isoform_structure_rmsd_shared_status,structure,isoform,P,evidence_cols,P2_shared_structural_change,False,str,1.0,4,False,status_string,one_hot,-,Shared-region RMSD status,,,,
+isoform_structure_shared_region_len,structure,isoform,P,evidence_cols,P2_shared_structural_change,True,float,0.7914,874,True,,numeric,log1p,Shared region length (aa),,,absent_for_separate_orfs,0.0
+isoform_structure_sse_all_elements,structure,isoform,P,evidence_cols,P3_secondary_structure,True,list,1.0,59,False,list,count,-,,,,,
+isoform_structure_sse_canonical,structure,isoform,P,module_map,,False,str,0.8567,3145,False,categorical,-,-,,,,,
+isoform_structure_sse_isoform,structure,isoform,P,module_map,,False,str,0.9321,5924,False,categorical,-,-,,,,,
+isoform_structure_sse_status,structure,isoform,P,evidence_cols,P3_secondary_structure,False,str,1.0,2,False,status_string,one_hot,-,,,,,
+isoform_structure_status,structure,isoform,P,evidence_cols,P1_structured_extension,False,str,1.0,2,False,status_string,one_hot,-,Structure prediction status,,,,
+isoform_structure_tm_score,structure,isoform,P,evidence_cols,P2_shared_structural_change,False,float,0.8528,5510,True,,numeric,linear,Global TM-score,,,,0.8761
+isoform_structure_tm_score_shared,structure,isoform,P,evidence_cols,P2_shared_structural_change,False,float,0.7914,5113,True,,numeric,linear,Shared-region TM-score,,,absent_for_separate_orfs,0.0
+n_isoform_structure_sse_all_elements,structure,isoform,P,evidence_cols,P3_secondary_structure,False,int,1.0,59,True,,numeric,log1p,,isoform_structure_sse_all_elements,,,1.0
+canonical_biophysics_aa_diversity,biophysics,canonical,S,module_map,,False,int,1.0,12,True,,numeric,linear,,,,,1.0
+canonical_biophysics_aromaticity,biophysics,canonical,S,module_map,,False,float,1.0,1073,True,,numeric,linear,,,,,1.0
+canonical_biophysics_disorder,biophysics,canonical,S,module_map,,False,float,1.0,1729,True,,numeric,linear,,,,,1.0
+canonical_biophysics_fraction_charged,biophysics,canonical,S,module_map,,False,float,1.0,1644,True,,numeric,linear,,,,,1.0
+canonical_biophysics_fraction_disorder_promoting,biophysics,canonical,S,module_map,,False,float,1.0,1791,True,,numeric,linear,,,,,1.0
+canonical_biophysics_fraction_lcr,biophysics,canonical,S,module_map,,False,float,1.0,1567,True,,numeric,linear,,,,,1.0
+canonical_biophysics_gravy,biophysics,canonical,S,module_map,,False,float,1.0,2935,True,,numeric,linear,,,,,1.0
+canonical_biophysics_instability_index,biophysics,canonical,S,module_map,,False,float,0.9986,3346,True,,numeric,linear,,,,,1.0
+canonical_biophysics_length,biophysics,canonical,S,module_map,,False,int,1.0,1223,True,,numeric,log1p,,,,,1.0
+canonical_biophysics_llps_score,biophysics,canonical,S,module_map,,False,float,1.0,1053,True,,numeric,linear,,,,,1.0
+canonical_biophysics_longest_homopolymer,biophysics,canonical,S,module_map,,False,int,1.0,21,True,,numeric,linear,,,,,1.0
+canonical_biophysics_mean_window_entropy,biophysics,canonical,S,module_map,,False,float,1.0,2278,True,,numeric,linear,,,,,1.0
+canonical_biophysics_normalized_complexity,biophysics,canonical,S,module_map,,False,float,1.0,858,True,,numeric,linear,,,,,1.0
+canonical_biophysics_pI,biophysics,canonical,S,module_map,,False,float,1.0,983,True,,numeric,linear,,,,,1.0
+canonical_biophysics_pipi_propensity,biophysics,canonical,S,module_map,,False,float,1.0,1258,True,,numeric,linear,,,,,1.0
+canonical_biophysics_prionlike_fraction,biophysics,canonical,S,module_map,,False,float,1.0,1242,True,,numeric,linear,,,,,1.0
+canonical_biophysics_rg_fg_density,biophysics,canonical,S,module_map,,False,float,1.0,1748,True,,numeric,linear,,,,,1.0
+canonical_biophysics_shannon_entropy,biophysics,canonical,S,module_map,,False,float,1.0,2040,True,,numeric,linear,,,,,1.0
+cmp_biophysics_aa_diversity_delta,biophysics,cmp,S,module_map,,False,float,1.0,21,True,,numeric,signed_log,,,,,1.0
+cmp_biophysics_aa_diversity_enriched,biophysics,cmp,S,module_map,,False,bool,0.9118,2,False,binary,binary_0_1,-,,,,,
+cmp_biophysics_aa_diversity_ratio,biophysics,cmp,S,module_map,,False,float,0.9118,110,True,,numeric,signed_log,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_aa_diversity_shared,biophysics,cmp,S,module_map,,False,float,0.9118,15,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_aa_diversity_unique,biophysics,cmp,S,module_map,,False,float,0.9118,16,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_aromaticity_delta,biophysics,cmp,S,module_map,,False,float,1.0,1952,True,,numeric,signed_log,,,,,1.0
+cmp_biophysics_aromaticity_enriched,biophysics,cmp,S,module_map,,False,bool,0.9036,2,False,binary,binary_0_1,-,,,,,
+cmp_biophysics_aromaticity_ratio,biophysics,cmp,S,module_map,,False,float,0.9036,4193,True,,numeric,signed_log,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_aromaticity_shared,biophysics,cmp,S,module_map,,False,float,0.9118,1301,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_aromaticity_unique,biophysics,cmp,S,module_map,,False,float,0.9118,1069,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_disorder_delta,biophysics,cmp,S,evidence_cols,S2_biophysics,True,float,1.0,2755,True,,numeric,signed_log,Δ disorder (isoform − canonical),,,,1.0
+cmp_biophysics_disorder_enriched,biophysics,cmp,S,module_map,,False,bool,0.7806,2,False,binary,binary_0_1,-,,,,,
+cmp_biophysics_disorder_ratio,biophysics,cmp,S,module_map,,False,float,0.9118,5874,True,,numeric,signed_log,Disorder unique/shared ratio,,,absent_for_separate_orfs,0.0
+cmp_biophysics_disorder_shared,biophysics,cmp,S,module_map,,False,float,0.9118,2297,True,,numeric,linear,Disorder over shared region,,,absent_for_separate_orfs,0.0
+cmp_biophysics_disorder_unique,biophysics,cmp,S,module_map,,False,float,0.9118,3023,True,,numeric,linear,Disorder over unique region,,,absent_for_separate_orfs,0.0
+cmp_biophysics_fraction_charged_delta,biophysics,cmp,S,evidence_cols,S2_biophysics,True,float,1.0,2369,True,,numeric,signed_log,Δ fraction charged (isoform − canonical),,,,1.0
+cmp_biophysics_fraction_charged_enriched,biophysics,cmp,S,module_map,,False,bool,0.9118,2,False,binary,binary_0_1,-,,,,,
+cmp_biophysics_fraction_charged_ratio,biophysics,cmp,S,module_map,,False,float,0.9118,5601,True,,numeric,signed_log,Fraction charged unique/shared ratio,,,absent_for_separate_orfs,0.0
+cmp_biophysics_fraction_charged_shared,biophysics,cmp,S,module_map,,False,float,0.9118,2138,True,,numeric,linear,Fraction charged over shared region,,,absent_for_separate_orfs,0.0
+cmp_biophysics_fraction_charged_unique,biophysics,cmp,S,module_map,,False,float,0.9118,1630,True,,numeric,linear,Fraction charged over unique region,,,absent_for_separate_orfs,0.0
+cmp_biophysics_fraction_disorder_promoting_delta,biophysics,cmp,S,module_map,,False,float,1.0,2463,True,,numeric,signed_log,,,,,1.0
+cmp_biophysics_fraction_disorder_promoting_enriched,biophysics,cmp,S,module_map,,False,bool,0.9118,2,False,binary,binary_0_1,-,,,,,
+cmp_biophysics_fraction_disorder_promoting_ratio,biophysics,cmp,S,module_map,,False,float,0.9118,5790,True,,numeric,signed_log,Disorder-promoting fraction unique/shared ratio,,,absent_for_separate_orfs,0.0
+cmp_biophysics_fraction_disorder_promoting_shared,biophysics,cmp,S,module_map,,False,float,0.9118,2317,True,,numeric,linear,Disorder-promoting fraction over shared region,,,absent_for_separate_orfs,0.0
+cmp_biophysics_fraction_disorder_promoting_unique,biophysics,cmp,S,module_map,,False,float,0.9118,1868,True,,numeric,linear,Disorder-promoting fraction over unique region,,,absent_for_separate_orfs,0.0
+cmp_biophysics_fraction_lcr_delta,biophysics,cmp,S,module_map,,False,float,1.0,3090,True,,numeric,signed_log,,,,,1.0
+cmp_biophysics_fraction_lcr_enriched,biophysics,cmp,S,module_map,,False,bool,0.6354,2,False,binary,binary_0_1,-,,,,,
+cmp_biophysics_fraction_lcr_ratio,biophysics,cmp,S,module_map,,False,float,0.6354,1712,True,,numeric,signed_log,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_fraction_lcr_shared,biophysics,cmp,S,module_map,,False,float,0.9118,1960,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_fraction_lcr_unique,biophysics,cmp,S,module_map,,False,float,0.9118,1599,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_gravy_delta,biophysics,cmp,S,evidence_cols,S2_biophysics,True,float,1.0,4915,True,,numeric,signed_log,Δ GRAVY (isoform − canonical),,,,1.0
+cmp_biophysics_gravy_enriched,biophysics,cmp,S,module_map,,False,bool,0.0478,2,False,binary,binary_0_1,-,,,,,
+cmp_biophysics_gravy_ratio,biophysics,cmp,S,module_map,,False,float,0.9118,5876,True,,numeric,signed_log,GRAVY unique/shared ratio,,,absent_for_separate_orfs,0.0
+cmp_biophysics_gravy_shared,biophysics,cmp,S,module_map,,False,float,0.9118,4569,True,,numeric,linear,GRAVY over shared region,,,absent_for_separate_orfs,0.0
+cmp_biophysics_gravy_unique,biophysics,cmp,S,module_map,,False,float,0.9118,4468,True,,numeric,linear,GRAVY over unique region,,,absent_for_separate_orfs,0.0
+cmp_biophysics_instability_index_delta,biophysics,cmp,S,module_map,,False,float,0.9986,6351,True,,numeric,signed_log,,,,,1.0
+cmp_biophysics_instability_index_enriched,biophysics,cmp,S,module_map,,False,bool,0.8856,2,False,binary,binary_0_1,-,,,,,
+cmp_biophysics_instability_index_ratio,biophysics,cmp,S,module_map,,False,float,0.911,5886,True,,numeric,signed_log,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_instability_index_shared,biophysics,cmp,S,module_map,,False,float,0.911,5518,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_instability_index_unique,biophysics,cmp,S,module_map,,False,float,0.911,5369,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_length_delta,biophysics,cmp,S,module_map,,False,float,1.0,1278,True,,numeric,signed_log,,,,,1.0
+cmp_biophysics_length_enriched,biophysics,cmp,S,module_map,,False,bool,0.9118,2,False,binary,binary_0_1,-,,,,,
+cmp_biophysics_length_ratio,biophysics,cmp,S,module_map,,False,float,0.9118,5300,True,,numeric,signed_log,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_length_shared,biophysics,cmp,S,module_map,,False,float,0.9118,1259,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_length_unique,biophysics,cmp,S,module_map,,False,float,0.9118,1006,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_llps_score_delta,biophysics,cmp,S,module_map,,False,float,1.0,1741,True,,numeric,signed_log,,,,,1.0
+cmp_biophysics_llps_score_enriched,biophysics,cmp,S,module_map,,False,bool,0.8982,2,False,binary,binary_0_1,-,,,,,
+cmp_biophysics_llps_score_ratio,biophysics,cmp,S,module_map,,False,float,0.9118,5865,True,,numeric,signed_log,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_llps_score_shared,biophysics,cmp,S,module_map,,False,float,0.9118,1368,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_llps_score_unique,biophysics,cmp,S,module_map,,False,float,0.9118,2268,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_longest_homopolymer_delta,biophysics,cmp,S,module_map,,False,float,1.0,25,True,,numeric,signed_log,,,,,1.0
+cmp_biophysics_longest_homopolymer_enriched,biophysics,cmp,S,module_map,,False,bool,0.9118,2,False,binary,binary_0_1,-,,,,,
+cmp_biophysics_longest_homopolymer_ratio,biophysics,cmp,S,module_map,,False,float,0.9118,87,True,,numeric,signed_log,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_longest_homopolymer_shared,biophysics,cmp,S,module_map,,False,float,0.9118,21,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_longest_homopolymer_unique,biophysics,cmp,S,module_map,,False,float,0.9118,16,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_mean_window_entropy_delta,biophysics,cmp,S,module_map,,False,float,1.0,2974,True,,numeric,signed_log,,,,,1.0
+cmp_biophysics_mean_window_entropy_enriched,biophysics,cmp,S,module_map,,False,bool,0.9118,2,False,binary,binary_0_1,-,,,,,
+cmp_biophysics_mean_window_entropy_ratio,biophysics,cmp,S,module_map,,False,float,0.9118,5882,True,,numeric,signed_log,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_mean_window_entropy_shared,biophysics,cmp,S,module_map,,False,float,0.9118,3143,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_mean_window_entropy_unique,biophysics,cmp,S,module_map,,False,float,0.9118,3268,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_normalized_complexity_delta,biophysics,cmp,S,module_map,,False,float,1.0,1532,True,,numeric,signed_log,,,,,1.0
+cmp_biophysics_normalized_complexity_enriched,biophysics,cmp,S,module_map,,False,bool,0.9118,2,False,binary,binary_0_1,-,,,,,
+cmp_biophysics_normalized_complexity_ratio,biophysics,cmp,S,module_map,,False,float,0.9118,5818,True,,numeric,signed_log,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_normalized_complexity_shared,biophysics,cmp,S,module_map,,False,float,0.9118,1187,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_normalized_complexity_unique,biophysics,cmp,S,module_map,,False,float,0.9118,2137,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_pI_delta,biophysics,cmp,S,module_map,,False,float,1.0,2460,True,,numeric,signed_log,,,,,1.0
+cmp_biophysics_pI_enriched,biophysics,cmp,S,module_map,,False,bool,0.9118,2,False,binary,binary_0_1,-,,,,,
+cmp_biophysics_pI_ratio,biophysics,cmp,S,module_map,,False,float,0.9118,5689,True,,numeric,signed_log,pI unique/shared ratio,,,absent_for_separate_orfs,0.0
+cmp_biophysics_pI_shared,biophysics,cmp,S,module_map,,False,float,0.9118,1108,True,,numeric,linear,pI over shared region,,,absent_for_separate_orfs,0.0
+cmp_biophysics_pI_unique,biophysics,cmp,S,module_map,,False,float,0.9118,1229,True,,numeric,linear,pI over unique region,,,absent_for_separate_orfs,0.0
+cmp_biophysics_pipi_propensity_delta,biophysics,cmp,S,module_map,,False,float,1.0,2163,True,,numeric,signed_log,,,,,1.0
+cmp_biophysics_pipi_propensity_enriched,biophysics,cmp,S,module_map,,False,bool,0.911,2,False,binary,binary_0_1,-,,,,,
+cmp_biophysics_pipi_propensity_ratio,biophysics,cmp,S,module_map,,False,float,0.911,5354,True,,numeric,signed_log,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_pipi_propensity_shared,biophysics,cmp,S,module_map,,False,float,0.9118,1617,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_pipi_propensity_unique,biophysics,cmp,S,module_map,,False,float,0.9118,1388,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_prionlike_fraction_delta,biophysics,cmp,S,module_map,,False,float,1.0,2180,True,,numeric,signed_log,,,,,1.0
+cmp_biophysics_prionlike_fraction_enriched,biophysics,cmp,S,module_map,,False,bool,0.9116,2,False,binary,binary_0_1,-,,,,,
+cmp_biophysics_prionlike_fraction_ratio,biophysics,cmp,S,module_map,,False,float,0.9116,5459,True,,numeric,signed_log,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_prionlike_fraction_shared,biophysics,cmp,S,module_map,,False,float,0.9118,1587,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_prionlike_fraction_unique,biophysics,cmp,S,module_map,,False,float,0.9118,1404,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_rg_fg_density_delta,biophysics,cmp,S,module_map,,False,float,1.0,4402,True,,numeric,signed_log,,,,,1.0
+cmp_biophysics_rg_fg_density_enriched,biophysics,cmp,S,module_map,,False,bool,0.6801,2,False,binary,binary_0_1,-,,,,,
+cmp_biophysics_rg_fg_density_ratio,biophysics,cmp,S,module_map,,False,float,0.6801,1763,True,,numeric,signed_log,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_rg_fg_density_shared,biophysics,cmp,S,module_map,,False,float,0.9118,1908,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_rg_fg_density_unique,biophysics,cmp,S,module_map,,False,float,0.9118,1193,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_shannon_entropy_delta,biophysics,cmp,S,module_map,,False,float,1.0,3132,True,,numeric,signed_log,,,,,1.0
+cmp_biophysics_shannon_entropy_enriched,biophysics,cmp,S,module_map,,False,bool,0.9118,2,False,binary,binary_0_1,-,,,,,
+cmp_biophysics_shannon_entropy_ratio,biophysics,cmp,S,module_map,,False,float,0.9118,5884,True,,numeric,signed_log,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_shannon_entropy_shared,biophysics,cmp,S,module_map,,False,float,0.9118,2923,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+cmp_biophysics_shannon_entropy_unique,biophysics,cmp,S,module_map,,False,float,0.9118,3456,True,,numeric,linear,,,,absent_for_separate_orfs,0.0
+diff_biophysics_aa_diversity,biophysics,diff,S,module_map,,False,float,0.9817,16,True,,numeric,linear,,,,,1.0
+diff_biophysics_aromaticity,biophysics,diff,S,module_map,,False,float,0.9817,1092,True,,numeric,linear,,,,,1.0
+diff_biophysics_disorder,biophysics,diff,S,module_map,,False,float,0.9817,3140,True,,numeric,linear,,,,,1.0
+diff_biophysics_fraction_charged,biophysics,diff,S,module_map,,False,float,0.9817,1679,True,,numeric,linear,,,,,1.0
+diff_biophysics_fraction_disorder_promoting,biophysics,diff,S,module_map,,False,float,0.9817,1934,True,,numeric,linear,,,,,1.0
+diff_biophysics_fraction_lcr,biophysics,diff,S,module_map,,False,float,0.9817,1655,True,,numeric,linear,,,,,1.0
+diff_biophysics_gravy,biophysics,diff,S,module_map,,False,float,0.9817,4736,True,,numeric,linear,,,,,1.0
+diff_biophysics_instability_index,biophysics,diff,S,module_map,,False,float,0.9817,5785,True,,numeric,linear,,,,,1.0
+diff_biophysics_length,biophysics,diff,S,module_map,,False,float,0.9817,1022,True,,numeric,log1p,,,,,1.0
+diff_biophysics_llps_score,biophysics,diff,S,module_map,,False,float,0.9817,2338,True,,numeric,linear,,,,,1.0
+diff_biophysics_longest_homopolymer,biophysics,diff,S,module_map,,False,float,0.9817,16,True,,numeric,linear,,,,,1.0
+diff_biophysics_mean_window_entropy,biophysics,diff,S,module_map,,False,float,0.9817,3456,True,,numeric,linear,,,,,1.0
+diff_biophysics_normalized_complexity,biophysics,diff,S,module_map,,False,float,0.9817,2231,True,,numeric,linear,,,,,1.0
+diff_biophysics_pI,biophysics,diff,S,module_map,,False,float,0.9817,1251,True,,numeric,linear,,,,,1.0
+diff_biophysics_pipi_propensity,biophysics,diff,S,module_map,,False,float,0.9817,1421,True,,numeric,linear,,,,,1.0
+diff_biophysics_prionlike_fraction,biophysics,diff,S,module_map,,False,float,0.9817,1445,True,,numeric,linear,,,,,1.0
+diff_biophysics_rg_fg_density,biophysics,diff,S,module_map,,False,float,0.9817,1224,True,,numeric,linear,,,,,1.0
+diff_biophysics_shannon_entropy,biophysics,diff,S,module_map,,False,float,0.9817,3659,True,,numeric,linear,,,,,1.0
+isoform_biophysics_aa_diversity,biophysics,isoform,S,module_map,,False,int,1.0,17,True,,numeric,linear,,,,,1.0
+isoform_biophysics_aromaticity,biophysics,isoform,S,module_map,,False,float,1.0,1323,True,,numeric,linear,,,,,1.0
+isoform_biophysics_disorder,biophysics,isoform,S,module_map,,False,float,1.0,2489,True,,numeric,linear,,,,,1.0
+isoform_biophysics_fraction_charged,biophysics,isoform,S,module_map,,False,float,1.0,2238,True,,numeric,linear,,,,,1.0
+isoform_biophysics_fraction_disorder_promoting,biophysics,isoform,S,module_map,,False,float,1.0,2476,True,,numeric,linear,,,,,1.0
+isoform_biophysics_fraction_lcr,biophysics,isoform,S,module_map,,False,float,1.0,2166,True,,numeric,linear,,,,,1.0
+isoform_biophysics_gravy,biophysics,isoform,S,module_map,,False,float,1.0,5124,True,,numeric,linear,,,,,1.0
+isoform_biophysics_instability_index,biophysics,isoform,S,module_map,,False,float,1.0,6404,True,,numeric,linear,,,,,1.0
+isoform_biophysics_length,biophysics,isoform,S,module_map,,False,int,1.0,1314,True,,numeric,log1p,,,,,1.0
+isoform_biophysics_llps_score,biophysics,isoform,S,module_map,,False,float,1.0,1535,True,,numeric,linear,,,,,1.0
+isoform_biophysics_longest_homopolymer,biophysics,isoform,S,module_map,,False,int,1.0,21,True,,numeric,linear,,,,,1.0
+isoform_biophysics_mean_window_entropy,biophysics,isoform,S,module_map,,False,float,1.0,3522,True,,numeric,linear,,,,,1.0
+isoform_biophysics_normalized_complexity,biophysics,isoform,S,module_map,,False,float,1.0,1424,True,,numeric,linear,,,,,1.0
+isoform_biophysics_pI,biophysics,isoform,S,module_map,,False,float,1.0,1190,True,,numeric,linear,,,,,1.0
+isoform_biophysics_pipi_propensity,biophysics,isoform,S,module_map,,False,float,1.0,1696,True,,numeric,linear,,,,,1.0
+isoform_biophysics_prionlike_fraction,biophysics,isoform,S,module_map,,False,float,1.0,1665,True,,numeric,linear,,,,,1.0
+isoform_biophysics_rg_fg_density,biophysics,isoform,S,module_map,,False,float,1.0,2062,True,,numeric,linear,,,,,1.0
+isoform_biophysics_shannon_entropy,biophysics,isoform,S,module_map,,False,float,1.0,3319,True,,numeric,linear,,,,,1.0
+canonical_interproscan_hits,interproscan,canonical,S,module_map,,False,list,1.0,137,False,list,count,-,,,,,
+canonical_interproscan_summary.n_databases,interproscan,canonical,S,module_map,,False,int,1.0,16,True,,numeric,log1p,,,,,1.0
+canonical_interproscan_summary.n_hits,interproscan,canonical,S,module_map,,False,int,1.0,137,True,,numeric,log1p,,,,,1.0
+canonical_interproscan_summary.n_interpro,interproscan,canonical,S,module_map,,False,int,1.0,25,True,,numeric,log1p,,,,,1.0
+canonical_interproscan_summary.status,interproscan,canonical,S,module_map,,False,str,1.0,1,False,status_string,-,-,,,,,
+n_canonical_interproscan_hits,interproscan,canonical,S,module_map,,False,int,1.0,137,False,redundant,numeric,log1p,,canonical_interproscan_hits,canonical_interproscan_summary.n_hits,,1.0
+cmp_interproscan_hits_canonical_status,interproscan,cmp,S,module_map,,False,str,1.0,1,False,status_string,-,-,,,,,
+cmp_interproscan_hits_in_diff_region,interproscan,cmp,S,module_map,,False,list,1.0,109,False,list,count,-,,,,,
+cmp_interproscan_hits_isoform_status,interproscan,cmp,S,module_map,,False,str,1.0,1,False,status_string,-,-,,,,,
+cmp_interproscan_hits_source_pane,interproscan,cmp,S,module_map,,False,str,1.0,2,False,categorical,one_hot,-,,,,,
+cmp_interproscan_n_hits_in_diff_region,interproscan,cmp,S,evidence_cols,S1_domain_change,False,int,1.0,109,True,,numeric,linear,Domains in diff region,,,,1.0
+cmp_interproscan_n_real_domains_changed_in_diff_region,interproscan,cmp,S,evidence_cols,S1_domain_change,True,int,1.0,44,True,,numeric,linear,,,,,1.0
+n_cmp_interproscan_hits_in_diff_region,interproscan,cmp,S,module_map,,False,int,1.0,109,False,redundant,numeric,log1p,,cmp_interproscan_hits_in_diff_region,cmp_interproscan_n_hits_in_diff_region,,1.0
+isoform_interproscan_hits,interproscan,isoform,S,module_map,,False,list,1.0,127,False,list,count,-,,,,,
+isoform_interproscan_summary.n_databases,interproscan,isoform,S,evidence_cols,S1_domain_change,False,int,1.0,16,True,,numeric,log1p,,,,,1.0
+isoform_interproscan_summary.n_hits,interproscan,isoform,S,evidence_cols,S1_domain_change,False,int,1.0,127,True,,numeric,log1p,,,,,1.0
+isoform_interproscan_summary.n_interpro,interproscan,isoform,S,evidence_cols,S1_domain_change,False,int,1.0,22,True,,numeric,log1p,,,,,1.0
+isoform_interproscan_summary.status,interproscan,isoform,S,evidence_cols,S1_domain_change,False,str,1.0,1,False,status_string,-,-,,,,,
+n_isoform_interproscan_hits,interproscan,isoform,S,module_map,,False,int,1.0,127,False,redundant,numeric,log1p,,isoform_interproscan_hits,isoform_interproscan_summary.n_hits,,1.0
+canonical_motifs_hits,motifs,canonical,S,module_map,,False,list,1.0,96,False,list,count,-,,,,,
+canonical_motifs_summary.APIM,motifs,canonical,S,module_map,,False,int,1.0,4,True,,numeric,linear,,,,,1.0
+canonical_motifs_summary.APIM_density_per100aa,motifs,canonical,S,module_map,,False,float,1.0,89,True,,numeric,log1p,,,,,1.0
+canonical_motifs_summary.ATM_Sites_SQ_TQ,motifs,canonical,S,module_map,,False,int,1.0,44,True,,numeric,linear,,,,,1.0
+canonical_motifs_summary.ATM_Sites_SQ_TQ_density_per100aa,motifs,canonical,S,module_map,,False,float,1.0,1756,True,,numeric,log1p,,,,,1.0
+canonical_motifs_summary.CDK_Sites_SP_TP,motifs,canonical,S,module_map,,False,int,1.0,60,True,,numeric,linear,,,,,1.0
+canonical_motifs_summary.CDK_Sites_SP_TP_density_per100aa,motifs,canonical,S,module_map,,False,float,1.0,1908,True,,numeric,log1p,,,,,1.0
+canonical_motifs_summary.EB1_SxIP,motifs,canonical,S,module_map,,False,int,1.0,14,True,,numeric,linear,,,,,1.0
+canonical_motifs_summary.EB1_SxIP_density_per100aa,motifs,canonical,S,module_map,,False,float,1.0,1000,True,,numeric,log1p,,,,,1.0
+canonical_motifs_summary.Heme_CP_HRM,motifs,canonical,S,module_map,,False,int,1.0,3,True,,numeric,linear,,,,,1.0
+canonical_motifs_summary.Heme_CP_HRM_density_per100aa,motifs,canonical,S,module_map,,False,float,1.0,24,True,,numeric,log1p,,,,,1.0
+canonical_motifs_summary.Heme_CXXCH,motifs,canonical,S,module_map,,False,int,1.0,4,True,,numeric,linear,,,,,1.0
+canonical_motifs_summary.Heme_CXXCH_density_per100aa,motifs,canonical,S,module_map,,False,float,1.0,85,True,,numeric,log1p,,,,,1.0
+canonical_motifs_summary.Mode1_1433,motifs,canonical,S,module_map,,False,int,1.0,2,False,binary,binary_0_1,linear,,,,,
+canonical_motifs_summary.Mode1_1433_density_per100aa,motifs,canonical,S,module_map,,False,float,1.0,47,True,,numeric,log1p,,,,,1.0
+canonical_motifs_summary.Mode2_1433,motifs,canonical,S,module_map,,False,int,1.0,14,True,,numeric,linear,,,,,1.0
+canonical_motifs_summary.Mode2_1433_density_per100aa,motifs,canonical,S,module_map,,False,float,1.0,1059,True,,numeric,log1p,,,,,1.0
+canonical_motifs_summary.PIP_box,motifs,canonical,S,module_map,,False,int,1.0,3,True,,numeric,linear,,,,,1.0
+canonical_motifs_summary.PIP_box_density_per100aa,motifs,canonical,S,module_map,,False,float,1.0,97,True,,numeric,log1p,,,,,1.0
+canonical_motifs_summary.RGG_Sites,motifs,canonical,S,module_map,,False,int,1.0,12,True,,numeric,linear,,,,,1.0
+canonical_motifs_summary.RGG_Sites_density_per100aa,motifs,canonical,S,module_map,,False,float,1.0,379,True,,numeric,log1p,,,,,1.0
+canonical_motifs_summary.RGG_clusters,motifs,canonical,S,module_map,,False,int,1.0,5,True,,numeric,linear,,,,,1.0
+canonical_motifs_summary.RG_rich,motifs,canonical,S,module_map,,False,int,1.0,2,False,binary,binary_0_1,linear,,,,,
+canonical_motifs_summary.RING_finger,motifs,canonical,S,module_map,,False,int,1.0,3,True,,numeric,linear,,,,,1.0
+canonical_motifs_summary.RING_finger_density_per100aa,motifs,canonical,S,module_map,,False,float,1.0,42,True,,numeric,log1p,,,,,1.0
+canonical_motifs_summary.SH3_ClassI,motifs,canonical,S,module_map,,False,int,1.0,11,True,,numeric,linear,,,,,1.0
+canonical_motifs_summary.SH3_ClassII,motifs,canonical,S,module_map,,False,int,1.0,11,True,,numeric,linear,,,,,1.0
+canonical_motifs_summary.SH3_ClassII_density_per100aa,motifs,canonical,S,module_map,,False,float,1.0,610,True,,numeric,log1p,,,,,1.0
+canonical_motifs_summary.SH3_ClassI_density_per100aa,motifs,canonical,S,module_map,,False,float,1.0,624,True,,numeric,log1p,,,,,1.0
+canonical_motifs_summary.ZnF_C2H2,motifs,canonical,S,module_map,,False,int,1.0,20,True,,numeric,linear,,,,,1.0
+canonical_motifs_summary.ZnF_C2H2_density_per100aa,motifs,canonical,S,module_map,,False,float,1.0,100,True,,numeric,log1p,,,,,1.0
+canonical_motifs_summary.density_1433_per100aa,motifs,canonical,S,module_map,,False,float,1.0,1059,True,,numeric,log1p,,,,,1.0
+canonical_motifs_summary.total_1433,motifs,canonical,S,module_map,,False,int,1.0,14,True,,numeric,log1p,,,,,1.0
+n_canonical_motifs_hits,motifs,canonical,S,module_map,,False,int,1.0,96,True,,numeric,log1p,,canonical_motifs_hits,,,1.0
+cmp_motifs_hits_canonical_status,motifs,cmp,S,module_map,,False,null,0.0,0,False,all_null,-,-,,,,,
+cmp_motifs_hits_in_diff_region,motifs,cmp,S,module_map,,False,list,1.0,80,False,list,count,-,,,,,
+cmp_motifs_hits_isoform_status,motifs,cmp,S,module_map,,False,null,0.0,0,False,all_null,-,-,,,,,
+cmp_motifs_hits_source_pane,motifs,cmp,S,module_map,,False,str,1.0,2,False,categorical,one_hot,-,,,,,
+cmp_motifs_n_hits_in_diff_region,motifs,cmp,S,module_map,,False,int,1.0,80,True,,numeric,linear,,,,,1.0
+n_cmp_motifs_hits_in_diff_region,motifs,cmp,S,module_map,,False,int,1.0,80,False,redundant,numeric,log1p,,cmp_motifs_hits_in_diff_region,cmp_motifs_n_hits_in_diff_region,,1.0
+isoform_motifs_hits,motifs,isoform,S,module_map,,False,list,1.0,86,False,list,count,-,,,,,
+isoform_motifs_summary.APIM,motifs,isoform,S,module_map,,False,int,1.0,4,True,,numeric,linear,,,,,1.0
+isoform_motifs_summary.APIM_density_per100aa,motifs,isoform,S,module_map,,False,float,1.0,127,True,,numeric,log1p,,,,,1.0
+isoform_motifs_summary.ATM_Sites_SQ_TQ,motifs,isoform,S,module_map,,False,int,1.0,36,True,,numeric,linear,,,,,1.0
+isoform_motifs_summary.ATM_Sites_SQ_TQ_density_per100aa,motifs,isoform,S,module_map,,False,float,1.0,2019,True,,numeric,log1p,,,,,1.0
+isoform_motifs_summary.CDK_Sites_SP_TP,motifs,isoform,S,module_map,,False,int,1.0,53,True,,numeric,linear,,,,,1.0
+isoform_motifs_summary.CDK_Sites_SP_TP_density_per100aa,motifs,isoform,S,module_map,,False,float,1.0,2394,True,,numeric,log1p,,,,,1.0
+isoform_motifs_summary.EB1_SxIP,motifs,isoform,S,module_map,,False,int,1.0,12,True,,numeric,linear,,,,,1.0
+isoform_motifs_summary.EB1_SxIP_density_per100aa,motifs,isoform,S,module_map,,False,float,1.0,1143,True,,numeric,log1p,,,,,1.0
+isoform_motifs_summary.Heme_CP_HRM,motifs,isoform,S,module_map,,False,int,1.0,3,True,,numeric,linear,,,,,1.0
+isoform_motifs_summary.Heme_CP_HRM_density_per100aa,motifs,isoform,S,module_map,,False,float,1.0,27,True,,numeric,log1p,,,,,1.0
+isoform_motifs_summary.Heme_CXXCH,motifs,isoform,S,module_map,,False,int,1.0,4,True,,numeric,linear,,,,,1.0
+isoform_motifs_summary.Heme_CXXCH_density_per100aa,motifs,isoform,S,module_map,,False,float,1.0,119,True,,numeric,log1p,,,,,1.0
+isoform_motifs_summary.Mode1_1433,motifs,isoform,S,module_map,,False,int,1.0,2,False,binary,binary_0_1,linear,,,,,
+isoform_motifs_summary.Mode1_1433_density_per100aa,motifs,isoform,S,module_map,,False,float,1.0,66,True,,numeric,log1p,,,,,1.0
+isoform_motifs_summary.Mode2_1433,motifs,isoform,S,module_map,,False,int,1.0,14,True,,numeric,linear,,,,,1.0
+isoform_motifs_summary.Mode2_1433_density_per100aa,motifs,isoform,S,module_map,,False,float,1.0,1248,True,,numeric,log1p,,,,,1.0
+isoform_motifs_summary.PIP_box,motifs,isoform,S,module_map,,False,int,1.0,3,True,,numeric,linear,,,,,1.0
+isoform_motifs_summary.PIP_box_density_per100aa,motifs,isoform,S,module_map,,False,float,1.0,135,True,,numeric,log1p,,,,,1.0
+isoform_motifs_summary.RGG_Sites,motifs,isoform,S,module_map,,False,int,1.0,11,True,,numeric,linear,,,,,1.0
+isoform_motifs_summary.RGG_Sites_density_per100aa,motifs,isoform,S,module_map,,False,float,1.0,489,True,,numeric,log1p,,,,,1.0
+isoform_motifs_summary.RGG_clusters,motifs,isoform,S,module_map,,False,int,1.0,4,True,,numeric,linear,,,,,1.0
+isoform_motifs_summary.RG_rich,motifs,isoform,S,module_map,,False,int,1.0,2,False,binary,binary_0_1,linear,,,,,
+isoform_motifs_summary.RING_finger,motifs,isoform,S,module_map,,False,int,1.0,3,True,,numeric,linear,,,,,1.0
+isoform_motifs_summary.RING_finger_density_per100aa,motifs,isoform,S,module_map,,False,float,1.0,42,True,,numeric,log1p,,,,,1.0
+isoform_motifs_summary.SH3_ClassI,motifs,isoform,S,module_map,,False,int,1.0,9,True,,numeric,linear,,,,,1.0
+isoform_motifs_summary.SH3_ClassII,motifs,isoform,S,module_map,,False,int,1.0,10,True,,numeric,linear,,,,,1.0
+isoform_motifs_summary.SH3_ClassII_density_per100aa,motifs,isoform,S,module_map,,False,float,1.0,764,True,,numeric,log1p,,,,,1.0
+isoform_motifs_summary.SH3_ClassI_density_per100aa,motifs,isoform,S,module_map,,False,float,1.0,772,True,,numeric,log1p,,,,,1.0
+isoform_motifs_summary.ZnF_C2H2,motifs,isoform,S,module_map,,False,int,1.0,18,True,,numeric,linear,,,,,1.0
+isoform_motifs_summary.ZnF_C2H2_density_per100aa,motifs,isoform,S,module_map,,False,float,1.0,152,True,,numeric,log1p,,,,,1.0
+isoform_motifs_summary.density_1433_per100aa,motifs,isoform,S,module_map,,False,float,1.0,1255,True,,numeric,log1p,,,,,1.0
+isoform_motifs_summary.total_1433,motifs,isoform,S,module_map,,False,int,1.0,14,True,,numeric,log1p,,,,,1.0
+n_isoform_motifs_hits,motifs,isoform,S,module_map,,False,int,1.0,86,True,,numeric,log1p,,isoform_motifs_hits,,,1.0
+isoform_sae_features_canonical_only,sae,isoform,S,module_map,,False,list,1.0,29,False,list,count,-,,,,,
+isoform_sae_features_isoform_only,sae,isoform,S,module_map,,False,list,1.0,30,False,list,count,-,,,,,
+isoform_sae_mean_abs_delta_shared,sae,isoform,S,module_map,,False,float,1.0,4396,True,,numeric,linear,,,,,1.0
+isoform_sae_n_canonical_only,sae,isoform,S,module_map,,False,int,1.0,1492,True,,numeric,linear,,,,,1.0
+isoform_sae_n_canonical_total,sae,isoform,S,module_map,,False,int,1.0,1795,True,,numeric,linear,,,,,1.0
+isoform_sae_n_isoform_only,sae,isoform,S,module_map,,False,int,1.0,458,True,,numeric,linear,,,,,1.0
+isoform_sae_n_isoform_total,sae,isoform,S,module_map,,False,int,1.0,2245,True,,numeric,linear,,,,,1.0
+isoform_sae_n_shared,sae,isoform,S,module_map,,False,int,1.0,2245,True,,numeric,linear,,,,,1.0
+isoform_sae_n_unique_region_features,sae,isoform,S,module_map,,False,int,1.0,1719,True,,numeric,linear,,,,,1.0
+isoform_sae_shared_feature_deltas,sae,isoform,S,module_map,,False,list,1.0,6,False,list,count,-,,,,,
+isoform_sae_status,sae,isoform,S,module_map,,False,str,1.0,1,False,status_string,-,-,,,,,
+isoform_sae_top_gained_delta_max,sae,isoform,S,evidence_cols,S3_sae,True,float,1.0,4573,True,,numeric,signed_log,,,,,1.0
+isoform_sae_top_gained_feature_index,sae,isoform,S,module_map,,False,int,1.0,821,True,,numeric,linear,,,,,1.0
+isoform_sae_top_gained_feature_label,sae,isoform,S,module_map,,False,str,1.0,797,False,free_text,text_embedding,-,,,,,
+isoform_sae_top_lost_delta_max,sae,isoform,S,evidence_cols,S3_sae,True,float,1.0,4789,True,,numeric,signed_log,,,,,1.0
+isoform_sae_top_lost_feature_index,sae,isoform,S,module_map,,False,int,1.0,1266,True,,numeric,linear,,,,,1.0
+isoform_sae_top_lost_feature_label,sae,isoform,S,module_map,,False,str,1.0,1238,False,free_text,text_embedding,-,,,,,
+isoform_sae_unique_region_space,sae,isoform,S,module_map,,False,str,1.0,2,False,categorical,one_hot,-,,,,,
+isoform_sae_unique_region_top_features,sae,isoform,S,module_map,,False,list,1.0,12,False,list,count,-,,,,,
+n_isoform_sae_features_canonical_only,sae,isoform,S,module_map,,False,int,1.0,29,True,,numeric,log1p,,isoform_sae_features_canonical_only,,,1.0
+n_isoform_sae_features_isoform_only,sae,isoform,S,module_map,,False,int,1.0,30,True,,numeric,log1p,,isoform_sae_features_isoform_only,,,1.0
+n_isoform_sae_shared_feature_deltas,sae,isoform,S,module_map,,False,int,1.0,6,True,,numeric,log1p,,isoform_sae_shared_feature_deltas,,,1.0
+n_isoform_sae_unique_region_top_features,sae,isoform,S,module_map,,False,int,1.0,12,True,,numeric,log1p,,isoform_sae_unique_region_top_features,,,1.0
+isoform_core_identity_canonical_protein_length,core_identity,isoform,-,none,,False,int,1.0,1215,False,redundant,numeric,log1p,,,canonical_per_tid_length,,1.0
+isoform_core_identity_differential_length_aa,core_identity,isoform,-,none,,False,int,1.0,1024,False,redundant,numeric,linear,,,diff_end,,1.0
+isoform_core_identity_in_frame,core_identity,isoform,-,none,,False,bool,1.0,2,False,binary,binary_0_1,-,,,,,
+isoform_core_identity_isoform_protein_length,core_identity,isoform,-,none,,False,int,1.0,1314,False,redundant,numeric,log1p,,,isoform_biophysics_length,,1.0
+isoform_core_identity_large_truncation_warning,core_identity,isoform,-,none,,False,bool,1.0,2,False,binary,binary_0_1,-,,,,,
+isoform_core_identity_orf_type,core_identity,isoform,-,none,,False,str,1.0,6,False,categorical,one_hot,-,,,,,
+isoform_core_identity_variant_id,core_identity,isoform,-,none,,False,str,1.0,6462,False,identifier,-,-,,,,,
+generef_function,generef,site,-,none,,False,str,0.9971,3279,False,free_text,text_embedding,-,,,,,
+generef_keywords,generef,site,-,none,,False,str,0.946,2895,False,free_text,text_embedding,-,,,,,
+generef_subcellular_location,generef,site,-,none,,False,str,0.8836,908,False,free_text,text_embedding,-,,,,,
+generef_uniprot_id,generef,site,-,none,,False,str,0.9971,3353,False,identifier,-,-,,,,,
+isoform_scoring_criteria.C1_primate_conservation,scoring,isoform,-,none,,False,bool,0.9944,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_criteria.C2_mammalian_conservation,scoring,isoform,-,none,,False,bool,0.9944,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_criteria.C3_phylop_coding_selection,scoring,isoform,-,none,,False,bool,0.9944,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_criteria.D1_multi_cell_line,scoring,isoform,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_criteria.D2_initiation_efficiency,scoring,isoform,-,none,,False,bool,0.9933,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_criteria.D3_mass_spec,scoring,isoform,-,none,,False,bool,0.942,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_criteria.L1_localization_change,scoring,isoform,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_criteria.L2_targeting_change,scoring,isoform,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_criteria.M1_pathogenic_variant_enrichment,scoring,isoform,-,none,,False,bool,0.9446,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_criteria.M2_clinical_variant_overlap,scoring,isoform,-,none,,False,bool,0.9415,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_criteria.P1_structured_extension,scoring,isoform,-,none,,False,bool,0.8528,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_criteria.P2_shared_structural_change,scoring,isoform,-,none,,False,bool,0.6521,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_criteria.P3_secondary_structure,scoring,isoform,-,none,,False,bool,0.8528,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_criteria.S1_domain_change,scoring,isoform,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_criteria.S2_biophysics,scoring,isoform,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_criteria.S3_sae,scoring,isoform,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_existence_evaluable,scoring,isoform,-,none,,False,int,1.0,5,False,derived_from_features,-,linear,,,,,
+isoform_scoring_existence_high_confidence,scoring,isoform,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_existence_score,scoring,isoform,-,none,,False,int,1.0,7,False,derived_from_features,-,linear,,,,,
+isoform_scoring_functional_evaluable,scoring,isoform,-,none,,False,int,1.0,6,False,derived_from_features,-,linear,,,,,
+isoform_scoring_functional_high_confidence,scoring,isoform,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_functional_score,scoring,isoform,-,none,,False,int,1.0,11,False,derived_from_features,-,linear,,,,,
+isoform_scoring_reasons.C1_primate_conservation,scoring,isoform,-,none,,False,str,1.0,876,False,derived_from_features,-,-,,,,,
+isoform_scoring_reasons.C2_mammalian_conservation,scoring,isoform,-,none,,False,str,1.0,1878,False,derived_from_features,-,-,,,,,
+isoform_scoring_reasons.C3_phylop_coding_selection,scoring,isoform,-,none,,False,str,1.0,5690,False,derived_from_features,-,-,,,,,
+isoform_scoring_reasons.D1_multi_cell_line,scoring,isoform,-,none,,False,str,1.0,6,False,derived_from_features,-,-,,,,,
+isoform_scoring_reasons.D2_initiation_efficiency,scoring,isoform,-,none,,False,str,1.0,446,False,derived_from_features,-,-,,,,,
+isoform_scoring_reasons.D3_mass_spec,scoring,isoform,-,none,,False,str,1.0,9,False,derived_from_features,-,-,,,,,
+isoform_scoring_reasons.L1_localization_change,scoring,isoform,-,none,,False,str,1.0,8,False,derived_from_features,-,-,,,,,
+isoform_scoring_reasons.L2_targeting_change,scoring,isoform,-,none,,False,str,1.0,4,False,derived_from_features,-,-,,,,,
+isoform_scoring_reasons.M1_pathogenic_variant_enrichment,scoring,isoform,-,none,,False,str,1.0,5693,False,derived_from_features,-,-,,,,,
+isoform_scoring_reasons.M2_clinical_variant_overlap,scoring,isoform,-,none,,False,str,1.0,5948,False,derived_from_features,-,-,,,,,
+isoform_scoring_reasons.P1_structured_extension,scoring,isoform,-,none,,False,str,1.0,570,False,derived_from_features,-,-,,,,,
+isoform_scoring_reasons.P2_shared_structural_change,scoring,isoform,-,none,,False,str,1.0,4257,False,derived_from_features,-,-,,,,,
+isoform_scoring_reasons.P3_secondary_structure,scoring,isoform,-,none,,False,str,1.0,2911,False,derived_from_features,-,-,,,,,
+isoform_scoring_reasons.S1_domain_change,scoring,isoform,-,none,,False,str,1.0,44,False,derived_from_features,-,-,,,,,
+isoform_scoring_reasons.S2_biophysics,scoring,isoform,-,none,,False,str,1.0,8,False,derived_from_features,-,-,,,,,
+isoform_scoring_reasons.S3_sae,scoring,isoform,-,none,,False,str,1.0,6458,False,derived_from_features,-,-,,,,,
+isoform_scoring_summary.existence_axis_complete,scoring,isoform,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_summary.functional_axis_complete,scoring,isoform,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_summary.n_criteria_evaluable,scoring,isoform,-,none,,False,int,1.0,9,False,derived_from_features,-,log1p,,,,,
+isoform_scoring_summary.n_criteria_total,scoring,isoform,-,none,,False,int,1.0,1,False,derived_from_features,-,log1p,,,,,
+aa_len,site,site,-,none,,False,int,1.0,1314,False,redundant,numeric,log1p,,,isoform_biophysics_length,,1.0
+canonical_kozak_context,site,site,-,none,,False,str,1.0,3355,False,free_text,text_embedding,-,,,,,
+canonical_len,site,site,-,none,,False,int,1.0,1223,False,redundant,numeric,log1p,,,canonical_biophysics_length,,1.0
+canonical_orf_exons,site,site,-,none,,False,list,1.0,72,False,list,count,-,,,,,
+canonical_per_tid_differs_from_gene,site,site,-,none,,False,bool,1.0,2,False,binary,binary_0_1,-,,,,,
+canonical_per_tid_length,site,site,-,none,,False,int,1.0,1215,True,,numeric,log1p,,,,,1.0
+canonical_start_codon,site,site,-,none,,False,str,1.0,5,False,free_text,text_embedding,-,,,,,
+canonical_transcript_id,site,site,-,none,,False,str,1.0,3371,False,identifier,-,-,,,,,
+chrom,site,site,-,none,,False,str,1.0,24,False,identifier,-,-,,,,,
+diff_end,site,site,-,none,,False,int,1.0,1024,True,,numeric,linear,,,,,1.0
+diff_region_confidence,site,site,-,none,,False,str,1.0,5,False,status_string,one_hot,-,,,,,
+diff_space,site,site,-,none,,False,str,1.0,2,False,status_string,one_hot,-,,,,,
+diff_start,site,site,-,none,,False,int,1.0,1,False,constant,-,linear,,,,,
+differential_sequence,site,site,-,none,,False,str,1.0,6317,False,free_text,text_embedding,-,,,,,
+gene_id,site,site,-,none,,False,str,1.0,3371,False,identifier,-,-,,,,,
+gene_name,site,site,-,none,,False,str,1.0,3371,False,identifier,-,-,,,,,
+isoform_len,site,site,-,none,,False,int,1.0,1314,False,redundant,numeric,log1p,,,isoform_biophysics_length,,1.0
+kozak_context,site,site,-,none,,False,str,1.0,6435,False,free_text,text_embedding,-,,,,,
+n_canonical_orf_exons,site,site,-,none,,False,int,1.0,72,True,,numeric,log1p,,canonical_orf_exons,,,1.0
+n_orf_exons,site,site,-,none,,False,int,1.0,64,True,,numeric,log1p,,orf_exons,,,1.0
+n_shared_genomic_intervals,site,site,-,none,,False,int,1.0,64,True,,numeric,log1p,,shared_genomic_intervals,,,1.0
+n_unique_genomic_intervals,site,site,-,none,,False,int,1.0,62,True,,numeric,log1p,,unique_genomic_intervals,,,1.0
+orf_exons,site,site,-,none,,False,list,1.0,64,False,list,count,-,,,,,
+orf_type,site,site,-,none,,False,str,1.0,6,False,categorical,one_hot,-,,,,,
+position,site,site,-,none,,False,int,1.0,6462,False,identifier,-,linear,,,,,
+shared_genomic_intervals,site,site,-,none,,False,list,1.0,64,False,list,count,-,,,,,
+start_codon,site,site,-,none,,False,str,1.0,10,False,free_text,text_embedding,-,,,,,
+strand,site,site,-,none,,False,str,1.0,2,False,identifier,-,-,,,,,
+tis_id,site,site,-,none,,False,str,1.0,6462,False,identifier,-,-,,,,,
+transcript_id,site,site,-,none,,False,str,1.0,3636,False,identifier,-,-,,,,,
+unique_genomic_intervals,site,site,-,none,,False,list,1.0,62,False,list,count,-,,,,,
