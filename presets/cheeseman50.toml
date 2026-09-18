@@ -1,0 +1,325 @@
+# The LLM-tuning coreset: 50 isoforms across 40 genes.
+#
+# Explicit [[isoforms]] picks, like cheeseman13 — each entry's
+# (tid, genome_pos, start_codon) is matched against the combined catalog to pull
+# its sequence, and the canonical Annotated rows for these genes are kept
+# automatically. Runs multi-sample.
+#
+# Composition:
+#   22 anchors        hand-curated, static
+#   12 rare-type fill  n=1 sampler within each of
+#                  uorf / internal_oof / 3utr_orf / uoorf — the four types
+#                  the global sampler never reaches, being 0.3-4.9% of the
+#                  pool. Yields each type's max, min and most typical.
+#   16 sampler        n=6 sampler over the MFA feature
+#                  space (all-ORF, 6,462 x 391), one isoform per gene.
+#
+# ORF types: Extended 18, Truncated 18, uoORF 4, uORF 4, internal out-of-frame 3, 3'UTR ORF 3
+#
+# Regenerate with figures/clustering_dims/principled_sampling/write_preset.py
+# after rebuilding coreset_50.csv.
+run_name = "cheeseman50"
+
+# Production reproducibility bar, matching cheeseman13. At 1 every TIS passes D1
+# by construction, handing the LLM a criterion that is True everywhere.
+min_cell_lines = 3
+
+[[isoforms]]
+gene = "ACBD5"
+tid = "ENST00000375897.7"
+genome_pos = "chr10:27197429-27240394:-"
+start_codon = "ATG"  # Truncated — sampler
+
+[[isoforms]]
+gene = "ADAR"
+tid = "ENST00000368471.8"
+genome_pos = "chr1:154602508-154602598:-"
+start_codon = "ATC"  # uoORF — rare-type fill
+
+[[isoforms]]
+gene = "AJUBA"
+tid = "ENST00000397388.7"
+genome_pos = "chr14:22973442-22976722:-"
+start_codon = "TTG"  # Extended — sampler
+
+[[isoforms]]
+gene = "APC"
+tid = "ENST00000505350.2"
+genome_pos = "chr5:112754890-112844126:+"
+start_codon = "ATG"  # 3'UTR ORF — rare-type fill
+
+[[isoforms]]
+gene = "ASPM"
+tid = "ENST00000367409.9"
+genome_pos = "chr1:197084323-197146533:-"
+start_codon = "CTG"  # Extended — anchor
+
+[[isoforms]]
+gene = "ATP9A"
+tid = "ENST00000338821.6"
+genome_pos = "chr20:51601210-51604919:-"
+start_codon = "GTG"  # Truncated — sampler
+
+[[isoforms]]
+gene = "CBX1"
+tid = "ENST00000225603.9"
+genome_pos = "chr17:48071434-48076878:-"
+start_codon = "AAG"  # Truncated — anchor
+
+[[isoforms]]
+gene = "CBX1"
+tid = "ENST00000225603.9"
+genome_pos = "chr17:48071434-48076938:-"
+start_codon = "GTG"  # Truncated — anchor
+
+[[isoforms]]
+gene = "CBX1"
+tid = "ENST00000225603.9"
+genome_pos = "chr17:48071434-48077016:-"
+start_codon = "CTG"  # Extended — anchor
+
+[[isoforms]]
+gene = "CBX1"
+tid = "ENST00000225603.9"
+genome_pos = "chr17:48071434-48101353:-"
+start_codon = "CTG"  # Extended — anchor
+
+[[isoforms]]
+gene = "CBX1"
+tid = "ENST00000225603.9"
+genome_pos = "chr17:48071434-48101392:-"
+start_codon = "GTG"  # Extended — anchor
+
+[[isoforms]]
+gene = "CBX5"
+tid = "ENST00000439541.6"
+genome_pos = "chr12:54241754-54257644:-"
+start_codon = "AAG"  # Truncated — sampler
+
+[[isoforms]]
+gene = "CCT3"
+tid = "ENST00000368258.7"
+genome_pos = "chr1:156309198-156338174:-"
+start_codon = "ATC"  # internal out-of-frame — rare-type fill
+
+[[isoforms]]
+gene = "CDC34"
+tid = "ENST00000215574.9"
+genome_pos = "chr19:531766-541552:+"
+start_codon = "CTG"  # Extended — anchor
+
+[[isoforms]]
+gene = "CDC34"
+tid = "ENST00000215574.9"
+genome_pos = "chr19:535896-541552:+"
+start_codon = "AAG"  # Truncated — anchor
+
+[[isoforms]]
+gene = "CGGBP1"
+tid = "ENST00000309534.10"
+genome_pos = "chr3:88058138-88058939:-"
+start_codon = "ACG"  # uoORF — rare-type fill
+
+[[isoforms]]
+gene = "CMC2"
+tid = "ENST00000219400.8"
+genome_pos = "chr16:80997414-81006748:-"
+start_codon = "GTG"  # uORF — rare-type fill
+
+[[isoforms]]
+gene = "DELE1"
+tid = "ENST00000432126.7"
+genome_pos = "chr5:141924624-141938759:+"
+start_codon = "AAG"  # Truncated — sampler
+
+[[isoforms]]
+gene = "EIF2B1"
+tid = "ENST00000424014.7"
+genome_pos = "chr12:123621755-123632402:-"
+start_codon = "ATG"  # Truncated — anchor
+
+[[isoforms]]
+gene = "EIF2B1"
+tid = "ENST00000424014.7"
+genome_pos = "chr12:123621755-123633548:-"
+start_codon = "AAG"  # Truncated — anchor
+
+[[isoforms]]
+gene = "EIF2B1"
+tid = "ENST00000424014.7"
+genome_pos = "chr12:123621755-123633644:-"
+start_codon = "CTG"  # Extended — anchor
+
+[[isoforms]]
+gene = "ETAA1"
+tid = "ENST00000272342.6"
+genome_pos = "chr2:67397342-67397378:+"
+start_codon = "ATG"  # uORF — sampler
+
+[[isoforms]]
+gene = "FMR1"
+tid = "ENST00000621453.5"
+genome_pos = "chrX:147912227-147948424:+"
+start_codon = "AAG"  # Truncated — anchor
+
+[[isoforms]]
+gene = "GBE1"
+tid = "ENST00000429644.7"
+genome_pos = "chr3:81490406-81761505:-"
+start_codon = "ATG"  # Truncated — sampler
+
+[[isoforms]]
+gene = "GTPBP6"
+tid = "ENST00000711233.2"
+genome_pos = "chrY:305073-316965:-"
+start_codon = "ACG"  # Truncated — sampler
+
+[[isoforms]]
+gene = "HSP90AA1"
+tid = "ENST00000216281.13"
+genome_pos = "chr14:102081711-102087024:-"
+start_codon = "GTG"  # Extended — sampler
+
+[[isoforms]]
+gene = "INCENP"
+tid = "ENST00000394818.8"
+genome_pos = "chr11:62124150-62151976:+"
+start_codon = "GTG"  # Extended — sampler
+
+[[isoforms]]
+gene = "KMT2C"
+tid = "ENST00000262189.11"
+genome_pos = "chr7:152136831-152187716:-"
+start_codon = "AGG"  # Truncated — sampler
+
+[[isoforms]]
+gene = "LGALS1"
+tid = "ENST00000215909.10"
+genome_pos = "chr22:37675690-37679749:+"
+start_codon = "CTG"  # Extended — sampler
+
+[[isoforms]]
+gene = "LMNA"
+tid = "ENST00000368300.9"
+genome_pos = "chr1:156114909-156139106:+"
+start_codon = "CTG"  # Extended — sampler
+
+[[isoforms]]
+gene = "LRRC58"
+tid = "ENST00000295628.4"
+genome_pos = "chr3:120331199-120349006:-"
+start_codon = "TTG"  # Truncated — sampler
+
+[[isoforms]]
+gene = "MAD2L1"
+tid = "ENST00000296509.11"
+genome_pos = "chr4:120060117-120065801:-"
+start_codon = "ATT"  # Truncated — anchor
+
+[[isoforms]]
+gene = "MAD2L1"
+tid = "ENST00000296509.11"
+genome_pos = "chr4:120060117-120066779:-"
+start_codon = "CTG"  # Extended — anchor
+
+[[isoforms]]
+gene = "MAD2L1"
+tid = "ENST00000296509.11"
+genome_pos = "chr4:120060117-120066797:-"
+start_codon = "TTG"  # Extended — anchor
+
+[[isoforms]]
+gene = "NUCKS1"
+tid = "ENST00000367142.5"
+genome_pos = "chr1:205718279-205718417:-"
+start_codon = "AAG"  # Truncated — sampler
+
+[[isoforms]]
+gene = "PBRM1"
+tid = "ENST00000420148.5"
+genome_pos = "chr3:52682206-52685817:-"
+start_codon = "GTG"  # uORF — rare-type fill
+
+[[isoforms]]
+gene = "PHACTR4"
+tid = "ENST00000493669.2"
+genome_pos = "chr1:28407460-28490954:+"
+start_codon = "TTG"  # internal out-of-frame — rare-type fill
+
+[[isoforms]]
+gene = "PIEZO1"
+tid = "ENST00000301015.14"
+genome_pos = "chr16:88715604-88785126:-"
+start_codon = "ACG"  # Extended — sampler
+
+[[isoforms]]
+gene = "RPS6KA5"
+tid = "ENST00000614987.5"
+genome_pos = "chr14:91001150-91060550:-"
+start_codon = "CTG"  # uoORF — rare-type fill
+
+[[isoforms]]
+gene = "SKA3"
+tid = "ENST00000314759.6"
+genome_pos = "chr13:21155149-21176414:-"
+start_codon = "ACG"  # Truncated — anchor
+
+[[isoforms]]
+gene = "SKA3"
+tid = "ENST00000298260.8"
+genome_pos = "chr13:21155149-21176521:-"
+start_codon = "GTG"  # uoORF — anchor
+
+[[isoforms]]
+gene = "SMIM10L1"
+tid = "ENST00000622602.2"
+genome_pos = "chr12:11171567-11171702:+"
+start_codon = "ATG"  # 3'UTR ORF — rare-type fill
+
+[[isoforms]]
+gene = "SPECC1"
+tid = "ENST00000467722.3"
+genome_pos = "chr17:20232217-20236881:+"
+start_codon = "AGG"  # 3'UTR ORF — rare-type fill
+
+[[isoforms]]
+gene = "SPEN"
+tid = "ENST00000375759.8"
+genome_pos = "chr1:15847903-15848005:+"
+start_codon = "ATG"  # uORF — rare-type fill
+
+[[isoforms]]
+gene = "SPIN4"
+tid = "ENST00000374884.3"
+genome_pos = "chrX:63350557-63350587:-"
+start_codon = "ATG"  # internal out-of-frame — rare-type fill
+
+[[isoforms]]
+gene = "SRSF2"
+tid = "ENST00000585202.5"
+genome_pos = "chr17:76736160-76737265:-"
+start_codon = "GTG"  # Extended — anchor
+
+[[isoforms]]
+gene = "TRIP13"
+tid = "ENST00000166345.8"
+genome_pos = "chr5:892926-917103:+"
+start_codon = "GTG"  # Extended — anchor
+
+[[isoforms]]
+gene = "TRNT1"
+tid = "ENST00000251607.11"
+genome_pos = "chr3:3129127-3148154:+"
+start_codon = "ATG"  # Truncated — anchor
+
+[[isoforms]]
+gene = "UBE2D2"
+tid = "ENST00000398733.8"
+genome_pos = "chr5:139561698-139626801:+"
+start_codon = "ATC"  # Extended — anchor
+
+[[isoforms]]
+gene = "UBE2M"
+tid = "ENST00000253023.8"
+genome_pos = "chr19:58556088-58558576:-"
+start_codon = "ACG"  # Extended — anchor
