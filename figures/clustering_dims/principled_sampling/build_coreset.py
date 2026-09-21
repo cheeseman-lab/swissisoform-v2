@@ -291,7 +291,7 @@ def plot_coreset(result: fs.MFAResult, picks: pd.DataFrame, anchors: set[str], p
     scores, meta = result.scores, result.matrix.meta
     is_anchor = meta["gene_name"].isin(anchors).to_numpy()
 
-    fig, axes = plt.subplots(1, 2, figsize=(15, 6.8))
+    fig, axes = plt.subplots(2, 1, figsize=(7.5, 13.6))
     for ax, (a, b) in zip(axes, ((0, 1), (2, 3))):
         first = (a, b) == (0, 1)
         orf = meta["orf_type"].to_numpy()

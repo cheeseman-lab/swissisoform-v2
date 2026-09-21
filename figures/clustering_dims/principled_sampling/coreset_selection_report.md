@@ -1,4 +1,4 @@
-# cheeseman_50 coreset
+# cheeseman50 coreset
 
 22 static anchors (12 genes) + 28 picks = 50 isoforms.
 Space: all-ORF, 6,462 × 391.
