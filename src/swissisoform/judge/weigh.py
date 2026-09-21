@@ -159,7 +159,7 @@ def center_scores(scores: Iterable[Score]) -> dict[tuple[str, str, str], float]:
 
 def bradley_terry(
     comparisons: Sequence[Comparison],
-    arms: Sequence[str] = ARMS,
+    arms: Sequence[str] | None = None,
     *,
     baseline: str = BASELINE,
     prior: float = 0.5,
@@ -177,7 +177,17 @@ def bradley_terry(
     Returns an empty dict when no comparison survives, which is a real outcome for
     a unit where the judge contradicted itself throughout.
     """
-    present = [a for a in arms if any(c.winner == a or c.loser == a for c in comparisons)]
+    # ``arms=None`` means every arm that actually competed, which is the right
+    # default: an arm present in the comparisons but absent from *arms* used to be
+    # counted in the numerator (it beat someone) and not the denominator (it was
+    # not an opponent), inflating everyone else. The replicate hit exactly this --
+    # it is not in ARMS, so 1,297 of 5,919 comparisons were half-counted and the
+    # noise-floor control itself got no estimate. An explicit *arms* is still
+    # honoured, and `pool` below drops the excluded arms' games so the numerator
+    # and denominator always describe the same opponent set.
+    observed = {c.winner for c in comparisons} | {c.loser for c in comparisons}
+    candidates = sorted(observed) if arms is None else arms
+    present = [a for a in candidates if a in observed]
     if not present or not comparisons:
         return {}
 
@@ -192,7 +202,12 @@ def bradley_terry(
         wins[(a, b)] += prior
         wins[(b, a)] += prior
 
-    total_wins = {a: sum(v for (w, _), v in wins.items() if w == a) for a in present}
+    # Restricted to opponents in *present*, so the numerator can never count a game
+    # the denominator below does not.
+    pool = set(present)
+    total_wins = {
+        a: sum(v for (w, loser), v in wins.items() if w == a and loser in pool) for a in present
+    }
     strength = {a: 1.0 for a in present}
 
     for _ in range(iterations):
@@ -238,7 +253,7 @@ class Interval:
 
 def cluster_bootstrap_bt(
     comparisons: Sequence[Comparison],
-    arms: Sequence[str] = ARMS,
+    arms: Sequence[str] | None = None,
     *,
     baseline: str = BASELINE,
     n: int = N_BOOTSTRAP,
@@ -249,6 +264,10 @@ def cluster_bootstrap_bt(
     Isoforms are the resampling unit. Resampling individual comparisons would
     treat the 36 pairs within one cell as independent when they are 9 arms read
     against one shared evidence payload.
+
+    ``arms=None`` passes through to :func:`bradley_terry`, i.e. fit every arm that
+    competed. Defaulting to ``ARMS`` here is what left the replicate without an
+    interval even after that function was fixed.
     """
     point = bradley_terry(comparisons, arms, baseline=baseline)
     if not point:
