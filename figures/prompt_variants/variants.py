@@ -3,12 +3,13 @@
 Four groundings x two hint levels. Kept in one place so the driver and anything
 that later reads the corpora cannot disagree about what an arm was.
 
-The two axes are not independent, and the write-up has to say so: in ``criteria``,
-``-hint`` removes the system Directionality block *and* ~18 per-member
-``interpretation_hint`` strings, while in the other three groundings there are no
-per-member hints to remove, so only the system block goes. That asymmetry is a
-property of the framings, not a bug — but it means "the hint effect" is not one
-number across the matrix.
+The two axes are not independent, and the write-up has to say so. ``-hint``
+removes the system Directionality block everywhere; on top of that it removes
+per-member interpretation hints in ``criteria`` (~18 strings) and in ``tags``
+(one ``means`` per criterion-backed tag, 14), while ``raw`` and ``dist`` have
+none to remove. That asymmetry is a property of the framings, not a bug — but
+it means "the hint effect" is not one number across the matrix, and it is not
+even the same *kind* of difference in the two arms that have one.
 """
 
 from __future__ import annotations

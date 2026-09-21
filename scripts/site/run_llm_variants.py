@@ -129,6 +129,7 @@ def run_arm(variant: variants_mod.Variant, args: argparse.Namespace) -> int:
         variant.grounding,
         dist_version=args.dist_version,
         tag_version=args.tag_registry,
+        hints=variant.hints,
     )
     if variant.grounding == "criteria" and not variant.hints:
         # The only arm with per-member hints to remove — the other three carry

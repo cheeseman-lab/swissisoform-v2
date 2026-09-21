@@ -271,6 +271,110 @@ class TestTags:
         assert gr._tags_body(reg)(rec, CATEGORY_C)["tags_registry_version"] == "vtest"
 
 
+class TestTagMetrics:
+    """A criterion-backed tag carries the criterion's own supporting numbers.
+
+    The single cited value is one input to a verdict that may rest on nine, so a
+    tag restating a criterion hands over that criterion's `evidence_cols` too.
+    Sweep tags stay lean: their value IS their metric.
+    """
+
+    @staticmethod
+    def _rec(raw_extra: dict | None = None) -> dict:
+        raw = {
+            "isoform_tags_states": {"crit": True, "sweep": True},
+            "isoform_tags_citations": {"crit": 7.0, "sweep": 2.0},
+            "a": 1,
+            "b": 2,
+            "unused": 99,
+        }
+        raw.update(raw_extra or {})
+        return _record(raw)
+
+    @staticmethod
+    def _install(monkeypatch, cfg: dict) -> None:
+        monkeypatch.setitem(gr.ev.CRITERIA, "X", cfg)
+
+    def test_sweep_tag_stays_lean(self, monkeypatch):
+        self._install(monkeypatch, {"evidence_cols": ["a"], "interpretation_hint": "H"})
+        reg = _registry(_tag_row(tag_id="sweep", metric="m"))
+        tag = gr._tags_body(reg)(self._rec(), CATEGORY_C)["tags"][0]
+        assert "metrics" not in tag and "means" not in tag and "criterion_id" not in tag
+
+    def test_derived_tag_carries_exactly_its_evidence_cols(self, monkeypatch):
+        """Closed on purpose: a future 'just hand over _raw' regression fails here."""
+        self._install(monkeypatch, {"evidence_cols": ["a", "b"], "interpretation_hint": "H"})
+        reg = _registry(_tag_row(tag_id="crit", criterion_id="X", metric="m"))
+        tag = gr._tags_body(reg)(self._rec(), CATEGORY_C)["tags"][0]
+        assert tag["metrics"] == {"a": 1, "b": 2}
+        assert tag["criterion_id"] == "X"
+
+    def test_builder_backed_criterion_is_not_a_silent_no_op(self, monkeypatch):
+        """S2/S3 hold their evidence in a builder, not a column list.
+
+        No builder-backed criterion ships today, so the real corpus cannot catch
+        a regression here — this test is the only thing that does.
+        """
+        self._install(
+            monkeypatch,
+            {
+                "evidence_cols": [],
+                "interpretation_hint": "H",
+                "evidence_builder": lambda rec: {"evidence": {"k": 1}},
+            },
+        )
+        reg = _registry(_tag_row(tag_id="crit", criterion_id="X", metric="m"))
+        tag = gr._tags_body(reg)(self._rec(), CATEGORY_C)["tags"][0]
+        assert tag["metrics"] == {"k": 1}
+
+    def test_builder_returning_none_keeps_the_tag(self, monkeypatch):
+        """The tri-state is still a real result; dropping the tag would make
+        "could not build evidence" read as "not evaluated"."""
+        self._install(
+            monkeypatch,
+            {"evidence_cols": [], "interpretation_hint": "H", "evidence_builder": lambda r: None},
+        )
+        reg = _registry(_tag_row(tag_id="crit", criterion_id="X", metric="m"))
+        tag = gr._tags_body(reg)(self._rec(), CATEGORY_C)["tags"][0]
+        assert "metrics" not in tag
+        assert tag["state"] == "on"
+
+    def test_nested_leak_is_scrubbed_from_builder_output(self, monkeypatch):
+        """`_leaks` is name-based and cannot see a leak nested under a label."""
+        self._install(
+            monkeypatch,
+            {
+                "evidence_cols": [],
+                "interpretation_hint": "H",
+                "evidence_builder": lambda rec: {
+                    "evidence": {"GRAVY": {"ratio": 1.2, "cmp_biophysics_gravy_enriched": True}}
+                },
+            },
+        )
+        reg = _registry(_tag_row(tag_id="crit", criterion_id="X", metric="m"))
+        tag = gr._tags_body(reg)(self._rec(), CATEGORY_C)["tags"][0]
+        assert tag["metrics"]["GRAVY"] == {"ratio": 1.2}
+
+    def test_hints_off_drops_only_means(self, monkeypatch):
+        """`interpretation_hint` IS the hint axis — carrying it unconditionally
+        would hand tags_nohint the guidance the axis exists to remove."""
+        self._install(monkeypatch, {"evidence_cols": ["a"], "interpretation_hint": "H"})
+        reg = _registry(_tag_row(tag_id="crit", criterion_id="X", metric="m", note="N"))
+        rec = self._rec()
+        on = gr._tags_body(reg, hints=True)(rec, CATEGORY_C)["tags"][0]
+        off = gr._tags_body(reg, hints=False)(rec, CATEGORY_C)["tags"][0]
+        assert on["means"] == "H"
+        assert set(on) - set(off) == {"means"}
+        assert off["metrics"] == {"a": 1} and off["note"] == "N"
+
+    def test_unknown_criterion_fails_at_build_time(self):
+        """Registry/criteria drift must fail at arm setup, not degrade to a lean
+        payload partway through a paid run."""
+        reg = _registry(_tag_row(tag_id="crit", criterion_id="nope", metric="m"))
+        with pytest.raises(gr.GroundingError):
+            gr._tags_body(reg)
+
+
 # ---------------------------------------------------------------------------
 # dist
 # ---------------------------------------------------------------------------

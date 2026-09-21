@@ -66,9 +66,14 @@ CONTRACTS: dict[str, str] = {
         _IDENTITY + "`tags` — a controlled vocabulary of binary findings, each already "
         "evaluated against a frozen cutoff. `state` is `on` (the test passed), `off` "
         "(it was tested and failed) or `not_evaluable` (it could not be tested at all, "
-        "which is NOT the same as off). Each fired tag carries the single `value` it "
-        "rests on and the `test` that produced it. There are no other metrics: reason "
-        "from these tags and their numbers."
+        "which is NOT the same as off). Every tag carries the single `value` its `test` "
+        "cut on. A tag that restates a scored criterion additionally carries `metrics` "
+        "— the full set of supporting numbers behind that criterion, of which `value` "
+        "is only the one the cutoff reads — and a `note` where its definition has a "
+        "caveat. A tag with no `metrics` is single-metric by construction: its `value` "
+        "is the whole of its evidence, not an excerpt. There are no verdict strings and "
+        "no row-level records: reason from the states, their numbers, and the "
+        "supporting metrics where they are given."
     ),
     "dist": (
         _IDENTITY + "`fields` — every numeric metric for the category with its `value` "
@@ -92,6 +97,15 @@ NOUNS: dict[str, str] = {
     "raw": "the metrics in `evidence`",
     "tags": "the tags in `tags`",
     "dist": "the fields in `fields`",
+}
+# Appended in the `+hint` arms only. `means` is the criterion's own
+# interpretation_hint, so leaving it unconditional would give `tags_nohint` the
+# guidance the hint axis exists to remove.
+_HINT_CLAUSE: dict[str, str] = {
+    "tags": (
+        " Where a tag carries `means`, that states what the tag is asking and which "
+        "of its `metrics` the call rests on; read it before weighing the numbers."
+    ),
 }
 _TERMINOLOGY = (
     ' Terminology: where the rest of this prompt says "members" or "submodules", '
@@ -200,8 +214,9 @@ def render(text: str, *, grounding: str, hints: bool, is_tool_prompt: bool = Fal
     # section -> replacement lines, or None to delete the block's body entirely.
     edits: dict[str, list[str] | None] = {}
     if grounding in CONTRACTS:
+        contract = CONTRACTS[grounding] + (_HINT_CLAUSE.get(grounding, "") if hints else "")
         edits["input_contract"] = [
-            CONTRACTS[grounding] + _TERMINOLOGY.format(noun=NOUNS[grounding], na=_NA[grounding])
+            contract + _TERMINOLOGY.format(noun=NOUNS[grounding], na=_NA[grounding])
         ]
     if not hints:
         edits["directionality"] = None

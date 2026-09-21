@@ -11,7 +11,9 @@ measured rather than argued:
     No verdicts at all: every column the feature catalog assigns to the category.
 ``tags``
     No verdicts: the fired tags off ``isoform_tags_states``, each with the one
-    number it rests on, plus the judgment tags the M/P tool loops answer.
+    number it rests on — and, where a tag restates a scored criterion, that
+    criterion's full ``evidence_cols`` and its interpretation hint. Plus the
+    judgment tags the M/P tool loops answer.
 ``dist``
     No verdicts and no tags: every profiled numeric field with its value and its
     percentile in the frozen reference population.
@@ -38,6 +40,7 @@ from typing import Any, Callable
 import pandas as pd
 
 from swissisoform import distributions as dist_mod
+from swissisoform.site import evidence as ev
 from swissisoform.tags import registry as reg_mod
 from swissisoform.tags import seeds
 
@@ -82,6 +85,20 @@ class GroundingError(RuntimeError):
 def _leaks(column: str) -> bool:
     """Whether *column* would hand a grounding a verdict it is meant to lack."""
     return column.startswith(LEAK_PREFIXES) or column.endswith(LEAK_SUFFIXES)
+
+
+def _scrub(value: Any) -> Any:
+    """Drop leaking keys at every depth of a nested evidence block.
+
+    ``_leaks`` is name-based, so it cannot see a leak nested under a display
+    label — and S2's builder emits exactly that, a ``cmp_biophysics_<f>_enriched``
+    per feature keyed by "Hydropathy (GRAVY)".
+    """
+    if isinstance(value, dict):
+        return {k: _scrub(v) for k, v in value.items() if not _leaks(str(k))}
+    if isinstance(value, list):
+        return [_scrub(v) for v in value]
+    return value
 
 
 def _is_list(value: Any) -> bool:
@@ -206,6 +223,8 @@ def _raw_body(
 
 def _tags_body(
     reg: reg_mod.TagRegistry,
+    *,
+    hints: bool = True,
 ) -> Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]:
     """Fired tags with their cited number, plus the judgment tags for M and P.
 
@@ -213,10 +232,54 @@ def _tags_body(
     — "tested and absent" — and ``not_evaluable`` is the distinction the whole tag
     layer exists to preserve; dropping either would leave the model unable to tell
     a negative result from an untestable one.
+
+    A tag that restates a scored criterion additionally carries that criterion's
+    ``evidence_cols`` — the same numbers the ``criteria`` arm sees — because the
+    single cited value is one input to a verdict that may rest on nine. Sweep
+    tags stay lean: their value *is* their metric, so there is nothing withheld.
+
+    ``hints`` gates the per-tag ``means`` only. ``interpretation_hint`` is the
+    hint axis itself (``variants.py`` documents ``-hint`` as stripping it from
+    ``criteria``), so carrying it unconditionally would hand ``tags_nohint`` the
+    guidance the axis exists to remove.
+
+    Raises:
+        GroundingError: A tag names a ``criterion_id`` absent from ``CRITERIA``
+            — registry/criteria drift, which must fail at arm setup rather than
+            silently degrade to a lean payload partway through a paid run.
     """
     by_category: dict[str, list[reg_mod.Tag]] = {}
     for tag in reg:
         by_category.setdefault(tag.category, []).append(tag)
+
+    # Resolved once, not per record: `TagRegistry.get` rebuilds its index on
+    # every call, and CRITERIA is a module-level dict either way.
+    criterion_cfg: dict[str, dict[str, Any]] = {}
+    for tag in reg:
+        if not tag.criterion_id:
+            continue
+        cfg = ev.CRITERIA.get(tag.criterion_id)
+        if cfg is None:
+            raise GroundingError(
+                f"tag {tag.tag_id!r} names criterion {tag.criterion_id!r}, which "
+                "site.evidence.CRITERIA does not define"
+            )
+        criterion_cfg[tag.tag_id] = cfg
+
+    def metrics_for(tag: reg_mod.Tag, record: dict[str, Any]) -> dict[str, Any] | None:
+        """The criterion's supporting numbers, or None when it has none here."""
+        cfg = criterion_cfg.get(tag.tag_id)
+        if cfg is None:
+            return None
+        builder = cfg.get("evidence_builder")
+        if builder is not None:
+            # S2/S3 express their evidence as a nested dict no flat column list
+            # can hold, so the criteria arm builds it on the fly; do the same
+            # rather than reporting them as having no metrics.
+            built = builder(record) or {}
+            return _scrub(built.get("evidence")) or None
+        raw = record.get("_raw") or {}
+        return {col: _clean(raw.get(col)) for col in cfg.get("evidence_cols", ())} or None
 
     def build(record: dict[str, Any], category: dict[str, Any]) -> dict[str, Any]:
         raw = record.get("_raw") or {}
@@ -253,6 +316,15 @@ def _tags_body(
             # are not either-or roll-ups — state the comparison it actually makes.
             if tag.metric and tag.direction and tag.cutoff is not None:
                 entry["test"] = f"{tag.metric} {tag.direction} {tag.cutoff:.6g}"
+            if tag.note:
+                entry["note"] = tag.note
+            if tag.criterion_id:
+                entry["criterion_id"] = tag.criterion_id
+                metrics = metrics_for(tag, record)
+                if metrics:
+                    entry["metrics"] = metrics
+                if hints:
+                    entry["means"] = criterion_cfg[tag.tag_id]["interpretation_hint"]
             fired.append(entry)
         body: dict[str, Any] = {"tags": fired, "tags_registry_version": reg.version}
         if questions:
@@ -361,11 +433,16 @@ def build(
     dist_version: str = DEFAULT_DIST_VERSION,
     tag_version: str = DEFAULT_TAG_VERSION,
     strip_lists_for: frozenset[str] = STRIP_LISTS_FOR,
+    hints: bool = True,
 ) -> Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] | None:
     """The body builder for one grounding, or ``None`` for ``criteria``.
 
     ``None`` is not a failure: it means "install no hook", so the status-quo arm
     runs the untouched code path rather than a reimplementation of it.
+
+    ``hints`` reaches only ``tags``, whose criterion-backed entries carry an
+    ``interpretation_hint``. The other two alternative bodies have no per-member
+    hint to strip, which is why ``strip_hints`` is a ``criteria``-only path.
 
     Raises:
         GroundingError: Unknown mode.
@@ -375,7 +452,7 @@ def build(
     if mode == "criteria":
         return None
     if mode == "tags":
-        return _tags_body(reg_mod.load(tag_version))
+        return _tags_body(reg_mod.load(tag_version), hints=hints)
     catalog = pd.read_csv(catalog_csv)
     if mode == "raw":
         return _raw_body(category_columns(catalog), strip_lists_for)
