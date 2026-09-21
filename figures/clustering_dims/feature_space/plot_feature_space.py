@@ -1,10 +1,10 @@
 #!/usr/bin/env python
-"""Map the isoform feature space — one figure per matrix.
+"""Map the isoform feature space.
 
-**No clustering.** A k-sweep (k = 5..100, both matrices) established that this
-space has no discrete groups: silhouette peaked at 0.21 and fell monotonically to
-0.15, cost showed no elbow, and a matched multivariate Gaussian — structureless
-by construction — scored 0.12-0.16 on the same measure. Swapping rank-to-normal
+**No clustering.** A k-sweep (k = 5..100) established that this space has no
+discrete groups: silhouette peaked at 0.21 and fell monotonically to 0.15, cost
+showed no elbow, and a matched multivariate Gaussian — structureless by
+construction — scored 0.12-0.16 on the same measure. Swapping rank-to-normal
 for a multimodality-preserving robust z-score changed nothing (0.238/0.171/0.153
 vs 0.211/0.168/0.154), so the blob is not an artifact of the transform. Isoform
 feature space is a continuum, and any k-way partition of it is an arbitrary
@@ -22,7 +22,7 @@ All components are kept — no truncation, no permutation-null cut, so distance 
 score space equals distance in the weighted feature space exactly.
 
 Outputs (alongside this script):
-  - feature_space_<matrix>.png   ORF type on PC1-PC2 and PC3-PC4, block
+  - feature_space_all_orf.png   ORF type on PC1-PC2 and PC3-PC4, block
                                  contributions per component
   - feature_space_report.md      the written read-out
 
@@ -149,10 +149,11 @@ def plot_matrix(result: fs.MFAResult, anchors: set[str], path: Path) -> None:
     plt.close(fig)
 
 
-def write_report(results: dict[str, fs.MFAResult], anchors: set[str], path: Path) -> str:
+def write_report(result: fs.MFAResult, anchors: set[str], path: Path) -> str:
     """Write the markdown read-out and return it."""
+    n_anchor = int(anchor_mask(result.matrix.meta, anchors).sum())
     lines = [
-        "# Isoform feature space — MFA maps",
+        "# Isoform feature space — MFA map",
         "",
         f"Anchors: {len(anchors)} curated genes from `presets/cheeseman50.toml`.",
         "",
@@ -163,34 +164,28 @@ def write_report(results: dict[str, fs.MFAResult], anchors: set[str], path: Path
         "changed nothing. The space is a continuum; selection must cover it rather "
         "than partition it.",
         "",
+        "```",
+        fs.summarize(result),
+        f"  anchor isoforms present: {n_anchor}",
+        f"  verify: {fs.verify(result) or 'OK'}",
+        f"  imputation bias (corr |score| vs observed): {fs.imputation_bias(result):+.3f}",
+        "```",
+        "",
+        "Component correlation with the evidence scores — a check that the "
+        "embedding did not merely rediscover the ~19 scored levers:",
+        "",
+        "```",
+        fs.score_correlation(result).round(3).to_string(),
+        "```",
+        "",
+        "Block contribution, PC1-PC6 (columns sum to 1):",
+        "",
+        "```",
+        result.block_contributions().iloc[:, :6].round(3).to_string(),
+        "```",
+        "",
+        "",
     ]
-    for name, r in results.items():
-        n_anchor = int(anchor_mask(r.matrix.meta, anchors).sum())
-        lines += [
-            f"## {name}",
-            "",
-            "```",
-            fs.summarize(r),
-            f"  anchor isoforms present: {n_anchor}",
-            f"  verify: {fs.verify(r) or 'OK'}",
-            f"  imputation bias (corr |score| vs observed): {fs.imputation_bias(r):+.3f}",
-            "```",
-            "",
-            "Component correlation with the evidence scores — a check that the "
-            "embedding did not merely rediscover the ~19 scored levers:",
-            "",
-            "```",
-            fs.score_correlation(r).round(3).to_string(),
-            "```",
-            "",
-            "Block contribution, PC1-PC6 (columns sum to 1):",
-            "",
-            "```",
-            r.block_contributions().iloc[:, :6].round(3).to_string(),
-            "```",
-            "",
-            "",
-        ]
     text = "\n".join(lines)
     path.write_text(text)
     return text
@@ -202,7 +197,7 @@ def load_anchors() -> set[str]:
 
 
 def main() -> None:
-    """Fit both embeddings and draw one map each."""
+    """Fit the embedding and draw the map."""
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--parquet", default=None, help="all_paired.parquet path or glob")
     args = ap.parse_args()
@@ -210,18 +205,15 @@ def main() -> None:
     anchors = load_anchors()
     print(f"anchors: {len(anchors)} genes")
 
-    results = {}
-    for name, matrix in fs.build_matrices(args.parquet).items():
-        print(f"\nfitting MFA — {name}")
-        r = fs.fit_mfa(matrix)
-        results[name] = r
-        print(fs.summarize(r))
-        print("  verify:", fs.verify(r) or "OK")
-        slug = name.replace("-", "_").lower()
-        plot_matrix(r, anchors, HERE / f"feature_space_{slug}.png")
+    matrix = fs.build_matrix_all_orf(args.parquet)
+    print("\nfitting MFA — all-ORF")
+    result = fs.fit_mfa(matrix)
+    print(fs.summarize(result))
+    print("  verify:", fs.verify(result) or "OK")
+    plot_matrix(result, anchors, HERE / "feature_space_all_orf.png")
 
     print()
-    print(write_report(results, anchors, HERE / "feature_space_report.md"))
+    print(write_report(result, anchors, HERE / "feature_space_report.md"))
     print(f"\nwrote figures + feature_space_report.md to {HERE}")
 
 

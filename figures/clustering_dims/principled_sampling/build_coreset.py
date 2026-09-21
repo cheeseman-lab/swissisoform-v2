@@ -21,10 +21,9 @@ sampler runs or a gene gets picked twice and the set lands at 27.
 ``extended``, ``truncated`` and ``uorf`` get no floor: the anchors already carry
 12 extended and 9 truncated, and the sampler picked 3 uORFs unprompted at n=10.
 
-Matrix: **all-ORF**, forced rather than preferred — paired-ORF contains only
-extended and truncated and cannot supply a rare-type isoform at all. The cost is
-the 83 shared-region features, which do carry independent signal (adjusted Rand
-0.27 between the two spaces).
+Matrix: **all-ORF** — drops the 83 shared-region features (they do not exist for
+every ORF type) so the rare separate types sit in the same space as everything
+else.
 
 Outputs (alongside this script):
   - coreset_selection.csv       the 28 picks, with provenance
@@ -441,7 +440,7 @@ def main() -> None:
     anchors = load_anchors()
     print(f"anchors: {len(anchors)} genes")
 
-    matrix = fs.build_matrices(args.parquet)["all-ORF"]
+    matrix = fs.build_matrix_all_orf(args.parquet)
     result = fs.fit_mfa(matrix)
     print(fs.summarize(result))
 

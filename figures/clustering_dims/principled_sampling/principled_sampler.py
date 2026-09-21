@@ -31,8 +31,8 @@ method returns on its own, and how far that is from the rules.
 The sampler is deterministic — no seed, no restarts, nothing to tune but ``n``.
 
 Outputs (alongside this script):
-  - principled_sample.csv        one row per pick, both matrices, every n
-  - principled_sample_<matrix>.png   the picks drawn on PC1-PC2 and PC3-PC4
+  - principled_sample.csv        one row per pick, every n
+  - principled_sample_all_orf.png   the picks drawn on PC1-PC2 and PC3-PC4
   - principled_sample_report.md  composition, collisions, overlap, n-sensitivity
 
 Usage:
@@ -325,7 +325,7 @@ def load_anchors() -> set[str]:
 
 
 def main() -> None:
-    """Run the sampler on both matrices and write the exploratory read-out."""
+    """Run the sampler and write the exploratory read-out."""
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--parquet", default=None, help="all_paired.parquet path or glob")
     ap.add_argument(
@@ -354,56 +354,55 @@ def main() -> None:
     ]
     frames = []
 
-    for name, matrix in fs.build_matrices(args.parquet).items():
-        print(f"\nfitting MFA — {name}")
-        result = fs.fit_mfa(matrix)
-        print(fs.summarize(result))
+    matrix = fs.build_matrix_all_orf(args.parquet)
+    print("\nfitting MFA — all-ORF")
+    result = fs.fit_mfa(matrix)
+    print(fs.summarize(result))
 
-        lines += [
-            f"## {name}",
-            "",
-            f"`{result.scores.shape[0]:,} × {result.scores.shape[1]}` scores",
-            "",
-        ]
+    lines += [
+        "## all-ORF",
+        "",
+        f"`{result.scores.shape[0]:,} × {result.scores.shape[1]}` scores",
+        "",
+    ]
 
-        for n in ns:
-            picks = principled_sample(result.scores, n)
-            problems = verify_sample(result.scores, n, picks)
-            print(f"  n={n:2d}  verify: {problems or 'OK'}")
+    for n in ns:
+        picks = principled_sample(result.scores, n)
+        problems = verify_sample(result.scores, n, picks)
+        print(f"  n={n:2d}  verify: {problems or 'OK'}")
 
-            frame = picks_frame(result, anchors, n)
-            frames.append(frame)
-            lines += [f"### n = {n}", "", "```"]
-            lines += summarize_picks(frame, result.matrix.meta)
-            lines += w_distinctness(result, n)
-            if problems:
-                lines += ["VERIFY PROBLEMS:", *(f"  {p}" for p in problems), ""]
-            lines += ["```", ""]
+        frame = picks_frame(result, anchors, n)
+        frames.append(frame)
+        lines += [f"### n = {n}", "", "```"]
+        lines += summarize_picks(frame, result.matrix.meta)
+        lines += w_distinctness(result, n)
+        if problems:
+            lines += ["VERIFY PROBLEMS:", *(f"  {p}" for p in problems), ""]
+        lines += ["```", ""]
 
-            if n == DEFAULT_N:
-                lines += [
-                    f"The {3 * n} picks at the headline n:",
-                    "",
-                    "```",
-                    frame[
-                        [
-                            "set",
-                            "component",
-                            "rank",
-                            "gene_name",
-                            "orf_type",
-                            "is_anchor",
-                            "value",
-                            "inf_norm",
-                        ]
+        if n == DEFAULT_N:
+            lines += [
+                f"The {3 * n} picks at the headline n:",
+                "",
+                "```",
+                frame[
+                    [
+                        "set",
+                        "component",
+                        "rank",
+                        "gene_name",
+                        "orf_type",
+                        "is_anchor",
+                        "value",
+                        "inf_norm",
                     ]
-                    .round(3)
-                    .to_string(index=False),
-                    "```",
-                    "",
                 ]
-                slug = name.replace("-", "_").lower()
-                plot_picks(result, frame, anchors, HERE / f"principled_sample_{slug}.png")
+                .round(3)
+                .to_string(index=False),
+                "```",
+                "",
+            ]
+            plot_picks(result, frame, anchors, HERE / "principled_sample_all_orf.png")
 
     out = pd.concat(frames, ignore_index=True)
     out.to_csv(HERE / "principled_sample.csv", index=False)

@@ -23,15 +23,12 @@ categories, which is where the cross-block structure lives. Per-block PCA follow
 by concatenation (a different, tempting method) would destroy exactly that before
 the global step ever saw it.
 
-Two matrices, because the shared region does not exist for every ORF type:
+One matrix, all-ORF: 397 dims x 6,462 isoforms. Drops the shared-region
+features, which do not exist for every ORF type, so every ORF type — including
+the rare separate ones (uORF, uoORF, internal-OOF, 3'UTR-ORF) — sits in the same
+space.
 
-    all-ORF     397 dims x 6,462 isoforms   drops the shared-region features
-    paired-ORF  480 dims x 6,018 isoforms   extended/truncated only
-
-Their coordinate systems are independent — different features, rows and
-eigenvectors — so nothing may be compared across them numerically.
-
-Consumed by ``plot_feature_space.py`` (and, later, gene selection) so both work
+Consumed by ``plot_feature_space.py`` and ``principled_sampler.py`` so both work
 from an identical embedding.
 """
 
@@ -77,10 +74,8 @@ ANCHOR_GENES = frozenset(
 )
 
 # Features the catalog flagged as unavailable (or heavily depleted) for separate
-# ORFs. The all-ORF matrix drops them; the paired-ORF matrix keeps them.
+# ORFs. Dropped from the matrix so every ORF type sits in the same feature set.
 SHARED_REGION_FLAGS = ("absent_for_separate_orfs", "depleted_for_separate_orfs")
-
-PAIRED_ORF_TYPES = ("extended", "truncated")
 
 # Carried alongside the scores for colouring and reporting — never dimensions.
 # The scoring columns in particular are computed FROM these features, so using
@@ -159,7 +154,7 @@ class FeatureMatrix:
         blocks: CDLMPS letter per column, in matrix order.
         meta: Per-row metadata (gene, ORF type, scores, ...).
         observed: ``(n, p)`` mask — True where measured, False where imputed.
-        name: Human label ("all-ORF" / "paired-ORF").
+        name: Human label for the matrix (``"all-ORF"``).
     """
 
     X: np.ndarray
@@ -220,25 +215,18 @@ def _raw_frame(files: list[Path], wanted: list[str]) -> pd.DataFrame:
     return frame
 
 
-def build_matrix(
-    frame: pd.DataFrame,
-    catalog: pd.DataFrame,
-    *,
-    name: str,
-    row_mask: np.ndarray | None = None,
-) -> FeatureMatrix:
+def build_matrix(frame: pd.DataFrame, catalog: pd.DataFrame, *, name: str) -> FeatureMatrix:
     """Transform, rank-normalize, impute and standardize one feature matrix."""
-    sub = frame if row_mask is None else frame.loc[row_mask]
     features = list(catalog["feature"])
     blocks = catalog["category"].to_numpy()
     transforms = dict(zip(catalog["feature"], catalog["transform"]))
 
-    n, p = len(sub), len(features)
+    n, p = len(frame), len(features)
     X = np.empty((n, p), dtype=float)
     observed = np.empty((n, p), dtype=bool)
 
     for j, feat in enumerate(features):
-        raw = pd.to_numeric(sub[feat], errors="coerce").to_numpy(dtype=float)
+        raw = pd.to_numeric(frame[feat], errors="coerce").to_numpy(dtype=float)
         col = rank_to_normal(apply_transform(raw, transforms[feat]))
         observed[:, j] = np.isfinite(col)
         # Impute gaps to 0 — the rank-normal median, i.e. the column's centre.
@@ -252,12 +240,12 @@ def build_matrix(
     sd[sd == 0] = 1.0
     X /= sd
 
-    meta = sub[[c for c in META_COLUMNS if c in sub.columns]].reset_index(drop=True)
+    meta = frame[[c for c in META_COLUMNS if c in frame.columns]].reset_index(drop=True)
     return FeatureMatrix(X, features, blocks, meta, observed, name)
 
 
-def build_matrices(parquet: str | None = None) -> dict[str, FeatureMatrix]:
-    """Build the all-ORF and paired-ORF matrices from a genome-wide run."""
+def build_matrix_all_orf(parquet: str | None = None) -> FeatureMatrix:
+    """Build the all-ORF matrix from a genome-wide run."""
     files = resolve_parquet(parquet)
     catalog = load_catalog()
 
@@ -269,12 +257,7 @@ def build_matrices(parquet: str | None = None) -> dict[str, FeatureMatrix]:
     frame = _raw_frame(files, list(catalog["feature"]))
 
     all_orf_catalog = catalog[~catalog["null_pattern"].isin(SHARED_REGION_FLAGS)]
-    paired_mask = frame["orf_type"].isin(PAIRED_ORF_TYPES).to_numpy()
-
-    return {
-        "all-ORF": build_matrix(frame, all_orf_catalog, name="all-ORF"),
-        "paired-ORF": build_matrix(frame, catalog, name="paired-ORF", row_mask=paired_mask),
-    }
+    return build_matrix(frame, all_orf_catalog, name="all-ORF")
 
 
 # ---------------------------------------------------------------------------
@@ -475,7 +458,7 @@ __all__ = [
     "CATEGORIES",
     "FeatureMatrix",
     "MFAResult",
-    "build_matrices",
+    "build_matrix_all_orf",
     "fit_mfa",
     "imputation_bias",
     "score_correlation",
