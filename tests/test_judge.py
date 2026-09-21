@@ -717,6 +717,43 @@ class TestWeighing:
         assert all(v < 99 for v in eff["grounding"].values())
 
 
+class TestBradleyTerryArmSet:
+    """An arm that competed must be fitted, not half-counted.
+
+    The replicate is not in ARMS, so passing the default arm set left it out of
+    `present` while its 1,297 comparisons still fed every other arm's numerator.
+    It also meant the noise-floor control had no estimate at all.
+    """
+
+    @staticmethod
+    def _comparisons():
+        return [
+            Comparison(slug="i1", unit="C", winner="raw_hint", loser=REPLICATE),
+            Comparison(slug="i2", unit="C", winner="raw_hint", loser=BASELINE),
+            Comparison(slug="i3", unit="C", winner=REPLICATE, loser=BASELINE),
+            Comparison(slug="i4", unit="C", winner=BASELINE, loser="raw_hint"),
+        ]
+
+    def test_competing_arm_absent_from_arms_is_still_fitted(self):
+        fit = W.bradley_terry(self._comparisons())
+        assert REPLICATE in fit, "the replicate competed; it must get an estimate"
+
+    def test_numerator_and_denominator_share_one_opponent_set(self):
+        """Restricting *arms* must drop that arm's games, not just its estimate."""
+        restricted = W.bradley_terry(self._comparisons(), arms=("raw_hint", BASELINE))
+        assert set(restricted) == {"raw_hint", BASELINE}
+        # raw_hint beat the replicate once, and that game must not count here.
+        only_pair = [
+            c for c in self._comparisons() if {c.winner, c.loser} == {"raw_hint", BASELINE}
+        ]
+        direct = W.bradley_terry(only_pair, arms=("raw_hint", BASELINE))
+        assert restricted["raw_hint"] == pytest.approx(direct["raw_hint"])
+
+    def test_baseline_stays_pinned_at_zero(self):
+        fit = W.bradley_terry(self._comparisons())
+        assert fit[BASELINE] == pytest.approx(0.0)
+
+
 class TestConstants:
     def test_seven_units_six_categories_plus_synthesis(self):
         assert len(UNITS) == 7
