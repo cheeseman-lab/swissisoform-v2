@@ -163,10 +163,59 @@ def propose(
     profiled = set(dist.numeric["metric"])
     out: list[Candidate] = []
 
-    # Stream 1 — the sixteen scored criteria.
+    # Stream 1 — the scored criteria, one row each, read off the scorer's own
+    # verdict rather than re-cut from a metric.
+    #
+    # `kind="bool"` is the whole trick. The criterion's as-run True/False/None
+    # is already a column (`load_run` flattens the scoring struct), so every
+    # downstream stage does the right thing untouched: choose_cutoff and the
+    # chip rule and the fire-rate band all gate on `kind == "code"` and skip it,
+    # which is correct because a criterion's cutoff is fixed and not the sweep's
+    # to move — while the Jaccard filter admits every non-LLM candidate, so a
+    # criterion competes head-to-head with the sweep tags. Sorting criteria
+    # first (see build_table) makes a redundant sweep tag lose to the criterion
+    # rather than the other way round.
+    #
+    # One row per criterion, not per branch: M1's two inputs and S2's three are
+    # either-or roll-ups inside one scorer, so they are one tag. Their cutoffs
+    # still reach the registry, through the criterion_branch stream below.
+    for criterion_id, label in seeds.CRITERION_LABELS.items():
+        if criterion_id in seeds.UNCALIBRATED_CRITERIA:
+            continue
+        branches = seeds.seeds_for_criterion(criterion_id)
+        column = seeds.criterion_state_column(criterion_id)
+        single = branches[0] if len(branches) == 1 else None
+        out.append(
+            Candidate(
+                tag_id=_slug(criterion_id),
+                category=criterion_id[0],
+                label=label,
+                metric=column,
+                kind="bool",
+                direction="",
+                # The scorer's own gates already null out the rows a criterion
+                # is undefined for, so re-declaring validity here would subtract
+                # twice from the evaluable denominator.
+                valid_for=seeds.ALL_ORF_TYPES,
+                source="criterion",
+                criterion_id=criterion_id,
+                note=" ".join(s.note for s in branches if s.note),
+                blocked=(
+                    "" if column in columns else "criteria struct absent in this run"
+                ),
+                current_cutoff=(
+                    _current_cutoff(single.config_field, single.literal) if single else None
+                ),
+            )
+        )
+
+    # Stream 1b — one row per criterion BRANCH, kept only so
+    # `--cutoffs distribution` can still move a criterion's threshold
+    # (setup.tags.criterion_rows looks these up by id). They are cutoff inputs,
+    # not tags: build_table drops them before the table is written.
     for seed in seeds.CRITERION_SEEDS:
-        if seed.metric is None:
-            continue  # categorical or list-scored; the boolean stream covers these
+        if seed.metric is None or seed.criterion_id in seeds.UNCALIBRATED_CRITERIA:
+            continue
         null_pattern = _null_pattern(by_feature, seed.metric)
         out.append(
             Candidate(
@@ -177,7 +226,7 @@ def propose(
                 kind="code",
                 direction=seed.direction,
                 valid_for=seeds.validity_for(seed.metric, null_pattern),
-                source="criterion",
+                source="criterion_branch",
                 criterion_id=seed.criterion_id,
                 note=seed.note,
                 blocked=seed.blocked
@@ -636,6 +685,15 @@ def build_table(
     cands = apply_filters(cands, dist, by_feature, funnel)
     cands = [choose_cutoff(c, dist, band) for c in cands]
 
+    # Criterion branches exist only to carry a swept cutoff into the registry
+    # (`--cutoffs distribution`), and choose_cutoff has just given them one.
+    # They are not tags — the criterion itself is the tag — so they leave before
+    # the table is written, and `sweep()` keeps them because it does not call
+    # build_table.
+    branches = [c for c in cands if c.source == "criterion_branch"]
+    cands = [c for c in cands if c.source != "criterion_branch"]
+    funnel.drop("criterion branch — a cutoff input, not a tag", len(branches))
+
     # Band split, on two grounds.
     #
     # No cutoff at all: no in-band cut exists anywhere in the distribution.
@@ -701,7 +759,10 @@ def build_table(
                 j = jaccard(vec, other)
                 if j > max_j:
                     max_j, nearest = j, tag_id
-            if max_j >= jaccard_max:
+            # A criterion's overlap is reported but never eliminates it: the
+            # scoring layer decides the vocabulary contains it, not the sweep.
+            # The reviewer can still drop one with `decision`.
+            if max_j >= jaccard_max and cand.source != "criterion":
                 funnel.drop(f"redundant (Jaccard >= {jaccard_max})")
                 continue
             accepted.append((cand.tag_id, vec))
@@ -851,7 +912,18 @@ def _chip_table(
 
 
 REVIEW_COLUMNS = ("decision", "reviewer_notes")
-SUPERSEDED = "[superseded] no longer proposed by the current sweep. "
+SUPERSEDED = "[superseded] not in the current sweep's output. "
+
+# Everything a retired row measured against a previous run. Blanked on the way
+# out: the row is kept for its decision and its note, and leaving last sweep's
+# fire rate or Jaccard beside it reads as this sweep's reason for dropping it.
+MEASURED_COLUMNS = (
+    "cutoff", "current_cutoff", "current_fire_pct", "cutoff_source", "cutoff_pctile",
+    "break_depth", "fire_pct", "not_evaluable_pct", "fire_pct_extended",
+    "not_evaluable_pct_extended", "fire_pct_truncated", "not_evaluable_pct_truncated",
+    "fire_pct_separate", "not_evaluable_pct_separate", "max_jaccard", "nearest_tag",
+    "examples_on", "examples_off",
+)
 
 
 def merge_decisions(new: pd.DataFrame, previous: pd.DataFrame) -> pd.DataFrame:
@@ -883,6 +955,9 @@ def merge_decisions(new: pd.DataFrame, previous: pd.DataFrame) -> pd.DataFrame:
         fresh = ~rows["reviewer_notes"].str.startswith(SUPERSEDED)
         rows.loc[fresh, "reviewer_notes"] = SUPERSEDED + rows.loc[fresh, "reviewer_notes"]
         rows["decision"] = rows["decision"].replace("", "remove").fillna("remove")
+        for column in MEASURED_COLUMNS:
+            if column in rows:
+                rows[column] = ""
         out = pd.concat([out, rows], ignore_index=True)
     return out
 

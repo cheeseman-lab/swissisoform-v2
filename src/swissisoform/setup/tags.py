@@ -200,8 +200,18 @@ def _warn_if_truncating(criterion_id: str, field: str, value: float, cutoffs: st
         )
 
 
-def criterion_rows(by_id: dict[str, cand_mod.Candidate], *, cutoffs: str) -> list[dict[str, Any]]:
-    """One ``derived`` row per scored criterion — all sixteen.
+def criterion_rows(
+    by_id: dict[str, cand_mod.Candidate],
+    *,
+    cutoffs: str,
+    labels: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """One ``derived`` row per scored criterion the reviewer kept.
+
+    ``labels`` is the accepted set from the candidate table, keyed by the same
+    ``_slug(criterion_id)`` the criterion candidate carries. Passing it is what
+    makes ``decision=remove`` work on a criterion; ``None`` keeps every
+    calibrated one, which is only useful in tests.
 
     Every criterion is carried as ``derived`` rather than as a threshold on its
     headline metric. That is not a stylistic choice: measured on cheeseman50, the
@@ -220,6 +230,12 @@ def criterion_rows(by_id: dict[str, cand_mod.Candidate], *, cutoffs: str) -> lis
     """
     rows: list[dict[str, Any]] = []
     for criterion_id, label in seeds.CRITERION_LABELS.items():
+        # Skip before the scorer check: a criterion the reviewer dropped, or one
+        # whose threshold was never calibrated, is not a wiring error.
+        if criterion_id in seeds.UNCALIBRATED_CRITERIA:
+            continue
+        if labels is not None and cand_mod._slug(criterion_id) not in labels:
+            continue
         if criterion_id not in derived_mod.SCORER_BY_CRITERION:
             raise TagBuildError(f"{criterion_id} has a label but no scorer")
         category = criterion_id[0]
@@ -249,7 +265,9 @@ def criterion_rows(by_id: dict[str, cand_mod.Candidate], *, cutoffs: str) -> lis
                 "tag_id": cand_mod._slug(criterion_id),
                 "category": category,
                 "axis": axis_for(category),
-                "label": label,
+                # A criterion is a reviewable row now, so a rewritten
+                # proposed_label wins over the hardcoded one.
+                "label": (labels or {}).get(cand_mod._slug(criterion_id)) or label,
                 "kind": KIND_DERIVED,
                 "metric": single,
                 "direction": branches[0].direction if single else "",
@@ -346,14 +364,16 @@ def build(
             f"candidate table and the code have diverged: {', '.join(missing[:6])}"
         )
 
-    # Criterion-stream candidates are superseded by the derived rows below: the
-    # same claim, with the gates the threshold form cannot carry. Keeping both
-    # would put two tags in the vocabulary for one criterion, one of them wrong
-    # on exactly the rows where being wrong matters most.
+    # A criterion candidate governs — it is what the reviewer marks and what the
+    # Jaccard filter weighs — but it does not become the registry row. That row
+    # is rebuilt from the scorer below, because a bare `metric >= cutoff` drops
+    # gates the scorer carries (5 of 13 disagreed; see criterion_rows). Passing
+    # `labels` through is what ties the two together: the reviewer's verdict on
+    # the candidate now decides whether the derived row is emitted at all.
     rows = [
         candidate_row(by_id[tid], labels[tid]) for tid in labels if by_id[tid].source != "criterion"
     ]
-    rows.extend(criterion_rows(by_id, cutoffs=cutoffs))
+    rows.extend(criterion_rows(by_id, cutoffs=cutoffs, labels=labels))
     frame = pd.DataFrame(rows, columns=list(REGISTRY_COLUMNS))
     frame = frame.sort_values(["category", "kind", "tag_id"], kind="stable").reset_index(drop=True)
 

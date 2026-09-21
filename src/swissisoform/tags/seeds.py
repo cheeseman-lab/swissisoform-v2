@@ -183,6 +183,29 @@ CRITERION_LABELS: dict[str, str] = {
     "S3_sae": "Interpretable features shift",
 }
 
+# Criteria whose thresholds were never derived from anything. `config.py` marks
+# all three s2_* fields "PROVISIONAL — set in threshold discussion", and
+# s3_top_delta_min carries no provenance at all. A tag asserts that a number
+# crossed a meaningful line; for these there is no line, so they are scored but
+# not tagged. S1 is deliberately absent from this set: its cutoff is a break
+# discovered in the distribution, not a number someone picked.
+#
+# This excludes them from the tag VOCABULARY only. EvidenceScoringModule still
+# computes them into isoform_scoring_criteria and both axis scores — the tag
+# layer is additive beside the scorer, never upstream of it.
+UNCALIBRATED_CRITERIA: frozenset[str] = frozenset({"S2_biophysics", "S3_sae"})
+
+# The column the scorer's own per-criterion verdict lands in, once `load_run`
+# flattens the `isoform_scoring_criteria` struct. Reading a criterion here — as
+# a plain tri-state boolean — is what lets it be an ordinary `bool` candidate
+# rather than a threshold the sweep would try to re-cut.
+CRITERION_STATE_PREFIX = "isoform_scoring_criteria."
+
+
+def criterion_state_column(criterion_id: str) -> str:
+    """Flattened column holding *criterion_id*'s as-run True/False/None."""
+    return f"{CRITERION_STATE_PREFIX}{criterion_id}"
+
 
 def seeds_for_criterion(criterion_id: str) -> tuple[CriterionSeed, ...]:
     """Every seed belonging to one criterion — several, for the either-or ones."""
@@ -446,6 +469,11 @@ def label_for(metric: str, direction: str, fallback: str = "") -> str:
     hit = TAG_LABELS.get((metric, direction or "bool"))
     if hit:
         return hit
+    # A criterion names itself. Without this the fallback below would render
+    # `isoform_scoring_criteria.L1_localization_change` as "L1 localization
+    # change", losing the curated wording.
+    if metric.startswith(CRITERION_STATE_PREFIX):
+        return CRITERION_LABELS.get(metric[len(CRITERION_STATE_PREFIX) :], fallback)
     if metric.startswith("isoform_motifs_summary."):
         name = _MOTIF_LABELS.get(metric.split(".", 1)[1])
         if name:
