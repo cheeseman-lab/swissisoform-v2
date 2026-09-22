@@ -285,7 +285,15 @@ built by `python scripts/setup/build_tag_registry.py --version v1 --cutoffs conf
 refuse-to-clobber discipline and `_setup.json` provenance). It re-runs the sweep's
 own `propose → apply_filters → choose_cutoff` against distributions `v3` and keeps
 the rows `figures/tag_vocab/tag_candidates.csv` does not mark `remove` — nothing is
-recovered by parsing the CSV's `test` string. `v1` = 56 tags, 52 code-fired.
+recovered by parsing the CSV's `test` string.
+
+**`v2` is current and the default** — 44 tags, 40 code-fired, 14 derived. `v1`
+(56/52/16) predates the review pass and is a *historical artifact*: it was built
+from an 89-row table, and rebuilding `--version v1` against today's 103-row
+table would emit v2's contents under the v1 name. v2 drops the eight tags that
+assert absence or ask an absolute question, plus S2/S3, whose thresholds were
+never calibrated (`seeds.UNCALIBRATED_CRITERIA` — they are still *scored*, just
+not tagged).
 
 **Four kinds, and only one of them is code.** Adding a tag is adding a row:
 
@@ -312,7 +320,8 @@ P3's `p3_min_sse_plddt` are gates, not cutoffs, and stay at their config values.
 
 `--cutoffs config` reproduces today's scoring exactly (verified:
 `effective_scoring(v1, ScoringConfig()) == ScoringConfig()`, and
-`scripts/tags/check_tag_parity.py` shows 16/16 criteria agreeing row-for-row);
+`scripts/tags/check_tag_parity.py` shows every derived tag agreeing row-for-row
+— 16/16 under v1, 14/14 under v2, which carries no S2/S3 tag);
 `--cutoffs distribution` cuts where the frozen distribution put each criterion.
 Build the config one first — a calibration finding must never be confusable with a
 wiring bug. **Two distribution cutoffs are not usable as-is**: swept percentiles on

@@ -49,7 +49,12 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[3]
 REF_DIR = ROOT / "data" / "reference" / "tags"
-DEFAULT_VERSION = "v1"
+# v2 is the reviewed vocabulary. v1 predates the review pass: it was built from
+# an 89-row candidate table and ships the eight retired tags plus S2/S3, which
+# `seeds.UNCALIBRATED_CRITERIA` now excludes. It is also no longer reproducible
+# — building `--version v1` against today's table yields v2's 44 tags under the
+# v1 name — so the on-disk v1 is a historical artifact, not a rebuildable one.
+DEFAULT_VERSION = "v2"
 
 REGISTRY_FILE = "registry.parquet"
 SIDECAR_FILE = "_setup.json"

@@ -51,6 +51,7 @@ from swissisoform.tags import candidates as cand_mod
 from swissisoform.tags import derived as derived_mod
 from swissisoform.tags import seeds
 from swissisoform.tags.registry import (
+    DEFAULT_VERSION,
     KIND_BOOL,
     KIND_DERIVED,
     KIND_LLM,
@@ -428,7 +429,13 @@ def write_sidecar(
 def main(argv: Iterable[str] | None = None) -> int:
     """Build one frozen tag-registry version. Refuses to clobber without --force."""
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    p.add_argument("--version", default="v1", help="Version directory name (default: v1)")
+    # Defaulting to v1 meant `--force` rebuilt the pre-review vocabulary's
+    # directory with today's reviewed table, stamping v2's contents as v1.
+    p.add_argument(
+        "--version",
+        default=DEFAULT_VERSION,
+        help=f"Version directory name (default: {DEFAULT_VERSION})",
+    )
     p.add_argument(
         "--cutoffs",
         choices=("config", "distribution"),
