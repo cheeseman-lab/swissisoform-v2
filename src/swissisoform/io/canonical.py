@@ -277,3 +277,30 @@ def _extract_genome_start(genome_pos: str) -> str:
     chrom, coords, strand = genome_pos.rsplit(":", 2)
     left, right = coords.split("-")
     return f"{chrom}:{left}" if strand == "+" else f"{chrom}:{right}"
+
+
+def read_fasta(path: Path) -> dict[str, str]:
+    """Parse a FASTA into ``{label: sequence}``, label being the first token.
+
+    Dependency-free on purpose: the GPU CLIs (``plm.cli``, ``structure.cli``)
+    read their input FASTA before any model is loaded, and both carried an
+    identical private copy of this loop.
+    """
+    seqs: dict[str, str] = {}
+    label: str | None = None
+    parts: list[str] = []
+    with open(path) as fh:
+        for line in fh:
+            line = line.rstrip()
+            if not line:
+                continue
+            if line.startswith(">"):
+                if label is not None:
+                    seqs[label] = "".join(parts)
+                label = line[1:].split()[0]
+                parts = []
+            else:
+                parts.append(line)
+        if label is not None:
+            seqs[label] = "".join(parts)
+    return seqs

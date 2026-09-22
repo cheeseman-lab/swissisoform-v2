@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,6 +46,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 from swissisoform import distributions as dist_mod
+from swissisoform.setup._common import ROOT, rel_to_root, resolve_parquet, sha256_file
 from swissisoform.tags import candidates as cand_mod
 from swissisoform.tags import derived as derived_mod
 from swissisoform.tags import seeds
@@ -63,7 +63,6 @@ from swissisoform.tags.registry import (
     from_frame,
 )
 
-ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_CATALOG = ROOT / "figures" / "clustering_dims" / "feature_space" / "feature_catalog.csv"
 DEFAULT_CANDIDATES = ROOT / "figures" / "tag_vocab" / "tag_candidates.csv"
 DEFAULT_DIST_VERSION = "v3"
@@ -84,17 +83,8 @@ class TagBuildError(RuntimeError):
     """Raised when the candidate table and the sweep cannot be reconciled."""
 
 
-def _rel(path: Path) -> str:
-    """Repo-relative path when inside the repo, else absolute."""
-    return str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path)
 
 
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def run_columns(run: str | None, parquet: Path | None) -> tuple[set[str], str]:
@@ -103,16 +93,8 @@ def run_columns(run: str | None, parquet: Path | None) -> tuple[set[str], str]:
     Only the schema is read: the builder needs to know which boolean columns exist,
     not what is in them, and the genome-wide parquet is ~2 GB.
     """
-    if parquet is not None:
-        return set(pq.read_schema(parquet).names), parquet.parent.name
-    run_dir = ROOT / "data" / "output" / (run or "")
-    merged = run_dir / "all_paired.parquet"
-    if merged.exists():
-        return set(pq.read_schema(merged).names), run or ""
-    shards = sorted((ROOT / "data" / "output").glob(f"{run}_shard_*/all_paired.parquet"))
-    if shards:
-        return set(pq.read_schema(shards[0]).names), run or ""
-    raise SystemExit(f"no all_paired.parquet under {run_dir} or {run}_shard_*/")
+    files, label = resolve_parquet(run, parquet)
+    return set(pq.read_schema(files[0]).names), label
 
 
 def accepted_ids(candidates_csv: Path) -> tuple[dict[str, str], dict[str, int]]:
@@ -312,6 +294,37 @@ def candidate_row(cand: cand_mod.Candidate, label: str) -> dict[str, Any]:
     }
 
 
+def _check_metrics_resolve(frame: pd.DataFrame, columns: set[str]) -> None:
+    """Fail the build if a threshold tag names a metric no run can resolve.
+
+    The sweep profiles a frame the runtime never sees: ``load_run`` synthesizes a
+    ``<col>__len`` per list column and materialises a few list columns whole. A
+    cutoff cut against one of those names is a perfectly good cutoff on a metric
+    that resolves to None at firing time, and the only symptom is one WARNING and
+    a permanently null tag — which is how
+    ``cmp_motifs_hits_in_diff_region__len`` reached the frozen v2 registry and
+    stayed dead there.
+
+    Checked at build time against the run's own column names, so the freeze
+    cannot capture a tag that was never going to fire.
+    """
+    from swissisoform import metrics as metrics_mod
+
+    dead = [
+        f"{row.tag_id} ({row.metric})"
+        for row in frame.itertuples()
+        if row.kind == KIND_THRESHOLD
+        and not row.blocked
+        and not metrics_mod.resolvable(str(row.metric), columns)
+    ]
+    if dead:
+        raise TagBuildError(
+            f"{len(dead)} threshold tag(s) name a metric that metrics.resolve cannot "
+            "produce from this run, so they would freeze into the registry and never "
+            f"fire: {', '.join(dead)}"
+        )
+
+
 def _check_scorer_names() -> None:
     """Fail the build if a criterion was renamed out from under the derived map.
 
@@ -377,6 +390,7 @@ def build(
     rows.extend(criterion_rows(by_id, cutoffs=cutoffs, labels=labels))
     frame = pd.DataFrame(rows, columns=list(REGISTRY_COLUMNS))
     frame = frame.sort_values(["category", "kind", "tag_id"], kind="stable").reset_index(drop=True)
+    _check_metrics_resolve(frame, columns)
 
     kinds = frame["kind"].value_counts().to_dict()
     counts.update(
@@ -406,10 +420,10 @@ def write_sidecar(
         "cutoff_source": cutoffs,
         "distributions_version": dist_version,
         "source_run_for_columns": source_run,
-        "candidates_csv": _rel(candidates_csv),
-        "candidates_csv_sha256": _sha256(candidates_csv),
-        "feature_catalog": _rel(catalog_csv),
-        "feature_catalog_sha256": _sha256(catalog_csv),
+        "candidates_csv": rel_to_root(candidates_csv),
+        "candidates_csv_sha256": sha256_file(candidates_csv),
+        "feature_catalog": rel_to_root(catalog_csv),
+        "feature_catalog_sha256": sha256_file(catalog_csv),
         "counts": counts,
         "caveats": [
             "A blank `decision` in the candidate table counts as accepted, so a "

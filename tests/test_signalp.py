@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from swissisoform.evidence.l2_targeting.signalp import SignalPModule, _protein_hash
+from swissisoform.evidence.l2_targeting.signalp import SignalPModule, protein_hash
 
 
 class TestSignalPModule:
@@ -11,7 +11,7 @@ class TestSignalPModule:
     def test_annotate_found(self, config):
         seq = "MKLLVVAAAGGSP"
         predictions = {
-            _protein_hash(seq): {
+            protein_hash(seq): {
                 "signalp_prediction": "SP",
                 "signalp_probability": 0.97,
                 "signalp_cleavage_site": "CS pos: 25-26. ProbCS: 0.91",
@@ -50,7 +50,7 @@ class TestSignalPModule:
         module = SignalPModule(
             config,
             predictions={
-                _protein_hash("MKLLA"): {
+                protein_hash("MKLLA"): {
                     "signalp_prediction": "OTHER",
                     "signalp_probability": 0.8,
                     "signalp_cleavage_site": None,

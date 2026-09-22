@@ -29,7 +29,6 @@ Driven by the thin CLI ``scripts/setup/build_distributions.py``.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -56,8 +55,8 @@ from swissisoform.distributions import (
     STRATUM_SEPARATE,
     SUMMARY_FILE,
 )
+from swissisoform.setup._common import ROOT, rel_to_root, resolve_parquet, sha256_file
 
-ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_CATALOG = ROOT / "figures" / "clustering_dims" / "feature_space" / "feature_catalog.csv"
 CRITERIA_STRUCT = "isoform_scoring_criteria"
 
@@ -77,21 +76,8 @@ CATALOG_COLUMNS = ("feature", "module", "pane", "category", "dtype")
 # ---------------------------------------------------------------------------
 
 
-def _rel(path: Path) -> str:
-    """Repo-relative path when it is inside the repo, else absolute.
-
-    Inputs are routinely outside the tree (a scratch parquet, a tmp_path fixture),
-    so a bare ``relative_to`` would fail the build on the provenance write.
-    """
-    return str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path)
 
 
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def load_catalog(path: Path) -> pd.DataFrame:
@@ -136,23 +122,35 @@ def read_flat(files: list[Path]) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
+def _pad(n_rows: int, fill: Any, dtype: str) -> pd.Series:
+    """A file's worth of missing values, so a per-file concat stays row-aligned."""
+    return pd.Series([fill] * n_rows, dtype=dtype)
+
+
 def read_list_columns(files: list[Path], names: Iterable[str]) -> dict[str, pd.Series]:
     """Materialise named list columns in full, for transforms that need the hits.
 
     :func:`read_flat` drops every list column because they dominate the file, but
     a few derived metrics need the elements themselves — D3 counts hits flagged
     both unique and validated, a conjunction the summary struct does not carry.
+
+    Every returned series spans **all** files' rows in file order — see
+    :func:`list_lengths` for why skipping a file instead would misalign them.
     """
     wanted = list(names)
-    out: dict[str, list[pd.Series]] = {}
+    out: dict[str, list[pd.Series]] = {n: [] for n in wanted}
+    seen: set[str] = set()
     for path in files:
-        present = {f.name for f in pq.ParquetFile(path).schema_arrow}
+        pf = pq.ParquetFile(path)
+        present = {f.name for f in pf.schema_arrow}
+        n_rows = pf.metadata.num_rows
         for name in wanted:
-            if name not in present:
-                continue
-            col = pq.read_table(path, columns=[name]).column(0).to_pandas()
-            out.setdefault(name, []).append(col)
-    return {k: pd.concat(v, ignore_index=True) for k, v in out.items()}
+            if name in present:
+                seen.add(name)
+                out[name].append(pq.read_table(path, columns=[name]).column(0).to_pandas())
+            else:
+                out[name].append(_pad(n_rows, None, "object"))
+    return {k: pd.concat(v, ignore_index=True) for k, v in out.items() if k in seen}
 
 
 def list_lengths(files: list[Path]) -> dict[str, pd.Series]:
@@ -160,17 +158,38 @@ def list_lengths(files: list[Path]) -> dict[str, pd.Series]:
 
     A hit-list length is a real per-isoform metric (how many variants, domains,
     peptides) and would otherwise be lost entirely.
+
+    Every returned series spans **all** files' rows in file order, NaN where a
+    file lacks the column. ``load_run`` aligns these positionally against the
+    flat frame, so concatenating over only the subset of files that *had* the
+    column would shift every later shard's values onto the wrong rows — silently,
+    and only for the length metrics. Multi-file input is the normal path:
+    ``resolve_parquet`` profiles ``{run}_shard_*/all_paired.parquet``.
     """
-    out: dict[str, list[pd.Series]] = {}
-    for path in files:
-        pf = pq.ParquetFile(path)
-        for fld in pf.schema_arrow:
-            if not (pa.types.is_list(fld.type) or pa.types.is_large_list(fld.type)):
+    schemas = [(p, pq.ParquetFile(p)) for p in files]
+    wanted = list(
+        dict.fromkeys(
+            fld.name
+            for _, pf in schemas
+            for fld in pf.schema_arrow
+            if pa.types.is_list(fld.type) or pa.types.is_large_list(fld.type)
+        )
+    )
+    out: dict[str, list[pd.Series]] = {n: [] for n in wanted}
+    for _, pf in schemas:
+        present = {f.name for f in pf.schema_arrow}
+        n_rows = pf.metadata.num_rows
+        for name in wanted:
+            if name not in present:
+                out[name].append(_pad(n_rows, float("nan"), "float64"))
                 continue
-            for batch in pf.iter_batches(batch_size=512, columns=[fld.name]):
-                out.setdefault(fld.name, []).append(
-                    pc.list_value_length(batch.column(0)).to_pandas()
-                )
+            parts = [
+                pc.list_value_length(batch.column(0)).to_pandas()
+                for batch in pf.iter_batches(batch_size=512, columns=[name])
+            ]
+            out[name].append(
+                pd.concat(parts, ignore_index=True) if parts else _pad(0, float("nan"), "float64")
+            )
     return {k: pd.concat(v, ignore_index=True) for k, v in out.items()}
 
 
@@ -185,10 +204,28 @@ def load_run(files: list[Path]) -> pd.DataFrame:
     """
     df = read_flat(files)
     for col, series in list_lengths(files).items():
-        df[f"{col}__len"] = series.reindex(df.index)
+        _check_aligned(col, series, df)
+        df[f"{col}{metrics.LEN_SUFFIX}"] = series.reindex(df.index)
     for col, series in read_list_columns(files, metrics.required_list_columns()).items():
+        _check_aligned(col, series, df)
         df[col] = series.reindex(df.index)
     return df
+
+
+def _check_aligned(col: str, series: pd.Series, df: pd.DataFrame) -> None:
+    """Refuse to attach a list-derived column that is not row-aligned.
+
+    These series are built per file and concatenated positionally, so a length
+    mismatch means some file was skipped and every later file's values would
+    land on the wrong rows. ``reindex`` would paper over it with NaN tails
+    rather than fail, which is why this is checked rather than trusted.
+    """
+    if len(series) != len(df):
+        raise SystemExit(
+            f"{col}: {len(series)} values for {len(df)} rows. The per-file concat is "
+            "not row-aligned; profiling it would attribute one shard's values to "
+            "another's isoforms."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -396,7 +433,7 @@ def build(
         # A list column contributes its length metric, inheriting the parent's
         # module/pane/category — the list itself has no distribution.
         targets: list[tuple[str, str]] = (
-            [(f"{feature}__len", "int")] if dtype == "list" else [(feature, dtype)]
+            [(f"{feature}{metrics.LEN_SUFFIX}", "int")] if dtype == "list" else [(feature, dtype)]
         )
         for name, kind in targets:
             if name not in present:
@@ -509,10 +546,10 @@ def write_sidecar(
         "artifact": "metric distributions (frozen percentile reference)",
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "source_run": source_label,
-        "source_parquet": [_rel(p) for p in parquet_files],
-        "source_parquet_sha256": [_sha256(p) for p in parquet_files],
-        "feature_catalog": _rel(catalog_csv),
-        "feature_catalog_sha256": _sha256(catalog_csv),
+        "source_parquet": [rel_to_root(p) for p in parquet_files],
+        "source_parquet_sha256": [sha256_file(p) for p in parquet_files],
+        "feature_catalog": rel_to_root(catalog_csv),
+        "feature_catalog_sha256": sha256_file(catalog_csv),
         "n_isoforms": n_rows,
         "strata_n": strata,
         "row_counts": counts,
@@ -535,18 +572,6 @@ def write_sidecar(
 # ---------------------------------------------------------------------------
 
 
-def resolve_parquet(run: str | None, parquet: Path | None) -> tuple[list[Path], str]:
-    """Return ``(files, label)`` for a run name or an explicit parquet path."""
-    if parquet is not None:
-        return [parquet], parquet.parent.name
-    run_dir = ROOT / "data" / "output" / (run or "")
-    merged = run_dir / "all_paired.parquet"
-    if merged.exists():
-        return [merged], run or ""
-    shards = sorted((ROOT / "data" / "output").glob(f"{run}_shard_*/all_paired.parquet"))
-    if shards:
-        return shards, run or ""
-    raise SystemExit(f"no all_paired.parquet under {run_dir} or {run}_shard_*/")
 
 
 def main(argv: Iterable[str] | None = None) -> int:

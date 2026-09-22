@@ -144,6 +144,32 @@ def test_list_column_contributes_its_length(built):
     assert s["category"] == "C" and s["module"] == "test"
 
 
+def test_list_lengths_stay_row_aligned_across_shards(tmp_path):
+    """A shard lacking a list column must not shift the next shard's values onto it.
+
+    ``load_run`` attaches these series positionally. Concatenating over only the
+    files that *had* the column used to put shard B's hit counts on shard A's
+    isoforms and leave B's own rows null — silent, and only for list metrics,
+    while ``{run}_shard_*`` is the normal multi-file input.
+    """
+    a = pa.table({"tis_id": ["a1", "a2", "a3"], "x": [1.0, 2.0, 3.0]})
+    b = pa.table(
+        {
+            "tis_id": ["b1", "b2"],
+            "x": [4.0, 5.0],
+            "hits": pa.array([[1, 2, 3, 4], [1]], type=pa.list_(pa.int64())),
+        }
+    )
+    pq.write_table(a, tmp_path / "a.parquet")
+    pq.write_table(b, tmp_path / "b.parquet")
+
+    df = build_mod.load_run([tmp_path / "a.parquet", tmp_path / "b.parquet"])
+    lengths = df.set_index("tis_id")["hits__len"]
+
+    assert lengths[["a1", "a2", "a3"]].isna().all()
+    assert lengths["b1"] == 4 and lengths["b2"] == 1
+
+
 def test_metric_absent_from_the_run_is_skipped(built):
     """A catalog entry with no column in the run does not fabricate a row."""
     assert built.summary("absent_from_run") is None

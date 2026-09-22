@@ -12,33 +12,13 @@ import logging
 import sys
 from pathlib import Path
 
+from swissisoform.io.canonical import read_fasta
 from swissisoform.structure.fold import (
     DEFAULT_BACKEND,
     DEFAULT_CACHE_DIR,
     DEFAULT_MAX_SEQ_LEN,
     precompute_fold,
 )
-
-
-def _read_fasta(path: Path) -> dict[str, str]:
-    seqs: dict[str, str] = {}
-    label: str | None = None
-    parts: list[str] = []
-    with open(path) as fh:
-        for line in fh:
-            line = line.rstrip()
-            if not line:
-                continue
-            if line.startswith(">"):
-                if label is not None:
-                    seqs[label] = "".join(parts)
-                label = line[1:].split()[0]
-                parts = []
-            else:
-                parts.append(line)
-        if label is not None:
-            seqs[label] = "".join(parts)
-    return seqs
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -73,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"FASTA not found: {args.fasta}", file=sys.stderr)
         return 2
 
-    seqs = _read_fasta(args.fasta)
+    seqs = read_fasta(args.fasta)
     if not seqs:
         print(f"No sequences in {args.fasta}", file=sys.stderr)
         return 2

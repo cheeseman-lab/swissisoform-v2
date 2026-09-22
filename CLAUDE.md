@@ -287,13 +287,23 @@ own `propose → apply_filters → choose_cutoff` against distributions `v3` and
 the rows `figures/tag_vocab/tag_candidates.csv` does not mark `remove` — nothing is
 recovered by parsing the CSV's `test` string.
 
-**`v2` is current and the default** — 44 tags, 40 code-fired, 14 derived. `v1`
-(56/52/16) predates the review pass and is a *historical artifact*: it was built
-from an 89-row table, and rebuilding `--version v1` against today's 103-row
-table would emit v2's contents under the v1 name. v2 drops the eight tags that
-assert absence or ask an absolute question, plus S2/S3, whose thresholds were
-never calibrated (`seeds.UNCALIBRATED_CRITERIA` — they are still *scored*, just
-not tagged).
+**`v3` is current and the default** — 44 tags, 40 code-fired, 14 derived. Its
+table is *byte-identical to v2's*; the version exists because the code under it
+changed. `metrics.resolve` had no branch for the `<col>__len` metrics the
+profiler synthesizes, so v2's `cmp_motifs_hits_in_diff_region__len` tag resolved
+to None on every row of every run — 1 of 40 code-fired tags was dead, with one
+WARNING as the only symptom. Fixing `resolve` in place would have changed what
+`v2` fires while leaving v2's bytes untouched, so the fix took a version.
+`setup.tags._check_metrics_resolve` now refuses at build time to freeze a
+threshold tag whose metric no run can resolve.
+
+`v2` (same 44 tags, 39 live) is the faithful record of what the judged runs
+actually fired. `v1` (56/52/16) predates the review pass and is a *historical
+artifact*: it was built from an 89-row table, and rebuilding `--version v1`
+against today's 103-row table would emit the reviewed contents under the v1
+name. v2 dropped the eight tags that assert absence or ask an absolute question,
+plus S2/S3, whose thresholds were never calibrated
+(`seeds.UNCALIBRATED_CRITERIA` — they are still *scored*, just not tagged).
 
 **Four kinds, and only one of them is code.** Adding a tag is adding a row:
 
@@ -596,3 +606,29 @@ pytest tests/test_biophysics.py -v
 - Type annotations required
 - Tests: `pytest` with synthetic fixtures in `conftest.py`
 - Module names are single words (no underscores) to avoid Parquet column prefix ambiguity
+
+### No generated `*.md` reports
+
+**Export and build scripts write data, never a prose `report.md` / `summary.md`
+companion.** Print the summary to stdout if a human wants it at run time; the
+artifact on disk is the CSV/TSV/parquet.
+
+A generated markdown file is a second copy of numbers that already live in the
+data file, and it goes stale the moment the data file is edited by hand — which
+is routine here, since `tag_candidates.csv` carries a human `decision` column.
+Two artifacts then give two answers to the same question and nothing says which
+is current. Removed on this basis: `tag_review.md` (`tags/candidates.py`) and
+`feature_catalog_summary.md` (`export_feature_catalog.py`).
+
+This does not cover **hand-written** docs (`docs/architecture/`, `docs/plans/`,
+this file) or machine-readable provenance sidecars (`_setup.json`,
+`merge_report.tsv`) — those are the right way to record the same facts.
+
+### Reuse before you add
+
+Before writing a helper, grep for one that already exists and import it. A
+second copy of `_sha256` or a path resolver is not free: the copies drift, and a
+fix lands in one of them. Shared spellings and magic strings belong in one
+module that both sides import — `metrics.LEN_SUFFIX` is the worked example,
+after the profiler and the runtime disagreed about `__len` and silently shipped
+a tag that could never fire.

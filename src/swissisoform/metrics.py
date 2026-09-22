@@ -27,6 +27,8 @@ from typing import Callable
 
 import pandas as pd
 
+from swissisoform.config import CELL_LINES
+
 PREFIX = "tx:"
 
 # Magnitude of a signed column: `abs:<column>`. A tag on a *_delta asks whether a
@@ -35,8 +37,15 @@ PREFIX = "tx:"
 # already score magnitudes (`tx:abs_*_delta`); this generalises that to the sweep.
 ABS_PREFIX = "abs:"
 
+# Element count of a list column: `<column>__len`. The profiler synthesizes one
+# per list column (`setup.distributions.list_lengths`) because a hit-list length
+# is a real per-isoform quantity — how many variants, domains, peptides. It is
+# a suffix rather than a prefix only because that is how the profiler already
+# named it; both sides read this constant so the two cannot drift.
+LEN_SUFFIX = "__len"
+
 # Cell lines the expression columns are emitted for, in report order.
-SAMPLES = ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen")
+SAMPLES = CELL_LINES
 
 
 def _num(name: str) -> Callable[[pd.DataFrame], pd.Series]:
@@ -231,8 +240,18 @@ BY_METRIC: dict[str, Transform] = {t.metric: t for t in TRANSFORMS}
 
 
 def is_magnitude(metric: str) -> bool:
-    """True for a metric that is a magnitude, so its sign carries no information."""
-    return metric.startswith(ABS_PREFIX) or "abs_" in metric
+    """True for a metric that is a magnitude, so its sign carries no information.
+
+    Two families, both matched on where the name *starts*: the generic
+    ``abs:<column>``, and the three S2 transforms named ``tx:abs_*_delta``.
+    Matching ``"abs_"`` anywhere in the name also swallowed the real signed
+    column ``isoform_sae_mean_abs_delta_shared`` — which ``candidates.propose``
+    then skipped before any ``funnel.drop``, dropping an S metric from the
+    vocabulary with no record of it in the review table.
+    """
+    if metric.startswith(ABS_PREFIX):
+        return True
+    return metric.startswith(PREFIX) and metric[len(PREFIX) :].startswith("abs_")
 
 
 def magnitude_of(column: str) -> str:
@@ -252,12 +271,39 @@ def resolve(metric: str, df: pd.DataFrame) -> pd.Series | None:
         if column not in df.columns:
             return None
         return pd.to_numeric(df[column], errors="coerce").abs()
+    if metric.endswith(LEN_SUFFIX) and metric not in df.columns:
+        # Only the profiler materialises `<col>__len` as a column; the runtime
+        # frame carries the list itself, so a tag cut on a list length has to be
+        # counted here or it resolves to None for the whole run.
+        column = metric[: -len(LEN_SUFFIX)]
+        if column not in df.columns:
+            return None
+        return df[column].map(lambda v: float("nan") if v is None else float(len(v)))
     tx = BY_METRIC.get(metric)
     if tx is not None:
         return tx.fn(df) if tx.available(set(df.columns)) else None
     if metric in df.columns:
         return pd.to_numeric(df[metric], errors="coerce")
     return None
+
+
+def resolvable(metric: str, columns: set[str]) -> bool:
+    """Whether :func:`resolve` could produce values for *metric* from *columns*.
+
+    Name-level only, so a builder can reject a tag whose metric no run can see
+    without reading any data. This is the guard that would have caught
+    ``cmp_motifs_hits_in_diff_region__len`` reaching a frozen registry: the
+    profiler invents `__len` columns, so the sweep cut a real cutoff against a
+    name that exists nowhere at firing time.
+    """
+    if metric.startswith(ABS_PREFIX):
+        return metric[len(ABS_PREFIX):] in columns
+    if metric in columns:
+        return True
+    if metric.endswith(LEN_SUFFIX):
+        return metric[: -len(LEN_SUFFIX)] in columns
+    tx = BY_METRIC.get(metric)
+    return tx is not None and tx.available(columns)
 
 
 def available(df_columns: set[str]) -> tuple[Transform, ...]:

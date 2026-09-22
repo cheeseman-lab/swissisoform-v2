@@ -26,7 +26,6 @@ all-null or constant in practice is excluded with that reason recorded.
 
 Outputs (alongside this script):
   - feature_catalog.csv       one row per feature
-  - feature_catalog_summary.md  category x include counts, exclusions by reason
 
 Usage:
     python figures/clustering_dims/export_feature_catalog.py
@@ -47,6 +46,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
+from swissisoform import metrics
 from swissisoform.site.evidence import CRITERIA, CRITERIA_METRIC_LABELS
 
 HERE = Path(__file__).resolve().parent
@@ -70,9 +70,8 @@ DEFAULT_PARQUET = ROOT / "data" / "output" / "full_catalog" / "all_paired.parque
 SHARD_GLOB = str(ROOT / "data" / "output" / "full_catalog_shard_*" / "all_paired.parquet")
 
 OUT_CSV = HERE / "feature_catalog.csv"
-OUT_MD = HERE / "feature_catalog_summary.md"
 
-SAMPLES = ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen")
+SAMPLES = metrics.SAMPLES
 
 # Separate-ORF types have no shared region at all, so every unique-vs-shared
 # feature is null for them by construction (comparator.py `_shared_annotations`).
@@ -359,24 +358,34 @@ def read_flat(files: list[Path]) -> tuple[pd.DataFrame, dict[str, pa.DataType]]:
 
 
 def list_lengths(files: list[Path], schema: pa.Schema) -> dict[str, pd.Series]:
-    """Return per-list-column element counts.
+    """Return per-list-column element counts, one row per run row, in file order.
 
     Streamed in batches, one column at a time: the hit lists dominate the file
     (``canonical_clinical_hits`` alone is 876 MB compressed) and we only want
     their lengths, so nothing larger than a batch is ever held.
+
+    A file lacking the column contributes NaN for each of its rows rather than
+    being skipped. ``build_catalog`` assigns these into the flat frame and then
+    stratifies them by ``orf_type``, so a skipped file would shift every later
+    shard's counts onto earlier shards' isoforms and corrupt ``null_pattern`` —
+    which is what decides a tag's ``valid_for``.
     """
     out: dict[str, pd.Series] = {}
+    counts = [pq.ParquetFile(p).metadata.num_rows for p in files]
     for fld in schema:
         if not (pa.types.is_list(fld.type) or pa.types.is_large_list(fld.type)):
             continue
         parts: list[pd.Series] = []
-        for path in files:
+        seen = False
+        for path, n_rows in zip(files, counts):
             pf = pq.ParquetFile(path)
             if fld.name not in {f.name for f in pf.schema_arrow}:
+                parts.append(pd.Series([float("nan")] * n_rows, dtype="float64"))
                 continue
+            seen = True
             for batch in pf.iter_batches(batch_size=512, columns=[fld.name]):
                 parts.append(pc.list_value_length(batch.column(0)).to_pandas())
-        if parts:
+        if seen:
             out[fld.name] = pd.concat(parts, ignore_index=True)
     return out
 
@@ -688,89 +697,6 @@ def verify(catalog: pd.DataFrame) -> list[str]:
     return warnings
 
 
-def _md_table(frame: pd.DataFrame, index_name: str | None = None) -> str:
-    """Render a DataFrame as a GitHub markdown table (no tabulate dependency)."""
-    header = ([index_name] if index_name else []) + [str(c) for c in frame.columns]
-    lines = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
-    for idx, row in frame.iterrows():
-        cells = ([str(idx)] if index_name else []) + [
-            f"{v:g}" if isinstance(v, float) else str(v) for v in row
-        ]
-        lines.append("| " + " | ".join(cells) + " |")
-    return "\n".join(lines)
-
-
-def write_summary(catalog: pd.DataFrame, files: list[Path], n_rows: int) -> str:
-    """Write the markdown companion and return it."""
-    pivot = pd.crosstab(catalog["category"], catalog["include_in_plot"])
-    pivot = pivot.reindex([c for c in CATEGORY_ORDER if c in pivot.index])
-
-    excl = (
-        catalog[~catalog["include_in_plot"]]
-        .groupby("exclude_reason")
-        .agg(n=("feature", "size"), encodable=("encodable_as", lambda s: sorted(set(s))[0]))
-        .sort_values("n", ascending=False)
-    )
-
-    by_module = (
-        catalog.groupby(["category", "module"])
-        .agg(total=("feature", "size"), dims=("include_in_plot", "sum"), scored=("scored", "sum"))
-        .reset_index()
-        .sort_values(["category", "dims"], ascending=[True, False])
-    )
-
-    lines = [
-        "# Feature catalog — summary",
-        "",
-        f"Source: `{files[0]}`" + (f" (+{len(files) - 1} shards)" if len(files) > 1 else ""),
-        f"Rows profiled: {n_rows:,} isoforms · features catalogued: {len(catalog):,} · "
-        f"plot dimensions: {int(catalog['include_in_plot'].sum()):,}",
-        "",
-        "## Dimensions by CDLMPS category",
-        "",
-        _md_table(pivot, index_name="category"),
-        "",
-        "## Excluded, by reason",
-        "",
-        _md_table(excl, index_name="exclude_reason"),
-        "",
-        "## By category and module",
-        "",
-        _md_table(by_module),
-        "",
-        "## Judgement calls",
-        "",
-        "- `motifs` -> **S**: short linear interaction/PTM motifs (CDK/ATM sites, 14-3-3,",
-        "  SH3, RING, ZnF) sit closest to S1 domains. An argument exists for L on the",
-        "  targeting-like ones.",
-        "- `initiation_context` -> **D**: Kozak Hamming distances and window GC measure",
-        "  start-site strength, which is detection-side alongside D2.",
-        "",
-        "Both are `category_source=module_map` rows and can be moved in the CSV without",
-        "touching code.",
-        "",
-        "## Caveats carried by this run",
-        "",
-        "- **Block missingness.** `null_pattern` marks features whose availability",
-        "  depends on ORF type: `absent_for_separate_orfs` (never present for uORF,",
-        "  uoORF, internal-OOF, 3'UTR-ORF — no shared *sequence* exists to compare",
-        "  against) and `depleted_for_separate_orfs` (present for under half that",
-        "  stratum; genomic-space overlaps survive where protein-space ones do not).",
-        "  `fill_separate_orfs` carries the measured rate so a downstream embedding can",
-        "  set its own tolerance. This missingness is structural, not random: imputing",
-        "  it would collapse all separate ORFs onto one synthetic point.",
-        "- **HeLa-restricted run.** Non-HeLa `expr_*` features sit far below full fill, so",
-        "  any D dimension drawn from them is biased by construction.",
-        "- **`plm_vep` rename.** The catalog carries both `constraint_delta` (current code,",
-        "  `plm/module.py`) and `constraint_enrichment` (what this run emitted); whichever",
-        "  is absent shows `fill_rate=0`.",
-        "",
-    ]
-    text = "\n".join(lines)
-    OUT_MD.write_text(text)
-    return text
-
-
 def main() -> None:
     """Profile the run, classify every feature, write the catalog."""
     ap = argparse.ArgumentParser(description=__doc__)
@@ -785,7 +711,6 @@ def main() -> None:
     print(f"profiling {files[0]}" + (f" (+{len(files) - 1} more)" if len(files) > 1 else ""))
 
     catalog = build_catalog(files)
-    n_rows = pq.ParquetFile(files[0]).metadata.num_rows if len(files) == 1 else -1
 
     catalog = catalog.sort_values(
         ["category", "module", "pane", "feature"],
@@ -793,10 +718,9 @@ def main() -> None:
     )
     catalog.to_csv(OUT_CSV, index=False)
 
-    print(write_summary(catalog, files, n_rows))
     for w in verify(catalog):
         print(f"NOTE: {w}", file=sys.stderr)
-    print(f"\nwrote {OUT_CSV}\nwrote {OUT_MD}")
+    print(f"\nwrote {OUT_CSV}")
 
 
 if __name__ == "__main__":

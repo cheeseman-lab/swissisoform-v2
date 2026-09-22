@@ -10,6 +10,7 @@ import tomllib
 from pathlib import Path
 
 from swissisoform.config import (
+    CELL_LINES,
     ClinicalConfig,
     ConservationConfig,
     PipelineConfig,
@@ -41,7 +42,7 @@ HAL_SIF = DATA / "zoonomia" / "singularity" / "cactus.sif"
 HAL2MAF_BIN = ROOT / "scripts" / "bin" / "hal2maf"
 HALSTATS_BIN = ROOT / "scripts" / "bin" / "halStats"
 
-ALL_CELL_LINES = ["HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"]
+ALL_CELL_LINES = list(CELL_LINES)
 
 # Presets — auto-discovered from presets/*.toml at the repo root. Each TOML is a
 # self-contained named run: either `genes = [...]` (+ optional cell_lines) or an

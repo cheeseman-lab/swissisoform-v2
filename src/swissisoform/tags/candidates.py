@@ -505,6 +505,28 @@ def _scoring_stratum(cand: Candidate, dist: Distributions) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _threshold_state(
+    values: pd.Series,
+    cutoff: float,
+    direction: str,
+    valid_for: Iterable[str],
+    orf: pd.Series,
+) -> np.ndarray:
+    """Tri-state a numeric metric against one cutoff: 1 on, 0 off, -1 unknown.
+
+    The single arithmetic for "did this threshold fire", shared by the sweep's
+    proposed cutoff and by ``_current_fire``'s shipped one — the two used to
+    carry the same six lines and differ only in which cutoff they read.
+    """
+    arr = pd.to_numeric(values, errors="coerce").to_numpy(dtype="float64")
+    with np.errstate(invalid="ignore"):
+        hit = arr >= cutoff if direction == ">=" else arr < cutoff
+    fired = np.where(np.isnan(arr), np.nan, hit.astype("float64"))
+    state = np.where(np.isnan(fired), -1.0, fired)
+    state = np.where(~orf.isin(tuple(valid_for)).to_numpy(), -1.0, state)
+    return state.astype("int8")
+
+
 def evaluate(df: pd.DataFrame, cands: Iterable[Candidate]) -> dict[str, np.ndarray]:
     """Tri-state firing per candidate: 1 on, 0 off, -1 not-evaluable.
 
@@ -524,16 +546,15 @@ def evaluate(df: pd.DataFrame, cands: Iterable[Candidate]) -> dict[str, np.ndarr
             if raw is None:
                 continue
             fired = raw.map({True: 1, False: 0}).to_numpy(dtype="float64", na_value=np.nan)
-        else:
-            if values is None or (cand.cutoff is None):
-                continue
-            arr = pd.to_numeric(values, errors="coerce").to_numpy(dtype="float64")
-            with np.errstate(invalid="ignore"):
-                hit = arr >= cand.cutoff if cand.direction == ">=" else arr < cand.cutoff
-            fired = np.where(np.isnan(arr), np.nan, hit.astype("float64"))
-        state = np.where(np.isnan(fired), -1.0, fired)
-        state = np.where(~orf.isin(cand.valid_for).to_numpy(), -1.0, state)
-        out[cand.tag_id] = state.astype("int8")
+            state = np.where(np.isnan(fired), -1.0, fired)
+            state = np.where(~orf.isin(cand.valid_for).to_numpy(), -1.0, state)
+            out[cand.tag_id] = state.astype("int8")
+            continue
+        if values is None or cand.cutoff is None:
+            continue
+        out[cand.tag_id] = _threshold_state(
+            values, cand.cutoff, cand.direction, cand.valid_for, orf
+        )
     return out
 
 
@@ -853,15 +874,14 @@ def _current_fire(df: pd.DataFrame, cand: Candidate) -> float | None:
     values = metrics.resolve(cand.metric, df)
     if values is None:
         return None
-    arr = pd.to_numeric(values, errors="coerce").to_numpy(dtype="float64")
-    with np.errstate(invalid="ignore"):
-        hit = arr >= cand.current_cutoff if cand.direction == ">=" else arr < cand.current_cutoff
-    fired = np.where(np.isnan(arr), np.nan, hit.astype("float64"))
-    state = np.where(np.isnan(fired), -1.0, fired)
-    state = np.where(
-        ~df["orf_type"].astype("string").isin(cand.valid_for).to_numpy(), -1.0, state
+    state = _threshold_state(
+        values,
+        cand.current_cutoff,
+        cand.direction,
+        cand.valid_for,
+        df["orf_type"].astype("string"),
     )
-    fire, _ = rates(state.astype("int8"))
+    fire, _ = rates(state)
     return round(fire, 2) if fire == fire else None
 
 
@@ -922,59 +942,16 @@ def merge_decisions(new: pd.DataFrame, previous: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def write_outputs(table: pd.DataFrame, funnel: Funnel, out_dir: Path, *, version: str) -> None:
-    """Write the candidate table and the review summary."""
+def write_outputs(table: pd.DataFrame, funnel: Funnel, out_dir: Path) -> None:
+    """Write the candidate table, carrying any prior review decisions across.
+
+    The table is the only artifact. A companion ``tag_review.md`` used to be
+    written beside it, restating the funnel and the per-category counts — both
+    of which the sweep already prints — so it was a second copy of the same
+    numbers that went stale whenever the CSV was edited by hand.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     existing = out_dir / "tag_candidates.csv"
     if existing.exists():
         table = merge_decisions(table, pd.read_csv(existing).fillna(""))
     table.to_csv(existing, index=False)
-
-    lines = [
-        "# Tag candidate review",
-        "",
-        f"Swept against distributions `{version}`. "
-        f"{funnel.proposed} proposals → **{funnel.kept} candidates**. "
-        "Counts in the funnel are *proposals* (a metric is proposed in both directions).",
-        "",
-        "Fill in `decision` (keep / drop / reword / merge-into) and rewrite",
-        "`proposed_label` in `tag_candidates.csv`. Accepted rows become the registry.",
-        "",
-        "## Funnel",
-        "",
-        "| stage | n |",
-        "|---|---|",
-        f"| proposed | {funnel.proposed} |",
-    ]
-    for reason, n in sorted(funnel.dropped.items(), key=lambda kv: -kv[1]):
-        lines.append(f"| dropped — {reason} | {n} |")
-    lines += [
-        f"| **kept for review** | **{funnel.kept}** |",
-        "",
-        "## Per category",
-        "",
-    ]
-    if len(table):
-        counts = table.groupby("category").size()
-        lines += ["| category | candidates |", "|---|---|"]
-        lines += [f"| {cat} | {n} |" for cat, n in counts.items()]
-    blocked = table[table["blocked"].astype(bool)] if len(table) else table
-    if len(blocked):
-        lines += ["", "## Blocked", ""]
-        for _, r in blocked.iterrows():
-            lines.append(f"- **{r['tag_id']}** ({r['source_metric']}) — {r['blocked']}")
-    lines += [
-        "",
-        "## Deliberately not swept",
-        "",
-        "- **Categorical string columns.** The `cmp_*_changed` booleans already",
-        "  encode 'the compartment / targeting call differs'; a raw compartment",
-        "  string would need pairing logic that reproduces them.",
-        "- **Canonical-pane metrics.** They describe the gene, not the isoform's",
-        "  change. Note this excludes only the `canonical_` pane — the differential",
-        "  metrics live on `isoform_`, so a stricter pane filter would starve C and P.",
-        "- **Unimodal metrics.** Dropped outright rather than listed: a range filter",
-        "  reads the frozen distributions, so nothing here has to carry them.",
-        "",
-    ]
-    (out_dir / "tag_review.md").write_text("\n".join(lines), encoding="utf-8")
