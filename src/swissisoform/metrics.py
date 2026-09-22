@@ -65,6 +65,23 @@ def max_initiation_efficiency(df: pd.DataFrame) -> pd.Series:
     return df[cols].apply(pd.to_numeric, errors="coerce").max(axis=1)
 
 
+def _summary_field(df: pd.DataFrame, summary: str, field: str) -> pd.Series | None:
+    """One key of a summary struct, whether the frame is flattened or not.
+
+    The profiling frame flattens every struct (``read_flat`` calls
+    ``table.flatten()``) but the runtime frame keeps one level nested, so a
+    metric named off a nested key has to accept both spellings or it resolves
+    to None for the entire run while still profiling fine.
+    """
+    flat = df.get(f"{summary}.{field}")
+    if flat is not None:
+        return flat
+    nested = df.get(summary)
+    if nested is None:
+        return None
+    return nested.map(lambda v: v.get(field) if isinstance(v, dict) else None)
+
+
 def n_validated_unique_peptides(df: pd.DataFrame) -> pd.Series:
     """Count isoform-unique PepQuery-validated peptides (D3).
 
@@ -74,9 +91,9 @@ def n_validated_unique_peptides(df: pd.DataFrame) -> pd.Series:
 
     The conjunction (unique AND validated) is not in ``massspec_summary``, which
     carries ``unique_peptides`` and ``validated_peptides`` separately, so this has
-    to walk the hit list. Reads the flattened ``summary.pepquery_run`` column.
+    to walk the hit list.
     """
-    ran = df.get("isoform_massspec_summary.pepquery_run")
+    ran = _summary_field(df, "isoform_massspec_summary", "pepquery_run")
     hits_col = df.get("isoform_massspec_hits")
     if ran is None or hits_col is None:
         return pd.Series(float("nan"), index=df.index)
@@ -103,22 +120,30 @@ def min_shared_plddt(df: pd.DataFrame) -> pd.Series:
     """The weaker of the two shared-region pLDDT means (P2's confidence gate).
 
     P2 is only meaningful when the shared region is confidently folded in BOTH
-    structures, so the gate is the minimum, not either one alone.
+    structures, so the gate is the minimum, not either one alone — hence
+    ``skipna=False``, which is also what makes one missing side read as unknown
+    rather than as the other side's value. ``reindex`` keeps a frame that has
+    only one of the two columns from raising: ``Transform.available`` admits it.
     """
-    pair = df[
-        [
+    pair = df.reindex(
+        columns=[
             "isoform_structure_plddt_shared_mean_isoform",
             "isoform_structure_plddt_shared_mean_canonical",
         ]
-    ].apply(pd.to_numeric, errors="coerce")
-    return pair.min(axis=1)
+    ).apply(pd.to_numeric, errors="coerce")
+    return pair.min(axis=1, skipna=False)
 
 
 def sae_top_delta(df: pd.DataFrame) -> pd.Series:
-    """The strongest shared-feature activation shift (S3), as a magnitude."""
-    pair = df[["isoform_sae_top_gained_delta_max", "isoform_sae_top_lost_delta_max"]].apply(
-        pd.to_numeric, errors="coerce"
-    )
+    """The strongest shared-feature activation shift (S3), as a magnitude.
+
+    ``reindex`` rather than ``df[[...]]``: ``Transform.available`` admits a frame
+    carrying only one of the two columns, and the max of the one present is still
+    the answer to "strongest shift".
+    """
+    pair = df.reindex(
+        columns=["isoform_sae_top_gained_delta_max", "isoform_sae_top_lost_delta_max"]
+    ).apply(pd.to_numeric, errors="coerce")
     return pair.abs().max(axis=1)
 
 
@@ -151,7 +176,13 @@ class Transform:
         return f"{PREFIX}{self.name}"
 
     def available(self, columns: set[str]) -> bool:
-        """True when at least one required column is present."""
+        """True when at least one required column is present.
+
+        Deliberately ``any``: the per-sample transforms are defined over whatever
+        subset of cell lines a run carries. The obligation that buys is on ``fn``,
+        which must be total over any frame this admits — so a transform reads its
+        columns through ``reindex``/``get`` and returns NaN, never ``KeyError``.
+        """
         return not self.requires or any(c in columns for c in self.requires)
 
 
@@ -168,7 +199,8 @@ TRANSFORMS: tuple[Transform, ...] = (
     Transform(
         "n_validated_unique_peptides", n_validated_unique_peptides, "D",
         "Validated isoform-unique peptides",
-        ("isoform_massspec_summary.pepquery_run",),
+        # Both spellings: flattened in the profiling frame, nested at runtime.
+        ("isoform_massspec_summary.pepquery_run", "isoform_massspec_summary"),
         requires_lists=("isoform_massspec_hits",),
     ),
     Transform(

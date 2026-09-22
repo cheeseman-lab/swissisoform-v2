@@ -785,8 +785,13 @@ def _attach_tags(
     late, optional stage. Both paths log at WARNING, because a parquet silently
     lacking tags is indistinguishable from one whose tags all came out empty.
 
-    Only our own exceptions are caught. A ``TypeError`` from the evaluator is a
-    bug and should still take the run down where it can be seen.
+    **Every** exception is caught, not just ours. Narrowing this to
+    ``TagRegistryError``/``TagEvaluationError`` was the same mistake in a smaller
+    form: a ``KeyError`` from a transform, or an unknown criterion reaching
+    ``score_criterion``, would escape here — after the whole annotation has run
+    and before ``run()`` writes any parquet, so the entire run is lost to a bug
+    in the optional stage. An unexpected failure is logged at ERROR with its
+    traceback, which is where it can be seen, and the run still lands.
     """
     if "tags" in spec.skip:
         logger.info("Tags: skipped (--skip-modules tags)")
@@ -799,6 +804,14 @@ def _attach_tags(
             "Tags: %s/%s/%s are absent from this run. %s",
             *TagModule.OUTPUT_COLUMNS,
             exc,
+        )
+        return paired
+    except Exception:
+        logger.exception(
+            "Tags: %s/%s/%s are absent from this run — unexpected failure in the "
+            "tag layer. This is a bug; the run continues because every other "
+            "column is correct.",
+            *TagModule.OUTPUT_COLUMNS,
         )
         return paired
 
