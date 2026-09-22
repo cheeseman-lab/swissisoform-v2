@@ -49,7 +49,9 @@ logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_CATALOG = ROOT / "figures" / "clustering_dims" / "feature_space" / "feature_catalog.csv"
 DEFAULT_DIST_VERSION = "v3"
-DEFAULT_TAG_VERSION = "v1"
+# Deferred, not restated: a literal here silently pinned the tags arm to the
+# retired vocabulary after the registry default moved.
+DEFAULT_TAG_VERSION = reg_mod.DEFAULT_VERSION
 
 GROUNDINGS: tuple[str, ...] = ("criteria", "raw", "tags", "dist")
 
