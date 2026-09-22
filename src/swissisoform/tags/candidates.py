@@ -37,7 +37,7 @@ from swissisoform.distributions import (
 from swissisoform.tags import seeds
 
 # Issue #30's usefulness band: a tag firing on <10% is a curiosity, one firing on
-# >60% does not partition the corpus. Out-of-band candidates become chips.
+# >60% does not partition the corpus. Out-of-band candidates are dropped.
 DEFAULT_BAND: tuple[float, float] = (10.0, 60.0)
 
 # Percentiles swept when no anchor or break yields an in-band cutoff.
@@ -169,8 +169,8 @@ def propose(
     # `kind="bool"` is the whole trick. The criterion's as-run True/False/None
     # is already a column (`load_run` flattens the scoring struct), so every
     # downstream stage does the right thing untouched: choose_cutoff and the
-    # chip rule and the fire-rate band all gate on `kind == "code"` and skip it,
-    # which is correct because a criterion's cutoff is fixed and not the sweep's
+    # percentile-only drop and the fire-rate band all gate on `kind == "code"`
+    # and skip it, because a criterion's cutoff is fixed and not the sweep's
     # to move — while the Jaccard filter admits every non-LLM candidate, so a
     # criterion competes head-to-head with the sweep tags. Sorting criteria
     # first (see build_table) makes a redundant sweep tag lose to the criterion
@@ -360,7 +360,7 @@ def _current_cutoff(config_field: str | None, literal: float | None = None) -> f
 
     Carried beside the proposal so a reviewer sees what changes: several criteria
     fire on >90% at their shipped cutoff, which is the whole reason #30 wants them
-    re-cut or demoted to a chip.
+    re-cut or dropped.
     """
     if not config_field:
         return literal
@@ -579,7 +579,6 @@ class Funnel:
 
     proposed: int = 0
     dropped: dict[str, int] = field(default_factory=dict)
-    chips: int = 0
     kept: int = 0
 
     def drop(self, reason: str, n: int = 1) -> None:
@@ -666,15 +665,15 @@ def build_table(
     coreset: pd.DataFrame | None = None,
     band: tuple[float, float] = DEFAULT_BAND,
     jaccard_max: float = JACCARD_MAX,
-) -> tuple[pd.DataFrame, pd.DataFrame, Funnel]:
-    """Run the whole sweep and return ``(candidates, chips, funnel)``.
+) -> tuple[pd.DataFrame, Funnel]:
+    """Run the whole sweep and return ``(candidates, funnel)``.
 
     Args:
         df: The flattened run, with ``orf_type`` / ``gene_name`` / ``tis_id``.
         catalog: Feature catalog (metric registry).
         dist: Frozen distributions to cut cutoffs against.
         coreset: Optional cheeseman50 table, for worked examples.
-        band: Acceptable fire-rate window; out-of-band becomes a chip.
+        band: Acceptable fire-rate window; out-of-band is dropped.
         jaccard_max: Overlap above which the later candidate is redundant.
     """
     by_feature = _catalog_index(catalog)
@@ -694,32 +693,32 @@ def build_table(
     cands = [c for c in cands if c.source != "criterion_branch"]
     funnel.drop("criterion branch — a cutoff input, not a tag", len(branches))
 
-    # Band split, on two grounds.
+    # Dropped on two grounds.
     #
     # No cutoff at all: no in-band cut exists anywhere in the distribution.
     #
     # A bare *percentile* cutoff: no anchor, no break — the metric is unimodal, so
     # the boolean is arbitrary wherever it lands, and the fire rate was *set* by
-    # the percentile rather than discovered. Such a metric is a range filter, not
-    # a checkbox.
+    # the percentile rather than discovered. Such a metric belongs in a range
+    # filter, which reads the frozen distributions directly and needs nothing
+    # from the sweep.
     #
-    # Two exemptions, both already in the vocabulary and so not facing a
-    # tag-or-chip choice: existing criteria (human-blessed, and the reviewer must
-    # see all sixteen), and the re-derived `*_enriched` tags, which shipped with a
-    # hardcoded 1.0 — for those the real choice is "distribution percentile or
-    # that constant", and the percentile is strictly better even at p50.
-    def _is_chip(c: Candidate) -> bool:
+    # Two exemptions, both already in the vocabulary: existing criteria
+    # (human-blessed, and the reviewer must see all sixteen), and the re-derived
+    # `*_enriched` tags, which shipped with a hardcoded 1.0 — for those the real
+    # choice is "distribution percentile or that constant", and the percentile is
+    # strictly better even at p50.
+    def _percentile_only(c: Candidate) -> bool:
         if c.kind != "code" or c.blocked:
             return False
         if c.cutoff is None:
             return True
         return c.cutoff_source == "percentile" and c.source not in ("criterion", "enriched")
 
-    chips = [c for c in cands if _is_chip(c)]
-    chip_ids = {id(c) for c in chips}
-    cands = [c for c in cands if id(c) not in chip_ids]
-    funnel.drop("unimodal — percentile cutoff only", len(chips))
-    funnel.chips = len(chips)
+    dropped = [c for c in cands if _percentile_only(c)]
+    dropped_ids = {id(c) for c in dropped}
+    cands = [c for c in cands if id(c) not in dropped_ids]
+    funnel.drop("unimodal — percentile cutoff only", len(dropped))
 
     # One direction per metric. `>= x` and `< x` are exact complements, so their
     # True sets are disjoint and Jaccard can never catch the pair — but as filter
@@ -742,8 +741,7 @@ def build_table(
         # Measured on the run, which can disagree with the grid estimate the
         # cutoff was chosen by (ties, missing rows). The measurement wins.
         if cand.kind == "code" and not (lo <= fire <= hi):
-            chips.append(cand)
-            funnel.chips += 1
+            funnel.drop("measured fire rate out of band")
             continue
         scored.append((cand, vec, fire, not_eval))
 
@@ -816,11 +814,7 @@ def build_table(
         table = table.sort_values(
             ["category", "max_jaccard", "tag_id"], ascending=[True, True, True]
         ).reset_index(drop=True)
-    # A metric kept as a tag must not also appear as a chip: only one of its
-    # two directions may have failed the band, and offering both readings
-    # would show the reviewer the same metric twice with opposite advice.
-    kept_metrics = set(table["source_metric"]) if len(table) else set()
-    return table, _chip_table(chips, dist, exclude=kept_metrics), funnel
+    return table, funnel
 
 
 def _one_direction_per_metric(
@@ -877,40 +871,6 @@ def _stratum_mask(df: pd.DataFrame, stratum: str) -> np.ndarray:
     return (df["orf_type"] == stratum).to_numpy()
 
 
-def _chip_table(
-    chips: list[Candidate], dist: Distributions, exclude: set[str] | None = None
-) -> pd.DataFrame:
-    """Demoted candidates, with the shape evidence for why a boolean was wrong."""
-    exclude = exclude or set()
-    rows = []
-    for cand in chips:
-        if cand.metric in exclude:
-            continue
-        summary = dist.summary(cand.metric, STRATUM_ALL) or {}
-        hist = dist.histogram(cand.metric, STRATUM_ALL)
-        found = find_break(*hist) if hist is not None else None
-        rows.append(
-            {
-                "category": cand.category,
-                "metric": cand.metric,
-                "label": cand.label,
-                "direction": cand.direction,
-                "n": summary.get("n"),
-                "p05": summary.get("p05"),
-                "p25": summary.get("p25"),
-                "p50": summary.get("p50"),
-                "p75": summary.get("p75"),
-                "p95": summary.get("p95"),
-                "best_break_depth": round(found[1], 3) if found else None,
-                "reason": "no in-band cutoff — continuous, range-filter it instead",
-            }
-        )
-    out = pd.DataFrame(rows)
-    if len(out):
-        out = out.drop_duplicates(subset=["metric"]).sort_values(["category", "metric"])
-    return out.reset_index(drop=True)
-
-
 REVIEW_COLUMNS = ("decision", "reviewer_notes")
 SUPERSEDED = "[superseded] not in the current sweep's output. "
 
@@ -962,24 +922,20 @@ def merge_decisions(new: pd.DataFrame, previous: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def write_outputs(
-    table: pd.DataFrame, chips: pd.DataFrame, funnel: Funnel, out_dir: Path, *, version: str
-) -> None:
-    """Write the candidate table, the chip table, and the review summary."""
+def write_outputs(table: pd.DataFrame, funnel: Funnel, out_dir: Path, *, version: str) -> None:
+    """Write the candidate table and the review summary."""
     out_dir.mkdir(parents=True, exist_ok=True)
     existing = out_dir / "tag_candidates.csv"
     if existing.exists():
         table = merge_decisions(table, pd.read_csv(existing).fillna(""))
     table.to_csv(existing, index=False)
-    chips.to_csv(out_dir / "percentile_chips.csv", index=False)
 
     lines = [
         "# Tag candidate review",
         "",
         f"Swept against distributions `{version}`. "
-        f"{funnel.proposed} proposals → **{funnel.kept} candidates** "
-        f"+ {len(chips)} percentile chips. Counts in the funnel are *proposals* "
-        f"(a metric is proposed in both directions); the chip table is per metric.",
+        f"{funnel.proposed} proposals → **{funnel.kept} candidates**. "
+        "Counts in the funnel are *proposals* (a metric is proposed in both directions).",
         "",
         "Fill in `decision` (keep / drop / reword / merge-into) and rewrite",
         "`proposed_label` in `tag_candidates.csv`. Accepted rows become the registry.",
@@ -993,7 +949,6 @@ def write_outputs(
     for reason, n in sorted(funnel.dropped.items(), key=lambda kv: -kv[1]):
         lines.append(f"| dropped — {reason} | {n} |")
     lines += [
-        f"| demoted to chip | {funnel.chips} proposals → {len(chips)} metrics |",
         f"| **kept for review** | **{funnel.kept}** |",
         "",
         "## Per category",
@@ -1018,6 +973,8 @@ def write_outputs(
         "- **Canonical-pane metrics.** They describe the gene, not the isoform's",
         "  change. Note this excludes only the `canonical_` pane — the differential",
         "  metrics live on `isoform_`, so a stricter pane filter would starve C and P.",
+        "- **Unimodal metrics.** Dropped outright rather than listed: a range filter",
+        "  reads the frozen distributions, so nothing here has to carry them.",
         "",
     ]
     (out_dir / "tag_review.md").write_text("\n".join(lines), encoding="utf-8")

@@ -34,7 +34,7 @@ def _frame() -> pd.DataFrame:
             "tis_id": [f"tis{i}" for i in range(n)],
             # Two well-separated modes: a break exists and should be found.
             "cmp_bimodal_score": np.r_[rng.normal(0, 0.4, half), rng.normal(10, 0.4, n - half)],
-            # Unimodal: no break, no anchor -> a chip, not a tag.
+            # Unimodal: no break, no anchor -> dropped, not a tag.
             "isoform_unimodal_score": rng.normal(0, 1, n),
             # A ratio: anchored at 1.0, with ~30% above it.
             "isoform_thing_ratio": np.r_[
@@ -96,8 +96,8 @@ def swept(tmp_path):
     dist_mod.load.cache_clear()
     dist = dist_mod.load("v1", root=tmp_path)
 
-    table, chips, funnel = C.build_table(df, _catalog(), dist)
-    return {"table": table, "chips": chips, "funnel": funnel, "dist": dist, "df": df}
+    table, funnel = C.build_table(df, _catalog(), dist)
+    return {"table": table, "funnel": funnel, "dist": dist, "df": df}
 
 
 def _row(table: pd.DataFrame, metric: str) -> pd.Series | None:
@@ -129,10 +129,14 @@ def test_anchor_beats_a_percentile(swept):
     assert row["cutoff"] == pytest.approx(1.0)
 
 
-def test_unimodal_metric_becomes_a_chip(swept):
-    """No anchor and no break means the boolean is arbitrary — range-filter it."""
+def test_unimodal_metric_is_dropped(swept):
+    """No anchor and no break means the boolean is arbitrary, so it is not a tag.
+
+    Range-filtering it needs only the frozen distributions, so the sweep records
+    the drop in the funnel and emits nothing else for it.
+    """
     assert _row(swept["table"], "isoform_unimodal_score") is None
-    assert "isoform_unimodal_score" in set(swept["chips"]["metric"])
+    assert swept["funnel"].dropped["unimodal — percentile cutoff only"] >= 1
 
 
 def test_find_break_rejects_a_shallow_dip():

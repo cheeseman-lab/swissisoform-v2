@@ -6,7 +6,6 @@ actually fire on, and writes a reviewable table with an empty ``decision`` colum
 
 Outputs (default ``figures/tag_vocab/``):
     tag_candidates.csv    one row per surviving candidate — fill in `decision`
-    percentile_chips.csv  candidates with no in-band cutoff: range-filter these
     tag_review.md         the funnel, per-category counts, blockers, deferrals
 
 Usage:
@@ -63,15 +62,12 @@ def main(argv: list[str] | None = None) -> int:
     df = load_run([parquet])
     coreset = pd.read_csv(args.coreset) if args.coreset and args.coreset.exists() else None
 
-    table, chips, funnel = C.build_table(
+    table, funnel = C.build_table(
         df, catalog, dist, coreset=coreset, band=(lo, hi), jaccard_max=args.jaccard_max
     )
-    C.write_outputs(table, chips, funnel, args.out, version=args.version)
+    C.write_outputs(table, funnel, args.out, version=args.version)
 
-    print(
-        f"{funnel.proposed} proposals → {funnel.kept} candidates, "
-        f"{len(chips)} chips  ({args.out})"
-    )
+    print(f"{funnel.proposed} proposals → {funnel.kept} candidates  ({args.out})")
     for reason, n in sorted(funnel.dropped.items(), key=lambda kv: -kv[1]):
         print(f"  dropped {n:>4}  {reason}")
     return 0

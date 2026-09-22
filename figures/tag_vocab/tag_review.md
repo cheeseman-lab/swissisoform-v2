@@ -1,6 +1,6 @@
 # Tag candidate review
 
-Swept against distributions `v3`. 830 proposals → **84 candidates** + 264 percentile chips. Counts in the funnel are *proposals* (a metric is proposed in both directions); the chip table is per metric.
+Swept against distributions `v3`. 830 proposals → **84 candidates**. Counts in the funnel are *proposals* (a metric is proposed in both directions).
 
 Fill in `decision` (keep / drop / reword / merge-into) and rewrite
 `proposed_label` in `tag_candidates.csv`. Accepted rows become the registry.
@@ -18,7 +18,7 @@ Fill in `decision` (keep / drop / reword / merge-into) and rewrite
 | dropped — complementary direction of the same metric | 16 |
 | dropped — criterion branch — a cutoff input, not a tag | 11 |
 | dropped — constant | 8 |
-| demoted to chip | 527 proposals → 264 metrics |
+| dropped — measured fire rate out of band | 2 |
 | **kept for review** | **84** |
 
 ## Per category
@@ -44,3 +44,5 @@ Fill in `decision` (keep / drop / reword / merge-into) and rewrite
 - **Canonical-pane metrics.** They describe the gene, not the isoform's
   change. Note this excludes only the `canonical_` pane — the differential
   metrics live on `isoform_`, so a stricter pane filter would starve C and P.
+- **Unimodal metrics.** Dropped outright rather than listed: a range filter
+  reads the frozen distributions, so nothing here has to carry them.
