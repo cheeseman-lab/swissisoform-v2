@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from swissisoform.evidence.l2_targeting.targetp import TargetPModule, _protein_hash
+from swissisoform.evidence.l2_targeting.targetp import TargetPModule, protein_hash
 
 
 class TestTargetPModule:
@@ -11,7 +11,7 @@ class TestTargetPModule:
     def test_annotate_found(self, config):
         seq = "MLRARALLAAPASLRATP"
         predictions = {
-            _protein_hash(seq): {
+            protein_hash(seq): {
                 "targetp_prediction": "mTP",
                 "targetp_probability": 0.93,
                 "targetp_sp_prob": 0.02,
