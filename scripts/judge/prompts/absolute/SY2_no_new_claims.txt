@@ -1,4 +1,4 @@
-Does every factual claim in this synthesis trace to the category verdicts or the
+Does every factual claim in this synthesis trace to the category reads or the
 criteria evidence provided, without importing outside knowledge about this gene?
 
 Judge on substance, NOT style or length. Named interactors, residue ranges,

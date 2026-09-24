@@ -116,7 +116,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--sanity-anchor",
         action="store_true",
-        help="Score a deliberately bad verdict; R1/R2 must give it 1-2",
+        help="Score a deliberately bad read; R1/R2 must give it 1-2",
     )
     p.add_argument("--cell", default=None, help="Restrict a gate to one slug|unit")
     p.add_argument("--force", action="store_true", help="Ignore existing results")
@@ -375,7 +375,7 @@ def _self_consistency(judge: Judge, requests: list[Request], work: Path, *, limi
 
 # One anchor per axis, each violating only its own rubric and otherwise clean.
 #
-# The first version was a single verdict that broke all four axes at once, and it
+# The first version was a single read that broke all four axes at once, and it
 # could not tell us anything: R1 correctly scored it 1, but R3 -- which judges
 # proportionality and leaves number-checking to R1 -- scored the same response 4,
 # which is R3 complying with its rubric rather than failing. Two other claims were
@@ -394,7 +394,6 @@ ANCHORS: dict[str, dict[str, str]] = {
     "R1_evidential_support": {
         "needs": "any",
         "response": (
-            "verdict: interesting\n\n"
             "reasoning: The unique region is under strong constraint: mean phyloP "
             "is 88.412 and primate amino-acid identity reaches 99.97%, both far "
             "above the thresholds used here. Those two figures alone put this "
@@ -406,7 +405,6 @@ ANCHORS: dict[str, dict[str, str]] = {
     "R2_not_evaluable_discipline": {
         "needs": "unmeasured",
         "response": (
-            "verdict: not_interesting\n\n"
             "reasoning: Every line of evidence here comes back negative. The "
             "measurements that were run show no signal, and the remaining fields "
             "are likewise absent -- nothing was detected on any axis. Taken "
@@ -418,14 +416,14 @@ ANCHORS: dict[str, dict[str, str]] = {
 }
 
 
-# Synthesis anchors. The synthesis reference is that arm's six category verdicts
+# Synthesis anchors. The synthesis reference is that arm's six category reads
 # plus the criteria evidence, so `needs: "synthesis"` picks a synthesis cell and
 # the violations are aimed at that payload.
 SYNTHESIS_ANCHORS: dict[str, dict[str, str]] = {
     "SY1_coherence": {
         "response": (
             "headline: Every category read supports a clear functional change.\n"
-            "divergence_hypothesis: All six category verdicts agree that this "
+            "divergence_hypothesis: All six category reads agree that this "
             "isoform diverges functionally from the canonical, with none of them "
             "returning a negative or neutral read, so the picture is consistent "
             "across conservation, detection, localization, mutation landscape, "
@@ -434,7 +432,7 @@ SYNTHESIS_ANCHORS: dict[str, dict[str, str]] = {
             "isoform can be treated as a confirmed functional variant.\n"
             "tags: Domain loss\nconfidence: high"
         ),
-        "why": "claims all six verdicts agree when the inputs include neutral/negative reads",
+        "why": "claims all six reads agree when the inputs include negative or absent ones",
     },
     "SY2_no_new_claims": {
         "response": (
@@ -493,7 +491,7 @@ def _cell_kind(instruction: str) -> set[str]:
 
 
 def _sanity_anchor(judge: Judge, requests: list[Request], work: Path) -> int:
-    """Score each axis against a verdict wrong in exactly that axis.
+    """Score each axis against a read wrong in exactly that axis.
 
     A rubric that cannot score its own anchor 1-2 is not measuring anything, and
     that is far cheaper to learn here than after the full run.

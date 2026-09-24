@@ -34,7 +34,6 @@ class Output:
     arm: str
     slug: str
     unit: str
-    verdict: str | None
     reasoning: str
     payload: dict[str, Any]
 
@@ -42,9 +41,13 @@ class Output:
     def text(self) -> str:
         """What the judge is shown as the response.
 
-        Verdict and reasoning only. ``evidence_used`` is excluded deliberately:
-        it is non-empty in only ~40% of outputs in *every* arm, so including it
-        would add noise that cannot separate arms.
+        The reasoning alone for a category. A ``verdict:`` line used to head it;
+        the label is gone from the data model, and leaving the prefix would have
+        put the literal string ``verdict: None`` in front of every judged
+        response while the rubrics still asked whether it was supported.
+        ``evidence_used`` is excluded deliberately: it is non-empty in only ~40%
+        of outputs in *every* arm, so including it would add noise that cannot
+        separate arms.
         """
         if self.unit == SYNTHESIS_UNIT:
             parts = [
@@ -57,7 +60,7 @@ class Output:
             if self.payload.get("caveats"):
                 parts.append(f"caveats: {self.payload['caveats']}")
             return "\n".join(parts)
-        return f"verdict: {self.verdict}\n\nreasoning: {self.reasoning}"
+        return f"reasoning: {self.reasoning}"
 
 
 @dataclass
@@ -85,7 +88,7 @@ class Corpus:
         """Arms that produced an output in this cell.
 
         A cell missing an arm is dropped from that cell's comparisons rather than
-        imputed -- a missing verdict is not a neutral one.
+        imputed -- a missing read is not a neutral one.
         """
         return [a for a in self.arms if (a, slug, unit) in self.outputs]
 
@@ -141,7 +144,6 @@ def load_corpus(
                         arm=arm,
                         slug=slug,
                         unit=letter,
-                        verdict=entry.get("verdict"),
                         reasoning=entry.get("reasoning") or "",
                         payload=entry,
                     )
@@ -153,7 +155,6 @@ def load_corpus(
                     arm=arm,
                     slug=slug,
                     unit=SYNTHESIS_UNIT,
-                    verdict=data.get("confidence"),
                     reasoning=data.get("divergence_hypothesis") or "",
                     payload=data,
                 )

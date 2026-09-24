@@ -1,5 +1,5 @@
 Which response is the more reliable read of THIS isoform's evidence — that is,
-which verdict is better supported by the evidence provided, and states less that
+which conclusion is better supported by the evidence provided, and states less that
 the evidence does not support?
 
 Judge on substance, NOT style or length. A shorter answer is not worse; a longer
@@ -15,7 +15,7 @@ Reward:
   - Correct handling of unmeasured inputs: a field marked not_evaluable, null,
     no_cache, not_run or absent is UNKNOWN, and a response that says so is better
     than one that counts it as a negative result.
-  - A verdict that follows from the decisive evidence, with that evidence named.
+  - A conclusion that follows from the decisive evidence, with that evidence named.
   - Getting the direction right: an extension GAINS sequence the canonical lacks,
     a truncation LOSES sequence it has, and a separate ORF (uORF, uoORF,
     internal-OOF, 3'UTR-ORF) shares no reading frame, so gain/loss does not apply.
@@ -32,7 +32,7 @@ TIEBREAKER (apply BEFORE any preference for detail): if both responses are
 supported by the evidence, prefer the one that asserts LESS beyond it. A confident
 claim that overreaches is a DEFECT, not richness. Do NOT prefer a response merely
 because it is longer, cites more numbers, or reads as more decisive; extra detail
-counts only if it is both accurate and load-bearing for the verdict.
+counts only if it is both accurate and load-bearing for the conclusion.
 
 Prefer the response a careful reader of this evidence would judge the more
 accurate account of THIS isoform.

@@ -3,7 +3,7 @@
 Each arm saw a *different* payload -- that is the variable under test -- so an
 arm's own payload cannot be the yardstick: an arm shown little would score full
 marks for reasoning perfectly over little. The judge is instead given one
-reference per cell, and an arm that reaches a well-supported verdict from less
+reference per cell, and an arm that reaches a well-supported read from less
 input scores higher, not equal.
 
 The reference is ``criteria + tags + dist``, measured rather than chosen:
@@ -104,7 +104,7 @@ class ReferenceBuilder:
         """The reference for a synthesis cell.
 
         Synthesis is judged on coherence with **its own** inputs, so the
-        reference is that arm's six category verdicts plus the criteria evidence.
+        reference is that arm's six category reads plus the criteria evidence.
         Verified on the corpus: across arms ``category_reads`` is the only key
         that differs, while ``criteria_evidence`` (95,316 chars), ``gene``,
         ``isoform``, ``key_metrics``, ``localization``, ``scoring``, the
