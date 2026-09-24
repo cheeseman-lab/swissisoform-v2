@@ -62,6 +62,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--gene", default=None, help="Restrict to one gene (smoke test)")
     p.add_argument("--model", default=None, help="Override the model")
+    # A richer payload makes the model write longer reasoning, and a cell that
+    # overruns the cap truncates mid-JSON and cannot be retried at temperature 0.
+    p.add_argument("--max-tokens", type=int, default=None, help="Override the output cap")
+    p.add_argument(
+        "--only-category",
+        action="append",
+        default=None,
+        metavar="LETTER",
+        help="Regenerate only these category letters; the rest carry forward.",
+    )
     p.add_argument("--dry-run", action="store_true", help="Capture prompts, make no API calls")
     p.add_argument("--batch", action="store_true", help="Message Batches API for the 4 single-shot")
     p.add_argument("--tag-registry", default=grounding.DEFAULT_TAG_VERSION)
@@ -166,6 +176,10 @@ def run_arm(variant: variants_mod.Variant, args: argparse.Namespace) -> int:
         argv += ["--gene", args.gene]
     if args.model:
         argv += ["--model", args.model]
+    if args.max_tokens:
+        argv += ["--max-tokens", str(args.max_tokens)]
+    for letter in args.only_category or []:
+        argv += ["--only-category", letter]
     if args.dry_run:
         argv.append("--dry-run")
     if args.batch:

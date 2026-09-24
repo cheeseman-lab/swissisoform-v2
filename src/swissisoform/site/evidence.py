@@ -1856,6 +1856,23 @@ def format_metric(value: Any, fmt: str) -> str:
     return str(value)
 
 
+def hits_omitted_note(n_total: int) -> str:
+    """The note a tool-loop category carries in place of its hit rows.
+
+    Lives here because both payload builders need the identical wording: the
+    criteria path (``llm._strip_hits_for_tools``) and the tags path
+    (``grounding.hits_for``). Two copies is how the arms end up presenting two
+    vocabularies for the same evidence, which is the one thing the judge must
+    never be asked to score.
+    """
+    return (
+        f"{n_total} variant records exist for this isoform. Example rows "
+        "are deliberately omitted here: query them with the reader tools "
+        "so you choose the filter, rather than reasoning from a fixed "
+        "sample."
+    )
+
+
 def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[str, Any]:
     """Build the per-(isoform, criterion) slice for V2 UI tiles + future LLM passes.
 

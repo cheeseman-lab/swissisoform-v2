@@ -1645,6 +1645,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Overwrite existing outputs in --out.",
     )
+    parser.add_argument(
+        "--only-category",
+        action="append",
+        default=None,
+        metavar="LETTER",
+        help=(
+            "Regenerate only these category letters (repeatable); the rest are "
+            "carried forward from the existing categories.json. Needs --force, "
+            "since the isoform's output already exists."
+        ),
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument(
         "--batch",
@@ -2019,6 +2030,10 @@ def _strip_superseded_evidence(
     cols = SUPERSEDED_BY_TOOLS.get(letter)
     if not cols:
         return category_record
+    # Same guard as _strip_hits_for_tools: a grounding that does not key on
+    # ``members`` must come back untouched, not gain an empty one.
+    if "members" not in category_record:
+        return category_record
     members = []
     for member in category_record.get("members") or []:
         evidence = member.get("evidence")
@@ -2048,6 +2063,38 @@ def _strip_superseded_evidence(
 STRIP_HITS_FOR_TOOLS: frozenset[str] = frozenset({"M"})
 
 
+def _selected_categories(only: list[str] | None) -> list[dict[str, Any]]:
+    """``CATEGORIES``, or just the requested letters, in registry order."""
+    from swissisoform.site.evidence import CATEGORIES
+
+    if not only:
+        return list(CATEGORIES)
+    want = {c.upper() for c in only}
+    picked = [c for c in CATEGORIES if c["letter"] in want]
+    missing = want - {c["letter"] for c in picked}
+    if missing:
+        raise ValueError(
+            f"unknown category letter(s): {', '.join(sorted(missing))}; "
+            f"have {', '.join(c['letter'] for c in CATEGORIES)}"
+        )
+    return picked
+
+
+def _seed_results(out_path: Path, only: list[str] | None) -> dict[str, Any]:
+    """Prior verdicts for the categories this run is not regenerating.
+
+    A partial run rewrites the same ``categories.json``, and the writer emits
+    ``results`` wholesale — so without this the five categories we did not ask
+    for would be dropped on disk. Returns empty for a full run, where every
+    category is about to be recomputed anyway.
+    """
+    if not only or not out_path.exists():
+        return {}
+    prior = json.loads(out_path.read_text())
+    regenerating = {c["name"] for c in _selected_categories(only)}
+    return {k: v for k, v in prior.items() if k not in regenerating}
+
+
 def _strip_hits_for_tools(category_record: dict[str, Any]) -> dict[str, Any]:
     """Drop the truncated hit rows from a tool-loop category's opening context.
 
@@ -2065,20 +2112,22 @@ def _strip_hits_for_tools(category_record: dict[str, Any]) -> dict[str, Any]:
     Applied only to the categories in :data:`STRIP_HITS_FOR_TOOLS`, so the note's
     "variant records" wording describes every record it can reach.
     """
+    from swissisoform.site.evidence import hits_omitted_note
+
+    # An alternative grounding may not use ``members`` at all — the tags arm keys
+    # its payload on ``tags`` — and inventing an empty one here made the strip
+    # look like it had run when it had not. Leave a foreign shape untouched; that
+    # arm strips at its own builder (``grounding.hits_for``).
+    if "members" not in category_record:
+        return category_record
     members = []
     for member in category_record.get("members") or []:
-        n_total = member.get("n_hits_total") or 0
         members.append(
             {
                 **member,
                 "hits": [],
                 "n_hits_shown": 0,
-                "hits_note": (
-                    f"{n_total} variant records exist for this isoform. Example rows "
-                    "are deliberately omitted here: query them with the reader tools "
-                    "so you choose the filter, rather than reasoning from a fixed "
-                    "sample."
-                ),
+                "hits_note": hits_omitted_note(member.get("n_hits_total") or 0),
             }
         )
     return {**category_record, "members": members}
@@ -2240,8 +2289,11 @@ def _run_category_pass(
                 out_dir.mkdir(parents=True, exist_ok=True)
 
             iso_with_gene = {**iso, "gene": {"name": gene_name}}
-            results: dict[str, Any] = {}
-            for category in CATEGORIES:
+            # ``categories.json`` is written whole from ``results``, so a
+            # --only-category run must carry the untouched categories forward or
+            # it silently deletes them.
+            results: dict[str, Any] = _seed_results(out_path, args.only_category)
+            for category in _selected_categories(args.only_category):
                 letter = category["letter"]
                 tool_config = tool_configs.get(letter)
                 category_record = slice_category(iso_with_gene, category)
@@ -2384,9 +2436,9 @@ def _run_category_pass_batch(
                 n_reused += 1
                 continue
             iso_with_gene = {**iso, "gene": {"name": gene_name}}
-            iso_results.setdefault(tis_slug_val, {})
+            iso_results.setdefault(tis_slug_val, _seed_results(out_path, args.only_category))
             iso_out[tis_slug_val] = out_path
-            for category in CATEGORIES:
+            for category in _selected_categories(args.only_category):
                 record = slice_category(iso_with_gene, category)
                 if category["letter"] in tool_configs:
                     entry = tool_work.setdefault(tis_slug_val, (iso_with_gene, []))

@@ -283,6 +283,63 @@ def _tags_body(
         raw = record.get("_raw") or {}
         return {col: _clean(raw.get(col)) for col in cfg.get("evidence_cols", ())} or None
 
+    def hits_for(tag: reg_mod.Tag, record: dict[str, Any]) -> dict[str, Any] | None:
+        """The criterion's per-record hit list, capped exactly as the UI caps it.
+
+        Five criteria carry evidence that is one row per observed thing rather
+        than a fixed set of named columns — D3's peptides, S1's domains, M1/M2's
+        variants, P3's SSE elements — under ``evidence_hits_col``. ``metrics_for``
+        reads only ``evidence_cols``, so those tags used to show the model a
+        *count* where the criteria arm shows the *records*. S1's own
+        ``interpretation_hint`` spends a paragraph on how to read a list the tags
+        arm could not see.
+
+        Delegates to ``slice_criterion`` rather than re-reading the column: the
+        cap (``MAX_HITS``), the unique-region-first ordering for M1/M2, the
+        ``hits_note``, and P3's wholesale reshaping are all policy that must not
+        fork between the two arms.
+
+        Returns the keys to merge into the tag entry, under the same names the
+        ``criteria`` arm uses, so the judge is not comparing two vocabularies.
+
+        **Not for the tool-loop categories.** ``STRIP_LISTS_FOR`` holds the
+        categories whose rows reach the model through readers instead, and there
+        the rows are actively harmful: the API is stateless so the opening
+        context is re-sent every turn, M1 and M2 declare the *same*
+        ``evidence_hits_col`` so the sample serialises twice, and a fixed
+        30-of-N sample competes with the honest query access the tools give.
+        Measured: inlining took M's opening context to 87k chars against the
+        criteria arm's 5.6k, and M's Bradley-Terry score fell. ``llm``'s own
+        strip cannot do this for us — it matches on a ``members`` key this
+        payload does not have.
+        """
+        cfg = criterion_cfg.get(tag.tag_id)
+        if cfg is None or not cfg.get("evidence_hits_col"):
+            return None
+        sliced = ev.slice_criterion(record, tag.criterion_id)
+        if tag.category in STRIP_LISTS_FOR:
+            n_total = sliced.get("n_hits_total") or len(sliced.get("hits") or [])
+            if not n_total:
+                return None
+            return {
+                "hits": [],
+                "n_hits_shown": 0,
+                "n_hits_total": n_total,
+                "hits_note": ev.hits_omitted_note(n_total),
+            }
+        hits = _scrub(sliced.get("hits")) or []
+        if not hits:
+            return None
+        out: dict[str, Any] = {"hits": hits}
+        total = sliced.get("n_hits_total")
+        # Only worth saying when the cap bit; otherwise it restates len(hits).
+        if total is not None and total != len(hits):
+            out["n_hits_total"] = total
+            out["n_hits_shown"] = len(hits)
+        if sliced.get("hits_note"):
+            out["hits_note"] = sliced["hits_note"]
+        return out
+
     def build(record: dict[str, Any], category: dict[str, Any]) -> dict[str, Any]:
         raw = record.get("_raw") or {}
         states = raw.get("isoform_tags_states") or {}
@@ -325,6 +382,7 @@ def _tags_body(
                 metrics = metrics_for(tag, record)
                 if metrics:
                     entry["metrics"] = metrics
+                entry.update(hits_for(tag, record) or {})
                 if hints:
                     entry["means"] = criterion_cfg[tag.tag_id]["interpretation_hint"]
             fired.append(entry)
