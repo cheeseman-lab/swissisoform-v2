@@ -455,12 +455,16 @@ def test_emit_verdict_is_terminal_and_excluded_from_data_tools():
     }
 
 
-def test_emit_verdict_requires_verdict_reasoning_and_evidence():
+def test_emit_verdict_requires_reasoning_and_evidence():
+    """No verdict property at all — the label is gone from the data model.
+
+    Pinned because the schema is cross-validated at runtime against
+    category_read.json and the prompt prose; nothing else would catch one of the
+    three drifting back.
+    """
     emit = next(t for t in st.P_TOOLS if t["name"] == st.EMIT_VERDICT)
-    assert set(emit["input_schema"]["required"]) == {"verdict", "reasoning", "evidence_used"}
-    assert emit["input_schema"]["properties"]["verdict"]["enum"] == [
-        "interesting", "neutral", "not_interesting",
-    ]
+    assert set(emit["input_schema"]["required"]) == {"reasoning", "evidence_used"}
+    assert "verdict" not in emit["input_schema"]["properties"]
 
 
 def test_emit_verdict_is_strict_and_schema_stays_strict_compatible():

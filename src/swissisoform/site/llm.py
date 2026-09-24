@@ -905,12 +905,12 @@ MAX_TOOL_RESULT_CHARS = 60_000
 # get it wrong.
 _TOOL_NUDGE = (
     "You did not call a tool. Use the reader tools to inspect the underlying data, "
-    "then call emit_verdict exactly once with your verdict and reasoning."
+    "then call emit_verdict exactly once with your reasoning and evidence_used."
 )
 
 
 class ToolLoopError(RuntimeError):
-    """A tool loop that ended without a verdict, carrying its partial trace.
+    """A tool loop that ended without a read, carrying its partial trace.
 
     The trace is attached because a loop that failed is precisely the one worth
     inspecting; the caller persists it alongside successful ones.
@@ -1000,7 +1000,7 @@ def run_tool_loop(
     max_turns: int = DEFAULT_MAX_TOOL_TURNS,
     verdict_schema: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Drive a multi-turn tool conversation to a terminal verdict.
+    """Drive a multi-turn tool conversation to a terminal read.
 
     The model receives ``user`` as its opening context (for the category passes,
     the same precomputed slice the single-shot path uses) plus ``tools``. On each
@@ -1099,7 +1099,21 @@ def run_tool_loop(
                     payload = None
 
             reason: str | None = None  # None means "accept"
-            if not (isinstance(payload, dict) and payload.get("verdict")):
+            # Tier 1: is this an answer at all? The verdict enum used to serve as
+            # the format marker separating a real payload from chatter; with it
+            # gone, non-empty reasoning is what says "the model answered". Keep
+            # this distinct from the _verdict_violations branch below — that one
+            # means "an answer, but a bad one", and collects for salvage. Merging
+            # them would let arbitrary JSON reach the salvage path and ship.
+            #
+            # Deliberately NOT derived from verdict_schema["required"]: the tags
+            # arms list tags_fired there, whose legitimate value is [], so a
+            # truthiness rule over required keys would nudge a valid payload.
+            if not (
+                isinstance(payload, dict)
+                and isinstance(payload.get("reasoning"), str)
+                and payload["reasoning"].strip()
+            ):
                 reason = _TOOL_NUDGE
             elif n_data_calls < min_data_calls:
                 # Premature, not corrupt — and deliberately NOT added to
@@ -1353,14 +1367,14 @@ def _save_failed_response(
 def _write_category_results(
     out_path: Path, tis_slug: str, results: dict[str, Any], *, model: str
 ) -> bool:
-    """Write ``categories.json`` only when every category produced a verdict.
+    """Write ``categories.json`` only when every category produced a read.
 
     The skip check downstream is bare file existence, so a file carrying an
     ``{"error": ...}`` entry would block its own retry: the rerun skips the
-    isoform, reports ``0/0 successful`` and exits 0 with the errored verdict
+    isoform, reports ``0/0 successful`` and exits 0 with the errored read
     staged. Holding the write back leaves the isoform genuinely absent, so the
     next run regenerates it. Partial results land in ``categories.partial.json``
-    — nothing reads that name — so the good verdicts stay auditable.
+    — nothing reads that name — so the good reads stay auditable.
 
     Returns True when the real file was written.
     """
@@ -1472,20 +1486,33 @@ def _premature_verdict_msg(*, min_data_calls: int, n_data_calls: int, terminal_t
 def _salvaged(
     bad_verdicts: list[dict[str, Any]], trace: dict[str, Any], *, n_data_calls: int, turns: int
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Ship the last rejected verdict with its markup cut off. Last resort.
+    """Ship the last rejected read with its markup cut off. Last resort.
 
     A rejected payload is usually good prose with the markup at the tail, so
-    truncating beats losing the turn's work. Shared by both verdict doors —
-    only content rejections reach here; a premature verdict is never collected.
+    truncating beats losing the turn's work. Shared by both doors — only content
+    rejections reach here; a premature read is never collected.
+
+    Raises:
+        ToolLoopError: Truncation left no reasoning. This mattered less when a
+            verdict label rode alongside — an empty string still shipped a
+            usable category. Now the record would be *contentless*, and the only
+            write gate is ``"error" in v`` (:func:`_write_category_results`), so
+            it would land in categories.json as a success.
     """
+    salvaged = _strip_verdict_markup(bad_verdicts[-1])
+    if not str(salvaged.get("reasoning") or "").strip():
+        raise ToolLoopError(
+            f"no read validated in {turns} turns, and truncating the last payload "
+            "left no reasoning — nothing to salvage"
+        )
     trace["outcome"] = "emit_verdict_salvaged"
     trace["n_data_calls"] = n_data_calls
     print(
-        f"    [salvage] no verdict validated in {turns} turns; "
+        f"    [salvage] no read validated in {turns} turns; "
         "truncating the last payload at the markup marker",
         file=sys.stderr,
     )
-    return _strip_verdict_markup(bad_verdicts[-1]), trace
+    return salvaged, trace
 
 
 def _strip_verdict_markup(payload: dict[str, Any]) -> dict[str, Any]:
@@ -2239,14 +2266,14 @@ def _run_category_pass(
 
     Each call bundles all of the category's members (all first-class scored
     criteria, including S2 biophysics + S3 SAE) into one slice and asks the model
-    for a single ``{verdict, reasoning}``. Writes ``{tis_slug}/categories.json`` as
+    for a single ``{reasoning}``. Writes ``{tis_slug}/categories.json`` as
     a dict keyed by category name (the shape ``category_verdicts_for_isoform``
     consumes) — but only once every category produced a verdict; a run with any
     errored category holds the file back (:func:`_write_category_results`).
 
     Categories in :data:`TOOL_CATEGORY_PROMPTS` instead run a multi-turn tool
     loop, reading their own underlying data before emitting the same
-    ``{verdict, reasoning}`` shape, and additionally write ``{letter}_trace.json``.
+    ``{reasoning}`` shape, and additionally write ``{letter}_trace.json``.
     """
     tool_configs = _tool_categories(args, prompts_root, records)
 
@@ -2564,7 +2591,7 @@ def _build_synthesis_record(
 
     Carries the gene's ESTABLISHED function (``gene`` — Affinage function / keywords
     / localization, the baseline the isoform diverges from), the digested per-category
-    reads (``category_reads`` — the ``{verdict, reasoning}`` per CDLMPS category), and
+    reads (``category_reads`` — the ``{reasoning}`` per CDLMPS category), and
     the raw underlying evidence (``criteria_evidence``, one ``slice_criterion`` payload
     per criterion, all 16 incl. P3/S2/S3) so the model can weigh actual numbers.
 

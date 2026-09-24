@@ -1173,7 +1173,7 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "activation pattern or restate sequence composition already scored by "
             "the whole-protein biophysical shift in this same category. Do NOT name, "
             "quote or interpret a feature label in the reasoning, and do not let a "
-            "label move the verdict — cite the activation-shift magnitude, not the "
+            "label move the read — cite the activation-shift magnitude, not the "
             "labels and not the counts."
         ),
     },
