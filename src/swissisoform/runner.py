@@ -344,6 +344,32 @@ def write_proteins_fasta(proteins: list[str], out_path: Path) -> int:
     return n
 
 
+def _pepquery_reference_db() -> str:
+    """The ``-db`` value for PepQuery: a staged local FASTA, else the alias.
+
+    ``swissprot:human`` makes PepQuery download UniProt's human reference
+    proteome over FTP, which UniProt has retired — the alias now fails on every
+    machine. ``setup_databases.py pepquery-db`` stages the identical file over
+    HTTPS; when it is present we hand PepQuery the path and it never touches the
+    network.
+
+    Falls back to the alias rather than raising so the pipeline still runs
+    wherever FTP happens to work, and so a missing stage degrades to D3
+    not-evaluable instead of killing the run.
+    """
+    from swissisoform.setup.databases import PEPQUERY_DB_FASTA
+
+    if PEPQUERY_DB_FASTA.exists():
+        return str(PEPQUERY_DB_FASTA)
+    logger.warning(
+        "pepquery: %s not staged — falling back to the 'swissprot:human' alias, "
+        "which downloads over FTP and will fail (UniProt retired FTP). Run: "
+        "python scripts/setup/setup_databases.py pepquery-db",
+        PEPQUERY_DB_FASTA,
+    )
+    return "swissprot:human"
+
+
 def run_precompute(
     genes,
     all_proteins: list[str],
@@ -370,7 +396,7 @@ def run_precompute(
         preds["pepquery"] = precompute_pepquery(
             unique_peps,
             dataset="Deep_29_healthy_human_tissues_PXD010154,GTEx_32_Tissues_Proteome_PXD016999",
-            reference_db="swissprot:human",
+            reference_db=_pepquery_reference_db(),
             cache_dir=ROOT / "data" / "cache" / "pepquery",
             fix_mods=scoring.pepquery_fix_mods,
             var_mods=scoring.pepquery_var_mods,
