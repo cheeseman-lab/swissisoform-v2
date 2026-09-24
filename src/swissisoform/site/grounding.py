@@ -44,6 +44,10 @@ from swissisoform.site import evidence as ev
 from swissisoform.tags import registry as reg_mod
 from swissisoform.tags import seeds
 
+# The terminal tool's name, from the module that defines it — a bare literal here
+# would drift silently the day the tool is renamed.
+from swissisoform.site.tools import EMIT_VERDICT
+
 logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -590,9 +594,9 @@ def install_verdict_extras(
     """
     if not extras:
         return lambda: None
-    index = next((i for i, t in enumerate(tools) if t.get("name") == "emit_verdict"), None)
+    index = next((i for i, t in enumerate(tools) if t.get("name") == EMIT_VERDICT), None)
     if index is None:  # pragma: no cover - both tool lists define one
-        raise GroundingError("tool list has no emit_verdict entry to extend")
+        raise GroundingError(f"tool list has no {EMIT_VERDICT} entry to extend")
     original = tools[index]
     patched = copy.deepcopy(original)
     patched["input_schema"]["properties"].update(extras)
