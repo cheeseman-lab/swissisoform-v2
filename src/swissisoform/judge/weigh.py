@@ -29,11 +29,17 @@ Six rules, each answering a way this comparison can lie:
    isoforms rather than judgments. The 7 units of one isoform share evidence and
    are not independent; a naive bootstrap would report intervals several times too
    narrow and manufacture significance.
-5. **Everything is expressed in floor units.** The replicate's disagreement with
-   the status quo is the smallest difference this pipeline cannot tell from
-   sampling variance. Measured on the corpus it is 11.7% overall but ranges from
-   4.0% in Conservation to 20.0% in Structural Characteristics, so a single
-   threshold would be wrong in both directions.
+5. **The replicate arm is the resolution floor.** ``criteria_hint_rep`` is the
+   status quo run twice, and it competes in the fit like any other arm, so its
+   interval is where zero sits when the same framing is judged against itself. An
+   effect whose point estimate falls inside that half-width is not distinguishable
+   from re-running one arm. It is per unit because the units do not resolve alike.
+
+   This replaced a floor measured as the fraction of isoforms whose *verdict
+   label* flipped between the two runs. That statistic is gone with the label, and
+   the two are not interchangeable: the old one was on the output scale (11.7%
+   overall, 4.0% in C to 20.0% in S), this one is in the judge's log-odds. Old
+   ``Nx floor`` ratios cannot be reconstructed from new output.
 6. **Nothing is pooled across categories in a headline.** ``tags`` carries 24 tags
    in S against 3 in D; pooled, vocabulary thinness reads as a framing effect.
 """
@@ -43,7 +49,7 @@ from __future__ import annotations
 import math
 import random
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Iterable, Sequence
 
 from swissisoform.judge import ARMS, BASELINE, REPLICATE
@@ -250,6 +256,16 @@ class Interval:
         """Whether the interval is entirely on one side of zero."""
         return (self.lo > 0 and self.hi > 0) or (self.lo < 0 and self.hi < 0)
 
+    @property
+    def half_width(self) -> float:
+        """Half the interval's span — the resolution this fit can offer.
+
+        On the replicate arm this is the noise floor: the same framing judged
+        twice, so an effect whose point estimate falls inside it is not
+        distinguishable from running one arm again.
+        """
+        return (self.hi - self.lo) / 2
+
 
 def cluster_bootstrap_bt(
     comparisons: Sequence[Comparison],
@@ -300,54 +316,6 @@ def cluster_bootstrap_bt(
             n=len(series),
         )
     return out
-
-
-@dataclass
-class Floor:
-    """The noise floor, per unit and overall."""
-
-    by_unit: dict[str, float] = field(default_factory=dict)
-    overall: float = 0.0
-
-    def units_of(self, effect: float, unit: str) -> float:
-        """An effect expressed as a multiple of its own unit's floor.
-
-        ``inf`` when a unit's floor is zero -- the replicate agreed with the
-        status quo on every isoform there, so the pipeline cannot resolve *any*
-        difference downward and the ratio is genuinely unbounded.
-        """
-        floor = self.by_unit.get(unit, self.overall)
-        return effect / floor if floor else math.inf
-
-
-def verdict_floor(
-    base: dict[tuple[str, str], str | None],
-    rep: dict[tuple[str, str], str | None],
-    units: Sequence[str],
-) -> Floor:
-    """Disagreement between the status quo and its replicate, per unit.
-
-    Args:
-        base: ``{(slug, unit): verdict}`` for the status-quo arm.
-        rep: the same for the replicate.
-        units: units to measure.
-
-    This is the denominator for every other contrast. Measured on the corpus:
-    11.7% overall, 4.0% (C) to 20.0% (S) -- and against those per-unit floors
-    five of the eight framing effects in M and P are at or below 1.0x, i.e.
-    indistinguishable from running one arm twice.
-    """
-    per_unit: dict[str, float] = {}
-    agree = total = 0
-    for unit in units:
-        slugs = [s for (s, u) in base if u == unit and (s, u) in rep]
-        if not slugs:
-            continue
-        same = sum(base[(s, unit)] == rep[(s, unit)] for s in slugs)
-        per_unit[unit] = 1.0 - same / len(slugs)
-        agree += same
-        total += len(slugs)
-    return Floor(by_unit=per_unit, overall=1.0 - agree / total if total else 0.0)
 
 
 def factorial_effects(
