@@ -1,4 +1,4 @@
-Is this verdict supported by the evidence provided, and are the numbers it cites
+Is this conclusion supported by the evidence provided, and are the numbers it cites
 actually present in that evidence with the values it gives?
 
 Judge on substance, NOT style or length. A shorter answer is not worse; a longer
@@ -11,8 +11,8 @@ Treat arithmetic on evidence values (a difference of two lengths, a region lengt
 as correct. Treat a number that appears nowhere, or appears with a different value,
 as unsupported.
 
-Score 1: Cites one or more numbers that appear nowhere in the evidence, or states a verdict the evidence contradicts.
-Score 2: Every number is present but at least one is misstated, or the verdict rests on a single figure while stronger evidence points the other way.
-Score 3: Nothing is misquoted, but the reasoning does not identify which evidence drives the verdict, so support cannot be checked.
-Score 4: The verdict follows from the evidence and the values are quoted correctly, with some imprecision about which findings are decisive.
-Score 5: The verdict is entailed by the evidence, the decisive findings are named, and every value is quoted correctly.
+Score 1: Cites one or more numbers that appear nowhere in the evidence, or states a conclusion the evidence contradicts.
+Score 2: Every number is present but at least one is misstated, or the conclusion rests on a single figure while stronger evidence points the other way.
+Score 3: Nothing is misquoted, but the reasoning does not identify which evidence drives the conclusion, so support cannot be checked.
+Score 4: The conclusion follows from the evidence and the values are quoted correctly, with some imprecision about which findings are decisive.
+Score 5: The conclusion is entailed by the evidence, the decisive findings are named, and every value is quoted correctly.
