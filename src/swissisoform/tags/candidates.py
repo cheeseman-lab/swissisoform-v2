@@ -180,8 +180,6 @@ def propose(
     # either-or roll-ups inside one scorer, so they are one tag. Their cutoffs
     # still reach the registry, through the criterion_branch stream below.
     for criterion_id, label in seeds.CRITERION_LABELS.items():
-        if criterion_id in seeds.UNCALIBRATED_CRITERIA:
-            continue
         branches = seeds.seeds_for_criterion(criterion_id)
         column = seeds.criterion_state_column(criterion_id)
         single = branches[0] if len(branches) == 1 else None
@@ -214,7 +212,7 @@ def propose(
     # (setup.tags.criterion_rows looks these up by id). They are cutoff inputs,
     # not tags: build_table drops them before the table is written.
     for seed in seeds.CRITERION_SEEDS:
-        if seed.metric is None or seed.criterion_id in seeds.UNCALIBRATED_CRITERIA:
+        if seed.metric is None:
             continue
         null_pattern = _null_pattern(by_feature, seed.metric)
         out.append(

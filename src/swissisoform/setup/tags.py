@@ -25,6 +25,9 @@ Two cutoff sources, one flag:
 ``--cutoffs distribution``
     Criterion tags carry the cutoff the frozen distribution put them at.
 
+The flag is global, so a criterion that should be swept while the rest stay
+pinned names itself in ``seeds.SWEPT_CUTOFF_CRITERIA`` instead.
+
 Either way a criterion enters as a ``derived`` tag that runs its own scorer, with
 the cutoff handed to it through ``cutoff_overrides``. Only the numbers move; the
 gates the scorer applies around them do not. Swept tags have no ``ScoringConfig``
@@ -213,10 +216,8 @@ def criterion_rows(
     """
     rows: list[dict[str, Any]] = []
     for criterion_id, label in seeds.CRITERION_LABELS.items():
-        # Skip before the scorer check: a criterion the reviewer dropped, or one
-        # whose threshold was never calibrated, is not a wiring error.
-        if criterion_id in seeds.UNCALIBRATED_CRITERIA:
-            continue
+        # Skip before the scorer check: a criterion the reviewer dropped is a
+        # decision, not a wiring error.
         if labels is not None and cand_mod._slug(criterion_id) not in labels:
             continue
         if criterion_id not in derived_mod.SCORER_BY_CRITERION:
@@ -231,13 +232,22 @@ def criterion_rows(
             if not seed.config_field:
                 continue
             cand = by_id.get(cand_mod._slug(f"{criterion_id}__{seed.metric}"))
+            # `--cutoffs` is global, so a criterion whose own number should come
+            # from the distribution while the rest stay pinned names itself in
+            # SWEPT_CUTOFF_CRITERIA rather than forcing the whole build over.
+            swept = cutoffs == "distribution" or criterion_id in seeds.SWEPT_CUTOFF_CRITERIA
             value = (
                 cand.cutoff
-                if cutoffs == "distribution" and cand is not None and cand.cutoff is not None
+                if swept and cand is not None and cand.cutoff is not None
                 else cand_mod._current_cutoff(seed.config_field, seed.literal)
             )
             if value is not None:
-                _warn_if_truncating(criterion_id, seed.config_field, float(value), cutoffs)
+                _warn_if_truncating(
+                    criterion_id,
+                    seed.config_field,
+                    float(value),
+                    "distribution" if swept else cutoffs,
+                )
                 overrides[seed.config_field] = float(value)
         # A citation needs one number. An either-or criterion has no single one,
         # so it gets none rather than an arbitrary branch's.
@@ -255,7 +265,11 @@ def criterion_rows(
                 "metric": single,
                 "direction": branches[0].direction if single else "",
                 "cutoff": overrides.get(branches[0].config_field or "") if single else None,
-                "cutoff_source": cutoffs,
+                "cutoff_source": (
+                    "distribution"
+                    if criterion_id in seeds.SWEPT_CUTOFF_CRITERIA
+                    else cutoffs
+                ),
                 "cutoff_pctile": None,
                 "cutoff_overrides": json.dumps(overrides, sort_keys=True) if overrides else "",
                 "valid_for": "|".join(seeds.ALL_ORF_TYPES),

@@ -287,13 +287,26 @@ own `propose → apply_filters → choose_cutoff` against distributions `v3` and
 the rows `figures/tag_vocab/tag_candidates.csv` does not mark `remove` — nothing is
 recovered by parsing the CSV's `test` string.
 
-**`v3` is current and the default** — 44 tags, 40 code-fired, 14 derived. Its
-table is *byte-identical to v2's*; the version exists because the code under it
-changed. `metrics.resolve` had no branch for the `<col>__len` metrics the
-profiler synthesizes, so v2's `cmp_motifs_hits_in_diff_region__len` tag resolved
-to None on every row of every run — 1 of 40 code-fired tags was dead, with one
-WARNING as the only symptom. Fixing `resolve` in place would have changed what
-`v2` fires while leaving v2's bytes untouched, so the fix took a version.
+**`v3` is current and the default** — 46 tags, 42 code-fired, 16 derived. It is
+v2 plus `S2_biophysics` and `S3_sae`, readmitted after the judge study showed
+their absence was what the tags arm was being marked down for: of the 812
+Structural Characteristics pairs it lost under v2, 84.9% of the judge's own
+reasoning cites the whole-protein biophysical shift S2 carries and 81.5% the SAE
+shift S3 carries. Readmitting them moved S from **−1.05/−1.14 to +0.49/+0.82**.
+
+The two take their cutoffs from different places, deliberately. **S2 keeps its
+`ScoringConfig` numbers** — measured on `full_catalog` its three branches sit at
+p88–p89 and roll up to a 20.2% fire rate, mid-band and not measurably broken,
+where the sweep would have put all three at p60 on a bare percentile that *sets*
+the rate rather than discovering it. **S3 takes the swept cutoff**
+(`s3_top_delta_min` 10.0 → 11.37578), via `seeds.SWEPT_CUTOFF_CRITERIA`, which
+makes the cutoff source per-criterion instead of a global `--cutoffs` flag. Both
+are immune from Jaccard elimination, as ordinary criterion candidates.
+
+v3 also fixes a dead tag. `metrics.resolve` had no branch for the `<col>__len`
+metrics the profiler synthesizes, so v2's `cmp_motifs_hits_in_diff_region__len`
+resolved to None on every row of every run — 1 of 40 code-fired tags was dead,
+with one WARNING as the only symptom.
 `setup.tags._check_metrics_resolve` now refuses at build time to freeze a
 threshold tag whose metric no run can resolve.
 
@@ -302,8 +315,8 @@ actually fired. `v1` (56/52/16) predates the review pass and is a *historical
 artifact*: it was built from an 89-row table, and rebuilding `--version v1`
 against today's 103-row table would emit the reviewed contents under the v1
 name. v2 dropped the eight tags that assert absence or ask an absolute question,
-plus S2/S3, whose thresholds were never calibrated
-(`seeds.UNCALIBRATED_CRITERIA` — they are still *scored*, just not tagged).
+plus S2/S3, whose thresholds were never calibrated — v3 brings those two back
+and `UNCALIBRATED_CRITERIA` is gone.
 
 **Four kinds, and only one of them is code.** Adding a tag is adding a row:
 

@@ -49,18 +49,22 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[3]
 REF_DIR = ROOT / "data" / "reference" / "tags"
-# v3 is the current vocabulary. Its table is byte-identical to v2's 44 tags —
-# what changed is the code underneath: `metrics.resolve` could not read a
-# `<col>__len` metric, so v2's `cmp_motifs_hits_in_diff_region__len` tag was
-# null on every row of every run. Fixing that without a new version would have
-# altered what v2 fires while leaving v2's bytes alone, which is exactly the
-# drift the freeze exists to prevent, so the fix gets its own version.
+# v3 is the current vocabulary: v2's 44 tags plus S2_biophysics and S3_sae,
+# readmitted after the judge study showed their absence was what the tags arm
+# was being marked down for — 85% of its losses in Structural Characteristics
+# cite the biophysical or SAE evidence those two carry. S3's cutoff is swept
+# from the frozen distribution (`seeds.SWEPT_CUTOFF_CRITERIA`); S2 keeps its
+# config numbers, which measure well on the genome-wide population.
+#
+# v3 also fixes a dead tag: `metrics.resolve` could not read a `<col>__len`
+# metric, so v2's `cmp_motifs_hits_in_diff_region__len` was null on every row of
+# every run.
 #
 # v1 predates the review pass: it was built from an 89-row candidate table and
-# ships the eight retired tags plus S2/S3, which `seeds.UNCALIBRATED_CRITERIA`
-# now excludes. It is also no longer reproducible — building `--version v1`
-# against today's table yields the reviewed 44 tags under the v1 name — so the
-# on-disk v1 is a historical artifact, not a rebuildable one.
+# ships eight tags later retired for asserting absence. It is also no longer
+# reproducible — building `--version v1` against today's table yields today's
+# vocabulary under the v1 name — so the on-disk v1 is a historical artifact, not
+# a rebuildable one.
 DEFAULT_VERSION = "v3"
 
 REGISTRY_FILE = "registry.parquet"

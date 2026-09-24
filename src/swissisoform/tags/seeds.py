@@ -183,17 +183,20 @@ CRITERION_LABELS: dict[str, str] = {
     "S3_sae": "Interpretable features shift",
 }
 
-# Criteria whose thresholds were never derived from anything. `config.py` marks
-# all three s2_* fields "PROVISIONAL — set in threshold discussion", and
-# s3_top_delta_min carries no provenance at all. A tag asserts that a number
-# crossed a meaningful line; for these there is no line, so they are scored but
-# not tagged. S1 is deliberately absent from this set: its cutoff is a break
-# discovered in the distribution, not a number someone picked.
+# Criteria whose cutoff comes from the frozen distribution rather than from
+# `ScoringConfig`, whatever `--cutoffs` says. Per-criterion because the flag is
+# global: `--cutoffs distribution` would recalibrate all sixteen.
 #
-# This excludes them from the tag VOCABULARY only. EvidenceScoringModule still
-# computes them into isoform_scoring_criteria and both axis scores — the tag
-# layer is additive beside the scorer, never upstream of it.
-UNCALIBRATED_CRITERIA: frozenset[str] = frozenset({"S2_biophysics", "S3_sae"})
+# S3 is here and S2 is not, measured on full_catalog (6,462 isoforms) rather
+# than on the cheeseman50 coreset, which over-represents high-SAE-delta
+# isoforms by construction. S2's three branches sit at p88-p89 and fire
+# 11.8-12.9% each, rolling up to 20.2% — mid-band, and the sweep would move all
+# three to p60 (~4x looser, 56.9% roll-up). Neither number is discovered: both
+# are magnitudes, which carry no anchor by design, and no histogram break was
+# found, so the cascade falls through to a bare percentile that *sets* the fire
+# rate. Given that, the existing S2 numbers are kept and only S3 moves
+# (10.0 -> 10.96, 46.1% -> 40.0%).
+SWEPT_CUTOFF_CRITERIA: frozenset[str] = frozenset({"S3_sae"})
 
 # The column the scorer's own per-criterion verdict lands in, once `load_run`
 # flattens the `isoform_scoring_criteria` struct. Reading a criterion here — as
