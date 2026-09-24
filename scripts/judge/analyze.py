@@ -2,9 +2,9 @@
 
 Reads ``results.jsonl``, applies the six rules in :mod:`swissisoform.judge.weigh`
 and writes the tables. Nothing here fits a model to raw scores: the isoform is a
-blocking factor throughout, and every contrast is reported in floor units so a
-number smaller than the pipeline's own run-to-run variance cannot read as a
-finding.
+blocking factor throughout, and the replicate arm is carried in the fit so its own
+interval shows the smallest effect this pipeline can resolve — a number inside it
+is one framing judged twice, not a finding.
 
 Usage:
     python scripts/judge/analyze.py
@@ -34,7 +34,6 @@ from swissisoform.judge import (  # noqa: E402
 from swissisoform.judge import prompts as PR  # noqa: E402
 from swissisoform.judge import rubrics as RB  # noqa: E402
 from swissisoform.judge import weigh as W  # noqa: E402
-from swissisoform.judge.corpus import load_corpus  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("judge.analyze")
@@ -68,7 +67,6 @@ def main(argv: list[str] | None = None) -> int:
     comparisons, checks = W.resolve_orders(forward)
     logger.info("%d order-consistent comparison(s)", len(comparisons))
 
-    floor = _floor(args.corpus)
     centered = W.center_scores(scores)
     per_unit_bt = {
         unit: W.cluster_bootstrap_bt([c for c in comparisons if c.unit == unit], n=args.bootstrap)
@@ -76,8 +74,8 @@ def main(argv: list[str] | None = None) -> int:
     }
     pooled_bt = W.cluster_bootstrap_bt(comparisons, n=args.bootstrap)
 
-    _write(work, floor, checks, centered, per_unit_bt, pooled_bt, parse_failures)
-    _print(floor, checks, centered, per_unit_bt, pooled_bt)
+    _write(work, checks, centered, per_unit_bt, pooled_bt, parse_failures)
+    _print(checks, centered, per_unit_bt, pooled_bt)
     return 0
 
 
@@ -137,31 +135,38 @@ def _winner(row: dict, completion: str, arm_a: str, arm_b: str) -> str | None:
     return arm_a if choice == "A" else arm_b
 
 
-def _floor(corpus_name: str) -> W.Floor:
-    """The noise floor, read off the corpus itself.
+def _resolution_floor(per_unit_bt, pooled_bt) -> dict:
+    """The replicate arm's own interval, per unit — the smallest resolvable effect.
 
-    Verdict-level rather than judge-level on purpose: the floor has to describe
-    the variance of the *system under test*, so it is measured from the arms'
-    own outputs, not from anything Prometheus said.
+    No separate measurement: ``criteria_hint_rep`` competes in the fit like any
+    other arm, so its interval already says where zero sits when one framing is
+    judged against itself.
     """
-    corpus = load_corpus(corpus_name)
-    base: dict[tuple[str, str], str | None] = {}
-    rep: dict[tuple[str, str], str | None] = {}
-    for slug in corpus.slugs:
-        for unit in UNITS:
-            b = corpus.get(BASELINE, slug, unit)
-            r = corpus.get(REPLICATE, slug, unit)
-            if b is not None:
-                base[(slug, unit)] = b.verdict
-            if r is not None:
-                rep[(slug, unit)] = r.verdict
-    return W.verdict_floor(base, rep, UNITS)
+    out = {}
+    for unit, fit in per_unit_bt.items():
+        i = fit.get(REPLICATE)
+        if i is not None:
+            out[unit] = {
+                "point": round(i.point, 4),
+                "lo": round(i.lo, 4),
+                "hi": round(i.hi, 4),
+                "half_width": round(i.half_width, 4),
+            }
+    i = pooled_bt.get(REPLICATE)
+    if i is not None:
+        out["pooled"] = {
+            "point": round(i.point, 4),
+            "lo": round(i.lo, 4),
+            "hi": round(i.hi, 4),
+            "half_width": round(i.half_width, 4),
+        }
+    return out
 
 
-def _write(work, floor, checks, centered, per_unit_bt, pooled_bt, parse_failures) -> None:
+def _write(work, checks, centered, per_unit_bt, pooled_bt, parse_failures) -> None:
     """Persist everything as JSON, plus a TSV of the headline table."""
     payload = {
-        "floor": {"overall": floor.overall, "by_unit": floor.by_unit},
+        "resolution_floor": _resolution_floor(per_unit_bt, pooled_bt),
         "judge_reliability": {
             unit: {
                 "consistent": c.consistent,
@@ -204,7 +209,6 @@ def _write(work, floor, checks, centered, per_unit_bt, pooled_bt, parse_failures
 
 
 def _print(
-    floor,
     checks,
     centered,
     per_unit_bt,
@@ -215,11 +219,16 @@ def _print(
     pa_delta_per_unit=None,
 ) -> None:
     """The tables a reader actually needs."""
-    print("\n=== noise floor (verdict disagreement, status quo vs its replicate) ===")
-    for unit in UNITS:
-        if unit in floor.by_unit:
-            print(f"  {unit:10s} {floor.by_unit[unit]:6.1%}")
-    print(f"  {'overall':10s} {floor.overall:6.1%}")
+    print("\n=== resolution floor (status quo judged against its own replicate) ===")
+    print("    (log-odds; an effect inside +/- half-width is one framing judged twice)")
+    for unit in (*UNITS, "pooled"):
+        i = (pooled_bt if unit == "pooled" else per_unit_bt.get(unit, {})).get(REPLICATE)
+        if i is not None:
+            print(
+                f"  {unit:10s} {i.point:+6.2f} [{i.lo:+5.2f}, {i.hi:+5.2f}]"
+                f"   +/-{i.half_width:.2f}"
+            )
+    print("  This should straddle zero — it is the same framing on both sides.")
 
     print("\n=== judge reliability (pairs decided both ways, by order) ===")
     for unit in UNITS:
@@ -262,15 +271,8 @@ def _print(
             row += f"{sum(vals) / len(vals):+9.3f}" if vals else f"{'':>9s}"
         print(row)
 
-    print("\n=== replicate check ===")
-    rep = pooled_bt.get(REPLICATE)
-    if rep:
-        print(f"  {REPLICATE} vs {BASELINE}: {rep.point:+.3f} [{rep.lo:+.3f}, {rep.hi:+.3f}]")
-        print(
-            "  This should straddle zero. It is the same framing judged twice, so "
-            "anything else\n  means the judge is reading noise as quality — and "
-            "every other column inherits that."
-        )
+    # The replicate's own numbers now head the output as the resolution floor;
+    # printing them twice invited reading them as two separate checks.
 
     print("\n=== factorial (pooled; grounding and hint main effects) ===")
     eff = W.factorial_effects(pooled_bt)

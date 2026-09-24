@@ -607,22 +607,16 @@ class TestWeighing:
         comps, checks = W.resolve_orders({("s", "C", "a", "b"): "a"})
         assert comps == [] and checks == {}
 
-    def test_floor_is_per_unit(self):
-        base = {("i0", "C"): "x", ("i1", "C"): "x", ("i0", "S"): "x", ("i1", "S"): "x"}
-        rep = {("i0", "C"): "x", ("i1", "C"): "x", ("i0", "S"): "y", ("i1", "S"): "x"}
-        floor = W.verdict_floor(base, rep, ("C", "S"))
-        assert floor.by_unit["C"] == 0.0
-        assert floor.by_unit["S"] == 0.5
-        assert floor.overall == 0.25
+    def test_half_width_is_the_resolution_floor(self):
+        """On the replicate arm this is the smallest resolvable effect.
 
-    def test_effect_in_floor_units(self):
-        floor = W.Floor(by_unit={"C": 0.04, "S": 0.20}, overall=0.117)
-        assert floor.units_of(0.28, "C") == pytest.approx(7.0)
-        assert floor.units_of(0.20, "S") == pytest.approx(1.0)
-
-    def test_zero_floor_is_infinite_not_a_crash(self):
-        floor = W.Floor(by_unit={"C": 0.0}, overall=0.1)
-        assert floor.units_of(0.1, "C") == float("inf")
+        It replaced a floor counted as the fraction of isoforms whose verdict
+        label flipped between the two runs. That statistic went with the label,
+        and this one is in the judge's log-odds rather than on the output scale,
+        so the two are not interchangeable.
+        """
+        assert W.Interval(point=0.08, lo=-0.12, hi=0.31).half_width == pytest.approx(0.215)
+        assert W.Interval(point=0.0, lo=0.0, hi=0.0).half_width == 0.0
 
     def test_factorial_excludes_the_replicate(self):
         """The replicate is not a cell of the 4x2 design; including it would
