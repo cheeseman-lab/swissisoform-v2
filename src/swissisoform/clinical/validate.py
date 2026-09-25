@@ -12,6 +12,7 @@ canonical CDS.
 
 from __future__ import annotations
 
+import functools
 import logging
 from typing import Any
 
@@ -388,20 +389,6 @@ class ConsequenceValidator:
         if not pos_map:
             return _null_result(validated=False)
 
-        if genomic_pos not in pos_map:
-            return {
-                "consequence": "intronic",
-                "protein_pos": None,
-                "aa_ref": None,
-                "aa_alt": None,
-                "codon_ref": None,
-                "codon_alt": None,
-                "note": "",
-                "validated": True,
-            }
-
-        anchor_pos = pos_map[genomic_pos]
-
         # One walk for every class. VCF pads an indel with the base *before* the
         # event, and that base is unchanged — HGVS numbers the first changed one, so
         # reading POS as the position reports a codon the variant never touches.
@@ -433,11 +420,35 @@ class ConsequenceValidator:
             # order. Taking the lower of the two neighbouring offsets and stepping
             # one past it is correct on both strands, where mapping the genomic
             # successor alone lands a codon early on the minus strand.
-            neighbours = [pos_map.get(genomic_pos), pos_map.get(genomic_pos + 1)]
-            known = [offset for offset in neighbours if offset is not None]
-            span_offsets = [min(known) + 1] if known else [None]
+            #
+            # The neighbours are read either side of ``span_start``, the first base
+            # after the insertion point once *all* the padding is trimmed — not of
+            # POS, which is only right when VCF pads with exactly one base. Both must
+            # map: with one side outside the coding sequence the insertion sits at an
+            # exon edge or just outside the ORF, where it adds no coding bases.
+            left, right = pos_map.get(span_start - 1), pos_map.get(span_start)
+            span_offsets = (
+                [min(left, right) + 1] if left is not None and right is not None else [None]
+            )
 
-        if any(offset is None for offset in span_offsets):
+        mapped = [offset for offset in span_offsets if offset is not None]
+        if not mapped:
+            # Nothing the variant changes is coding. Decided on the changed bases, not
+            # on POS: VCF's padding base can sit in the intron while the bases it
+            # deletes are the first of the next exon, and reading POS alone called
+            # that frameshift intronic.
+            return {
+                "consequence": "intronic",
+                "protein_pos": None,
+                "aa_ref": None,
+                "aa_alt": None,
+                "codon_ref": None,
+                "codon_alt": None,
+                "note": "",
+                "validated": True,
+            }
+
+        if len(mapped) < len(span_offsets):
             # Part of the span lies outside this ORF's coding sequence, so splicing
             # the ALT in would translate intronic bases.
             #
@@ -451,10 +462,10 @@ class ConsequenceValidator:
             # For a substitution the class *depends* on translation, so a span that
             # leaves the coding sequence leaves nothing to say: it is intronic. That
             # is the second of the two ways a variant is called intronic — the first
-            # (above) is an anchor that maps nowhere and carries no residue.
+            # (above) is a span that maps nowhere and carries no residue.
             return {
                 "consequence": indel_term or "intronic",
-                "protein_pos": anchor_pos // 3,
+                "protein_pos": min(mapped) // 3,
                 "aa_ref": None,
                 "aa_alt": None,
                 "codon_ref": None,
@@ -467,7 +478,7 @@ class ConsequenceValidator:
                 else "",
                 "validated": True,
             }
-        coding_pos = min(span_offsets)  # type: ignore[arg-type]
+        coding_pos = min(mapped)
 
         if not coding_seq:
             return {
@@ -815,6 +826,16 @@ def _translate(seq: str, *, stop_at_first: bool = False) -> str:
     return protein
 
 
+@functools.lru_cache(maxsize=256)
+def _translate_cached(seq: str) -> str:
+    """:func:`_translate` of a reference CDS, which every indel in an ORF re-reads.
+
+    A multi-allelic record fans out into one indel per ALT against the same ORF, and
+    each used to retranslate the whole reference.
+    """
+    return _translate(seq)
+
+
 def _indel_result(
     *,
     coding_seq: str,
@@ -844,8 +865,27 @@ def _indel_result(
     """
     delta = len(alt_bases) - len(ref_bases)
     mutant = coding_seq[:coding_pos] + alt_bases + coding_seq[coding_pos + len(ref_bases) :]
-    ref_prot = _translate(coding_seq)
+    ref_prot = _translate_cached(coding_seq)
     alt_prot = _translate(mutant, stop_at_first=True)
+
+    # The same codon-0 question the substitution path asks: does the trinucleotide at
+    # the start still initiate? An indel can destroy an ATG as surely as an SNV can —
+    # deleting it outright, or splitting it with an insertion — and ClinVar names
+    # those ``p.Met1?`` / ``p.Met1del``. ``inframe_deletion`` is not in the LoF set, so
+    # without this the classic deleted-start variant never reached it.
+    if first_codon == 0:
+        start_override, start_note = start_codon_effect(coding_seq[:3], mutant[:3])
+        if start_override:
+            return {
+                "consequence": start_override,
+                "protein_pos": 0,
+                "aa_ref": ref_prot[:1],
+                "aa_alt": "",
+                "codon_ref": codon_ref,
+                "codon_alt": None,
+                "note": f"{start_note} by a {_indel_term(ref_bases, alt_bases)}",
+                "validated": True,
+            }
 
     if delta % 3 != 0:
         consequence = "frameshift_variant"

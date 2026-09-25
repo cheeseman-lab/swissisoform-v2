@@ -99,8 +99,11 @@ _SWEEP_MARKER = ".last_sweep"
 #: where it used to read as missense, and hits carry the classifier's own note ·
 #: d7 indels gained amino acids and their residue moved to the first *changed*
 #: base (the VCF padding base is not it), and a wrong-REF indel now reports
-#: reference_mismatch instead of a clean frameshift.
-DIGEST_SCHEMA = "d7"
+#: reference_mismatch instead of a clean frameshift · d8 an indel whose VCF padding
+#: base is intronic is classified on the bases it changes (it read as intronic), an
+#: indel that destroys an annotated ATG is start_lost, an insertion at an exon edge
+#: is intronic, and records over the per-record ALT cap are rejected.
+DIGEST_SCHEMA = "d8"
 
 
 class ScanStoreError(RuntimeError):
