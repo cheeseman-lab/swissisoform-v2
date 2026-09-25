@@ -367,6 +367,16 @@ class TestRubrics:
         assert "asserts LESS" in text
         assert "DEFECT" in text
 
+    def test_pairwise_demerits_inventory_and_transcription(self):
+        """Economy is now weighed beside support, which reverses the ban the
+        other axes still carry -- so the demerit has to be present AND stay a
+        demerit. Decisive, it would let a terse wrong answer beat a supported one.
+        """
+        text = RB.pairwise().criterion
+        assert "Penalize lightly" in text
+        assert "never decisive" in text
+        assert "transcription" in text
+
     def test_surviving_axes_name_a_locatable_referent(self):
         """The axes that work ask whether something is *in the payload*; the two
         that failed asked the judge to weigh or cross-check.

@@ -31,6 +31,7 @@ import logging
 import sys
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
@@ -116,7 +117,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--sanity-anchor",
         action="store_true",
-        help="Score a deliberately bad read; R1/R2 must give it 1-2",
+        help=(
+            "Score a deliberately bad read; R1/R2 must give it 1-2, and the "
+            "pairwise rubric must prefer a terse relational read over a fluent "
+            "inventory of the same evidence, in both presentation orders"
+        ),
     )
     p.add_argument("--cell", default=None, help="Restrict a gate to one slug|unit")
     p.add_argument("--force", action="store_true", help="Ignore existing results")
@@ -389,7 +394,7 @@ def _self_consistency(judge: Judge, requests: list[Request], work: Path, *, limi
 #
 # R3 has no anchor because it is no longer scored: it gave its own anchor a 4,
 # and calibration has no checkable referent in the evidence for the judge to be
-# wrong about. See RETIRED_RUBRICS in rubrics.py.
+# wrong about. See the rubrics.py module docstring for what was removed and why.
 ANCHORS: dict[str, dict[str, str]] = {
     "R1_evidential_support": {
         "needs": "any",
@@ -413,6 +418,53 @@ ANCHORS: dict[str, dict[str, str]] = {
         ),
         "why": "calls fields the evidence marks unmeasured 'absent' and 'negative'",
     },
+}
+
+
+# The pairwise anchor. The rubric now weighs economy and legibility beside
+# support, which reverses the ban the other axes still carry -- so this is the
+# probe that would have caught the ORIGINAL failure, where fluent confident prose
+# won on fluency. Both responses reach the same conclusion from the same numbers;
+# one relates them, the other walks them. Support is equal by construction, so
+# only economy can decide, and a rubric that cannot prefer the terse one has
+# re-opened the hole.
+#
+# Self-contained rather than borrowed from a corpus cell: equal support is the
+# whole design and cannot be guaranteed against an arbitrary payload. Run in both
+# orders, because a single order cannot tell preference from position bias.
+PAIRWISE_ANCHOR: dict[str, str] = {
+    "instruction": (
+        "Category C (Conservation) for a truncated isoform that removes the "
+        "canonical N-terminal 19 aa.\n"
+        "  primate amino-acid identity over the removed region: 0.977\n"
+        "  mammalian amino-acid identity over the removed region: 0.934\n"
+        "  phyloP mean over the removed region: 3.4\n"
+        "  phyloP mean over the shared region: 3.1\n"
+        "Write one integrated read of what this evidence means for the removed "
+        "segment."
+    ),
+    "terse": (
+        "reasoning: The 19 aa lost in this truncation are under purifying "
+        "selection, and the measures corroborate rather than repeat each other: "
+        "the primate and mammalian alignments agree, so the signal is not an "
+        "artefact of one clade's sampling, and phyloP puts it at the nucleotide "
+        "level rather than restating the protein alignment. Its loss is therefore "
+        "more likely consequential than neutral."
+    ),
+    "verbose": (
+        "reasoning: The evidence for this truncation spans several independent "
+        "measurements, each of which is worth setting out in turn. Primate "
+        "amino-acid identity over the removed region is 0.977, which is a high "
+        "value. Mammalian amino-acid identity over the same region is 0.934, "
+        "which is also a high value. The phyloP mean over the removed region is "
+        "3.4. The phyloP mean over the shared region is 3.1, so the shared region "
+        "is likewise conserved. The removed segment is 19 amino acids long and "
+        "sits at the N-terminus of the canonical protein, as the annotation "
+        "states. Taking all of these measurements together, the removed segment "
+        "appears to be under purifying selection, and its loss is therefore more "
+        "likely consequential than neutral."
+    ),
+    "why": "same conclusion from the same numbers; one relates them, one lists them",
 }
 
 
@@ -572,12 +624,15 @@ def _sanity_anchor(judge: Judge, requests: list[Request], work: Path) -> int:
         except PR.ParseError:
             scores[probe.rubric] = None
 
+    pairwise = _pairwise_anchor(judge)
+
     (work / "sanity_anchor.json").write_text(
         json.dumps(
             {
                 "scores": scores,
                 "cells": chosen,
                 "violations": {k: v["why"] for k, v in specs.items()},
+                "pairwise": pairwise,
             },
             indent=2,
             sort_keys=True,
@@ -595,10 +650,68 @@ def _sanity_anchor(judge: Judge, requests: list[Request], work: Path) -> int:
         print(f"  {rubric_id:28s} {score}  {verdict:8s}  ({spec['why']})")
         if score is None or score > 2:
             failed.append(rubric_id)
+
+    print("\npairwise anchor (terse relational vs fluent inventory; want terse in BOTH orders):")
+    print(f"  terse as A -> {pairwise['order_0']}   terse as B -> {pairwise['order_1']}")
+    print(f"  {PAIRWISE_ANCHOR['why']}")
+    if not pairwise["ok"]:
+        print("  !! the rubric does not prefer the terse read; the fluency hole is open")
+        failed.append("pairwise")
+
     if failed:
         print(f"!! {len(failed)} rubric(s) cannot fail their own anchor: {failed}")
         return 1
     return 0
+
+
+def _pairwise_anchor(judge: Judge) -> dict[str, Any]:
+    """Ask the pairwise rubric to prefer the terse read, in both orders.
+
+    One order cannot tell a preference from position bias -- measured at 100% on
+    byte-identical text -- so the gate is that terse wins whichever slot it sits
+    in. A split is a failure, not a near miss: it means position decided.
+    """
+    rubric = RB.pairwise().criterion
+    probes = []
+    for order, (a, b) in enumerate(
+        ((PAIRWISE_ANCHOR["terse"], PAIRWISE_ANCHOR["verbose"]),
+         (PAIRWISE_ANCHOR["verbose"], PAIRWISE_ANCHOR["terse"]))
+    ):
+        probes.append(
+            Request(
+                id=f"anchor|pairwise|{order}",
+                kind="pairwise",
+                slug="__anchor__",
+                unit="C",
+                rubric=RB.PAIRWISE_ID,
+                prompt=PR.chat(
+                    PR.relative_prompt(
+                        instruction=PAIRWISE_ANCHOR["instruction"],
+                        response_a=a,
+                        response_b=b,
+                        rubric=rubric,
+                    )
+                ),
+                arm_a="terse" if order == 0 else "verbose",
+                arm_b="verbose" if order == 0 else "terse",
+                order=order,
+            )
+        )
+
+    picked: list[str | None] = []
+    for probe, result in zip(probes, judge.run(probes)):
+        try:
+            letter, _ = PR.parse_choice(result.completion)
+        except PR.ParseError:
+            picked.append(None)
+            continue
+        picked.append(probe.arm_a if letter == "A" else probe.arm_b)
+
+    return {
+        "order_0": picked[0] or "unparseable",
+        "order_1": picked[1] or "unparseable",
+        "ok": picked == ["terse", "terse"],
+    }
 
 
 def _compare_backends(

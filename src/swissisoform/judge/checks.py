@@ -36,6 +36,7 @@ arms cite numbers it does not contain.
 from __future__ import annotations
 
 import re
+import statistics
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
@@ -127,6 +128,8 @@ class CheckReport:
     n_with_findings: int = 0
     counts_by_arm: dict[str, int] = field(default_factory=dict)
     counts_by_unit: dict[str, int] = field(default_factory=dict)
+    words_by_arm: dict[str, list[int]] = field(default_factory=dict)
+    words_by_arm_unit: dict[str, list[int]] = field(default_factory=dict)
 
     def add(self, finding: Finding) -> None:
         """Record a finding and its per-arm / per-unit tallies."""
@@ -134,9 +137,33 @@ class CheckReport:
         self.counts_by_arm[finding.arm] = self.counts_by_arm.get(finding.arm, 0) + 1
         self.counts_by_unit[finding.unit] = self.counts_by_unit.get(finding.unit, 0) + 1
 
+    def measure(self, *, arm: str, unit: str, reasoning: str) -> None:
+        """Record one output's length. A control, not a check.
+
+        Nothing in the judge measured response size, so an ordering that moved
+        after the rubric started weighing economy could not be told apart from
+        drift. Deliberately not a ``Finding``: length is evidence about an arm,
+        and there is no threshold at which it is wrong.
+        """
+        n = len((reasoning or "").split())
+        self.words_by_arm.setdefault(arm, []).append(n)
+        self.words_by_arm_unit.setdefault(f"{arm}\t{unit}", []).append(n)
+
     def rate(self) -> float:
         """Share of outputs with at least one finding."""
         return self.n_with_findings / self.n_outputs if self.n_outputs else 0.0
+
+
+def word_stats(values: Iterable[int]) -> dict[str, float]:
+    """``n`` / ``median`` / ``p90`` over one group's word counts."""
+    xs = sorted(values)
+    if not xs:
+        return {"n": 0, "median": 0.0, "p90": 0.0}
+    return {
+        "n": len(xs),
+        "median": float(statistics.median(xs)),
+        "p90": float(xs[min(len(xs) - 1, int(0.9 * len(xs)))]),
+    }
 
 
 def numbers_in(text: str) -> set[str]:
