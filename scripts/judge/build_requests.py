@@ -2,15 +2,14 @@
 
 Per cell (one isoform, one output unit), every arm present:
 
-  absolute  9 arms x 4 rubrics (3 for synthesis)        = 36 / 27 calls
-  pairwise  C(9,2) = 36 pairs x 2 presentation orders   = 72 calls
+  C(9,2) = 36 pairs x 2 presentation orders = 72 calls
 
 Both orders is not optional. Prometheus 2 relative grading has documented position
 bias, so a pair is only a verdict when the judge picks the same arm whichever slot
 it sits in; the rest are dropped and the drop rate reported as judge reliability.
 
 Requests come out ordered by cell, so vLLM prefills each ~5-24k reference prefix
-once for all ~108 calls that share it rather than 108 times.
+once for all 72 calls that share it rather than 72 times.
 
 Usage:
     python scripts/judge/build_requests.py --limit 2      # smoke test
@@ -68,7 +67,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=",".join((*CATEGORY_LETTERS, SYNTHESIS_UNIT)),
         help="Comma-separated units to build",
     )
-    p.add_argument("--skip-pairwise", action="store_true", help="Absolute only (cheap rehearsal)")
     p.add_argument(
         "--budget",
         type=int,
@@ -163,53 +161,7 @@ def main(argv: list[str] | None = None) -> int:
                         }
                     )
 
-            # Absolute: every arm, every rubric for this unit.
-            for arm in arms:
-                out = corpus.get(arm, slug, unit)
-                if shared is not None:
-                    instruction = shared
-                else:
-                    fitted = fit_reference(
-                        _reference_for(builder, record, unit, arm, corpus, slug),
-                        count_tokens,
-                        budget=args.budget,
-                    )
-                    instruction = render(fitted.reference)
-                    if fitted.trimmed:
-                        trimmed.append(
-                            {
-                                "slug": slug,
-                                "unit": unit,
-                                "arm": arm,
-                                "tokens": fitted.tokens,
-                                "steps": fitted.steps_applied,
-                            }
-                        )
-                for rubric in RB.rubrics_for(unit):
-                    prompt = PR.chat(
-                        PR.absolute_prompt(
-                            instruction=instruction,
-                            response=out.text,
-                            rubric=rubric.render(),
-                        )
-                    )
-                    requests.append(
-                        Request(
-                            id=f"abs|{slug}|{unit}|{arm}|{rubric.id}",
-                            kind="absolute",
-                            slug=slug,
-                            unit=unit,
-                            rubric=rubric.id,
-                            prompt=prompt,
-                            arm=arm,
-                        )
-                    )
-                    _note_if_at_risk(prompt, at_risk, slug, unit, "absolute")
-
-            if args.skip_pairwise:
-                continue
-
-            # Pairwise: every unordered pair, both presentation orders.
+            # Every unordered pair, both presentation orders.
             for arm_a, arm_b in itertools.combinations(arms, 2):
                 for order, (first, second) in enumerate(((arm_a, arm_b), (arm_b, arm_a))):
                     if shared is not None:
@@ -233,7 +185,6 @@ def main(argv: list[str] | None = None) -> int:
                     requests.append(
                         Request(
                             id=f"pw|{slug}|{unit}|{first}|{second}|{order}",
-                            kind="pairwise",
                             slug=slug,
                             unit=unit,
                             rubric=RB.PAIRWISE_ID,
@@ -243,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
                             order=order,
                         )
                     )
-                    _note_if_at_risk(prompt, at_risk, slug, unit, "pairwise")
+                    _note_if_at_risk(prompt, at_risk, slug, unit)
 
     path = out_dir / "requests.jsonl"
     n = write_requests(requests, path)
@@ -251,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
     return 1 if at_risk else 0
 
 
-def _note_if_at_risk(prompt: str, sink: list[dict], slug: str, unit: str, kind: str) -> None:
+def _note_if_at_risk(prompt: str, sink: list[dict], slug: str, unit: str) -> None:
     """Record a prompt whose estimated length leaves no room for feedback.
 
     Estimated at 4 chars/token, so this is a screen rather than the assertion --
@@ -260,7 +211,7 @@ def _note_if_at_risk(prompt: str, sink: list[dict], slug: str, unit: str, kind: 
     """
     tokens = estimate_tokens(prompt)
     if tokens + MAX_NEW_TOKENS > MAX_MODEL_LEN:
-        sink.append({"slug": slug, "unit": unit, "kind": kind, "est_tokens": tokens})
+        sink.append({"slug": slug, "unit": unit, "est_tokens": tokens})
 
 
 def _summarise(
@@ -273,12 +224,10 @@ def _summarise(
     count_tokens,
 ) -> None:
     """Print and persist the shape of what was built."""
-    by_kind: dict[str, int] = {}
     by_unit: dict[str, int] = {}
     longest = 0
     longest_real = 0
     for r in requests:
-        by_kind[r.kind] = by_kind.get(r.kind, 0) + 1
         by_unit[r.unit] = by_unit.get(r.unit, 0) + 1
         longest = max(longest, estimate_tokens(r.prompt))
     # Real count on the longest few only -- tokenizing all 37k here would double
@@ -288,7 +237,6 @@ def _summarise(
 
     meta = {
         "n_requests": n,
-        "by_kind": by_kind,
         "by_unit": by_unit,
         "longest_prompt_est_tokens": longest,
         "longest_prompt_real_tokens": longest_real,
@@ -303,9 +251,7 @@ def _summarise(
         json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8"
     )
 
-    print(f"\n{n:,} requests -> {path}")
-    for kind, count in sorted(by_kind.items()):
-        print(f"  {kind:10s} {count:>8,}")
+    print(f"\n{n:,} pairwise request(s) -> {path}")
     print("\nper unit:")
     for unit, count in sorted(by_unit.items()):
         print(f"  {unit:10s} {count:>8,}")

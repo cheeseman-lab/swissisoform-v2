@@ -1,7 +1,7 @@
-r"""The Prometheus 2 prompt templates, verbatim, and the ``[RESULT]`` parser.
+r"""The Prometheus 2 relative prompt template, verbatim, and the ``[RESULT]`` parser.
 
-These strings are the ``prometheus-eval`` package's ``ABSOLUTE_PROMPT_WO_REF`` and
-``RELATIVE_PROMPT_WO_REF``, vendored rather than imported because the request
+This string is the ``prometheus-eval`` package's ``RELATIVE_PROMPT_WO_REF``,
+vendored rather than imported because the request
 builder runs in an env without that package. ``test_judge.py`` asserts equality
 wherever ``prometheus_eval`` *is* importable, so the copy cannot drift silently --
 which it already had: the first version of this file carried a ``"Feedback: "``
@@ -12,12 +12,12 @@ nothing errors, but the scores stop meaning what the benchmarks measured. The
 ``###`` headers, the numbered instructions and the trailing ``###Feedback: `` are
 all load-bearing.
 
-**No reference answer.** The absolute template accepts a
-``###Reference Answer (Score 5):`` block and scores are less noisy with one, but
-we have no gold verdicts for these isoforms. A model-written reference would be a
-ninth framing smuggled in as ground truth -- the one thing the experiment cannot
-afford. So the reference-free variant is used and the cost is paid in precision,
-which is exactly what the noise floor is there to measure.
+**No reference answer.** The template accepts a ``###Reference Answer (Score 5):``
+block and verdicts are less noisy with one, but we have no gold reads for these
+isoforms. A model-written reference would be a tenth framing smuggled in as ground
+truth -- the one thing the experiment cannot afford. So the reference-free variant
+is used and the cost is paid in precision.
+
 """
 
 from __future__ import annotations
@@ -28,11 +28,6 @@ from typing import Literal
 
 # Mistral/Mixtral has no system role, so the judge persona is prepended to the
 # user turn -- which is what the prometheus-eval library does.
-ABS_SYSTEM = (
-    "You are a fair judge assistant tasked with providing clear, objective feedback "
-    "based on specific criteria, ensuring each assessment reflects the absolute "
-    "standards set for performance."
-)
 REL_SYSTEM = (
     "You are a fair judge assistant assigned to deliver insightful feedback that "
     "compares individual performances, highlighting how each stands relative to "
@@ -47,15 +42,6 @@ _TASK_INTRO = (
     "An instruction (might include an Input inside it), a response to evaluate, "
     "and a score rubric representing a evaluation criteria are given.\n"
 )
-_ABS_STEPS = (
-    "1. Write a detailed feedback that assess the quality of the response strictly "
-    "based on the given score rubric, not evaluating in general.\n"
-    "2. After writing a feedback, write a score that is an integer between 1 and 5. "
-    "You should refer to the score rubric.\n"
-    '3. The output format should look as follows: "(write a feedback for criteria) '
-    '[RESULT] (an integer number between 1 and 5)"\n'
-    "4. Please do not generate any other opening, closing, and explanations.\n"
-)
 _REL_STEPS = (
     "1. Write a detailed feedback that assess the quality of two responses strictly "
     "based on the given score rubric, not evaluating in general.\n"
@@ -66,14 +52,6 @@ _REL_STEPS = (
     "4. Please do not generate any other opening, closing, and explanations.\n"
 )
 
-ABSOLUTE_TEMPLATE = (
-    "###Task Description:\n" + _TASK_INTRO + _ABS_STEPS + "\n"
-    "###The instruction to evaluate:\n{instruction}\n\n"
-    "###Response to evaluate:\n{response}\n\n"
-    "###Score Rubrics:\n{rubric}\n\n"
-    "###Feedback: "
-)
-
 RELATIVE_TEMPLATE = (
     "###Task Description:\n" + _TASK_INTRO + _REL_STEPS + "\n"
     "###Instruction:\n{instruction}\n\n"
@@ -82,12 +60,6 @@ RELATIVE_TEMPLATE = (
     "###Score Rubric:\n{rubric}\n\n"
     "###Feedback: "
 )
-
-
-def absolute_prompt(*, instruction: str, response: str, rubric: str) -> str:
-    """The user turn for one direct assessment."""
-    body = ABSOLUTE_TEMPLATE.format(instruction=instruction, response=response, rubric=rubric)
-    return f"{ABS_SYSTEM}\n\n{body}"
 
 
 def relative_prompt(*, instruction: str, response_a: str, response_b: str, rubric: str) -> str:
@@ -113,7 +85,6 @@ def chat(user_turn: str) -> str:
 
 # ── Parsing ────────────────────────────────────────────────────────────────
 
-_SCORE = re.compile(r"\[RESULT\]\s*\(?\s*([1-5])\s*\)?", re.I)
 _CHOICE = re.compile(r"\[RESULT\]\s*\(?\s*([AB])\s*\)?\b", re.I)
 
 # The verdict sits within a couple of tokens of the marker; a wider scan drifts
@@ -299,24 +270,6 @@ def average_orders(forward: float | None, reverse: float | None) -> float | None
 
 class ParseError(ValueError):
     """The judge's output carried no usable verdict."""
-
-
-def parse_score(text: str) -> tuple[int, str]:
-    """``(score, feedback)`` from an absolute completion.
-
-    Raises:
-        ParseError: No ``[RESULT] <1-5>`` present. Raised rather than defaulted:
-            a silent 3 would be indistinguishable from a real middling score and
-            would drag every mean toward the centre.
-    """
-    matches = _SCORE.findall(text or "")
-    if not matches:
-        raise ParseError(f"no '[RESULT] <1-5>' in completion: {(text or '')[-200:]!r}")
-    # Last match: the template puts the score at the end, and feedback prose can
-    # quote the format string from the instructions.
-    score = int(matches[-1])
-    feedback = (text or "").split("[RESULT]")[0].removeprefix("Feedback:").strip()
-    return score, feedback
 
 
 def parse_choice(text: str) -> tuple[Literal["A", "B"], str]:

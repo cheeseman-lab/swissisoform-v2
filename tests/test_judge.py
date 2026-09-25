@@ -19,82 +19,42 @@ from swissisoform.judge import quantize as Q
 from swissisoform.judge import reference as RF
 from swissisoform.judge import rubrics as RB
 from swissisoform.judge import weigh as W
-from swissisoform.judge.weigh import Comparison, Score
+from swissisoform.judge.weigh import Comparison
 
 
 class TestPrompts:
-    def test_templates_are_the_published_shape(self):
-        """A paraphrased template still answers, so nothing errors -- the scores
+    def test_template_is_the_published_shape(self):
+        """A paraphrased template still answers, so nothing errors -- the verdicts
         just stop meaning what the benchmarks measured.
         """
-        for template, headers in (
-            (
-                PR.ABSOLUTE_TEMPLATE,
-                (
-                    "###Task Description:",
-                    "###The instruction to evaluate:",
-                    "###Response to evaluate:",
-                    "###Score Rubrics:",
-                    "###Feedback: ",
-                ),
-            ),
-            (
-                PR.RELATIVE_TEMPLATE,
-                (
-                    "###Task Description:",
-                    "###Instruction:",
-                    "###Response A:",
-                    "###Response B:",
-                    "###Score Rubric:",
-                    "###Feedback: ",
-                ),
-            ),
+        template = PR.RELATIVE_TEMPLATE
+        for header in (
+            "###Task Description:",
+            "###Instruction:",
+            "###Response A:",
+            "###Response B:",
+            "###Score Rubric:",
+            "###Feedback: ",
         ):
-            for header in headers:
-                assert header in template, header
-            assert template.endswith("###Feedback: ")
-            assert "1. Write a detailed feedback" in template
-            assert "4. Please do not generate any other opening" in template
-
-    def test_absolute_asks_for_an_integer_and_relative_for_a_letter(self):
-        assert "an integer number between 1 and 5" in PR.ABSOLUTE_TEMPLATE
-        assert "(A or B)" in PR.RELATIVE_TEMPLATE
+            assert header in template, header
+        assert template.endswith("###Feedback: ")
+        assert "1. Write a detailed feedback" in template
+        assert "4. Please do not generate any other opening" in template
+        assert "(A or B)" in template
 
     def test_no_reference_answer_block(self):
-        """We have no gold verdicts; a model-written one would be a ninth framing
+        """We have no gold reads; a model-written one would be a tenth framing
         smuggled in as ground truth.
         """
-        assert "Reference Answer" not in PR.ABSOLUTE_TEMPLATE
+        assert "Reference Answer" not in PR.RELATIVE_TEMPLATE
 
     def test_filled_prompt_has_no_leftover_placeholders(self):
-        out = PR.absolute_prompt(instruction="I", response="R", rubric="U")
+        out = PR.relative_prompt(instruction="I", response_a="A", response_b="B", rubric="U")
         assert "{" not in out and "}" not in out
-        assert out.startswith(PR.ABS_SYSTEM)
+        assert out.startswith(PR.REL_SYSTEM)
 
     def test_chat_wrapping(self):
         assert PR.chat("x") == "<s>[INST] x [/INST]"
-
-    @pytest.mark.parametrize(
-        "text,expected",
-        [
-            ("Feedback: fine. [RESULT] 4", 4),
-            ("Feedback: fine. [RESULT] (2)", 2),
-            ("[result] 5", 5),
-            # Prose can quote the instruction's own format string, so the LAST
-            # match is the score.
-            ("mentions [RESULT] 1 then concludes [RESULT] 5", 5),
-        ],
-    )
-    def test_parse_score(self, text, expected):
-        assert PR.parse_score(text)[0] == expected
-
-    @pytest.mark.parametrize("bad", ["", "no marker", "[RESULT] 6", "[RESULT] 0", "[RESULT] A"])
-    def test_unparseable_score_raises_rather_than_defaulting(self, bad):
-        """A silent 3 is indistinguishable from a real middling score and would
-        drag every mean toward the centre.
-        """
-        with pytest.raises(PR.ParseError):
-            PR.parse_score(bad)
 
     @pytest.mark.parametrize(
         "text,expected", [("[RESULT] A", "A"), ("[RESULT] (B)", "B"), ("x [result] b", "B")]
@@ -313,41 +273,23 @@ class TestRubrics:
             assert r.criterion.strip()
             assert r.path.exists()
 
-    def test_two_category_axes_and_three_synthesis(self):
-        """Two, not four. A calibration axis scored a deliberately miscalibrated
-        verdict 4/5, and a directionality axis scored 4, 4, then 5/5 across three
-        wordings; both were removed. An axis that cannot fail its own anchor adds
-        variance without discriminating between arms.
-        """
-        assert RB.CATEGORY_IDS == (
-            "R1_evidential_support",
-            "R2_not_evaluable_discipline",
-        )
-        assert len(RB.SYNTHESIS_IDS) == 3
+    def test_one_axis(self):
+        assert RB.all_ids() == (RB.PAIRWISE_ID,)
 
-    def test_absolute_rubrics_declare_five_levels(self):
-        """A rubric short of a level still returns scores -- on a scale its own
-        text does not describe -- so the loader refuses it.
+    def test_score_lines_are_refused(self, tmp_path):
+        """Relative grading emits A or B, so Score lines are a sign the wrong
+        template was edited.
         """
-        for rid in (*RB.CATEGORY_IDS, *RB.SYNTHESIS_IDS):
-            assert len(RB.by_id(rid).levels) == 5
-
-    def test_pairwise_declares_no_levels(self):
-        """Relative grading emits A or B, so Score lines there would be a sign the
-        wrong template was edited.
-        """
-        assert RB.pairwise().levels == ()
-
-    def test_a_malformed_rubric_is_refused(self, tmp_path):
-        (tmp_path / "absolute").mkdir()
-        (tmp_path / "absolute" / "R1_evidential_support.txt").write_text(
-            "criterion\n\nScore 1: a\nScore 2: b\n"
-        )
-        with pytest.raises(RB.RubricError, match="missing Score line"):
-            RB.load("R1_evidential_support", tmp_path)
+        (tmp_path / "pairwise.txt").write_text("criterion\n\nScore 1: a\nScore 2: b\n")
+        with pytest.raises(RB.RubricError, match="declares Score lines"):
+            RB.load(RB.PAIRWISE_ID, tmp_path)
 
     def test_a_missing_rubric_is_refused(self, tmp_path):
         with pytest.raises(RB.RubricError, match="no rubric file"):
+            RB.load(RB.PAIRWISE_ID, tmp_path)
+
+    def test_an_unknown_rubric_is_refused(self, tmp_path):
+        with pytest.raises(RB.RubricError, match="unknown rubric"):
             RB.load("R1_evidential_support", tmp_path)
 
     def test_every_rubric_rejects_style_and_length(self):
@@ -425,22 +367,21 @@ class TestPairwiseAnchors:
         cats = {p["instruction"]["category"] for p in self._pairs()}
         assert cats == set("CDLMPS"), sorted(cats)
 
-    def test_surviving_axes_name_a_locatable_referent(self):
-        """The axes that work ask whether something is *in the payload*; the two
-        that failed asked the judge to weigh or cross-check.
+    def test_the_axis_names_a_locatable_referent(self):
+        """The question has to be answerable from the payload in front of the
+        judge, not from taste.
         """
-        assert "present in that evidence" in RB.by_id("R1_evidential_support").criterion
-        assert "not_evaluable" in RB.by_id("R2_not_evaluable_discipline").criterion
+        assert "not_evaluable" in RB.pairwise().criterion
 
     def test_removed_axes_have_no_files(self):
-        for gone in ("R3_calibration", "R4_directionality"):
+        for gone in ("R1_evidential_support", "R2_not_evaluable_discipline", "SY1_coherence"):
             assert gone not in RB.all_ids()
             with pytest.raises(RB.RubricError):
                 RB.load(gone)
 
     def test_render_is_the_file_verbatim(self):
         """What a reviewer reads in the diff is what the model receives."""
-        r = RB.by_id("R1_evidential_support")
+        r = RB.pairwise()
         assert r.render() == r.path.read_text(encoding="utf-8").strip()
 
     def test_evidence_used_is_in_no_rubric(self):
@@ -618,33 +559,6 @@ class TestWeighing:
         spanning = [a for a, v in fit.items() if a != BASELINE and not v.excludes_zero]
         assert len(spanning) >= len(ARMS) - 2
 
-    def test_centering_removes_isoform_difficulty(self):
-        """A conserved truncation outscores a uORF under every arm, so raw means
-        conflate arm quality with which isoforms are easy.
-        """
-        scores = []
-        for i in range(30):
-            hard = -1.5 if i % 2 else 1.5
-            for j, arm in enumerate(ARMS):
-                scores.append(
-                    Score(
-                        slug=f"iso{i}",
-                        unit="C",
-                        arm=arm,
-                        rubric="R1",
-                        score=max(1, min(5, round(3 + hard + 0.25 * j))),
-                    )
-                )
-        centered = W.center_scores(scores)
-        series = [centered[(a, "C", "R1")] for a in ARMS]
-        assert series == sorted(series)
-
-    def test_single_arm_cell_is_dropped(self):
-        """With one arm the centered value is 0 by construction and carries no
-        comparison.
-        """
-        assert W.center_scores([Score(slug="i", unit="C", arm="a", rubric="R", score=5)]) == {}
-
     def test_order_inconsistent_pairs_are_dropped_not_split(self):
         forward = {
             ("s", "C", "a", "b"): "a",
@@ -759,12 +673,6 @@ class TestTemplateFidelity:
             text = text.replace(a, b)
         return text.strip()
 
-    def test_absolute_matches_package(self):
-        pytest.importorskip("prometheus_eval")
-        from prometheus_eval.prompts import ABSOLUTE_PROMPT_WO_REF
-
-        assert self._norm(PR.ABSOLUTE_TEMPLATE) == self._norm(ABSOLUTE_PROMPT_WO_REF)
-
     def test_relative_matches_package(self):
         pytest.importorskip("prometheus_eval")
         from prometheus_eval.prompts import RELATIVE_PROMPT_WO_REF
@@ -773,20 +681,18 @@ class TestTemplateFidelity:
 
     def test_system_prompts_match_package(self):
         pytest.importorskip("prometheus_eval")
-        from prometheus_eval.prompts import ABS_SYSTEM_PROMPT, REL_SYSTEM_PROMPT
+        from prometheus_eval.prompts import REL_SYSTEM_PROMPT
 
-        assert PR.ABS_SYSTEM.strip() == ABS_SYSTEM_PROMPT.strip()
         assert PR.REL_SYSTEM.strip() == REL_SYSTEM_PROMPT.strip()
 
     def test_we_use_the_reference_free_variant(self):
-        """The package's default templates require a reference answer. We have no
-        gold verdicts, and a model-written one would be a ninth framing smuggled
-        in as ground truth -- so the WO_REF variant is the right one, and the
+        """The package's default template requires a reference answer. We have no
+        gold reads, and a model-written one would be a tenth framing smuggled in
+        as ground truth -- so the WO_REF variant is the right one, and the
         omission has to be consistent: the block *and* its mention in the task
         description.
         """
-        assert "Reference Answer" not in PR.ABSOLUTE_TEMPLATE
-        assert "reference answer" not in PR.ABSOLUTE_TEMPLATE
+        assert "Reference Answer" not in PR.RELATIVE_TEMPLATE
         assert "reference answer" not in PR.RELATIVE_TEMPLATE
 
 
