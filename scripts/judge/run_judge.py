@@ -421,51 +421,39 @@ ANCHORS: dict[str, dict[str, str]] = {
 }
 
 
-# The pairwise anchor. The rubric now weighs economy and legibility beside
-# support, which reverses the ban the other axes still carry -- so this is the
+# The pairwise anchors. The rubric now weighs economy and legibility beside
+# support, which reverses the ban the other axes still carry -- so these are the
 # probe that would have caught the ORIGINAL failure, where fluent confident prose
-# won on fluency. Both responses reach the same conclusion from the same numbers;
-# one relates them, the other walks them. Support is equal by construction, so
-# only economy can decide, and a rubric that cannot prefer the terse one has
-# re-opened the hole.
+# won on fluency. Each pair reaches the same conclusion from the same numbers; one
+# relates them, the other walks them. Support is equal by construction, so only
+# economy can decide.
 #
 # Self-contained rather than borrowed from a corpus cell: equal support is the
-# whole design and cannot be guaranteed against an arbitrary payload. Run in both
-# orders, because a single order cannot tell preference from position bias.
-PAIRWISE_ANCHOR: dict[str, str] = {
-    "instruction": (
-        "Category C (Conservation) for a truncated isoform that removes the "
-        "canonical N-terminal 19 aa.\n"
-        "  primate amino-acid identity over the removed region: 0.977\n"
-        "  mammalian amino-acid identity over the removed region: 0.934\n"
-        "  phyloP mean over the removed region: 3.4\n"
-        "  phyloP mean over the shared region: 3.1\n"
-        "Write one integrated read of what this evidence means for the removed "
-        "segment."
-    ),
-    "terse": (
-        "reasoning: The 19 aa lost in this truncation are under purifying "
-        "selection, and the measures corroborate rather than repeat each other: "
-        "the primate and mammalian alignments agree, so the signal is not an "
-        "artefact of one clade's sampling, and phyloP puts it at the nucleotide "
-        "level rather than restating the protein alignment. Its loss is therefore "
-        "more likely consequential than neutral."
-    ),
-    "verbose": (
-        "reasoning: The evidence for this truncation spans several independent "
-        "measurements, each of which is worth setting out in turn. Primate "
-        "amino-acid identity over the removed region is 0.977, which is a high "
-        "value. Mammalian amino-acid identity over the same region is 0.934, "
-        "which is also a high value. The phyloP mean over the removed region is "
-        "3.4. The phyloP mean over the shared region is 3.1, so the shared region "
-        "is likewise conserved. The removed segment is 19 amino acids long and "
-        "sits at the N-terminus of the canonical protein, as the annotation "
-        "states. Taking all of these measurements together, the removed segment "
-        "appears to be under purifying selection, and its loss is therefore more "
-        "likely consequential than neutral."
-    ),
-    "why": "same conclusion from the same numbers; one relates them, one lists them",
-}
+# whole design and cannot be guaranteed against an arbitrary payload. The
+# instructions still carry the real payload schema, abbreviated, so the probe
+# looks like the task.
+#
+# TWELVE pairs, not one. The first version was a single pair in two orders, and
+# two calls cannot settle this: the judge's decision is saturated (>=0.99 or
+# <=0.01 in 99.9% of 5,326 sampled archived rows, so there is no magnitude to
+# read) and the two orders disagree on 43-72% of real pairs. A single pair landing
+# on the positional side of that is the expected case, not a finding. The signal
+# is a rate over many pairs or it is nothing.
+PAIRWISE_ANCHOR_DIR = RB.PROMPTS_DIR / "pairwise_anchors"
+
+# Pass mark. The null here is NOT 50%: a judge with no preference that always
+# picks slot A scores zero wins, and one picking at random wins both orders with
+# p=0.25, so 8/12 is p~0.003 while 6/12 would be p~0.05.
+PAIRWISE_ANCHOR_PASS = 8
+
+
+def load_pairwise_anchors(directory: Path | None = None) -> list[dict[str, Any]]:
+    """The hand-written terse/verbose pairs, ordered by filename."""
+    root = directory or PAIRWISE_ANCHOR_DIR
+    pairs = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(root.glob("*.json"))]
+    if not pairs:
+        raise SystemExit(f"no pairwise anchor pairs in {root}")
+    return pairs
 
 
 # Synthesis anchors. The synthesis reference is that arm's six category reads
@@ -651,11 +639,19 @@ def _sanity_anchor(judge: Judge, requests: list[Request], work: Path) -> int:
         if score is None or score > 2:
             failed.append(rubric_id)
 
-    print("\npairwise anchor (terse relational vs fluent inventory; want terse in BOTH orders):")
-    print(f"  terse as A -> {pairwise['order_0']}   terse as B -> {pairwise['order_1']}")
-    print(f"  {PAIRWISE_ANCHOR['why']}")
+    print(
+        f"\npairwise anchors ({pairwise['n_pairs']} terse/verbose pairs, each judged in both "
+        f"orders; a pair counts only when the two orders agree):"
+    )
+    for pair_id, outcome in pairwise["per_pair"].items():
+        a, b = pairwise["orders"][pair_id]
+        print(f"  {pair_id:22s} {outcome:6s}  (terse as A -> {a}, terse as B -> {b})")
+    print(
+        f"  {pairwise['wins']} win / {pairwise['losses']} loss / {pairwise['splits']} split "
+        f"on position — pass at {pairwise['pass_mark']}"
+    )
     if not pairwise["ok"]:
-        print("  !! the rubric does not prefer the terse read; the fluency hole is open")
+        print("  !! the rubric does not prefer the terse reads; the fluency hole is open")
         failed.append("pairwise")
 
     if failed:
@@ -665,52 +661,70 @@ def _sanity_anchor(judge: Judge, requests: list[Request], work: Path) -> int:
 
 
 def _pairwise_anchor(judge: Judge) -> dict[str, Any]:
-    """Ask the pairwise rubric to prefer the terse read, in both orders.
+    """Score every terse/verbose pair in both orders; report the win rate.
 
-    One order cannot tell a preference from position bias -- measured at 100% on
-    byte-identical text -- so the gate is that terse wins whichever slot it sits
-    in. A split is a failure, not a near miss: it means position decided.
+    A pair counts only when it agrees with itself across the two presentation
+    orders -- the same rule the analysis applies to the real corpus, and the only
+    way to keep position bias out of the count. Disagreement is reported as
+    ``split`` rather than folded into either side, so a judge deciding on slot
+    rather than content is visible instead of averaging to noise.
     """
+    pairs = load_pairwise_anchors()
     rubric = RB.pairwise().criterion
-    probes = []
-    for order, (a, b) in enumerate(
-        ((PAIRWISE_ANCHOR["terse"], PAIRWISE_ANCHOR["verbose"]),
-         (PAIRWISE_ANCHOR["verbose"], PAIRWISE_ANCHOR["terse"]))
-    ):
-        probes.append(
-            Request(
-                id=f"anchor|pairwise|{order}",
-                kind="pairwise",
-                slug="__anchor__",
-                unit="C",
-                rubric=RB.PAIRWISE_ID,
-                prompt=PR.chat(
-                    PR.relative_prompt(
-                        instruction=PAIRWISE_ANCHOR["instruction"],
-                        response_a=a,
-                        response_b=b,
-                        rubric=rubric,
-                    )
-                ),
-                arm_a="terse" if order == 0 else "verbose",
-                arm_b="verbose" if order == 0 else "terse",
-                order=order,
+    probes: list[Request] = []
+    for pair in pairs:
+        for order, (a, b) in enumerate(
+            ((pair["terse"], pair["verbose"]), (pair["verbose"], pair["terse"]))
+        ):
+            probes.append(
+                Request(
+                    id=f"anchor|pairwise|{pair['id']}|{order}",
+                    kind="pairwise",
+                    slug=pair["id"],
+                    unit=pair["instruction"]["category"],
+                    rubric=RB.PAIRWISE_ID,
+                    prompt=PR.chat(
+                        PR.relative_prompt(
+                            instruction=json.dumps(pair["instruction"], indent=2),
+                            response_a=a,
+                            response_b=b,
+                            rubric=rubric,
+                        )
+                    ),
+                    arm_a="terse" if order == 0 else "verbose",
+                    arm_b="verbose" if order == 0 else "terse",
+                    order=order,
+                )
             )
-        )
 
-    picked: list[str | None] = []
+    picked: dict[str, list[str | None]] = {p["id"]: [None, None] for p in pairs}
     for probe, result in zip(probes, judge.run(probes)):
         try:
             letter, _ = PR.parse_choice(result.completion)
         except PR.ParseError:
-            picked.append(None)
             continue
-        picked.append(probe.arm_a if letter == "A" else probe.arm_b)
+        picked[probe.slug][probe.order] = probe.arm_a if letter == "A" else probe.arm_b
 
+    per_pair: dict[str, str] = {}
+    for pair in pairs:
+        got = picked[pair["id"]]
+        if got == ["terse", "terse"]:
+            per_pair[pair["id"]] = "win"
+        elif got == ["verbose", "verbose"]:
+            per_pair[pair["id"]] = "loss"
+        else:
+            per_pair[pair["id"]] = "split"
+
+    wins = sum(1 for v in per_pair.values() if v == "win")
     return {
-        "order_0": picked[0] or "unparseable",
-        "order_1": picked[1] or "unparseable",
-        "ok": picked == ["terse", "terse"],
+        "n_pairs": len(pairs),
+        "wins": wins,
+        "losses": sum(1 for v in per_pair.values() if v == "loss"),
+        "splits": sum(1 for v in per_pair.values() if v == "split"),
+        "pass_mark": PAIRWISE_ANCHOR_PASS,
+        "per_pair": per_pair,
+        "orders": {k: [v[0] or "unparseable", v[1] or "unparseable"] for k, v in picked.items()},
+        "ok": wins >= PAIRWISE_ANCHOR_PASS,
     }
 
 

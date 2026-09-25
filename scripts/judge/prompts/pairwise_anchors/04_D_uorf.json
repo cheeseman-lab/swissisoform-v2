@@ -1,0 +1,50 @@
+{
+  "id": "04_D_uorf",
+  "why": "strong unique peptides against middling initiation; the peptides are the harder signal",
+  "instruction": {
+    "category": "D",
+    "name": "Detection",
+    "isoform": {
+      "canonical_length_aa": 125,
+      "diff_space": "isoform",
+      "differential_region_location": "Separate ORF: the entire isoform sequence is the differential region and does not share reading frame with the canonical CDS; there is no shared region.",
+      "differential_sequence": "MSTQPLRAGWLQDSAVR",
+      "gene_name": "SF3B6",
+      "isoform_length_aa": 68,
+      "orf_type": "uorf",
+      "tis_id": "chrA:1250000:+:CTG:ENST00000125.1"
+    },
+    "criteria": [
+      {
+        "axis": "E",
+        "criterion_id": "D2_initiation_efficiency",
+        "label": "Initiation efficiency",
+        "value": true,
+        "reason": "max_efficiency=0.046",
+        "evidence": {
+          "expr_HeLa_initiation_efficiency": 0.046,
+          "expr_HeLa_cpm": 18.9,
+          "canonical_expr_HeLa_initiation_efficiency": 0.71
+        },
+        "headline": "alt used 0.065x vs canonical",
+        "interpretation_hint": "What share of initiation at this transcript happens at the alternative start?"
+      },
+      {
+        "axis": "E",
+        "criterion_id": "D3_mass_spec",
+        "label": "Mass spectrometry",
+        "value": true,
+        "reason": "n_validated_unique_peptides=7",
+        "evidence": {
+          "cmp_massspec_n_hits_in_diff_region": 7,
+          "isoform_massspec_n_candidate_unique_peptides": 9,
+          "isoform_massspec_best_hyperscore": 48.3
+        },
+        "headline": "7/9 isoform-unique peptides validated",
+        "interpretation_hint": "Direct protein-level evidence. For a separate ORF the whole sequence is unique, so peptides here speak to the ORF being translated and stable."
+      }
+    ]
+  },
+  "terse": "reasoning: This uORF is translated, and the peptide evidence is what settles it: 7 of 9 candidate unique peptides validated against public spectra, with a best hyperscore of 48.3. Because the whole 68 aa sequence is the differential region, those peptides speak to the ORF being made and stable enough to sample, which ribosome occupancy alone cannot show. Initiation efficiency of 0.046 against the canonical start's 0.71 is modest and would be easy to read as marginal on its own — but a product detected this consistently at the protein level is hard to explain by a start site that is not really used, so the two temper each other rather than conflict.",
+  "verbose": "reasoning: The detection evidence for this separate ORF comprises two measurements, which are described in turn. Initiation efficiency at the alternative start is 0.046 in HeLa. HeLa expression is 18.9 cpm. The canonical initiation efficiency in HeLa is 0.71, which is much higher. The mass spectrometry check found 7 hits in the differential region, out of 9 candidate unique peptides. The best hyperscore reported is 48.3. The isoform is 68 amino acids long and the canonical protein is 125 amino acids long. The entire isoform sequence is the differential region and does not share a reading frame with the canonical CDS, as the annotation states. Taking both of these measurements together, the uORF appears to be genuinely translated, with the peptide evidence providing protein-level confirmation and the initiation efficiency indicating that the start is used at a modest rate relative to the canonical start."
+}
