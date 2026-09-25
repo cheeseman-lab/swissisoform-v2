@@ -6,7 +6,7 @@ Weighs 9 arms × 50 isoforms × 7 output units = **3,150 outputs** with
 Prometheus is used because it sits outside the Claude family (no self-preference
 toward the system under test), its weights are fixed so every judgment is
 re-runnable at zero marginal cost, and it is the only option that scales to
-~37,800 calls. It has **no isoform biology**: it grades whether a verdict is
+~25,200 calls. It has **no isoform biology**: it grades whether a verdict is
 supported by the text in front of it. This ranks framings; it does not validate
 science.
 
@@ -44,14 +44,12 @@ variant-poor one have incomparable evidence, so a judge ranking them grades
 biology. Never across categories — `tags` carries 24 tags in S against 3 in D, so
 pooling makes vocabulary thinness look like a framing effect.
 
-Per cell: 9 arms × 3 rubrics absolute + C(9,2)=36 pairs × 2
-presentation orders = 108 calls.
+Per cell: C(9,2)=36 pairs × 2 presentation orders = 72 calls.
 
 ## How results are weighed
 
 | rule | why |
 |---|---|
-| Absolute scores centered within each cell | isoform difficulty dominates raw means |
 | Bradley-Terry per category, status quo pinned at 0 | every number reads as log-odds vs what we ship |
 | Order-inconsistent pairs dropped, not split | Prometheus 2 has position bias; splitting dilutes real signal |
 | Cluster bootstrap over isoforms | the 7 units of one isoform share evidence and are not independent |
@@ -94,12 +92,12 @@ real"; a third of them are not.
 - **M and P are excluded from the fabrication check.** Their arms queried the full
   variant/structure tables through tool readers while the reference holds a 30-row
   sample (30 of 13,690 on the worst M cell).
-- **No reference answers**, so absolute scores are noisier than Prometheus's
-  published benchmarks.
-- **Only three absolute axes, not four.** A calibration rubric was tried and
-  removed: it scored a deliberately miscalibrated verdict 4 of 5, matching its own
-  level-1 description. Calibration has no checkable referent in the evidence, so
-  judgment-level comparison rests on the pairwise composite.
+- **No reference answers**, so verdicts are noisier than Prometheus's published
+  benchmarks.
+- **One rubric, gated on the anchor pairs.** Each pair states the same conclusion
+  from the same numbers, one relating the measurements and one listing them, so
+  support is equal by construction and only economy can decide. The rubric has to
+  prefer the terse read in both presentation orders.
 - **Prometheus has a total position bias on this corpus.** Given identical text in
   both slots it picked A in 35 of 35 decided comparisons. Only order-consistent
   pairs count as verdicts; without that filter the ranking would reflect request

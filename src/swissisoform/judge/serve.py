@@ -57,13 +57,11 @@ class Request:
     """One judge call, resumable by ``id``."""
 
     id: str
-    kind: str  # "absolute" | "pairwise"
     slug: str
     unit: str
     rubric: str
     prompt: str
-    arm: str = ""  # absolute
-    arm_a: str = ""  # pairwise
+    arm_a: str = ""
     arm_b: str = ""
     order: int = 0  # 0 = (a, b) as listed; 1 = swapped
 
@@ -149,15 +147,8 @@ def snapshot_dir(model_dir: Path = MODEL_DIR) -> Path:
 
 
 def order_by_cell(requests: Iterable[Request]) -> list[Request]:
-    """Group requests so one cell's reference prefix is prefilled once.
-
-    Within a cell, absolute calls come first: they are shorter, so any early
-    failure surfaces before the expensive pairwise block runs.
-    """
-    return sorted(
-        requests,
-        key=lambda r: (r.slug, r.unit, r.kind != "absolute", r.rubric, r.id),
-    )
+    """Group requests so one cell's reference prefix is prefilled once."""
+    return sorted(requests, key=lambda r: (r.slug, r.unit, r.rubric, r.id))
 
 
 def write_requests(requests: Iterable[Request], path: Path) -> int:
@@ -321,17 +312,13 @@ class Judge:
         cannot be skipped, and the whole prefix is already in the KV cache
         (``enable_prefix_caching``), making this ~1 token of decode per call.
 
-        Pairwise only: absolute rubrics emit ``[RESULT] 1-5``, which
-        :func:`prompts.choice_probability` never reads, so every absolute call
-        would otherwise queue a pointless second pass.
         """
         from . import prompts as PR
 
         todo = [
             index
             for index, (request, result) in enumerate(zip(requests, results))
-            if request.kind == "pairwise"
-            and PR.choice_probability(result.token_logprobs, result.completion) is None
+            if PR.choice_probability(result.token_logprobs, result.completion) is None
         ]
         if not todo:
             return

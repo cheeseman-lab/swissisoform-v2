@@ -25,14 +25,12 @@ sys.path.insert(0, str(ROOT / "src"))
 from swissisoform.judge import (  # noqa: E402
     ARMS,
     BASELINE,
-    CATEGORY_LETTERS,
     DEFAULT_CORPUS,
     REPLICATE,
     SYNTHESIS_UNIT,
     UNITS,
 )
 from swissisoform.judge import prompts as PR  # noqa: E402
-from swissisoform.judge import rubrics as RB  # noqa: E402
 from swissisoform.judge import weigh as W  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -56,32 +54,25 @@ def main(argv: list[str] | None = None) -> int:
     if not results_path.exists():
         raise SystemExit(f"no results at {results_path}; run scripts/judge/run_judge.py")
 
-    scores, forward, parse_failures = _parse(results_path)
-    logger.info(
-        "%d absolute score(s), %d pairwise call(s), %d unparseable",
-        len(scores),
-        len(forward),
-        parse_failures,
-    )
+    forward, parse_failures = _parse(results_path)
+    logger.info("%d pairwise call(s), %d unparseable", len(forward), parse_failures)
 
     comparisons, checks = W.resolve_orders(forward)
     logger.info("%d order-consistent comparison(s)", len(comparisons))
 
-    centered = W.center_scores(scores)
     per_unit_bt = {
         unit: W.cluster_bootstrap_bt([c for c in comparisons if c.unit == unit], n=args.bootstrap)
         for unit in UNITS
     }
     pooled_bt = W.cluster_bootstrap_bt(comparisons, n=args.bootstrap)
 
-    _write(work, checks, centered, per_unit_bt, pooled_bt, parse_failures)
-    _print(checks, centered, per_unit_bt, pooled_bt)
+    _write(work, checks, per_unit_bt, pooled_bt, parse_failures)
+    _print(checks, per_unit_bt, pooled_bt)
     return 0
 
 
 def _parse(path: Path):
-    """``(scores, forward, n_unparseable)`` from a results file."""
-    scores: list[W.Score] = []
+    """``(forward, n_unparseable)`` from a results file."""
     forward: dict[tuple[str, str, str, str], str | None] = {}
     failures = 0
     with path.open(encoding="utf-8") as handle:
@@ -92,21 +83,13 @@ def _parse(path: Path):
             row = json.loads(line)
             rid, completion = row["id"], row.get("completion", "")
             parts = rid.split("|")
-            if parts[0] == "abs":
-                _, slug, unit, arm, rubric = parts
-                try:
-                    score, _ = PR.parse_score(completion)
-                except PR.ParseError:
-                    failures += 1
-                    continue
-                scores.append(W.Score(slug=slug, unit=unit, arm=arm, rubric=rubric, score=score))
-            elif parts[0] == "pw":
+            if parts[0] == "pw":
                 _, slug, unit, arm_a, arm_b, _order = parts
                 winner = _winner(row, completion, arm_a, arm_b)
                 if winner is None:
                     failures += 1
                 forward[(slug, unit, arm_a, arm_b)] = winner
-    return scores, forward, failures
+    return forward, failures
 
 
 def _winner(row: dict, completion: str, arm_a: str, arm_b: str) -> str | None:
@@ -163,7 +146,7 @@ def _resolution_floor(per_unit_bt, pooled_bt) -> dict:
     return out
 
 
-def _write(work, checks, centered, per_unit_bt, pooled_bt, parse_failures) -> None:
+def _write(work, checks, per_unit_bt, pooled_bt, parse_failures) -> None:
     """Persist everything as JSON, plus a TSV of the headline table."""
     payload = {
         "resolution_floor": _resolution_floor(per_unit_bt, pooled_bt),
@@ -177,10 +160,6 @@ def _write(work, checks, centered, per_unit_bt, pooled_bt, parse_failures) -> No
             for unit, c in checks.items()
         },
         "n_unparseable_completions": parse_failures,
-        "centered_absolute": {
-            f"{arm}|{unit}|{rubric}": round(value, 4)
-            for (arm, unit, rubric), value in centered.items()
-        },
         "bradley_terry_by_unit": {
             unit: {
                 arm: {"point": round(i.point, 4), "lo": round(i.lo, 4), "hi": round(i.hi, 4)}
@@ -210,7 +189,6 @@ def _write(work, checks, centered, per_unit_bt, pooled_bt, parse_failures) -> No
 
 def _print(
     checks,
-    centered,
     per_unit_bt,
     pooled_bt,
     pa_per_unit=None,
@@ -255,20 +233,6 @@ def _print(
                 if i is None
                 else f"{i.point:+8.2f}{'*' if i.excludes_zero else ' '}   "
             )
-        print(row)
-
-    print("\n=== centered absolute scores (advantage over the field, per cell) ===")
-    rubric_ids = list(RB.CATEGORY_IDS)
-    print(f"  {'arm':20s}" + "".join(f"{r.split('_')[0]:>9s}" for r in rubric_ids))
-    for arm in (*ARMS, REPLICATE):
-        row = f"  {arm:20s}"
-        for rubric in rubric_ids:
-            vals = [
-                centered[(arm, unit, rubric)]
-                for unit in CATEGORY_LETTERS
-                if (arm, unit, rubric) in centered
-            ]
-            row += f"{sum(vals) / len(vals):+9.3f}" if vals else f"{'':>9s}"
         print(row)
 
     # The replicate's own numbers now head the output as the resolution floor;

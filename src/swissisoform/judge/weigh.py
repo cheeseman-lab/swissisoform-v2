@@ -1,13 +1,8 @@
 """Turning judgments into arm contrasts.
 
-Six rules, each answering a way this comparison can lie:
+Five rules, each answering a way this comparison can lie:
 
-1. **Absolute scores are centered within a cell, never averaged raw.** Isoform
-   difficulty dominates raw means -- a conserved truncation outscores a uORF under
-   every arm -- so a raw mean conflates arm quality with which isoforms are easy.
-   Subtracting the cell mean leaves each arm's advantage over the field on that
-   cell. A within-block contrast, no model required.
-2. **Pairwise goes through Bradley-Terry**, per category, with the status quo
+1. **Pairwise goes through Bradley-Terry**, per category, with the status quo
    pinned at strength 0 so every number reads as log-odds better than what we ship.
    A position-aware variant was built and removed. It modelled the slot-A
    advantage as a nuisance parameter -- ``P(slot-A wins) = sigmoid(s_A - s_B +
@@ -21,15 +16,15 @@ Six rules, each answering a way this comparison can lie:
    conclusion rests on. Disagreements also turned out to carry almost no
    information about which arm is better -- pairs that disagreed involved arms only
    1.07x closer than pairs that agreed, not the clear separation the model assumes.
-3. **Order-inconsistent pairs are dropped, not split.** Prometheus 2 has
+2. **Order-inconsistent pairs are dropped, not split.** Prometheus 2 has
    documented position bias; a pair the judge decides differently by presentation
    order carries no information, and splitting it half-and-half would dilute real
    signal toward zero. The drop rate is reported as judge reliability.
-4. **Uncertainty comes from a cluster bootstrap over isoforms**, resampling
+3. **Uncertainty comes from a cluster bootstrap over isoforms**, resampling
    isoforms rather than judgments. The 7 units of one isoform share evidence and
    are not independent; a naive bootstrap would report intervals several times too
    narrow and manufacture significance.
-5. **The replicate arm is the resolution floor.** ``criteria_hint_rep`` is the
+4. **The replicate arm is the resolution floor.** ``criteria_hint_rep`` is the
    status quo run twice, and it competes in the fit like any other arm, so its
    interval is where zero sits when the same framing is judged against itself. An
    effect whose point estimate falls inside that half-width is not distinguishable
@@ -40,7 +35,7 @@ Six rules, each answering a way this comparison can lie:
    the two are not interchangeable: the old one was on the output scale (11.7%
    overall, 4.0% in C to 20.0% in S), this one is in the judge's log-odds. Old
    ``Nx floor`` ratios cannot be reconstructed from new output.
-6. **Nothing is pooled across categories in a headline.** ``tags`` carries 24 tags
+5. **Nothing is pooled across categories in a headline.** ``tags`` carries 24 tags
    in S against 3 in D; pooled, vocabulary thinness reads as a framing effect.
 """
 
@@ -50,7 +45,7 @@ import math
 import random
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Sequence
 
 from swissisoform.judge import ARMS, BASELINE, REPLICATE
 
@@ -68,17 +63,6 @@ class Comparison:
     unit: str
     winner: str
     loser: str
-
-
-@dataclass(frozen=True)
-class Score:
-    """One absolute score."""
-
-    slug: str
-    unit: str
-    arm: str
-    rubric: str
-    score: int
 
 
 @dataclass
@@ -137,30 +121,6 @@ def resolve_orders(
         loser = arm_b if winner == arm_a else arm_a
         out.append(Comparison(slug=slug, unit=unit, winner=winner, loser=loser))
     return out, dict(checks)
-
-
-def center_scores(scores: Iterable[Score]) -> dict[tuple[str, str, str], float]:
-    """Mean cell-centered score per ``(arm, unit, rubric)``.
-
-    Centering happens inside ``(slug, unit, rubric)``: every arm judged on that
-    cell contributes, and the cell's own mean is subtracted. A cell judged on
-    fewer than two arms is dropped -- with one arm the centered value is 0 by
-    construction and carries no comparison.
-    """
-    by_cell: dict[tuple[str, str, str], list[Score]] = defaultdict(list)
-    for s in scores:
-        by_cell[(s.slug, s.unit, s.rubric)].append(s)
-
-    sums: dict[tuple[str, str, str], float] = defaultdict(float)
-    counts: dict[tuple[str, str, str], int] = defaultdict(int)
-    for cell, group in by_cell.items():
-        if len(group) < 2:
-            continue
-        mean = sum(s.score for s in group) / len(group)
-        for s in group:
-            sums[(s.arm, s.unit, s.rubric)] += s.score - mean
-            counts[(s.arm, s.unit, s.rubric)] += 1
-    return {k: sums[k] / counts[k] for k in sums}
 
 
 def bradley_terry(

@@ -1,8 +1,7 @@
 """Score the request file with Prometheus, resumably.
 
 Reads ``requests.jsonl``, appends to ``results.jsonl``, and skips ids already
-there -- 37,800 calls is far too long to lose to one preemption, and the run is
-the only part of this pipeline that cannot be redone in seconds.
+there, so a preempted run restarts where it stopped.
 
 Verification gates live here rather than in a separate script, because the
 expensive thing must not start until they pass:
@@ -12,12 +11,15 @@ expensive thing must not start until they pass:
   4-chars/token estimate is a screen, not an assertion.
 * ``--self-consistency`` feeds a response against itself. The judge must split
   those ~50/50; a systematic winner means the harness leaks position or identity
-  and every pairwise number is worthless.
+  and every number is worthless.
+* ``--sanity-anchor`` judges the anchor pairs, which differ only in whether they
+  relate the measurements or list them. The rubric must prefer the terse read.
 
 Usage:
     # gates only, no scoring
     python scripts/judge/run_judge.py --check-context
     python scripts/judge/run_judge.py --self-consistency --limit 40
+    python scripts/judge/run_judge.py --sanity-anchor
 
     # the run
     python scripts/judge/run_judge.py --batch-size 64
@@ -36,12 +38,11 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-from swissisoform.judge import DEFAULT_CORPUS, SYNTHESIS_UNIT  # noqa: E402
+from swissisoform.judge import DEFAULT_CORPUS  # noqa: E402
 from swissisoform.judge import prompts as PR  # noqa: E402
 from swissisoform.judge import rubrics as RB  # noqa: E402
 from swissisoform.judge.serve import (  # noqa: E402
     MAX_MODEL_LEN,
-    MAX_NEW_TOKENS,
     Judge,
     Request,
     completed_ids,
@@ -93,16 +94,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument("--batch-size", type=int, default=64)
-    p.add_argument(
-        "--kind",
-        choices=("pairwise", "absolute", "both"),
-        default="both",
-        help=(
-            "Which call kind to run. 'pairwise' (25,200 of 31,950) carries the whole "
-            "Bradley-Terry ranking; 'absolute' (6,750) carries only the centered "
-            "rubric table, and still depends on the [RESULT] 1-5 regex."
-        ),
-    )
     p.add_argument("--limit", type=int, default=None, help="First N requests")
     p.add_argument(
         "--check-context",
@@ -118,9 +109,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--sanity-anchor",
         action="store_true",
         help=(
-            "Score a deliberately bad read; R1/R2 must give it 1-2, and the "
-            "pairwise rubric must prefer a terse relational read over a fluent "
-            "inventory of the same evidence, in both presentation orders"
+            "Judge the twelve anchor pairs and exit. The rubric must prefer the "
+            "terse relational read over the fluent inventory in at least 8 of 12, "
+            "in both presentation orders"
         ),
     )
     p.add_argument("--cell", default=None, help="Restrict a gate to one slug|unit")
@@ -128,10 +119,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def _build_judge(args: argparse.Namespace) -> Judge:
+    """The served model, configured from the CLI."""
+    kwargs: dict[str, Any] = {
+        "model": args.model,
+        "tensor_parallel_size": args.tensor_parallel_size,
+        "gpu_memory_utilization": args.gpu_memory_utilization,
+    }
+    if args.max_model_len:
+        kwargs["max_model_len"] = args.max_model_len
+    if args.quantization:
+        kwargs["quantization"] = args.quantization
+    return Judge(**kwargs)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the gates, or the scoring."""
     args = parse_args(argv)
     work = args.dir or (ROOT / "data" / "output" / "judge" / args.corpus)
+
+    if args.sanity_anchor:
+        # Self-contained: the anchor pairs carry their own instructions, so this
+        # skips parsing a 1.3 GB request file it would not read.
+        return _sanity_anchor(_build_judge(args), work)
+
     requests_path = work / "requests.jsonl"
     if not requests_path.exists():
         raise SystemExit(
@@ -142,35 +153,18 @@ def main(argv: list[str] | None = None) -> int:
     requests = list(read_requests(requests_path))
     logger.info("%d request(s) in %s", len(requests), requests_path)
 
-    judge_kwargs = {
-        "model": args.model,
-        "tensor_parallel_size": args.tensor_parallel_size,
-        "gpu_memory_utilization": args.gpu_memory_utilization,
-    }
-    if args.max_model_len:
-        judge_kwargs["max_model_len"] = args.max_model_len
-    if args.quantization:
-        judge_kwargs["quantization"] = args.quantization
-    judge = Judge(**judge_kwargs)
+    judge = _build_judge(args)
 
     if args.check_context:
         return _check_context(judge, requests, work)
     if args.self_consistency:
         return _self_consistency(judge, requests, work, limit=args.limit or 40)
-    if args.sanity_anchor:
-        return _sanity_anchor(judge, requests, work)
     if args.compare_backends:
         return _compare_backends(judge, requests, work, args.compare_backends, args.cell)
 
     results_path = work / "results.jsonl"
     done = set() if args.force else completed_ids(results_path)
     todo = [r for r in order_by_cell(requests) if r.id not in done]
-    if args.kind != "both":
-        # Filtered here rather than in the request file so one requests.jsonl keeps
-        # serving both, and a later absolute run appends to the same results file.
-        before = len(todo)
-        todo = [r for r in todo if r.kind == args.kind]
-        logger.info("--kind %s: %d of %d request(s)", args.kind, len(todo), before)
     if args.limit:
         todo = todo[: args.limit]
     logger.info("%d done, %d to run", len(done), len(todo))
@@ -378,72 +372,15 @@ def _self_consistency(judge: Judge, requests: list[Request], work: Path, *, limi
     return 1
 
 
-# One anchor per axis, each violating only its own rubric and otherwise clean.
-#
-# The first version was a single read that broke all four axes at once, and it
-# could not tell us anything: R1 correctly scored it 1, but R3 -- which judges
-# proportionality and leaves number-checking to R1 -- scored the same response 4,
-# which is R3 complying with its rubric rather than failing. Two other claims were
-# aimed at secondary structure and clinical variants, neither of which appears in
-# the Conservation cell it was scored against, so R2 never received the violation
-# it was meant to catch.
-#
-# Each anchor below is wrong in exactly one way, so a score above 2 is
-# unambiguously that rubric's problem. `needs` says what the cell must look like
-# for the violation to be possible at all.
-#
-# R3 has no anchor because it is no longer scored: it gave its own anchor a 4,
-# and calibration has no checkable referent in the evidence for the judge to be
-# wrong about. See the rubrics.py module docstring for what was removed and why.
-ANCHORS: dict[str, dict[str, str]] = {
-    "R1_evidential_support": {
-        "needs": "any",
-        "response": (
-            "reasoning: The unique region is under strong constraint: mean phyloP "
-            "is 88.412 and primate amino-acid identity reaches 99.97%, both far "
-            "above the thresholds used here. Those two figures alone put this "
-            "isoform among the most constrained in the set, which is why it is "
-            "worth following up rather than setting aside."
-        ),
-        "why": "cites two figures that appear nowhere in the evidence",
-    },
-    "R2_not_evaluable_discipline": {
-        "needs": "unmeasured",
-        "response": (
-            "reasoning: Every line of evidence here comes back negative. The "
-            "measurements that were run show no signal, and the remaining fields "
-            "are likewise absent -- nothing was detected on any axis. Taken "
-            "together the evidence is uniformly negative, so there is no case for "
-            "this isoform being functionally distinct from the canonical."
-        ),
-        "why": "calls fields the evidence marks unmeasured 'absent' and 'negative'",
-    },
-}
-
-
-# The pairwise anchors. The rubric now weighs economy and legibility beside
-# support, which reverses the ban the other axes still carry -- so these are the
-# probe that would have caught the ORIGINAL failure, where fluent confident prose
-# won on fluency. Each pair reaches the same conclusion from the same numbers; one
-# relates them, the other walks them. Support is equal by construction, so only
-# economy can decide.
-#
-# Self-contained rather than borrowed from a corpus cell: equal support is the
-# whole design and cannot be guaranteed against an arbitrary payload. The
-# instructions still carry the real payload schema, abbreviated, so the probe
-# looks like the task.
-#
-# TWELVE pairs, not one. The first version was a single pair in two orders, and
-# two calls cannot settle this: the judge's decision is saturated (>=0.99 or
-# <=0.01 in 99.9% of 5,326 sampled archived rows, so there is no magnitude to
-# read) and the two orders disagree on 43-72% of real pairs. A single pair landing
-# on the positional side of that is the expected case, not a finding. The signal
-# is a rate over many pairs or it is nothing.
+# Each anchor pair states the same conclusion from the same numbers, one relating
+# the measurements and one listing them, so support is equal by construction and
+# only economy can decide. Self-contained, carrying the real payload schema in
+# miniature, so the probe looks like the task.
 PAIRWISE_ANCHOR_DIR = RB.PROMPTS_DIR / "pairwise_anchors"
 
-# Pass mark. The null here is NOT 50%: a judge with no preference that always
-# picks slot A scores zero wins, and one picking at random wins both orders with
-# p=0.25, so 8/12 is p~0.003 while 6/12 would be p~0.05.
+# A judge with no preference that always picks slot A wins nothing, and one
+# picking at random wins both orders a quarter of the time -- so the null is well
+# under half and the mark sits high.
 PAIRWISE_ANCHOR_PASS = 8
 
 
@@ -456,189 +393,18 @@ def load_pairwise_anchors(directory: Path | None = None) -> list[dict[str, Any]]
     return pairs
 
 
-# Synthesis anchors. The synthesis reference is that arm's six category reads
-# plus the criteria evidence, so `needs: "synthesis"` picks a synthesis cell and
-# the violations are aimed at that payload.
-SYNTHESIS_ANCHORS: dict[str, dict[str, str]] = {
-    "SY1_coherence": {
-        "response": (
-            "headline: Every category read supports a clear functional change.\n"
-            "divergence_hypothesis: All six category reads agree that this "
-            "isoform diverges functionally from the canonical, with none of them "
-            "returning a negative or neutral read, so the picture is consistent "
-            "across conservation, detection, localization, mutation landscape, "
-            "structure and biophysics alike.\n"
-            "function_relevance: Because nothing in the inputs disagrees, the "
-            "isoform can be treated as a confirmed functional variant.\n"
-            "tags: Domain loss\nconfidence: high"
-        ),
-        "why": "claims all six reads agree when the inputs include negative or absent ones",
-    },
-    "SY2_no_new_claims": {
-        "response": (
-            "headline: A ribosome-profiling-validated interaction switch at the "
-            "ADAR N-terminus.\n"
-            "divergence_hypothesis: This isoform loses the Z-alpha domain that "
-            "mediates binding to STAT3 and to the NF-kB p65 subunit, and published "
-            "co-immunoprecipitation work places that contact within residues "
-            "140-180. The interferon-stimulated promoter upstream drives the "
-            "shorter form specifically in myeloid lineages.\n"
-            "function_relevance: Loss of that interaction surface would release "
-            "STAT3 inhibition and raise interferon output roughly threefold.\n"
-            "tags: Domain loss\nconfidence: high"
-        ),
-        "why": (
-            "imports named interactors, a residue range and a fold-change "
-            "found nowhere in the inputs"
-        ),
-    },
-    "SY3_hypothesis_quality": {
-        "response": (
-            "headline: This isoform may differ functionally from the canonical.\n"
-            "divergence_hypothesis: The isoform is different from the canonical "
-            "protein and that difference could matter. It may affect the "
-            "protein's behaviour in the cell, or it may not. Further work would "
-            "be needed to say which.\n"
-            "function_relevance: If the difference is real it could be relevant "
-            "to the gene's function.\n"
-            "tags: \nconfidence: low"
-        ),
-        "why": "a hypothesis so generic it would fit any isoform in the corpus",
-    },
-}
+def _sanity_anchor(judge: Judge, work: Path) -> int:
+    """Judge the anchor pairs and report whether the rubric prefers the terse read.
 
-
-def _cell_kind(instruction: str) -> set[str]:
-    """What violations this cell's evidence can support.
-
-    Returns a set, always containing ``"any"``. The `str` annotation this had
-    first was wrong in a way that would have run: the error path returned the
-    bare string ``"any"``, which iterates as three characters and would have
-    filed the cell under "a", "n" and "y".
+    Writes ``sanity_anchor.json`` and returns non-zero when the rubric misses the
+    pass mark, so the gate can stop a round before it starts.
     """
-    try:
-        payload = json.loads(instruction)
-    except json.JSONDecodeError:
-        return {"any"}
-    orf = str((payload.get("isoform") or {}).get("orf_type") or "").lower()
-    kinds = {"any"}
-    if orf in ("uorf", "uoorf", "internal_oof", "internal-oof", "3utr_orf", "3utr-orf"):
-        kinds.add("separate")
-    blob = json.dumps(payload).lower()
-    if any(m in blob for m in ("not_evaluable", "no_cache", "not_run", "null")):
-        kinds.add("unmeasured")
-    return kinds
-
-
-def _sanity_anchor(judge: Judge, requests: list[Request], work: Path) -> int:
-    """Score each axis against a read wrong in exactly that axis.
-
-    A rubric that cannot score its own anchor 1-2 is not measuring anything, and
-    that is far cheaper to learn here than after the full run.
-    """
-    # Group candidate cells by what they can test, then give each rubric a cell
-    # whose evidence actually supports its violation.
-    candidates: dict[str, list[Request]] = {}
-    for request in requests:
-        if request.kind != "absolute":
-            continue
-        instruction = request.prompt.split("###The instruction to evaluate:\n", 1)[-1]
-        instruction = instruction.split("\n\n###Response to evaluate:", 1)[0]
-        for kind in _cell_kind(instruction):
-            candidates.setdefault(kind, []).append(request)
-
-    probes: list[Request] = []
-    chosen: dict[str, str] = {}
-    specs: dict[str, dict[str, str]] = {
-        **{k: {**v, "unit": "category"} for k, v in ANCHORS.items()},
-        **{k: {**v, "needs": "any", "unit": SYNTHESIS_UNIT} for k, v in SYNTHESIS_ANCHORS.items()},
-    }
-    for rubric_id, spec in specs.items():
-        rubric = RB.by_id(rubric_id)
-        want_unit = spec.get("unit")
-        pool = candidates.get(spec["needs"]) or candidates.get("any") or []
-        if want_unit == SYNTHESIS_UNIT:
-            pool = [r for r in pool if r.unit == SYNTHESIS_UNIT]
-        else:
-            pool = [r for r in pool if r.unit != SYNTHESIS_UNIT]
-        if rubric is None or not pool:
-            logger.warning("no cell available to test %s (needs %s)", rubric_id, spec["needs"])
-            continue
-        template = pool[0]
-        instruction = template.prompt.split("###The instruction to evaluate:\n", 1)[1]
-        instruction = instruction.split("\n\n###Response to evaluate:", 1)[0]
-        chosen[rubric_id] = f"{template.slug}|{template.unit}|needs={spec['needs']}"
-        probes.append(
-            Request(
-                id=f"anchor|{rubric_id}",
-                kind="absolute",
-                slug=template.slug,
-                unit=template.unit,
-                rubric=rubric_id,
-                prompt=PR.chat(
-                    PR.absolute_prompt(
-                        instruction=instruction,
-                        response=spec["response"],
-                        rubric=rubric.render(),
-                    )
-                ),
-                arm="__anchor__",
-            )
-        )
-
-    # Drop probes the served context cannot hold. The synthesis anchors are ~25k
-    # tokens, so on 2x A6000 bf16 (which vLLM caps at 15,040) they cannot run at
-    # all -- and one oversized probe used to abort the whole gate, taking the
-    # category anchors down with it.
-    limit = judge.max_model_len - MAX_NEW_TOKENS
-    fits, skipped = [], []
-    for probe in probes:
-        if judge.token_count(probe.prompt) <= limit:
-            fits.append(probe)
-        else:
-            skipped.append(probe.rubric)
-    if skipped:
-        logger.warning(
-            "skipping %d anchor(s) too long for a %d-token context: %s",
-            len(skipped),
-            judge.max_model_len,
-            skipped,
-        )
-
-    scores: dict[str, int | None] = {}
-    for probe, result in zip(fits, judge.run(fits)):
-        try:
-            scores[probe.rubric], _ = PR.parse_score(result.completion)
-        except PR.ParseError:
-            scores[probe.rubric] = None
-
     pairwise = _pairwise_anchor(judge)
 
     (work / "sanity_anchor.json").write_text(
-        json.dumps(
-            {
-                "scores": scores,
-                "cells": chosen,
-                "violations": {k: v["why"] for k, v in specs.items()},
-                "pairwise": pairwise,
-            },
-            indent=2,
-            sort_keys=True,
-        ),
+        json.dumps(pairwise, indent=2, sort_keys=True),
         encoding="utf-8",
     )
-    print("\nper-axis anchors (each wrong in ONE way; want 1-2):")
-    failed = []
-    for rubric_id, spec in specs.items():
-        if rubric_id in skipped:
-            print(f"  {rubric_id:28s} -  skipped   (needs more context than served)")
-            continue
-        score = scores.get(rubric_id)
-        verdict = "ok" if score is not None and score <= 2 else "TOO HIGH"
-        print(f"  {rubric_id:28s} {score}  {verdict:8s}  ({spec['why']})")
-        if score is None or score > 2:
-            failed.append(rubric_id)
-
     print(
         f"\npairwise anchors ({pairwise['n_pairs']} terse/verbose pairs, each judged in both "
         f"orders; a pair counts only when the two orders agree):"
@@ -648,14 +414,10 @@ def _sanity_anchor(judge: Judge, requests: list[Request], work: Path) -> int:
         print(f"  {pair_id:22s} {outcome:6s}  (terse as A -> {a}, terse as B -> {b})")
     print(
         f"  {pairwise['wins']} win / {pairwise['losses']} loss / {pairwise['splits']} split "
-        f"on position — pass at {pairwise['pass_mark']}"
+        f"on position / {pairwise['no_verdict']} no verdict — pass at {pairwise['pass_mark']}"
     )
     if not pairwise["ok"]:
         print("  !! the rubric does not prefer the terse reads; the fluency hole is open")
-        failed.append("pairwise")
-
-    if failed:
-        print(f"!! {len(failed)} rubric(s) cannot fail their own anchor: {failed}")
         return 1
     return 0
 
@@ -664,10 +426,10 @@ def _pairwise_anchor(judge: Judge) -> dict[str, Any]:
     """Score every terse/verbose pair in both orders; report the win rate.
 
     A pair counts only when it agrees with itself across the two presentation
-    orders -- the same rule the analysis applies to the real corpus, and the only
-    way to keep position bias out of the count. Disagreement is reported as
-    ``split`` rather than folded into either side, so a judge deciding on slot
-    rather than content is visible instead of averaging to noise.
+    orders -- the same rule the analysis applies to the corpus, and the only way
+    to keep position bias out of the count. Disagreement is reported as ``split``
+    rather than folded into either side, so a judge deciding on slot rather than
+    content stays visible.
     """
     pairs = load_pairwise_anchors()
     rubric = RB.pairwise().criterion
@@ -679,7 +441,6 @@ def _pairwise_anchor(judge: Judge) -> dict[str, Any]:
             probes.append(
                 Request(
                     id=f"anchor|pairwise|{pair['id']}|{order}",
-                    kind="pairwise",
                     slug=pair["id"],
                     unit=pair["instruction"]["category"],
                     rubric=RB.PAIRWISE_ID,
@@ -699,32 +460,45 @@ def _pairwise_anchor(judge: Judge) -> dict[str, Any]:
 
     picked: dict[str, list[str | None]] = {p["id"]: [None, None] for p in pairs}
     for probe, result in zip(probes, judge.run(probes)):
-        try:
-            letter, _ = PR.parse_choice(result.completion)
-        except PR.ParseError:
-            continue
-        picked[probe.slug][probe.order] = probe.arm_a if letter == "A" else probe.arm_b
+        # The same entry point the analysis uses: a confident completion that never
+        # wrote the marker still carries its verdict in the logprobs.
+        prob = PR.preference(
+            result.token_logprobs, result.completion, result.forced_logprobs
+        )
+        if prob is None:
+            try:
+                letter, _ = PR.parse_choice(result.completion)
+            except PR.ParseError:
+                continue
+            prob = 1.0 if letter == "A" else 0.0
+        picked[probe.slug][probe.order] = probe.arm_a if prob > 0.5 else probe.arm_b
 
     per_pair: dict[str, str] = {}
     for pair in pairs:
         got = picked[pair["id"]]
-        if got == ["terse", "terse"]:
+        if None in got:
+            # Kept apart from `split`: an abstention is not the two orders
+            # disagreeing.
+            per_pair[pair["id"]] = "no_verdict"
+        elif got == ["terse", "terse"]:
             per_pair[pair["id"]] = "win"
         elif got == ["verbose", "verbose"]:
             per_pair[pair["id"]] = "loss"
         else:
             per_pair[pair["id"]] = "split"
 
-    wins = sum(1 for v in per_pair.values() if v == "win")
+    tally = {k: sum(1 for v in per_pair.values() if v == k) for k in
+             ("win", "loss", "split", "no_verdict")}
     return {
         "n_pairs": len(pairs),
-        "wins": wins,
-        "losses": sum(1 for v in per_pair.values() if v == "loss"),
-        "splits": sum(1 for v in per_pair.values() if v == "split"),
+        "wins": tally["win"],
+        "losses": tally["loss"],
+        "splits": tally["split"],
+        "no_verdict": tally["no_verdict"],
         "pass_mark": PAIRWISE_ANCHOR_PASS,
         "per_pair": per_pair,
-        "orders": {k: [v[0] or "unparseable", v[1] or "unparseable"] for k, v in picked.items()},
-        "ok": wins >= PAIRWISE_ANCHOR_PASS,
+        "orders": {k: [v[0] or "no_verdict", v[1] or "no_verdict"] for k, v in picked.items()},
+        "ok": tally["win"] >= PAIRWISE_ANCHOR_PASS,
     }
 
 
