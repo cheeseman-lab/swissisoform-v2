@@ -1,0 +1,52 @@
+{
+  "id": "08_M_extended",
+  "why": "partial evaluability by construction; one member readable, and that is not a hedge",
+  "instruction": {
+    "category": "M",
+    "name": "Mutation Landscape",
+    "isoform": {
+      "canonical_length_aa": 265,
+      "diff_space": "isoform",
+      "differential_region_location": "Extension: the differential region is the N-terminal segment the isoform adds ahead of the canonical start; it was 5'UTR or intron in the canonical annotation and was never coding. It spans 23 aa.",
+      "differential_sequence": "MAAWTRLSRPGGAQVLLPRGSAQ",
+      "gene_name": "CHMP4A",
+      "isoform_length_aa": 288,
+      "orf_type": "extended",
+      "tis_id": "chrA:2650000:+:CTG:ENST00000265.1"
+    },
+    "criteria": [
+      {
+        "axis": "F",
+        "criterion_id": "M1_pathogenic_variant_enrichment",
+        "label": "Germline constraint",
+        "value": null,
+        "reason": "not evaluable for an extension: unique region was never coding",
+        "evidence": {
+          "isoform_variant_intersection_gnomad_depletion_ratio": 0.88,
+          "isoform_plm_vep_constraint_delta": -0.41,
+          "isoform_plm_vep_status": "out_of_distribution",
+          "isoform_plm_vep_n_constrained_positions_unique": 0
+        },
+        "headline": "",
+        "interpretation_hint": "Germline TOLERANCE. For an EXTENSION both inputs are uninterpretable about protein constraint: the gnomAD ratio measures variation in never-coding nucleotides, and the ESM-C score is out of distribution. Zero constrained positions in the unique region is the NORM for extensions, not a negative finding. Never present the two as conflicting."
+      },
+      {
+        "axis": "F",
+        "criterion_id": "M2_clinical_variant_overlap",
+        "label": "Disease variant density",
+        "value": false,
+        "reason": "disease_enrichment_ratio=0.0; disease unique=0, shared=52",
+        "evidence": {
+          "isoform_variant_intersection_disease_enrichment_ratio": 0.0,
+          "isoform_variant_intersection_n_disease_in_unique_region": 0,
+          "isoform_variant_intersection_n_disease_in_shared_region": 52,
+          "isoform_variant_intersection_unique_region_nt": 69
+        },
+        "headline": "",
+        "interpretation_hint": "DISEASE density. A ratio at or above 1 means disease variants concentrate in the unique region."
+      }
+    ]
+  },
+  "terse": "reasoning: Only one of the two variant signals can speak to this extension, and it reports nothing: no disease variants fall in the added 23 aa against 52 in the canonical body the isoform retains. That is a real, if modest, negative — 69 nt is a small target, so absence there is weak evidence rather than none. The germline signals cannot temper or corroborate it, because the added region was never coding: the gnomAD ratio of 0.88 is measuring UTR variation and the ESM-C score is flagged out of distribution. Reading either as constraint would import a conclusion the measurement cannot support.",
+  "verbose": "reasoning: The mutation landscape evidence for this extension comprises two members, which are described in turn below. The gnomAD depletion ratio for the added region is 0.88. The ESM-C constraint delta is -0.41. The ESM-C status is out_of_distribution. The number of constrained positions in the unique region is 0. The disease enrichment ratio is 0.0. The number of disease variants in the unique region is 0. The number of disease variants in the shared region is 52. The unique region is 69 nucleotides long. The added segment is 23 amino acids long and sits ahead of the canonical start, as the annotation states, and was never coding in the canonical annotation. Taking all of these measurements together, no disease variants are found in the added region, and the germline constraint inputs are not interpretable for an extension because the region was not previously coding sequence."
+}

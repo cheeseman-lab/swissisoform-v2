@@ -7,6 +7,7 @@ clustering, a rubric that cannot fail a bad answer.
 
 from __future__ import annotations
 
+import json
 import random
 
 import pytest
@@ -376,6 +377,53 @@ class TestRubrics:
         assert "Penalize lightly" in text
         assert "never decisive" in text
         assert "transcription" in text
+
+
+class TestPairwiseAnchors:
+    """The hand-written terse/verbose pairs the economy axis is gated on.
+
+    Everything here is mechanical. The pairs only measure economy while the two
+    responses are equally supported; the moment one cites a number the other
+    cannot, the probe has quietly started measuring fabrication instead.
+    """
+
+    @staticmethod
+    def _pairs():
+        root = RB.PROMPTS_DIR / "pairwise_anchors"
+        return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(root.glob("*.json"))]
+
+    def test_every_pair_is_well_formed(self):
+        pairs = self._pairs()
+        assert len(pairs) >= 12, "the pass mark of 8/12 assumes twelve pairs"
+        assert len({p["id"] for p in pairs}) == len(pairs), "duplicate pair id"
+        for p in pairs:
+            for key in ("id", "why", "instruction", "terse", "verbose"):
+                assert p.get(key), f"{p.get('id')}: missing {key}"
+            assert p["instruction"]["category"] in set("CDLMPS"), p["id"]
+
+    def test_the_terse_read_is_the_shorter_one(self):
+        """The design, not a style preference: if the 'terse' member is not
+        actually leaner, the pair tests nothing.
+        """
+        for p in self._pairs():
+            assert len(p["terse"].split()) < len(p["verbose"].split()), p["id"]
+
+    def test_neither_response_cites_a_number_its_instruction_lacks(self):
+        """Support equal by construction. A stray number is a fabrication defect,
+        and the heavy penalty for it would decide the pair before economy could.
+        """
+        for p in self._pairs():
+            available = K.numbers_in(json.dumps(p["instruction"]))
+            for side in ("terse", "verbose"):
+                stray = K.numbers_in(p[side]) - available
+                assert not stray, f"{p['id']}/{side} cites {sorted(stray)}"
+
+    def test_the_pairs_span_the_categories(self):
+        """A rubric that only discriminates on Conservation prose would pass a
+        single-category set and tell us nothing about the other five.
+        """
+        cats = {p["instruction"]["category"] for p in self._pairs()}
+        assert cats == set("CDLMPS"), sorted(cats)
 
     def test_surviving_axes_name_a_locatable_referent(self):
         """The axes that work ask whether something is *in the payload*; the two

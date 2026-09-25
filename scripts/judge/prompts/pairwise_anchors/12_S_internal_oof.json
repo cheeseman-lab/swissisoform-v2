@@ -1,0 +1,63 @@
+{
+  "id": "12_S_internal_oof",
+  "why": "mostly not_evaluable; lead with what could not be assessed and why",
+  "instruction": {
+    "category": "S",
+    "name": "Structural Characteristics",
+    "isoform": {
+      "canonical_length_aa": 178,
+      "diff_space": "isoform",
+      "differential_region_location": "Separate ORF: the entire isoform sequence is the differential region and does not share reading frame with the canonical CDS; there is no shared region.",
+      "differential_sequence": "MSRVQPWLLGAARTSSQ",
+      "gene_name": "MRPL13",
+      "isoform_length_aa": 41,
+      "orf_type": "internal_oof",
+      "tis_id": "chrA:1780000:+:CTG:ENST00000178.1"
+    },
+    "criteria": [
+      {
+        "axis": "F",
+        "criterion_id": "S1_domain_change",
+        "label": "Domain change",
+        "value": false,
+        "reason": "n_real_domains_changed_in_diff_region=0",
+        "evidence": {
+          "cmp_interproscan_n_real_domains_changed_in_diff_region": 0,
+          "cmp_interproscan_n_hits_in_diff_region": 0
+        },
+        "headline": "No diverging domains",
+        "interpretation_hint": "Counts only real InterPro domains."
+      },
+      {
+        "axis": "F",
+        "criterion_id": "S2_biophysics",
+        "label": "Biophysical shift",
+        "value": null,
+        "reason": "not evaluable: no shared region for a whole-protein comparison",
+        "evidence": {
+          "fraction_charged_delta": null,
+          "gravy_delta": null,
+          "disorder_delta": null
+        },
+        "headline": "",
+        "interpretation_hint": "Whole-protein deltas, isoform vs canonical. For a SEPARATE ORF there is no shared region, so a canonical-versus-isoform whole-protein delta compares two unrelated sequences. Treat as absent by construction, not as missing data."
+      },
+      {
+        "axis": "F",
+        "criterion_id": "S3_sae",
+        "label": "SAE feature shift",
+        "value": null,
+        "reason": "not evaluable: shared-feature comparison undefined without a shared region",
+        "evidence": {
+          "mean_abs_delta_shared": null,
+          "top_gained": null,
+          "unique_region_space": "isoform"
+        },
+        "headline": "",
+        "interpretation_hint": "Scores on the magnitude of the strongest SHARED-feature activation shift, which requires a shared region."
+      }
+    ]
+  },
+  "terse": "reasoning: Almost nothing in this category can be asked of a separate ORF, and saying so is the finding. Both the biophysical and sparse-autoencoder members compare the isoform against a shared canonical region, and this 41 aa ORF has none — they are undefined by construction rather than missing. That leaves the domain scan, which did run and returned 0 real InterPro domains over the whole sequence. For a short ORF that is a weak negative rather than evidence against function, since most annotated domains are longer than the sequence available to carry one.",
+  "verbose": "reasoning: The structural characteristics evidence for this separate ORF comprises three members, which are described in turn below. The number of real InterPro domains changed in the differential region is 0. The number of raw InterProScan hits in the differential region is also 0. The whole-protein fraction charged delta is not available. The whole-protein GRAVY delta is not available. The whole-protein disorder delta is not available. The mean absolute shared-feature activation shift is not available. The top gained shared-feature shift is not available. The unique region space is the isoform. The isoform is 41 amino acids long and the canonical protein is 178 amino acids long. The entire isoform sequence is the differential region and does not share a reading frame with the canonical CDS, as the annotation states. Taking all of these measurements together, no domain content is detected, and the biophysical and sparse autoencoder comparisons could not be evaluated because there is no shared region."
+}

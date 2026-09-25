@@ -1,0 +1,53 @@
+{
+  "id": "09_P_extended",
+  "why": "confident local fold and unresolved orientation; the two together change the read",
+  "instruction": {
+    "category": "P",
+    "name": "Predicted Structure",
+    "isoform": {
+      "canonical_length_aa": 229,
+      "diff_space": "isoform",
+      "differential_region_location": "Extension: the differential region is the N-terminal segment the isoform adds ahead of the canonical start; it was 5'UTR or intron in the canonical annotation and was never coding. It spans 54 aa.",
+      "differential_sequence": "MAEALRSLWSQVPGRVLAALQTRSGEPWLLQARVSGGAEPLLRAHTQAGWSRAL",
+      "gene_name": "CLTB",
+      "isoform_length_aa": 283,
+      "orf_type": "extended",
+      "tis_id": "chrA:2290000:+:CTG:ENST00000229.1"
+    },
+    "criteria": [
+      {
+        "axis": "F",
+        "criterion_id": "P1_structured_extension",
+        "label": "Unique-region fold",
+        "value": true,
+        "reason": "plddt_diffregion_mean=0.847 (folded)",
+        "evidence": {
+          "isoform_structure_plddt_diffregion_mean": 0.847,
+          "isoform_structure_plddt_diffregion_std": 0.062,
+          "isoform_structure_pae_diff_vs_body": 27.4,
+          "isoform_structure_pae_body_vs_body": 6.8,
+          "isoform_structure_extension_contacts": 0,
+          "isoform_structure_ptm_isoform": 0.58
+        },
+        "headline": "Added region pLDDT 0.847",
+        "interpretation_hint": "Does the unique region fold confidently (ESMFold2 pLDDT)? Folding only. This member also carries the model-confidence metrics: PAE between the differential region and the canonical body says how well their RELATIVE placement is resolved, which is a separate question from whether each folds."
+      },
+      {
+        "axis": "F",
+        "criterion_id": "P3_secondary_structure",
+        "label": "Secondary structure",
+        "value": true,
+        "reason": "22 aa helix at 8-29 (pLDDT 0.86)",
+        "evidence": {
+          "isoform_structure_sse_element_len": 22,
+          "isoform_structure_sse_element_plddt": 0.86,
+          "isoform_structure_sse_status": "ok"
+        },
+        "headline": "22 aa helix gained in added region",
+        "interpretation_hint": "Is a helix or strand gained (extension) or lost (truncation) in the differential region? Both length and the element's own pLDDT matter."
+      }
+    ]
+  },
+  "terse": "reasoning: The 54 aa extension folds, but it does not join the protein, and holding those two together is what the evidence supports. Local confidence is high — pLDDT 0.847 over the added region, carrying a 22 aa helix at 0.86 — so the segment is genuinely ordered rather than a confident-looking coil. Placement is another matter: predicted aligned error between the extension and the canonical body averages 27.4 against 6.8 within the body itself, and no core contacts are reported. So the fold is real and its orientation is unresolved, which argues against reading the helix as an integrated structural element of the protein.",
+  "verbose": "reasoning: The predicted structure evidence for this extension comes from several measurements, each of which is set out in turn. The mean pLDDT over the added region is 0.847, which is a high value. The standard deviation of pLDDT over the added region is 0.062. The predicted aligned error between the differential region and the canonical body is 27.4. The predicted aligned error within the canonical body is 6.8. The number of extension contacts with the core is 0. The isoform pTM is 0.58. A helix of 22 amino acids is found in the differential region. The pLDDT over that helix element is 0.86. The secondary structure status is ok. The added segment is 54 amino acids long and sits ahead of the canonical start, as the annotation states. Taking all of these measurements together, the added region appears to fold confidently and to contain a helix, while its placement relative to the canonical body is not well resolved and it makes no contacts with the core."
+}

@@ -1,0 +1,63 @@
+{
+  "id": "11_S_truncated",
+  "why": "domain loss corroborated by composition; a muted SAE shift that adds nothing either way",
+  "instruction": {
+    "category": "S",
+    "name": "Structural Characteristics",
+    "isoform": {
+      "canonical_length_aa": 341,
+      "diff_space": "canonical",
+      "differential_region_location": "Truncation: the differential region is the canonical N-terminal segment the isoform does not translate; coordinates are in canonical space. It spans 44 aa.",
+      "differential_sequence": "MKKQNKKKVSPSKGKVEYLLKWKGKGKVEYLLKWKD",
+      "gene_name": "RPL22L1",
+      "isoform_length_aa": 297,
+      "orf_type": "truncated",
+      "tis_id": "chrA:3410000:+:CTG:ENST00000341.1"
+    },
+    "criteria": [
+      {
+        "axis": "F",
+        "criterion_id": "S1_domain_change",
+        "label": "Domain change",
+        "value": true,
+        "reason": "n_real_domains_changed_in_diff_region=3",
+        "evidence": {
+          "cmp_interproscan_n_real_domains_changed_in_diff_region": 3,
+          "cmp_interproscan_n_hits_in_diff_region": 5
+        },
+        "headline": "3 real domains lost in removed region",
+        "interpretation_hint": "Counts only real InterPro domains, not disorder, coiled-coil or low-complexity annotations."
+      },
+      {
+        "axis": "F",
+        "criterion_id": "S2_biophysics",
+        "label": "Biophysical shift",
+        "value": true,
+        "reason": "whole-protein |delta| distinct on fraction_charged",
+        "evidence": {
+          "fraction_charged_delta": 0.094,
+          "gravy_delta": 0.212,
+          "disorder_delta": 0.087
+        },
+        "headline": "Whole-protein charge shift 0.094",
+        "interpretation_hint": "Whole-protein GRAVY / fraction_charged / disorder deltas, isoform vs canonical. Scored as an either-or roll-up over the three."
+      },
+      {
+        "axis": "F",
+        "criterion_id": "S3_sae",
+        "label": "SAE feature shift",
+        "value": false,
+        "reason": "top shared-feature |delta| 4.35",
+        "evidence": {
+          "mean_abs_delta_shared": 0.07,
+          "top_gained": 4.35,
+          "top_lost": -4.33
+        },
+        "headline": "Top shared-feature shift 4.35",
+        "interpretation_hint": "Scores on MAGNITUDE, not presence: the strongest shared-feature activation shift is what matters. Gained/lost counts are context only. Never name, quote or interpret a feature label."
+      }
+    ]
+  },
+  "terse": "reasoning: This truncation removes a structurally substantial piece: 3 real InterPro domains fall in the lost 44 aa. Composition corroborates that from an independent direction rather than restating it — whole-protein hydropathy moves 0.212 and charged fraction 0.094, shifts large enough to register across a 297-residue protein, which a removal of incidental sequence would not produce. The sparse-autoencoder comparison is the one line that adds nothing: a top shared-feature shift of 4.35 is unremarkable, so it neither supports nor undercuts the domain read, and the conclusion rests on the other two.",
+  "verbose": "reasoning: The structural characteristics evidence for this truncation spans three members, each of which is set out in turn below. The number of real InterPro domains changed in the differential region is 3. The number of raw InterProScan hits in the differential region is 5. The whole-protein fraction charged delta is 0.094. The whole-protein GRAVY delta is 0.212. The whole-protein disorder delta is 0.087. The mean absolute shared-feature activation shift is 0.07. The top gained shared-feature shift is 4.35. The top lost shared-feature shift is -4.33. The removed segment is 44 amino acids long and sits at the N-terminus of the canonical protein, as the annotation states, and the isoform is 297 amino acids long. Taking all of these measurements together, the truncation removes annotated domain content and produces a measurable change in the whole-protein biophysical descriptors, while the sparse autoencoder shift is moderate in size."
+}

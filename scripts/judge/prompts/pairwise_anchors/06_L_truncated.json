@@ -1,0 +1,52 @@
+{
+  "id": "06_L_truncated",
+  "why": "a confirmed absence written as a finding, not as a gap or a hedge",
+  "instruction": {
+    "category": "L",
+    "name": "Localization",
+    "isoform": {
+      "canonical_length_aa": 182,
+      "diff_space": "canonical",
+      "differential_region_location": "Truncation: the differential region is the canonical N-terminal segment the isoform does not translate; coordinates are in canonical space. It spans 21 aa.",
+      "differential_sequence": "MAGHRLVLVLGDLHIPHRC",
+      "gene_name": "VPS29",
+      "isoform_length_aa": 161,
+      "orf_type": "truncated",
+      "tis_id": "chrA:1820000:+:CTG:ENST00000182.1"
+    },
+    "criteria": [
+      {
+        "axis": "F",
+        "criterion_id": "L1_localization_change",
+        "label": "Localization change",
+        "value": false,
+        "reason": "localization features unchanged (prediction/signals/membrane)",
+        "evidence": {
+          "canonical_localization_deeploc_prediction": "Cytoplasm",
+          "isoform_localization_deeploc_prediction": "Cytoplasm",
+          "cmp_localization_deeploc_prob_cytoplasm_delta": 0.014,
+          "cmp_localization_deeploc_top_prob_delta": 0.014
+        },
+        "headline": "iso: Cytoplasm | canon: Cytoplasm",
+        "interpretation_hint": "Does the predicted compartment change? Read the delta in class probability, not the label alone."
+      },
+      {
+        "axis": "F",
+        "criterion_id": "L2_targeting_change",
+        "label": "Targeting change",
+        "value": false,
+        "reason": "no targeting change flagged",
+        "evidence": {
+          "cmp_signalp_signalp_prediction_canonical": "OTHER",
+          "cmp_signalp_signalp_prediction_isoform": "OTHER",
+          "cmp_signalp_signalp_probability_delta": 0.006,
+          "cmp_targetp_targetp_prediction_isoform": "noTP"
+        },
+        "headline": "iso: noTP | canon: noTP",
+        "interpretation_hint": "Does a signal peptide or transit peptide appear or disappear?"
+      }
+    ]
+  },
+  "terse": "reasoning: Losing these 21 aa does not move the protein, and both predictors were able to say so rather than returning nothing. DeepLoc holds Cytoplasm across canonical and isoform with a top-class probability shift of 0.014, which is movement in the noise rather than a reassignment. SignalP is consistent with that from an independent angle: OTHER in both, shifting 0.006, so there is no cryptic targeting signal buried in the removed segment that the compartment call might have missed. Two tools agreeing on no change is a result about this truncation, not a gap in the evidence.",
+  "verbose": "reasoning: The localization evidence for this truncation comes from two predictors, which are reported in turn below. The canonical DeepLoc prediction is Cytoplasm. The isoform DeepLoc prediction is also Cytoplasm. The change in cytoplasm probability is 0.014, which is a small value. The change in the top class probability is 0.014, which is likewise small. The canonical SignalP prediction is OTHER. The isoform SignalP prediction is also OTHER. The SignalP probability delta is 0.006, which is a very small value. The isoform TargetP prediction is noTP. The removed segment is 21 amino acids long and sits at the N-terminus of the canonical protein, as the annotation states. Taking all of these measurements together, there is no evidence that the truncation changes the predicted subcellular localization or the targeting of the protein, and both predictors were able to evaluate the comparison."
+}

@@ -1,0 +1,40 @@
+{
+  "id": "10_P_truncated",
+  "why": "an elevated RMSD that its own confidence metric disqualifies",
+  "instruction": {
+    "category": "P",
+    "name": "Predicted Structure",
+    "isoform": {
+      "canonical_length_aa": 176,
+      "diff_space": "canonical",
+      "differential_region_location": "Truncation: the differential region is the canonical N-terminal segment the isoform does not translate; coordinates are in canonical space. It spans 27 aa.",
+      "differential_sequence": "MAAPRWLLCSLLALWGQAPVSAQRP",
+      "gene_name": "TMEM97",
+      "isoform_length_aa": 149,
+      "orf_type": "truncated",
+      "tis_id": "chrA:1760000:+:CTG:ENST00000176.1"
+    },
+    "criteria": [
+      {
+        "axis": "F",
+        "criterion_id": "P2_shared_structural_change",
+        "label": "Shared-region fold change",
+        "value": true,
+        "reason": "shared-region Ca RMSD 6.82 A; min shared pLDDT 0.51",
+        "evidence": {
+          "isoform_structure_rmsd_shared": 6.82,
+          "isoform_structure_rmsd_global": 8.14,
+          "isoform_structure_tm_score_shared": 0.74,
+          "isoform_structure_plddt_shared_mean_isoform": 0.51,
+          "isoform_structure_plddt_shared_mean_canonical": 0.55,
+          "isoform_structure_shared_region_len": 149,
+          "isoform_structure_ptm_canonical": 0.41
+        },
+        "headline": "Shared-region RMSD 6.82 A",
+        "interpretation_hint": "Does the retained core refold? Only meaningful when the shared region is confidently folded in BOTH structures; the reason string carries the minimum shared-region pLDDT. A floppy low-pLDDT loop moves the backbone without any conformational meaning. Weigh the RMSD against its confidence."
+      }
+    ]
+  },
+  "terse": "reasoning: The retained core appears to move — 6.82 A of shared-region Ca RMSD — but the confidence behind that number will not carry it. Shared-region pLDDT is 0.51 in the isoform and 0.55 in the canonical, so both models place that backbone poorly, and displacement between two uncertain predictions measures the uncertainty rather than a refold. The shared TM-score of 0.74 is consistent with that reading: the fold topology is retained while coordinates wander. The honest conclusion is that this comparison cannot say whether the truncation perturbs the core, not that it does.",
+  "verbose": "reasoning: The predicted structure evidence for this truncation comes from a single member with several associated measurements, which are reported in turn. The shared-region Ca RMSD is 6.82 A. The global RMSD is 8.14 A. The shared-region TM-score is 0.74. The mean shared-region pLDDT in the isoform is 0.51. The mean shared-region pLDDT in the canonical is 0.55. The shared region is 149 residues long. The canonical pTM is 0.41. The removed segment is 27 amino acids long and sits at the N-terminus of the canonical protein, as the annotation states. Taking all of these measurements together, the shared region shows an elevated backbone displacement between the two structures, while the confidence of both predictions over that region is low, so the displacement should be treated with caution rather than as an established conformational change."
+}

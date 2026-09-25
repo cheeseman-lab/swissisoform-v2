@@ -1,0 +1,52 @@
+{
+  "id": "07_M_truncated",
+  "why": "germline tolerance and disease density genuinely disagree, and on a truncation that is informative",
+  "instruction": {
+    "category": "M",
+    "name": "Mutation Landscape",
+    "isoform": {
+      "canonical_length_aa": 470,
+      "diff_space": "canonical",
+      "differential_region_location": "Truncation: the differential region is the canonical N-terminal segment the isoform does not translate; coordinates are in canonical space. It spans 24 aa.",
+      "differential_sequence": "MAAEPRVSVVTEGLWHRQGAAVLP",
+      "gene_name": "SNX17",
+      "isoform_length_aa": 446,
+      "orf_type": "truncated",
+      "tis_id": "chrA:4700000:+:CTG:ENST00000470.1"
+    },
+    "criteria": [
+      {
+        "axis": "F",
+        "criterion_id": "M1_pathogenic_variant_enrichment",
+        "label": "Germline constraint",
+        "value": false,
+        "reason": "gnomad_depletion_ratio=1.43; constraint_delta=-2.19",
+        "evidence": {
+          "isoform_variant_intersection_gnomad_depletion_ratio": 1.43,
+          "isoform_variant_intersection_n_gnomad_in_unique_region": 68,
+          "isoform_variant_intersection_n_gnomad_in_shared_region": 611,
+          "isoform_plm_vep_constraint_delta": -2.19
+        },
+        "headline": "",
+        "interpretation_hint": "Germline TOLERANCE. A gnomAD depletion ratio below 1 means population variation AVOIDS the unique region. A positive ESM-C constraint_delta means the model finds the unique region more conserved than the shared core. The two are independent, either-or evidence and run in OPPOSITE numerical directions. Never read gnomAD variants as disease burden."
+      },
+      {
+        "axis": "F",
+        "criterion_id": "M2_clinical_variant_overlap",
+        "label": "Disease variant density",
+        "value": true,
+        "reason": "disease_enrichment_ratio=2.41",
+        "evidence": {
+          "isoform_variant_intersection_disease_enrichment_ratio": 2.41,
+          "isoform_variant_intersection_n_disease_in_unique_region": 9,
+          "isoform_variant_intersection_n_pathogenic_in_unique_region": 7,
+          "isoform_variant_intersection_n_disease_in_shared_region": 73
+        },
+        "headline": "",
+        "interpretation_hint": "DISEASE density. A ClinVar/COSMIC enrichment ratio at or above 1 means disease variants CONCENTRATE in the unique region."
+      }
+    ]
+  },
+  "terse": "reasoning: The two variant signals point opposite ways here, and because this is a truncation removing real canonical coding sequence, both are valid and the disagreement is itself the finding. Disease variants concentrate in the lost 24 aa at 2.41 times the shared-core density, with 7 of the 9 classified pathogenic. Germline data does not corroborate that: the gnomAD depletion ratio of 1.43 means population variation is if anything more tolerated there, not less. A segment that tolerates standing variation yet carries a pathogenic cluster points to specific residues mattering rather than the whole stretch being constrained.",
+  "verbose": "reasoning: The mutation landscape evidence for this truncation comes from several measurements, each reported in turn. The gnomAD depletion ratio for the removed region is 1.43. The number of gnomAD variants in the unique region is 68. The number of gnomAD variants in the shared region is 611. The ESM-C constraint delta is -2.19, which is a negative value. The disease enrichment ratio is 2.41, which is above 1. The number of disease variants in the unique region is 9. The number of pathogenic variants in the unique region is 7. The number of disease variants in the shared region is 73. The removed segment is 24 amino acids long and sits at the N-terminus of the canonical protein, as the annotation states, and is canonical coding sequence. Taking all of these measurements together, disease variants concentrate in the removed region while germline variation does not appear depleted there, so the two lines of evidence give different pictures of the segment."
+}
