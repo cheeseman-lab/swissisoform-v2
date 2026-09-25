@@ -6,7 +6,9 @@ import pytest
 
 from swissisoform.variantquery.spec import (
     MALFORMED,
+    MAX_ALTS_PER_RECORD,
     SV_BREAKEND,
+    TOO_MANY_ALTS,
     UNSUPPORTED_ALT,
     Rejection,
     VariantSpec,
@@ -367,3 +369,17 @@ def test_sample_columns_are_not_retained_anywhere_on_the_spec() -> None:
     serialised = repr(spec)
     for leak in ("GT:GQ", "0|0", "1|0", "1/1", "48:1:51", "NS=3", "AF=0.5"):
         assert leak not in serialised, f"{leak!r} leaked into the parsed spec"
+
+
+def test_a_record_over_the_alt_cap_is_rejected_whole() -> None:
+    alts = ",".join(["A" * (i % 7 + 2) for i in range(MAX_ALTS_PER_RECORD + 1)])
+    out = parse_line(line("chr1", "100", ".", "C", alts, ".", "PASS", "."))
+    assert len(out) == 1
+    assert isinstance(out[0], Rejection) and out[0].reason == TOO_MANY_ALTS
+
+
+def test_a_record_at_the_alt_cap_is_split_as_usual() -> None:
+    alts = ",".join(["T"] * MAX_ALTS_PER_RECORD)
+    out = parse_line(line("chr1", "100", ".", "C", alts, ".", "PASS", "."))
+    assert len(out) == MAX_ALTS_PER_RECORD
+    assert all(isinstance(spec, VariantSpec) for spec in out)

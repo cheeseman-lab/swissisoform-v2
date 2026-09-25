@@ -171,6 +171,28 @@ def test_the_wall_clock_budget_stops_the_scan_and_says_so(
     assert result.counts.lines == 0
 
 
+def test_the_wall_clock_budget_can_stop_inside_one_record(
+    tmp_path: Path, index: OrfIndex, monkeypatch
+) -> None:
+    """One line is not a bounded unit of work: it can carry many ALTs.
+
+    A 50k-ALT line once ran 16 s with the clock never consulted, because the budget
+    was only read between lines.
+    """
+    path = tmp_path / "fat.vcf"
+    path.write_text(HEADER + "chr1\t1000\t.\tA\tT,G,C\t.\tPASS\t.\n")
+
+    # Deadline set, the per-line check passes, the first per-allele check is past it.
+    ticks = iter([0.0, 0.0, 1e9])
+    monkeypatch.setattr(time, "monotonic", lambda: next(ticks, 1e9))
+
+    result = scan(path, index, max_seconds=1.0, max_records=0)
+
+    assert result.counts.stopped == "time"
+    assert result.counts.lines == 1
+    assert result.counts.alleles == 0
+
+
 def test_an_unbudgeted_scan_reports_no_stop(tmp_path: Path, index: OrfIndex) -> None:
     path = write_vcf(tmp_path / "many.vcf", 20)
 
