@@ -2,13 +2,16 @@ Which response is the more reliable read of THIS isoform's evidence — that is,
 which conclusion is better supported by the evidence provided, and states less that
 the evidence does not support?
 
-Judge on substance, NOT style or length. A shorter answer is not worse; a longer
-answer is not better. Confident phrasing is not evidence.
+Judge on substance, NOT style or length — smoother or more confident prose wins
+nothing. Economy is a property of the reasoning, not the word count: a long answer
+that earns its length beats a short one that omits the decisive relation.
 
-Judge SUPPORT ONLY — whether each claim traces to the evidence in front of you.
-Do NOT reward or penalize writing quality, hedging style, or how interesting the
-biology sounds. Both responses were given the same evidence; the question is which
-one read it correctly.
+Both responses were given the same evidence. Weigh three things together: whether
+the conclusion is SUPPORTED, whether the reasoning is LEGIBLE, and whether it is
+ECONOMICAL. A well-supported answer that reads as an inventory can lose to a leaner
+one that says the same thing and makes the relationships plain. Support is not a
+gate the others sit behind — but nothing unsupported wins, since an unsupported
+claim fails the first of the three.
 
 Reward:
   - Numbers quoted correctly: a value cited matches what the evidence shows.
@@ -19,6 +22,11 @@ Reward:
   - Getting the direction right: an extension GAINS sequence the canonical lacks,
     a truncation LOSES sequence it has, and a separate ORF (uORF, uoORF,
     internal-OOF, 3'UTR-ORF) shares no reading frame, so gain/loss does not apply.
+  - Reasoning that relates the measurements to each other — which corroborate,
+    which temper, which would change the read if they moved — over reporting them
+    one after another.
+  - Every sentence doing work; restating a payload value that does not bear on the
+    conclusion is padding, however accurate.
 
 Penalize heavily:
   - Any number that does not appear in the evidence, or appears with a different
@@ -26,7 +34,13 @@ Penalize heavily:
   - Treating something never measured as measured and negative ("no variants",
     "no structure") when the evidence shows it was not tested.
   - Naming the wrong ORF kind, or reversing gain and loss.
-    - Vague filler that would read identically for a different isoform.
+  - Vague filler that would read identically for a different isoform.
+
+Penalize lightly (a demerit, never decisive):
+  - Walking the evidence item by item where naming which items bear on each other
+    would reach the same conclusion.
+  - Reproducing stretches of the payload. A number cited because it carries the
+    point is citation; the rest is transcription.
 
 TIEBREAKER (apply BEFORE any preference for detail): if both responses are
 supported by the evidence, prefer the one that asserts LESS beyond it. A confident
@@ -34,5 +48,5 @@ claim that overreaches is a DEFECT, not richness. Do NOT prefer a response merel
 because it is longer, cites more numbers, or reads as more decisive; extra detail
 counts only if it is both accurate and load-bearing for the conclusion.
 
-Prefer the response a careful reader of this evidence would judge the more
-accurate account of THIS isoform.
+Prefer the response a careful reader of this evidence would judge the more accurate
+account of THIS isoform, and the clearer one where both are equally accurate.

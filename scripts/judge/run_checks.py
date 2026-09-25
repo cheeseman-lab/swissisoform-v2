@@ -81,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
                 if out is None:
                     continue
                 report.n_outputs += 1
+                report.measure(arm=arm, unit=letter, reasoning=out.text)
                 found = K.check_fabrication(
                     arm=arm,
                     slug=slug,
@@ -102,6 +103,7 @@ def main(argv: list[str] | None = None) -> int:
             syn = corpus.get(arm, slug, SYNTHESIS_UNIT)
             if syn is not None:
                 report.n_outputs += 1
+                report.measure(arm=arm, unit=SYNTHESIS_UNIT, reasoning=syn.text)
                 found = K.check_synthesis_fields(arm=arm, slug=slug, payload=syn.payload)
                 if found:
                     report.n_with_findings += 1
@@ -132,6 +134,15 @@ def _write(report: K.CheckReport, meta: dict, out_dir: Path) -> None:
                 "by_check": by_check,
                 "by_arm": report.counts_by_arm,
                 "by_unit": report.counts_by_unit,
+                # The control for the economy criterion the pairwise rubric now
+                # weighs: without it a BT shift cannot be told from drift.
+                "words_by_arm": {
+                    arm: K.word_stats(v) for arm, v in sorted(report.words_by_arm.items())
+                },
+                "words_by_arm_unit": {
+                    k.replace("\t", "/"): K.word_stats(v)
+                    for k, v in sorted(report.words_by_arm_unit.items())
+                },
             },
             indent=2,
             sort_keys=True,
@@ -163,6 +174,12 @@ def _summarise(report: K.CheckReport, arms: tuple[str, ...]) -> None:
     print("\nper unit:")
     for unit in (*CATEGORY_LETTERS, SYNTHESIS_UNIT):
         print(f"  {unit:20s} {report.counts_by_unit.get(unit, 0):>6,}")
+
+    print("\nresponse length, words as the judge sees them (control, not a score):")
+    print(f"  {'arm':20s} {'n':>6} {'median':>8} {'p90':>8}")
+    for arm in arms:
+        s = K.word_stats(report.words_by_arm.get(arm, []))
+        print(f"  {arm:20s} {s['n']:>6,} {s['median']:>8.0f} {s['p90']:>8.0f}")
 
 
 if __name__ == "__main__":
