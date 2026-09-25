@@ -88,6 +88,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="LETTER",
         help="Regenerate only these category letters; the rest carry forward.",
     )
+    p.add_argument(
+        "--only-isoform",
+        action="append",
+        default=None,
+        metavar="TIS_SLUG",
+        help="Restrict to these isoforms by tis_slug; the rest are left untouched.",
+    )
     p.add_argument("--dry-run", action="store_true", help="Capture prompts, make no API calls")
     p.add_argument("--batch", action="store_true", help="Message Batches API for the 4 single-shot")
     p.add_argument("--tag-registry", default=grounding.DEFAULT_TAG_VERSION)
@@ -169,6 +176,8 @@ def _common_argv(
         argv += ["--max-tokens", str(args.max_tokens)]
     for letter in args.only_category or []:
         argv += ["--only-category", letter]
+    for slug in args.only_isoform or []:
+        argv += ["--only-isoform", slug]
     if args.dry_run:
         argv.append("--dry-run")
     if args.batch:

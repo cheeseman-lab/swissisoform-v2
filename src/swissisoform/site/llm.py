@@ -1683,6 +1683,17 @@ def build_parser() -> argparse.ArgumentParser:
             "since the isoform's output already exists."
         ),
     )
+    parser.add_argument(
+        "--only-isoform",
+        action="append",
+        default=None,
+        metavar="TIS_SLUG",
+        help=(
+            "Restrict to these isoforms by tis_slug (repeatable). The sibling of "
+            "--only-category: together they retry one failed cell without touching "
+            "the rest of an arm that cost 45 minutes to produce."
+        ),
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument(
         "--batch",
@@ -1807,6 +1818,8 @@ def main(argv: list[str] | None = None, *, prompts_dir: Path | None = None) -> i
         output_schema = load_output_schema(prompts_root / spec.output_schema_filename)
 
     records = _load_records_with_synthetic_fallback(args.records, args.gene, args.dry_run)
+    if getattr(args, "only_isoform", None):
+        records = _filter_isoforms(records, args.only_isoform)
 
     if spec.requires_prereq:
         missing = _check_prereqs(records, args.out, spec.requires_prereq)
@@ -2240,6 +2253,25 @@ def _run_tool_category(
         raise
     _persist(trace)
     return verdict
+
+
+def _filter_isoforms(records: dict, wanted: list[str]) -> dict:
+    """Keep only ``wanted`` tis_slugs, dropping genes left with none.
+
+    Raises on a slug that matches nothing: a targeted retry that silently
+    selects zero isoforms looks exactly like a successful one.
+    """
+    want = set(wanted)
+    kept: dict = {}
+    seen: set[str] = set()
+    for gene, record in records.items():
+        isos = [i for i in (record.get("isoforms") or []) if _tis_slug(i.get("tis_id")) in want]
+        seen.update(_tis_slug(i.get("tis_id")) for i in isos)
+        if isos:
+            kept[gene] = {**record, "isoforms": isos}
+    if missing := sorted(want - seen):
+        raise SystemExit(f"--only-isoform matched no record for: {', '.join(missing)}")
+    return kept
 
 
 def _check_prereqs(records, out_dir: Path, prereqs: tuple[str, ...]) -> list[str]:

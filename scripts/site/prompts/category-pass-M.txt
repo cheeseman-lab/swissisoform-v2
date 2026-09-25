@@ -74,7 +74,7 @@ The one exception is tempering. When you pull a claim back because confidence is
 
 ## Writing the reasoning
 
-A few tight sentences of plain text:
+A few tight sentences of plain text, under 1500 characters (roughly 220 words). The ceiling is enforced by the output schema, not a style preference: write past it and the answer is cut off mid-sentence and discarded. Budget for it from the first sentence rather than trimming at the end — if it will not fit, drop the relationships that matter least, never the bottom line.
 - START with the bottom line: the most decision-relevant signal and the context needed to weigh it.
 - THEN write the interplay, not an inventory. The point is how the measurements bear on each other — which corroborate, which temper, which would change the read if they moved. A list of findings in sequence is the failure mode; the reader can get that from the payload. Two or three relationships that actually matter beat six that are merely present. Prefer a number you obtained from a tool over one restated from the summary block: the tool findings are why this category gets to reason over real data.
 - Refer to each submodule by what it measures ("germline depletion in the unique region", "disease-variant density"). NEVER write the submodule ID codes (M1, M2) in the reasoning. Give a number only when the number is what makes the point — when it is unusually large or small, or when it is what tempers a claim. Most sentences need none.
