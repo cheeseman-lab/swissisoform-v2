@@ -295,7 +295,9 @@ class TestTagMetrics:
 
     @staticmethod
     def _install(monkeypatch, cfg: dict) -> None:
-        monkeypatch.setitem(gr.ev.CRITERIA, "X", cfg)
+        # slice_criterion reads the identity fields every real criterion declares.
+        base = {"axis": "E", "label": "L", "short_label": "S"}
+        monkeypatch.setitem(gr.ev.CRITERIA, "X", {**base, **cfg})
 
     def test_sweep_tag_stays_lean(self, monkeypatch):
         self._install(monkeypatch, {"evidence_cols": ["a"], "interpretation_hint": "H"})
@@ -368,6 +370,30 @@ class TestTagMetrics:
         assert on["means"] == "H"
         assert set(on) - set(off) == {"means"}
         assert off["metrics"] == {"a": 1} and off["note"] == "N"
+
+    def test_derived_tag_carries_the_criterion_s_summary_lines(self, monkeypatch):
+        """Without `headline`/`reason` the model derives ratios and counts itself."""
+        self._install(monkeypatch, {"evidence_cols": ["a"], "interpretation_hint": "H"})
+        rec = self._rec()
+        sliced = {"reason": "n_cell_lines=1 (threshold 3)", "headline": "detected in 1/6 cell lines"}
+        monkeypatch.setattr(gr.ev, "slice_criterion", lambda r, cid: dict(sliced))
+        reg = _registry(_tag_row(tag_id="crit", criterion_id="X", metric="m"))
+        tag = gr._tags_body(reg)(rec, CATEGORY_C)["tags"][0]
+        assert tag["reason"] == sliced["reason"]
+        assert tag["headline"] == sliced["headline"]
+
+    def test_missing_summary_line_is_omitted_not_nulled(self, monkeypatch):
+        self._install(monkeypatch, {"evidence_cols": ["a"], "interpretation_hint": "H"})
+        monkeypatch.setattr(gr.ev, "slice_criterion", lambda r, cid: {"reason": "r", "headline": None})
+        reg = _registry(_tag_row(tag_id="crit", criterion_id="X", metric="m"))
+        tag = gr._tags_body(reg)(self._rec(), CATEGORY_C)["tags"][0]
+        assert tag["reason"] == "r" and "headline" not in tag
+
+    def test_sweep_tag_carries_no_summary_lines(self, monkeypatch):
+        self._install(monkeypatch, {"evidence_cols": ["a"], "interpretation_hint": "H"})
+        reg = _registry(_tag_row(tag_id="sweep", metric="m"))
+        tag = gr._tags_body(reg)(self._rec(), CATEGORY_C)["tags"][0]
+        assert "reason" not in tag and "headline" not in tag
 
     def test_unknown_criterion_fails_at_build_time(self):
         """Registry/criteria drift must fail at arm setup, not degrade to a lean

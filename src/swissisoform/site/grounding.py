@@ -287,7 +287,7 @@ def _tags_body(
         raw = record.get("_raw") or {}
         return {col: _clean(raw.get(col)) for col in cfg.get("evidence_cols", ())} or None
 
-    def hits_for(tag: reg_mod.Tag, record: dict[str, Any]) -> dict[str, Any] | None:
+    def hits_for(tag: reg_mod.Tag, sliced: dict[str, Any]) -> dict[str, Any] | None:
         """The criterion's per-record hit list, capped exactly as the UI caps it.
 
         Five criteria carry evidence that is one row per observed thing rather
@@ -320,7 +320,6 @@ def _tags_body(
         cfg = criterion_cfg.get(tag.tag_id)
         if cfg is None or not cfg.get("evidence_hits_col"):
             return None
-        sliced = ev.slice_criterion(record, tag.criterion_id)
         if tag.category in STRIP_LISTS_FOR:
             n_total = sliced.get("n_hits_total") or len(sliced.get("hits") or [])
             if not n_total:
@@ -386,7 +385,13 @@ def _tags_body(
                 metrics = metrics_for(tag, record)
                 if metrics:
                     entry["metrics"] = metrics
-                entry.update(hits_for(tag, record) or {})
+                sliced = ev.slice_criterion(record, tag.criterion_id)
+                # The criteria arm's summary lines ("detected in 1/6 cell lines"); without
+                # them the model derives the ratios and counts itself, and gets them wrong.
+                for key in ("reason", "headline"):
+                    if sliced.get(key) is not None:
+                        entry[key] = sliced[key]
+                entry.update(hits_for(tag, sliced) or {})
                 if hints:
                     entry["means"] = criterion_cfg[tag.tag_id]["interpretation_hint"]
             fired.append(entry)
