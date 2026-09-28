@@ -1,0 +1,67 @@
+{
+  "id": "03_D_extended",
+  "why": "reproducibility across lines carries the read; thin peptide support tempers it",
+  "instruction": {
+    "category": "D",
+    "name": "Detection",
+    "isoform": {
+      "canonical_length_aa": 754,
+      "diff_space": "isoform",
+      "differential_region_location": "Extension: the differential region is the N-terminal segment the isoform adds ahead of the canonical start; it was 5'UTR or intron in the canonical annotation and was never coding. It spans 29 aa.",
+      "differential_sequence": "MAAPGRVSAWLLQPGSRTEAVGGRQPLSL",
+      "gene_name": "PPIG",
+      "isoform_length_aa": 783,
+      "orf_type": "extended",
+      "tis_id": "chrA:7540000:+:CTG:ENST00000754.1"
+    },
+    "criteria": [
+      {
+        "axis": "E",
+        "criterion_id": "D1_multi_cell_line",
+        "label": "Multi-cell-line detection",
+        "value": true,
+        "reason": "n_cell_lines=5",
+        "evidence": {
+          "expr_HeLa_cpm": 41.7,
+          "expr_K562_cpm": 38.2,
+          "expr_U2OS_cpm": 29.4,
+          "expr_RPE1_Async_cpm": 33.6,
+          "expr_RPE1_Que_cpm": 27.8,
+          "expr_HeLa_p_value": 4.2e-18,
+          "expr_K562_p_value": 6.7e-21
+        },
+        "headline": "detected in 5/6 cell lines",
+        "interpretation_hint": "Is the start site used reproducibly across independent cell lines? Count the lines with a significant call; agreement across lines argues against an artefact of one experiment."
+      },
+      {
+        "axis": "E",
+        "criterion_id": "D2_initiation_efficiency",
+        "label": "Initiation efficiency",
+        "value": true,
+        "reason": "max_efficiency=0.117",
+        "evidence": {
+          "expr_HeLa_initiation_efficiency": 0.117,
+          "expr_K562_initiation_efficiency": 0.094,
+          "canonical_expr_HeLa_initiation_efficiency": 0.62
+        },
+        "headline": "alt used 0.19x vs canonical",
+        "interpretation_hint": "What share of initiation at this transcript happens at the alternative start? Normalises for transcript abundance."
+      },
+      {
+        "axis": "E",
+        "criterion_id": "D3_mass_spec",
+        "label": "Mass spectrometry",
+        "value": false,
+        "reason": "n_validated_unique_peptides=1",
+        "evidence": {
+          "cmp_massspec_n_hits_in_diff_region": 1,
+          "isoform_massspec_n_candidate_unique_peptides": 4
+        },
+        "headline": "1/4 isoform-unique peptides validated",
+        "interpretation_hint": "Direct protein-level evidence for the differential region. A short differential region yields few tryptic peptides, so a low count is weak evidence rather than evidence of absence."
+      }
+    ]
+  },
+  "terse": "reasoning: This alternative start is used reproducibly rather than in a single experiment, and that is what the read rests on: it is called in 5 of 6 cell lines with initiation efficiency holding around 0.117 in HeLa and 0.094 in K562 — modest against the canonical start's 0.62, but consistent, which abundance alone would not produce. The proteomic evidence tempers rather than contradicts this. Only 1 of 4 candidate unique peptides validated, but a 29 aa differential region yields few tryptic peptides to begin with, so that count is thin evidence rather than evidence against. Confidence rests on reproducible initiation, not on peptide confirmation.",
+  "verbose": "reasoning: The detection evidence for this extension comes from several independent measurements, each of which is reported below. The isoform is detected in 5 of 6 cell lines. HeLa expression is 41.7 cpm. K562 expression is 38.2 cpm. U2OS expression is 29.4 cpm. RPE1 Async expression is 33.6 cpm. RPE1 Que expression is 27.8 cpm. The HeLa p-value is 4.2e-18 and the K562 p-value is 6.7e-21, both of which are very small. Initiation efficiency at the alternative start is 0.117 in HeLa and 0.094 in K562. The canonical initiation efficiency in HeLa is 0.62. The mass spectrometry check found 1 hit in the differential region, out of 4 candidate unique peptides. The differential region is 29 amino acids long and sits ahead of the canonical start, as the annotation states. Taking all of these measurements together, the alternative start appears to be genuinely and reproducibly used across cell lines, while the peptide-level confirmation of the resulting extended protein is comparatively sparse."
+}

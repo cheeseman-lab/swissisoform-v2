@@ -255,6 +255,51 @@ class TestVariants:
             V.select(["tags_hints"])
 
 
+class TestReplicate:
+    """The noise-floor arm. Its whole value is being indistinguishable from
+    `criteria_hint` except in where it writes — any real difference makes it a
+    ninth variant and useless as a measure of sampling variance.
+    """
+
+    def test_replicate_is_reachable_by_name(self):
+        assert "criteria_hint_rep" in V.BY_ID
+        assert V.select(["criteria_hint_rep"])[0].arm_id == "criteria_hint_rep"
+
+    def test_replicate_is_not_in_the_default_selection(self):
+        """Appending it to VARIANTS would silently make every existing
+        "run all arms" command a 9-arm, ~$20-more run.
+        """
+        assert len(V.VARIANTS) == 8
+        assert len(V.select(None)) == 8
+        assert "criteria_hint_rep" not in {v.arm_id for v in V.select(None)}
+
+    def test_replicate_matches_the_status_quo_framing(self):
+        rep, base = V.BY_ID["criteria_hint_rep"], V.BY_ID["criteria_hint"]
+        assert (rep.grounding, rep.hints) == (base.grounding, base.hints)
+
+    def test_replicate_prompts_are_byte_identical_to_the_status_quo(self, tmp_path):
+        """The assertion that makes it a floor: same grounding and hints must
+        assemble the same prompt, or the two arms differ in framing as well as
+        in sampling.
+        """
+        rep, base = V.BY_ID["criteria_hint_rep"], V.BY_ID["criteria_hint"]
+        a = A.materialize(tmp_path / "rep", grounding=rep.grounding, hints=rep.hints, base_dir=BASE)
+        b = A.materialize(
+            tmp_path / "base", grounding=base.grounding, hints=base.hints, base_dir=BASE
+        )
+        for name in A.BASE_PROMPTS:
+            assert (a / name).read_bytes() == (b / name).read_bytes(), name
+        assert (a / A.SCHEMA_REL).read_bytes() == (b / A.SCHEMA_REL).read_bytes()
+
+    def test_replicate_writes_somewhere_else(self):
+        """Same framing, different paths — otherwise it overwrites the arm it is
+        supposed to be compared against.
+        """
+        rep, base = V.BY_ID["criteria_hint_rep"], V.BY_ID["criteria_hint"]
+        assert rep.out_run != base.out_run
+        assert rep.capture_dir("cheeseman50") != base.capture_dir("cheeseman50")
+
+
 class TestTerminology:
     """The base prompts say "members" outside the marked block — in the task
     sentence, the all-None verdict rule, and the Bad/Good example. An arm whose

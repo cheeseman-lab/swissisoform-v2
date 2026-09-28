@@ -28,12 +28,32 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-DO_BASE=0 DO_PLM=0 DO_FOLD=0 WITH_FLASH=0 REBUILD=0
+# Keep the package caches off /home, which is quota'd (~48 GB) and small.
+#
+# miniforge3 itself was symlinked to /lab in July, so the *envs* were already
+# safe -- but uv does not install into the env prefix directly. It downloads and
+# unpacks each wheel into its own cache first, then links across, so the staging
+# area was still on /home. A vLLM resolve (multi-GB of CUDA wheels) is what
+# finally hit the wall:
+#
+#   failed to create directory `/home/ating/.cache/uv/.tmp*/nvidia_cuda_nvrtc-*`:
+#   Disk quota exceeded (os error 122)
+#
+# Same reasoning as the GPU sbatches pinning HF_HOME to $PWD/.torch_cache/hf.
+# Override either variable to relocate.
+: "${UV_CACHE_DIR:=${ROOT}/.cache/uv}"
+: "${PIP_CACHE_DIR:=${ROOT}/.cache/pip}"
+export UV_CACHE_DIR PIP_CACHE_DIR
+mkdir -p "$UV_CACHE_DIR" "$PIP_CACHE_DIR"
+echo ">> package caches: UV_CACHE_DIR=$UV_CACHE_DIR"
+
+DO_BASE=0 DO_PLM=0 DO_FOLD=0 DO_JUDGE=0 WITH_FLASH=0 REBUILD=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --base)    DO_BASE=1 ;;
     --plm)     DO_PLM=1 ;;
     --fold)    DO_FOLD=1 ;;
+    --judge)   DO_JUDGE=1 ;;
     --flash)   WITH_FLASH=1 ;;
     --rebuild) REBUILD=1 ;;
     -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
@@ -41,8 +61,9 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
-# No env flag -> build all three.
-if [[ $DO_BASE -eq 0 && $DO_PLM -eq 0 && $DO_FOLD -eq 0 ]]; then
+# No env flag -> build the three pipeline envs. `--judge` has to count as a flag
+# here, or asking for the judge alone silently rebuilds all three as well.
+if [[ $DO_BASE -eq 0 && $DO_PLM -eq 0 && $DO_FOLD -eq 0 && $DO_JUDGE -eq 0 ]]; then
   DO_BASE=1; DO_PLM=1; DO_FOLD=1
 fi
 
@@ -72,6 +93,9 @@ make_env() {
 [[ $DO_BASE -eq 1 ]] && make_env swissisoform-v2      dev
 [[ $DO_FOLD -eq 1 ]] && make_env swissisoform-v2-fold fold
 [[ $DO_PLM  -eq 1 ]] && make_env swissisoform-v2-plm  plm
+# Deliberately absent from the no-flag default: vLLM is only needed to serve
+# the Prometheus judge, and nothing in the annotation pipeline imports it.
+[[ $DO_JUDGE -eq 1 ]] && make_env swissisoform-v2-judge judge
 
 # Optional flash-attn (opt-in; from-source compile, wants a GPU node).
 if [[ $WITH_FLASH -eq 1 ]]; then
