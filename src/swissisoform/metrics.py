@@ -13,9 +13,6 @@ their distributions, and the tag layer resolves them at firing time. A quantity
 computed one way for its cutoff and another way for its test would silently
 mis-fire, so :func:`resolve` is the single point both go through.
 
-Lifted from ``figures/scoring_cutoffs/plot_cutoff_distributions.py:63-138``, whose
-``SERIES`` registry remains the reference for how each criterion is plotted.
-
 Metric names are prefixed ``tx:`` so a derived quantity is never mistaken for a
 column that exists in the parquet.
 """
