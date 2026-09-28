@@ -70,12 +70,22 @@ The one exception is tempering. When you pull a claim back because confidence is
 
 ## Writing the reasoning
 
-Three to six sentences of plain text, under 1500 characters (roughly 220 words). The ceiling is enforced by the output schema, not a style preference: write past it and the answer is cut off mid-sentence and discarded. Budget for it from the first sentence rather than trimming at the end — if it will not fit, drop the relationships that matter least, never the bottom line.
-- START with the bottom line: the most decision-relevant signal and the context needed to weigh it.
-- THEN write the interplay, not an inventory. The point is how the measurements bear on each other — which corroborate, which temper, which would change the read if they moved. A list of findings in sequence is the failure mode; the reader can get that from the payload. Two or three relationships that actually matter beat six that are merely present. Prefer a number you obtained from a tool over one restated from the summary block — reading the real arrays is why this category gets tools.
-- Refer to each submodule by what it measures ("unique-region fold confidence", "the shared-core fold RMSD"). NEVER write the submodule ID codes (P1, P2, P3) in the reasoning. Give a number only when the number is what makes the point — when it is unusually large or small, or when it is what tempers a claim. Most sentences need none.
-- When nothing was evaluable, lead with what could not be assessed and why.
+Plain text: at most four sentences, about 120 words.
+Write for a biologist who knows this pipeline: they know what the unique region is, what pLDDT, phyloP and gnomAD density measure, and how extensions and truncations map. Never define a term or explain what a measurement measures.
+The read appears under this isoform's header, which already shows the gene, ORF type, start codon, lengths and the differential sequence. Never restate them: refer to the differential region simply as "the extension", "the removed segment" or "the uORF", and give its length, position or sequence only when that number is what makes the point.
+The notes above on direction, coordinates and ORF type are for your reasoning, not for the reader. Never explain why a check applies or how it works for this ORF type.
+- START with the bottom line: the most decision-relevant signal and what it means here.
+- THEN one or two relationships that matter — which measurements corroborate each other and which temper the read. Each relationship sentence joins two measurements ("A agrees with B, so …" or "A, but B …") and says what that implies; a sentence about one measurement alone is inventory, so keep those to the bottom line. Do not explain why two measurements are independent or how they were made. Prefer a number you obtained from a tool over one restated from the summary block — reading the real arrays is why this category gets tools.
+- Refer to each submodule by what it measures ("unique-region fold confidence", "the shared-core fold RMSD"). NEVER write the submodule ID codes (P1, P2, P3) in the reasoning. Give the two or three numbers that carry the read — unusually large or small, or the one that tempers a claim.
+- Give each finding once, as a number or in words: do not restate a number you just gave ("…, meaning X is unchanged"), and do not list the raw inputs behind a summary value.
+- A tempering point is one clause, not a sentence of justification.
+- Close with one short sentence on what this means, not a restatement.
+- When nothing was evaluable, say what could not be assessed and why, in one or two sentences.
 
 `evidence_used` is a short list of the tool findings that actually drove the read — one plain-text note per entry, naming the number and where it came from.
 
-Example — Bad: "P1 fired with diffregion pLDDT 0.76, so the extension is structured." Good: "The 54-residue extension is well-formed but not attached: per-residue confidence holds at 0.85 across its first 20 residues before decaying to ~0.61, yet the predicted aligned error between it and the canonical body averages 30 A — so the segment folds locally while its orientation relative to the core is entirely unresolved, which argues against reading it as an integrated structural element."
+Example — Bad: "P1 fired with diffregion pLDDT 0.76, so the extension is structured." Good: "The extension folds but does not attach: confidence holds near 0.85 over its first 20 residues, yet predicted aligned error to the canonical body averages 30 A, so its orientation is unresolved. It should not be read as an integrated domain."
+
+Example — Bad, explains the mechanics to the reader: "Because this is a truncation, any diagnostic peptide would have to come from the new N-terminal junction in shared-region coordinates rather than from the removed segment itself, but that junction peptide was not found." Good: "No junction peptide was detected."
+
+Example — Bad, restates the header: "This 15-aa N-terminal extension (MAQSNRAT…) shows no evidence of conservation." Good: "The extension is not conserved: …"

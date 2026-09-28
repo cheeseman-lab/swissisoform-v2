@@ -74,12 +74,22 @@ The one exception is tempering. When you pull a claim back because confidence is
 
 ## Writing the reasoning
 
-A few tight sentences of plain text, under 1500 characters (roughly 220 words). The ceiling is enforced by the output schema, not a style preference: write past it and the answer is cut off mid-sentence and discarded. Budget for it from the first sentence rather than trimming at the end — if it will not fit, drop the relationships that matter least, never the bottom line.
-- START with the bottom line: the most decision-relevant signal and the context needed to weigh it.
-- THEN write the interplay, not an inventory. The point is how the measurements bear on each other — which corroborate, which temper, which would change the read if they moved. A list of findings in sequence is the failure mode; the reader can get that from the payload. Two or three relationships that actually matter beat six that are merely present. Prefer a number you obtained from a tool over one restated from the summary block: the tool findings are why this category gets to reason over real data.
-- Refer to each submodule by what it measures ("germline depletion in the unique region", "disease-variant density"). NEVER write the submodule ID codes (M1, M2) in the reasoning. Give a number only when the number is what makes the point — when it is unusually large or small, or when it is what tempers a claim. Most sentences need none.
-- When nothing was evaluable, lead with what could not be assessed and why.
+Plain text: at most four sentences, about 120 words.
+Write for a biologist who knows this pipeline: they know what the unique region is, what pLDDT, phyloP and gnomAD density measure, and how extensions and truncations map. Never define a term or explain what a measurement measures.
+The read appears under this isoform's header, which already shows the gene, ORF type, start codon, lengths and the differential sequence. Never restate them: refer to the differential region simply as "the extension", "the removed segment" or "the uORF", and give its length, position or sequence only when that number is what makes the point.
+The notes above on direction, coordinates and ORF type are for your reasoning, not for the reader. Never explain why a check applies or how it works for this ORF type.
+- START with the bottom line: the most decision-relevant signal and what it means here.
+- THEN one or two relationships that matter — which measurements corroborate each other and which temper the read. Each relationship sentence joins two measurements ("A agrees with B, so …" or "A, but B …") and says what that implies; a sentence about one measurement alone is inventory, so keep those to the bottom line. Do not explain why two measurements are independent or how they were made. Prefer a number you obtained from a tool over one restated from the summary block: the tool findings are why this category gets to reason over real data.
+- Refer to each submodule by what it measures ("germline depletion in the unique region", "disease-variant density"). NEVER write the submodule ID codes (M1, M2) in the reasoning. Give the two or three numbers that carry the read — unusually large or small, or the one that tempers a claim.
+- Give each finding once, as a number or in words: do not restate a number you just gave ("…, meaning X is unchanged"), and do not list the raw inputs behind a summary value.
+- A tempering point is one clause, not a sentence of justification.
+- Close with one short sentence on what this means, not a restatement.
+- When nothing was evaluable, say what could not be assessed and why, in one or two sentences.
 
 `evidence_used` is a short list of the tool findings that actually drove the read — one plain-text note per entry, naming the number and where it came from.
 
-Example — Bad: "M2 fired. The disease enrichment ratio is 2.1, so disease variants concentrate in the unique region." Good: "The 24 aa lost in this truncation carry a tight pathogenic cluster — 7 of the 9 ClinVar pathogenic variants in the region fall on canonical residues 14-17, and all 7 are also AlphaMissense-pathogenic (mean 0.91) — so the removed segment overlaps a specific disease-critical site rather than merely carrying a higher average variant density (2.1x the shared core)."
+Example — Bad: "M2 fired. The disease enrichment ratio is 2.1, so disease variants concentrate in the unique region." Good: "The lost segment overlaps a disease-critical site, not just a denser patch: 7 of the 9 pathogenic ClinVar variants fall on residues 14-17, all AlphaMissense-pathogenic (mean 0.91), which the 2.1x density over the shared core would not show on its own. The loss likely matters clinically."
+
+Example — Bad, explains the mechanics to the reader: "Because this is a truncation, any diagnostic peptide would have to come from the new N-terminal junction in shared-region coordinates rather than from the removed segment itself, but that junction peptide was not found." Good: "No junction peptide was detected."
+
+Example — Bad, restates the header: "This 15-aa N-terminal extension (MAQSNRAT…) shows no evidence of conservation." Good: "The extension is not conserved: …"
