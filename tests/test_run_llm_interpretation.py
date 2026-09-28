@@ -434,11 +434,9 @@ def test_synthesis_input_record_pulls_category_reads(monkeypatch, tmp_path):
     base.mkdir()
     category_payload = {
         "Conservation": {
-            "verdict": "interesting",
             "reasoning": "primate frame intact (frac_intact=0.96) with strong phyloP.",
         },
         "Mutation Landscape": {
-            "verdict": "neutral",
             "reasoning": "no disease enrichment; germline signal weak.",
         },
     }
@@ -464,7 +462,7 @@ def test_synthesis_input_record_pulls_category_reads(monkeypatch, tmp_path):
     assert rec["isoform"]["tis_id"] == "chr1:100:+:ATG:ENST_A"
     assert "Conservation" in rec["category_reads"]
     assert "Mutation Landscape" in rec["category_reads"]
-    assert rec["category_reads"]["Conservation"]["verdict"] == "interesting"
+    assert rec["category_reads"]["Conservation"]["reasoning"]
     # The gene's established function is threaded in as the divergence baseline.
     assert rec["gene"]["function"] == "GENE_A is a chromatin reader."
     assert rec["gene"]["keywords"] == "histone binding; chromatin"
@@ -554,7 +552,7 @@ def _dispatch_ok(name, tool_input):
     return {"n": 7, "tool": name, "input": tool_input}
 
 
-VERDICT = {"verdict": "interesting", "reasoning": "clustered pathogenic variants."}
+VERDICT = {"reasoning": "clustered pathogenic variants."}
 
 
 def test_tool_loop_returns_verdict_after_data_calls(mod, monkeypatch):
@@ -846,7 +844,7 @@ def test_category_pass_runs_m_as_a_tool_loop(
     single_shot: list = []
     monkeypatch.setattr(
         mod, "call_llm",
-        lambda *a, **kw: single_shot.append(1) or json.dumps({"verdict": "neutral",
+        lambda *a, **kw: single_shot.append(1) or json.dumps({
                                                              "reasoning": "single shot."}),
     )
     calls: list = []
@@ -865,7 +863,7 @@ def test_category_pass_runs_m_as_a_tool_loop(
 
     tis_slug = mod._tis_slug(TIS_ID)
     payload = json.loads((out_dir / tis_slug / "categories.json").read_text())
-    assert payload["Mutation Landscape"]["verdict"] == "interesting"
+    assert payload["Mutation Landscape"]["reasoning"]
     # The other five categories still went through the single-shot path.
     assert len(single_shot) == 5
     assert payload["Conservation"]["reasoning"] == "single shot."
@@ -875,7 +873,7 @@ def test_category_pass_writes_the_m_trace(
     mod, monkeypatch, tmp_path, category_records, variants_long, only_m
 ):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
-    monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: json.dumps({"verdict": "neutral",
+    monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: json.dumps({
                                                                      "reasoning": "x"}))
     script = [
         _Response([_tool_use("variant_position_histogram", {}, "t1")]),
@@ -1004,7 +1002,7 @@ def test_tool_loop_opening_context_carries_no_variant_rows(
 ):
     """End-to-end: what actually reaches the API has the rows removed."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
-    monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: json.dumps({"verdict": "neutral",
+    monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: json.dumps({
                                                                      "reasoning": "x"}))
     calls: list = []
     script = [
@@ -1036,7 +1034,7 @@ def test_no_tools_path_still_sends_the_hits(
 
     def capture(prompt, **kw):
         prompts.append(prompt.user)
-        return json.dumps({"verdict": "neutral", "reasoning": "x"})
+        return json.dumps({"reasoning": "x"})
 
     monkeypatch.setattr(mod, "call_llm", capture)
     mod.main(_category_run_args(category_records, tmp_path / "out", ["--no-tools"]))
@@ -1049,7 +1047,7 @@ def test_category_pass_writes_a_separate_tool_usage_report(
 ):
     """Tool categories are full-price and multi-turn, so their cost is reported apart."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
-    monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: json.dumps({"verdict": "neutral",
+    monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: json.dumps({
                                                                      "reasoning": "x"}))
     script = [
         _Response([_tool_use("query_variants", {}, "t1")]),
@@ -1079,7 +1077,7 @@ def test_category_pass_holds_back_the_file_when_the_loop_fails(
     carries {"error": ...} would block its retry and let the rerun report success.
     """
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
-    monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: json.dumps({"verdict": "neutral",
+    monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: json.dumps({
                                                                      "reasoning": "x"}))
     script = [_Response([_tool_use("query_variants", {}, "t1")])]  # never terminates
     monkeypatch.setattr(mod, "_try_import_anthropic", lambda: _fake_anthropic(script, []))
@@ -1097,7 +1095,7 @@ def test_category_pass_holds_back_the_file_when_the_loop_fails(
     # The five good verdicts and the error are kept, under a name nothing reads.
     payload = json.loads((iso_dir / "categories.partial.json").read_text())
     assert "error" in payload["Mutation Landscape"]
-    assert payload["Conservation"]["verdict"] == "neutral"
+    assert payload["Conservation"]["reasoning"]
     # The partial transcript is still written — a failed loop is the one worth reading.
     trace = json.loads((iso_dir / "M_trace.json").read_text())
     assert trace["outcome"] == "max_turns_exhausted"
@@ -1108,7 +1106,7 @@ def test_a_held_back_isoform_is_retried_and_clears_its_partial(
 ):
     """The point of holding the write back: the rerun regenerates, without --force."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
-    monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: json.dumps({"verdict": "neutral",
+    monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: json.dumps({
                                                                      "reasoning": "x"}))
     out_dir = tmp_path / "out"
     iso_dir = out_dir / mod._tis_slug(TIS_ID)
@@ -1134,7 +1132,7 @@ def test_a_held_back_isoform_is_retried_and_clears_its_partial(
     )
     assert mod.main(argv) == 0
     payload = json.loads((iso_dir / "categories.json").read_text())
-    assert payload["Mutation Landscape"]["verdict"] == VERDICT["verdict"]
+    assert payload["Mutation Landscape"]["reasoning"] == VERDICT["reasoning"]
     assert not (iso_dir / "categories.partial.json").exists()
 
     # A third run now genuinely has nothing to do — and says so, rather than
@@ -1168,7 +1166,7 @@ def test_no_tools_flag_runs_every_category_single_shot(
     single_shot: list = []
     monkeypatch.setattr(
         mod, "call_llm",
-        lambda *a, **kw: single_shot.append(1) or json.dumps({"verdict": "neutral",
+        lambda *a, **kw: single_shot.append(1) or json.dumps({
                                                              "reasoning": "single shot."}),
     )
     out_dir = tmp_path / "out"
@@ -1199,7 +1197,7 @@ def test_batch_path_excludes_tool_categories_from_the_batch(
         submitted["items"] = items
         return {
             cid: {
-                "text": json.dumps({"verdict": "neutral", "reasoning": "batched."}),
+                "text": json.dumps({"reasoning": "batched."}),
                 "usage": mod._empty_usage(),
                 "error": None,
             }
@@ -1225,7 +1223,7 @@ def test_batch_path_excludes_tool_categories_from_the_batch(
     assert len(submitted["items"]) == 5
     payload = json.loads((out_dir / mod._tis_slug(TIS_ID) / "categories.json").read_text())
     assert payload["Conservation"]["reasoning"] == "batched."
-    assert payload["Mutation Landscape"]["verdict"] == "interesting"
+    assert payload["Mutation Landscape"]["reasoning"]
     # Batch-priced and full-priced work are reported separately.
     assert (out_dir / "_usage_category.json").exists()
     assert (out_dir / "_usage_category_tools.json").exists()
@@ -1245,7 +1243,7 @@ def test_variants_long_defaults_to_a_sibling_of_records(mod, tmp_path):
 # ── P category wiring ─────────────────────────────────────────────────────
 
 
-P_VERDICT = {"verdict": "interesting", "reasoning": "extension folds but is unplaced."}
+P_VERDICT = {"reasoning": "extension folds but is unplaced."}
 
 
 def test_p_category_runs_as_a_tool_loop(
@@ -1256,7 +1254,7 @@ def test_p_category_runs_as_a_tool_loop(
     single_shot: list = []
     monkeypatch.setattr(
         mod, "call_llm",
-        lambda *a, **kw: single_shot.append(1) or json.dumps({"verdict": "neutral",
+        lambda *a, **kw: single_shot.append(1) or json.dumps({
                                                              "reasoning": "single shot."}),
     )
     calls: list = []
@@ -1273,7 +1271,7 @@ def test_p_category_runs_as_a_tool_loop(
 
     tis_slug = mod._tis_slug(TIS_ID)
     payload = json.loads((out_dir / tis_slug / "categories.json").read_text())
-    assert payload["Predicted Structure"]["verdict"] == "interesting"
+    assert payload["Predicted Structure"]["reasoning"]
     assert len(single_shot) == 5
     # And the trace lands under P, not M.
     trace = json.loads((out_dir / tis_slug / "P_trace.json").read_text())
@@ -1310,7 +1308,7 @@ _OBSERVED_STRING = (
 _ARRAY_SCHEMA = {
     "type": "object",
     "properties": {
-        "verdict": {"type": "string"},
+        "reasoning": {"type": "string"},
         "evidence_used": {"type": "array", "items": {"type": "string"}},
     },
 }
@@ -1324,7 +1322,7 @@ def test_tool_loop_returns_the_tool_input_verbatim(mod, monkeypatch):
     meant to reach _emit_schema_warnings and be reported, not silently fixed.
     """
     calls: list = []
-    emitted = {"verdict": "neutral", "reasoning": "x", "evidence_used": ["a", "b"]}
+    emitted = {"reasoning": "x", "evidence_used": ["a", "b"]}
     script = [
         _Response([_tool_use("query_variants", {}, "t1")]),
         _Response([_tool_use("variant_effect_stats", {}, "t2")]),
@@ -1355,7 +1353,7 @@ def test_tool_loop_does_not_repair_a_malformed_verdict(mod, monkeypatch):
             [
                 _tool_use(
                     "emit_verdict",
-                    {"verdict": "neutral", "reasoning": "x", "evidence_used": _OBSERVED_STRING},
+                    {"reasoning": "x", "evidence_used": _OBSERVED_STRING},
                     "t3",
                 )
             ]
@@ -1383,9 +1381,9 @@ def test_schema_validation_is_actually_running(mod):
         (ROOT / "scripts/site/prompts/output_schemas/category_read.json").read_text()
     )
     # A genuine violation: evidence_used declared array, supplied as a string.
-    bad = {"verdict": "neutral", "reasoning": "x", "evidence_used": _OBSERVED_STRING}
+    bad = {"reasoning": "x", "evidence_used": _OBSERVED_STRING}
     assert mod.validate_against_schema(bad, schema), "validator did not flag a real violation"
-    good = {"verdict": "neutral", "reasoning": "x", "evidence_used": ["a", "b"]}
+    good = {"reasoning": "x", "evidence_used": ["a", "b"]}
     assert mod.validate_against_schema(good, schema) == []
 
 
@@ -1394,7 +1392,7 @@ def test_schema_warnings_print_without_verbose(mod, capsys):
     schema = json.loads(
         (ROOT / "scripts/site/prompts/output_schemas/category_read.json").read_text()
     )
-    bad = {"verdict": "not_a_valid_enum_value", "reasoning": "x"}
+    bad = {"reasoning": "x", "unexpected_key": 1}
     mod._emit_schema_warnings(bad, schema, "some/label", verbose=False)
     assert "schema warning [some/label]" in capsys.readouterr().err
 
@@ -1761,7 +1759,7 @@ def test_tool_loop_capture_records_the_opening_and_the_tool_schemas(
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
     monkeypatch.setattr(
         mod, "call_llm",
-        lambda *a, **kw: json.dumps({"verdict": "neutral", "reasoning": "single shot."}),
+        lambda *a, **kw: json.dumps({"reasoning": "single shot."}),
     )
     script = [
         _Response([_tool_use("variant_position_histogram", {}, "t1")]),
@@ -1836,7 +1834,7 @@ def test_one_invocation_stamps_prompt_and_output_with_the_same_run_id(
 ):
     """The join between the corpus and the verdicts it produced."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
-    monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: json.dumps({"verdict": "neutral",
+    monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: json.dumps({
                                                                      "reasoning": "x"}))
     monkeypatch.setattr(
         mod, "_try_import_anthropic", lambda: _fake_anthropic(_emit_verdict_script(), [])
@@ -1864,7 +1862,7 @@ def test_reused_output_keeps_its_old_run_id_and_the_capture_says_so(
 ):
     """The drift that actually happens: the rerun skips, so the corpus goes stale."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
-    monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: json.dumps({"verdict": "neutral",
+    monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: json.dumps({
                                                                      "reasoning": "x"}))
     monkeypatch.setattr(
         mod, "_try_import_anthropic", lambda: _fake_anthropic(_emit_verdict_script(), [])
@@ -1895,7 +1893,7 @@ def test_dry_run_capture_says_it_describes_no_output(
 ):
     """--dry-run --save-prompts makes no API call, so it can match nothing."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
-    monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: json.dumps({"verdict": "neutral",
+    monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: json.dumps({
                                                                      "reasoning": "x"}))
     monkeypatch.setattr(
         mod, "_try_import_anthropic", lambda: _fake_anthropic(_emit_verdict_script(), [])
@@ -2161,16 +2159,14 @@ def test_save_failed_response_never_masks_the_original_error(mod, tmp_path):
 _SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["verdict", "reasoning"],
+    "required": ["reasoning"],
     "properties": {
-        "verdict": {"type": "string", "enum": ["interesting", "neutral", "not_interesting"]},
         "reasoning": {"type": "string", "minLength": 1, "maxLength": 60},
         "evidence_used": {"type": "array", "items": {"type": "string"}},
     },
 }
-_DIRTY = {"verdict": "neutral",
-          "reasoning": 'Fold is modest.</reasoning>\n<parameter name="evidence_used">'}
-_CLEAN = {"verdict": "neutral", "reasoning": "Fold is modest and not integrated."}
+_DIRTY = {"reasoning": 'Fold is modest.</reasoning>\n<parameter name="evidence_used">'}
+_CLEAN = {"reasoning": "Fold is modest and not integrated."}
 
 
 def test_verdict_violations_flags_markup_and_length(mod):
@@ -2188,7 +2184,6 @@ def test_verdict_violations_flags_markup_and_length(mod):
 def test_strip_verdict_markup_keeps_the_prose(mod):
     out = mod._strip_verdict_markup(_DIRTY)
     assert out["reasoning"] == "Fold is modest."
-    assert out["verdict"] == "neutral"
     assert mod._verdict_violations(out, _SCHEMA) == []
 
 
@@ -2313,8 +2308,13 @@ def test_text_verdict_carrying_markup_is_rejected_then_re_answered(mod, monkeypa
     assert "tool-call markup" in reason
 
 
-def test_off_enum_text_verdict_is_rejected(mod, monkeypatch):
-    """The site matches verdicts by string literal, so an off-enum value fires nothing."""
+def test_unexpected_key_in_a_text_payload_is_rejected(mod, monkeypatch):
+    """additionalProperties is False, so a stray key is a rejection, not a warning.
+
+    This used to pin the verdict enum. With the label gone that is exactly the
+    key most likely to drift back in, so the test now pins the closed schema
+    that would catch it.
+    """
     script = [
         *_data_turns(),
         _Response([_text(json.dumps({"verdict": "Interesting", "reasoning": "ok"}))],
@@ -2330,7 +2330,7 @@ def test_off_enum_text_verdict_is_rejected(mod, monkeypatch):
     )
     assert verdict == _CLEAN
     (reason,) = _nudge_reasons(trace)
-    assert "verdict" in reason and "is not one of" in reason
+    assert "verdict" in reason and "Additional properties are not allowed" in reason
 
 
 def test_text_verdict_before_the_data_calls_is_rejected(mod, monkeypatch):

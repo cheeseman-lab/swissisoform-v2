@@ -88,7 +88,7 @@ def require_structure_hashes(raw: dict[str, Any]) -> None:
     emitted the hash columns fails immediately with an actionable message,
     rather than every reader returning ``no_hash`` and the model quietly
     concluding "no structural evidence". Deliberately not a soft fallback: a P
-    verdict with the readers and one without are not comparable.
+    read with the readers and one without are not comparable.
     """
     missing = [c for c in _HASH_COL.values() if c not in (raw or {})]
     if missing:
@@ -634,7 +634,7 @@ P_TOOLS: list[dict[str, Any]] = [
     {
         "name": EMIT_VERDICT,
         "description": (
-            "Terminal call: record the category verdict and stop. Call it exactly "
+            "Terminal call: record the category read and stop. Call it exactly "
             "once, after gathering enough data with the reader tools to justify it."
         ),
         # See tools.py's EMIT_VERDICT for why this one tool is strict.
@@ -642,25 +642,21 @@ P_TOOLS: list[dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "verdict": {
-                    "type": "string",
-                    "enum": ["interesting", "neutral", "not_interesting"],
-                },
                 "reasoning": {
                     "type": "string",
                     "description": (
                         "A few tight sentences, bottom line first, citing the specific "
-                        "numbers that justify the verdict. Never write the submodule "
+                        "numbers that carry it. Never write the submodule "
                         "ID codes (P1, P2)."
                     ),
                 },
                 "evidence_used": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Short notes on which tool findings drove the verdict.",
+                    "description": "Short notes on which tool findings drove the read.",
                 },
             },
-            "required": ["verdict", "reasoning", "evidence_used"],
+            "required": ["reasoning", "evidence_used"],
             "additionalProperties": False,
         },
     },

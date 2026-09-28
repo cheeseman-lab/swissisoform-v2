@@ -174,7 +174,7 @@ class TestMaterialize:
         for name in A.BASE_PROMPTS:
             assert (dest / name).exists()
         schema = json.loads((dest / A.SCHEMA_REL).read_text())
-        assert list(schema["properties"]) == ["verdict", "reasoning", "evidence_used"]
+        assert list(schema["properties"]) == ["reasoning", "evidence_used"]
 
     def test_tags_fired_never_reaches_the_single_shot_decoder(self, tmp_path):
         """Declared as a property it is offered to C/D/L/S too, and the smoke test
@@ -191,11 +191,11 @@ class TestMaterialize:
         # worse — an open door instead of a labelled slot, so Detection started
         # emitting the field too.
         assert schema["additionalProperties"] is False
-        assert schema["properties"]["verdict"]["enum"] == [
-            "interesting",
-            "neutral",
-            "not_interesting",
-        ]
+        # The enum used to be pinned here too. With the verdict gone there is
+        # nothing to pin, and `additionalProperties is False` above is the half
+        # that was load-bearing — it is what keeps tags_fired out of the
+        # single-shot decoder.
+        assert "verdict" not in schema["properties"]
 
         # The tool loop gets its own schema; it is validated with jsonschema after
         # the fact, never decoded against, so the field is safe to declare there.
@@ -368,3 +368,41 @@ class TestJudgmentTags:
         source = {"M": {"tags_fired": {"items": {"enum": ["m1"]}}}}
         A._union_extras({**source, "P": {"tags_fired": {"items": {"enum": ["p1"]}}}})
         assert source["M"]["tags_fired"]["items"]["enum"] == ["m1"]
+
+
+class TestVerdictIsGone:
+    """The four declarations that used to cross-check each other via the enum.
+
+    category_read.json, the two terminal-tool schemas and the prompt prose are
+    validated against each other only at runtime, and the enum was what made a
+    mismatch loud. With it removed nothing else pins them, so pin them here.
+    """
+
+    def test_shared_schema_has_no_verdict(self):
+        schema = json.loads((BASE / "output_schemas" / "category_read.json").read_text())
+        assert schema["required"] == ["reasoning"]
+        assert "verdict" not in schema["properties"]
+
+    def test_neither_terminal_tool_declares_a_verdict(self):
+        from swissisoform.site import structure_tools as ST
+        from swissisoform.site import tools as T
+
+        for tools, const in ((T.M_TOOLS, T.EMIT_VERDICT), (ST.P_TOOLS, ST.EMIT_VERDICT)):
+            emit = next(x for x in tools if x["name"] == const)
+            assert "verdict" not in emit["input_schema"]["properties"]
+            assert "verdict" not in emit["input_schema"]["required"]
+
+    def test_no_prompt_asks_for_a_verdict(self):
+        """The only guard against the prose drifting back.
+
+        `emit_verdict` stays as the terminal tool's name -- it is persisted in
+        every {letter}_trace.json outcome -- so the tool call itself is allowed.
+        """
+        for name in A.BASE_PROMPTS:
+            text = (BASE / name).read_text()
+            leftovers = [
+                line
+                for line in text.splitlines()
+                if "verdict" in line and "emit_verdict" not in line
+            ]
+            assert not leftovers, f"{name} still asks for a verdict: {leftovers}"

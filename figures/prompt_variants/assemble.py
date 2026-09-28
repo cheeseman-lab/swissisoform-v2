@@ -73,7 +73,7 @@ CONTRACTS: dict[str, str] = {
         "caveat. A tag with no `metrics` is single-metric by construction: its `value` "
         "is the whole of its evidence, not an excerpt. There are no verdict strings and "
         "no row-level records: reason from the states, their numbers, and the "
-        "supporting metrics where they are given."
+        "supporting metrics where they are given. The `state`, `test` and `cutoff` are how the payload was built, not findings — read them, never cite them."
     ),
     "dist": (
         _IDENTITY + "`fields` — every numeric metric for the category with its `value` "
