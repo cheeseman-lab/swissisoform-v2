@@ -249,7 +249,7 @@ def _print(
         "counts:\n  `tags` carries 24 tags in S against 3 in D, so a pooled win can "
         "be one category."
     )
-    print(f"\n  (synthesis unit = {SYNTHESIS_UNIT!r}, judged on its own 3 rubrics)")
+    print(f"\n  (synthesis unit = {SYNTHESIS_UNIT!r}, judged pairwise)")
 
 
 if __name__ == "__main__":
