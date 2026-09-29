@@ -20,20 +20,16 @@ gracefully no-ops when the env is missing.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from typing import Any
 
 from swissisoform.config import PipelineConfig
+from swissisoform.hashing import protein_hash
 from swissisoform.models import TranslationInitiationSite
 
 logger = logging.getLogger(__name__)
 
 
-def _protein_hash(protein: str) -> str:
-    """Stable hash of a protein sequence (stop codon stripped, uppercased)."""
-    seq = protein.rstrip("*").upper()
-    return hashlib.sha1(seq.encode("ascii"), usedforsecurity=False).hexdigest()
 
 
 SIGNALP_CONDA_ENV = "swissisoform-v2-signalp"
@@ -91,7 +87,7 @@ def precompute_signalp(
 
     hash_to_seq: dict[str, str] = {}
     for _label, seq in proteins.items():
-        h = _protein_hash(seq)
+        h = protein_hash(seq)
         hash_to_seq.setdefault(h, seq.rstrip("*").upper())
 
     logger.info(
@@ -239,7 +235,7 @@ class SignalPModule:
         Returns all-``None`` when the hash isn't in the predictions dict
         (module degrades gracefully without a precompute run).
         """
-        h = _protein_hash(protein)
+        h = protein_hash(protein)
         pred = self.predictions.get(h, {})
         return {
             "signalp_prediction": pred.get("signalp_prediction"),

@@ -29,7 +29,6 @@ Driven by the thin CLI at ``scripts/setup/setup_databases.py``.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import logging
 import os
@@ -39,6 +38,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from swissisoform.setup._common import ROOT, SIDECAR_FILE, sha256_file
 
 
 def _load_dotenv(path: Path) -> None:
@@ -62,7 +63,6 @@ def _load_dotenv(path: Path) -> None:
 
 logger = logging.getLogger("setup_databases")
 
-ROOT = Path(__file__).resolve().parents[3]
 REF = ROOT / "data" / "reference"
 
 # ---------------------------------------------------------------------------
@@ -70,12 +70,6 @@ REF = ROOT / "data" / "reference"
 # ---------------------------------------------------------------------------
 
 
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def write_sidecar(
@@ -106,16 +100,16 @@ def write_sidecar(
         payload["artifact_files"] = {
             str(f.relative_to(artifact)): {
                 "size_bytes": f.stat().st_size,
-                "sha256": _sha256(f),
+                "sha256": sha256_file(f),
             }
             for f in files
         }
     else:
         payload["artifact_size_bytes"] = artifact.stat().st_size
-        payload["artifact_sha256"] = _sha256(artifact)
+        payload["artifact_sha256"] = sha256_file(artifact)
     if extra:
         payload.update(extra)
-    (db_dir / "_setup.json").write_text(json.dumps(payload, indent=2))
+    (db_dir / SIDECAR_FILE).write_text(json.dumps(payload, indent=2))
 
 
 def is_built(artifact: Path, refresh: bool) -> bool:

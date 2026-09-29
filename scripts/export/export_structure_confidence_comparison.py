@@ -19,14 +19,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from swissisoform.structure.fold import DEFAULT_CACHE_DIR, load_cache
+
 ROOT = Path(__file__).resolve().parents[2]
-CACHE = ROOT / "data" / "cache" / "structure"
+# The fold cache's layout belongs to fold.py; naming it again here is how an
+# export silently stops seeing a relocated cache.
+CACHE = DEFAULT_CACHE_DIR
 A_BACKEND = "boltz"
 B_BACKEND = "esmfold2"
 # Whether to write the full per-residue vectors into the CSV (semicolon-joined,
@@ -36,13 +39,14 @@ VEC_ROUND = 4
 
 
 def _load(backend: str, h: str) -> tuple[list[float] | None, dict]:
-    base = CACHE / backend / h
-    conf_p, met_p = base / "confidence.json", base / "metrics.json"
-    plddt = None
-    if conf_p.exists():
-        plddt = json.loads(conf_p.read_text()).get("plddt")
-    metrics = json.loads(met_p.read_text()) if met_p.exists() else {}
-    return plddt, metrics
+    """Per-residue pLDDT and the metrics dict for one cached fold.
+
+    Reads through ``fold.load_cache`` rather than re-deriving the cache layout,
+    so a change to where folds live reaches this export too.
+    """
+    cached = load_cache(h, backend=backend) or {}
+    plddt = (cached.get("confidence") or {}).get("plddt")
+    return plddt, cached.get("metrics") or {}
 
 
 def main(argv: list[str] | None = None) -> int:

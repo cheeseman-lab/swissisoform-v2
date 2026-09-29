@@ -14,11 +14,12 @@ chai_lab.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 from pathlib import Path
 from typing import Any
+
+from swissisoform.hashing import protein_hash
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +30,6 @@ DEFAULT_MAX_SEQ_LEN = 1024
 FOLD_CONDA_ENV = "swissisoform-v2-fold"
 
 
-def protein_hash(protein: str) -> str:
-    """Stable hash of a protein sequence (stop codon stripped, uppercased)."""
-    seq = protein.rstrip("*").upper()
-    return hashlib.sha1(seq.encode("ascii"), usedforsecurity=False).hexdigest()
 
 
 def cache_path(cache_dir: Path | str, backend: str, h: str) -> Path:

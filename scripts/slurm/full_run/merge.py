@@ -57,6 +57,9 @@ MERGEABLE = ("ok", "unverified")
 NEEDS_REFILL = ("stale", "missing", "unreadable")
 
 
+TAG_VERSION_COLUMN = "isoform_tags_registry_version"
+
+
 def read_manifest(path: Path) -> dict[str, str]:
     """Parse the tab-separated key/value ``split_manifest.txt``."""
     out: dict[str, str] = {}
@@ -223,6 +226,41 @@ def merge_campaign(
         any(counts.get(s) for s in NEEDS_REFILL) or orphans or duplicates or unexpected
     )
     df = pd.concat(frames, ignore_index=True)
+
+    # Tag vocabularies must match across shards. The states/citations columns are
+    # structs whose FIELDS are the registry's tag ids, so concatenating two
+    # registry versions unions their fields and back-fills the difference with
+    # nulls — indistinguishable, downstream, from tags that were genuinely
+    # not-evaluable. Never publish that; a mixed campaign has to be re-run.
+    #
+    # Two ways to get there, and a version count alone only catches the first.
+    # A shard that ran without tags at all — no registry on disk (the additive
+    # warn-and-skip path), or `--skip-modules tags` on a resubmit — contributes
+    # no tag columns, so the concat back-fills its rows with nulls and the
+    # campaign still reports exactly one version. Those null rows read
+    # downstream as "every tag not-evaluable", which is the same lie by a
+    # different route, so an untagged shard is fatal too.
+    if TAG_VERSION_COLUMN in df.columns:
+        present = df[TAG_VERSION_COLUMN]
+        versions = sorted(set(present.dropna().astype(str)))
+        n_untagged = int(present.isna().sum())
+        if len(versions) > 1:
+            print(
+                f"ERROR: shards carry {len(versions)} tag-registry versions "
+                f"({', '.join(versions)}). Merging them would union two vocabularies "
+                "into one struct and null-fill the difference. Re-run the campaign "
+                "under a single --tag-registry."
+            )
+            return 1, report
+        if n_untagged:
+            print(
+                f"ERROR: {n_untagged} of {len(df)} rows carry no tag-registry version "
+                f"while the rest carry {versions[0] if versions else '(none)'}. Some "
+                "shards ran without the tag layer, and their null tags are "
+                "indistinguishable downstream from not-evaluable ones. Re-run those "
+                "shards with the registry present, or drop the tag columns entirely."
+            )
+            return 1, report
 
     if complete or allow_partial:
         target = out / "all_paired.parquet"

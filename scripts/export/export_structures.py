@@ -16,38 +16,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 
-from swissisoform import runner  # noqa: E402, I001
-from swissisoform.assembly import assemble_genes  # noqa: E402
 from swissisoform.export.folding_colors import build_folding_colors  # noqa: E402
 from swissisoform.export.pae import export_pae  # noqa: E402
+from swissisoform.export.presets import assemble_for_preset  # noqa: E402
 from swissisoform.export.structures import export_structures  # noqa: E402
-from swissisoform.pipeline import UpstreamReference  # noqa: E402
 from swissisoform.references import (  # noqa: E402
-    ALL_CELL_LINES,
-    GENOME,
-    GTF,
     PRESETS,
-    PROTEIN,
-    build_config,
 )
-
-
-def assemble_for_preset(preset_name: str):
-    """Reproduce the runner's load + assemble for *preset_name*; return (spec, genes)."""
-    spec = PRESETS[preset_name]
-    ref = UpstreamReference.load(gtf_path=GTF, genome_fasta=GENOME, protein_fasta=PROTEIN)
-    if "isoforms" in spec:
-        combined = runner.load_combined(ALL_CELL_LINES, ref, build_config())
-        final, gene_names = runner.restrict_to_isoforms(
-            combined, runner.load_isoform_picks(spec["isoforms"])
-        )
-    else:
-        final = runner.load_single_sample(spec.get("cell_lines", ["HeLa"])[0], ref)
-        gene_names = spec["genes"]
-    genes = assemble_genes(
-        final, gene_names=gene_names, genome_fasta=GENOME, exon_skeletons=ref.exon_skeletons
-    )
-    return spec, genes
 
 
 def main(argv: list[str] | None = None) -> int:

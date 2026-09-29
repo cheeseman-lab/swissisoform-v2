@@ -62,6 +62,8 @@ from swissisoform.modules.generef import GeneRefModule
 from swissisoform.modules.initiation_context import InitiationContextModule
 from swissisoform.modules.motifs import MotifsModule
 from swissisoform.modules.scoring import EvidenceScoringModule
+from swissisoform.modules.tags import TagModule
+from swissisoform.modules.tags import schema_overrides as tag_schema_overrides
 from swissisoform.modules.variant_intersection import VariantIntersectionModule
 from swissisoform.modules.varianteffect import VariantEffectModule
 from swissisoform.pipeline import AnnotationPipeline, UpstreamReference, run_sample
@@ -79,6 +81,10 @@ from swissisoform.references import (
 from swissisoform.sourceresolve import collapse_to_source, resolution_columns
 from swissisoform.structure.fold import DEFAULT_BACKEND
 from swissisoform.structure.module import StructureModule
+from swissisoform.tags.evaluate import TagEvaluationError
+from swissisoform.tags.registry import DEFAULT_VERSION as TAG_REGISTRY_DEFAULT
+from swissisoform.tags.registry import TagRegistryError
+from swissisoform.tags.registry import load as load_tag_registry
 
 logger = logging.getLogger("run")
 
@@ -588,6 +594,10 @@ class RunSpec:
     # Non-production opt-in: drop TIS no long-read sample scored (collapse with
     # keep_unevaluated=False). For long-read-only timing tests.
     drop_unsupported_tis: bool = False
+    # Frozen tag-registry version to fire (data/reference/tags/<version>/). The
+    # tag columns are additive — a run without the registry built still produces
+    # every existing column, it just carries no tags.
+    tag_registry_version: str = TAG_REGISTRY_DEFAULT
 
 
 @dataclass
@@ -753,7 +763,57 @@ def annotate(prepared: PreparedRun, spec: RunSpec) -> pd.DataFrame:
     scoring_mod.run(all_sites)
     logger.info("Annotation + comparison + scoring complete")
 
-    return paired_tis_dataframe(genes)
+    # Tags run last, over the finished frame: a threshold tag's cutoff was derived
+    # from a named parquet column, so it is evaluated against that column rather
+    # than against a rebuilt one. `all_sites` is in the same nesting order the
+    # frame is built from, which is what aligns the derived tags to their rows.
+    paired = paired_tis_dataframe(genes)
+    return _attach_tags(paired, all_sites, cfg, spec)
+
+
+def _attach_tags(
+    paired: pd.DataFrame,
+    all_sites: list,
+    cfg,
+    spec: RunSpec,
+) -> pd.DataFrame:
+    """Add the tag columns, or leave the frame untouched and say why.
+
+    The tag layer is additive, so neither a missing registry nor a tag that
+    cannot be evaluated may fail a run that is otherwise complete — the other 533
+    columns are correct either way, and a multi-hour run should not be lost to a
+    late, optional stage. Both paths log at WARNING, because a parquet silently
+    lacking tags is indistinguishable from one whose tags all came out empty.
+
+    **Every** exception is caught, not just ours. Narrowing this to
+    ``TagRegistryError``/``TagEvaluationError`` was the same mistake in a smaller
+    form: a ``KeyError`` from a transform, or an unknown criterion reaching
+    ``score_criterion``, would escape here — after the whole annotation has run
+    and before ``run()`` writes any parquet, so the entire run is lost to a bug
+    in the optional stage. An unexpected failure is logged at ERROR with its
+    traceback, which is where it can be seen, and the run still lands.
+    """
+    if "tags" in spec.skip:
+        logger.info("Tags: skipped (--skip-modules tags)")
+        return paired
+    try:
+        registry = load_tag_registry(spec.tag_registry_version)
+        return TagModule(registry, cfg).annotate_frame(paired, all_sites)
+    except (TagRegistryError, TagEvaluationError) as exc:
+        logger.warning(
+            "Tags: %s/%s/%s are absent from this run. %s",
+            *TagModule.OUTPUT_COLUMNS,
+            exc,
+        )
+        return paired
+    except Exception:
+        logger.exception(
+            "Tags: %s/%s/%s are absent from this run — unexpected failure in the "
+            "tag layer. This is a bug; the run continues because every other "
+            "column is correct.",
+            *TagModule.OUTPUT_COLUMNS,
+        )
+        return paired
 
 
 def _write_parquet_atomic(df: pd.DataFrame, path: Path, schema: pa.Schema) -> None:
@@ -891,7 +951,7 @@ def run(spec: RunSpec) -> int:
     # pins the clinical summaries to map types, so the schema no longer depends
     # on which variant sources and consequence terms this frame happened to see
     # — without that, two shards of one campaign disagree on the same column.
-    schema = paired_schema(paired)
+    schema = paired_schema(paired, tag_schema_overrides(paired))
     for gene_name, sub in paired.groupby("gene_name"):
         gpath = out_dir / f"{gene_name}_paired.parquet"
         pq.write_table(pa.Table.from_pandas(sub, schema=schema, preserve_index=False), gpath)

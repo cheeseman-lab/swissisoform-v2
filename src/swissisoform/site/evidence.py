@@ -21,7 +21,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from swissisoform.config import SCORING_SIDECAR, ScoringConfig
+from swissisoform.config import CELL_LINES, SCORING_SIDECAR, ScoringConfig
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +152,7 @@ _ISO_CANON_HEADLINES = {
     ),
 }
 
-_INITIATION_EFFICIENCY_SAMPLES = ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen")
+_INITIATION_EFFICIENCY_SAMPLES = CELL_LINES
 
 
 def _is_missing(value: Any) -> bool:
@@ -1725,7 +1725,7 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
 }
 
 # D1/D2 — per-cell-line expression columns (generated programmatically)
-for _sample in ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"):
+for _sample in CELL_LINES:
     _display = _sample.replace("_", " ")
     CRITERIA_METRIC_LABELS[f"expr_{_sample}_initiation_efficiency"] = {
         "label": f"{_display}: initiation efficiency",
