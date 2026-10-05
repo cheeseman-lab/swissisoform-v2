@@ -534,12 +534,14 @@
 .cat-flag-interesting { color: #166534; background: #dcfce7; border-color: #bbf7d0; }
 .cat-flag-neutral { color: #475569; background: #f1f5f9; border-color: #e2e8f0; }
 .cat-flag-not_interesting { color: #991b1b; background: #fee2e2; border-color: #fecaca; }
+.cat-flag-met { color: #166534; background: #dcfce7; border-color: #bbf7d0; }
+.cat-flag-unmet { color: #475569; background: #f1f5f9; border-color: #e2e8f0; }
 .cat-flag-pending { color: #94a3b8; background: transparent; border: 1px dashed #cbd5e1; }
 .cat-flag-pending::before { content: "\2690"; }  /* ⚐ hollow — not yet assessed */
 
 /* CDLMPS lineup — the six category letters, replacing the old E/F badges.
-   A letter "fires" (interesting / not_interesting) with a semantic colour;
-   neutral + unscored stay quiet. Reuses the .cat-flag-* hue palette. */
+   A letter "fires" (a criterion met, or a legacy interesting / not_interesting
+   verdict) with a semantic colour; unmet, neutral and unscored stay quiet. Reuses the .cat-flag-* hue palette. */
 .cdlmps {
   display: inline-flex;
   align-items: baseline;
@@ -559,6 +561,8 @@
 .cdlmps-interesting { color: #16a34a; }      /* fires — vivid green */
 .cdlmps-not_interesting { color: #dc2626; }  /* fires — vivid red */
 .cdlmps-neutral { color: #cbd5e1; }          /* doesn't fire — greyed out */
+.cdlmps-met { color: #16a34a; }              /* a criterion met — green */
+.cdlmps-unmet { color: #cbd5e1; }            /* scored, none met — greyed out */
 .cdlmps-pending { color: #e2e8f0; }          /* not assessed — faintest */
 
 /* Collapsible LLM reasoning — the only disclosure inside a category box. */

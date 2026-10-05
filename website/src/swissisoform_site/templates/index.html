@@ -90,9 +90,9 @@
       <label class="sort-control">
         <span class="refine-label">Sort</span>
         <select id="sort-mode"
-                title="Order genes. 'interesting index' ranks by the Best isoform's net CDLMPS score (green +1, red −1).">
+                title="Order genes. 'interesting index' ranks by the Best isoform's CDLMPS score (one point per category with a criterion met).">
           <option value="name">gene name</option>
-          <option value="firing" title="Net CDLMPS score: +1 per green (interesting) category, −1 per red (not interesting)">interesting index</option>
+          <option value="firing" title="CDLMPS score: +1 per category with at least one criterion met">interesting index</option>
         </select>
       </label>
     </div>
@@ -169,7 +169,7 @@
 
     {# Headline CDLMPS lineup — the highest net-score isoform (best set above). #}
     {% if best %}
-    <div class="gene-card-best mb-2">{{ sc.cdlmps(best.category_verdicts, label='Best:') }}</div>
+    <div class="gene-card-best mb-2">{{ sc.cdlmps(best.category_flags, label='Best:') }}</div>
     {% endif %}
 
     {# UniProt keyword chips — clickable adds the term to the functional filter;

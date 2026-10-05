@@ -50,8 +50,8 @@
       </li>
       <li>
         <strong>The CDLMPS lineup</strong> — six letters, one per evidence category,
-        each coloured by an LLM's verdict for that category on this gene's headline
-        isoform: <em>interesting</em>, <em>neutral</em>, or <em>not interesting</em>.
+        lit green on this gene's headline isoform when at least one of that
+        category's criteria is met, grey otherwise.
         The lineup is the fastest read on the card — it tells you <em>which kind</em>
         of evidence is carrying this isoform.
       </li>
@@ -61,7 +61,7 @@
       </li>
       <li>
         <strong>The interesting index</strong> — the lineup condensed into a single
-        number (green +1, red −1) so the whole catalogue can be sorted by it.
+        number (one point per green letter) so the whole catalogue can be sorted by it.
       </li>
     </ul>
     <p>
@@ -80,10 +80,10 @@
       <strong>CDLMPS</strong>. Each criterion returns <strong>✓ (true)</strong>,
       <strong>✗ (false)</strong>, or <strong>– (not evaluable)</strong> — a criterion
       whose underlying data could not be computed reports "not evaluable" rather than
-      counting against the isoform. On every isoform, an LLM reads each category and
-      calls it <em>interesting</em>, <em>neutral</em>, or <em>not interesting</em>;
-      those verdicts colour the CDLMPS lineup you see on each gene card and drive the
-      "interesting index" (see <a href="#m-interesting-index">below</a>).
+      counting against the isoform. A category with at least one criterion met lights
+      its letter on the CDLMPS lineup you see on each gene card and counts toward the
+      "interesting index" (see <a href="#m-interesting-index">below</a>). On every
+      isoform, an LLM also writes a short read of each category, shown on its tile.
     </p>
 
     <div class="about-cats">
@@ -151,13 +151,13 @@
       </li>
       <li>
         <strong>Category</strong> — keep only genes whose headline (<em>Best:</em>)
-        isoform <em>fires</em> the chosen CDLMPS categories — a letter fires when its
-        LLM verdict is interesting or not-interesting. Selecting <code>C D</code>
+        isoform <em>fires</em> the chosen CDLMPS categories — a letter fires when at
+        least one of its criteria is met. Selecting <code>C D</code>
         (with <em>all</em>) keeps genes firing both Conservation and Detection.
       </li>
       <li>
         <strong>Sort — interesting index</strong> — order genes by their best
-        isoform's net CDLMPS score (green +1, red −1; see
+        isoform's CDLMPS score (one point per green letter; see
         <a href="#m-interesting-index">below</a>), surfacing the most promising
         isoforms first.
       </li>
@@ -571,7 +571,7 @@
       <dt id="m-interesting-index">The interesting index &amp; the CDLMPS lineup</dt>
       <dd>
         <p><b>What it measures.</b> A single at-a-glance readout of how promising an isoform is, shown as the coloured <span class="about-code">CDLMPS</span> lineup on each gene card and used to rank genes.</p>
-        <p><b>How it's calculated.</b> For each isoform, an LLM reads each of the six categories and returns a verdict — <em>interesting</em>, <em>neutral</em>, or <em>not interesting</em>. On the lineup a letter lights <span style="color:#16a34a;font-weight:700">green</span> when its category is interesting, <span style="color:#dc2626;font-weight:700">red</span> when not interesting, and stays grey when neutral or unscored. The <b>interesting index</b> is the net score: <b>+1 per green letter, −1 per red</b>, neutral = 0. Each gene card headlines its highest-scoring isoform (the "Best:" lineup), and the index page can sort genes by this interesting index. (This editorial index is separate from the underlying True/False criterion scores above — it summarizes the LLM's reading of them.)</p>
+        <p><b>How it's calculated.</b> On the lineup a letter lights <span style="color:#16a34a;font-weight:700">green</span> when at least one of its category's criteria is met (✓), and stays grey when its criteria were scored and none is met, or when none could be evaluated. The <b>interesting index</b> is the number of green letters. Each gene card headlines its highest-scoring isoform (the "Best:" lineup), and the index page can sort genes by this interesting index. The LLM's written read of each category is shown on the isoform page and does not enter the index. (Isoforms whose LLM output predates this change still carry an <em>interesting</em> / <em>neutral</em> / <em>not interesting</em> verdict; there a letter follows the verdict, and a <span style="color:#dc2626;font-weight:700">red</span> not-interesting letter counts −1.)</p>
         <p class="about-cite">Refs: SwissIsoform methods §Evidence scoring</p>
       </dd>
 
