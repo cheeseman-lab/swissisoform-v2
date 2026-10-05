@@ -44,6 +44,7 @@ from swissisoform import metrics
 from swissisoform.distributions import (
     CATEGORICAL_FILE,
     CRITERIA_FILE,
+    DEFAULT_VERSION,
     HIST_BINS,
     NAMED_PERCENTILES,
     NUMERIC_FILE,
@@ -581,7 +582,11 @@ def main(argv: Iterable[str] | None = None) -> int:
     g.add_argument("--run", help="Run name under data/output/")
     g.add_argument("--parquet", type=Path, help="Explicit all_paired.parquet path")
     p.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG, help="Feature catalog CSV")
-    p.add_argument("--version", default="v1", help="Version directory name (default: v1)")
+    p.add_argument(
+        "--version",
+        default=DEFAULT_VERSION,
+        help=f"Version directory name (default: {DEFAULT_VERSION})",
+    )
     p.add_argument("--out", type=Path, default=None, help="Override the output directory")
     p.add_argument("--force", action="store_true", help="Overwrite an existing version")
     args = p.parse_args(list(argv) if argv is not None else None)

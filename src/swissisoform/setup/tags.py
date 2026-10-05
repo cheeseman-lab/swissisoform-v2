@@ -28,10 +28,12 @@ Two cutoff sources, one flag:
 The flag is global, so a criterion that should be swept while the rest stay
 pinned names itself in ``seeds.SWEPT_CUTOFF_CRITERIA`` instead.
 
-Either way a criterion enters as a ``derived`` tag that runs its own scorer, with
-the cutoff handed to it through ``cutoff_overrides``. Only the numbers move; the
-gates the scorer applies around them do not. Swept tags have no ``ScoringConfig``
-equivalent and carry their distribution cutoff under both flags.
+Either way a criterion enters as a ``derived`` tag that runs its own scorer. Its
+cutoffs are recorded in ``cutoff_overrides``, but the evaluator scores derived
+tags at the run's ``ScoringConfig`` and only *reports* an override that differs —
+so a derived tag always equals its criterion, and a distribution build is a
+proposal for moving ``ScoringConfig``, not a second answer. Swept tags have no
+``ScoringConfig`` equivalent and carry their distribution cutoff under both flags.
 
 Driven by the thin CLI ``scripts/setup/build_tag_registry.py``.
 """
@@ -59,6 +61,7 @@ from swissisoform.tags.registry import (
     KIND_DERIVED,
     KIND_LLM,
     KIND_THRESHOLD,
+    OPTIONAL_COLUMNS,
     REGISTRY_COLUMNS,
     REGISTRY_FILE,
     SIDECAR_FILE,
@@ -68,7 +71,7 @@ from swissisoform.tags.registry import (
 
 DEFAULT_CATALOG = ROOT / "figures" / "clustering_dims" / "feature_space" / "feature_catalog.csv"
 DEFAULT_CANDIDATES = ROOT / "figures" / "tag_vocab" / "tag_candidates.csv"
-DEFAULT_DIST_VERSION = "v3"
+DEFAULT_DIST_VERSION = dist_mod.DEFAULT_VERSION
 DEFAULT_RUN = "full_catalog"
 
 # The sweep's `kind` vocabulary is narrower than the registry's — it has no notion
@@ -84,9 +87,6 @@ REJECT_DECISIONS = frozenset({"remove", "drop"})
 
 class TagBuildError(RuntimeError):
     """Raised when the candidate table and the sweep cannot be reconciled."""
-
-
-
 
 
 
@@ -249,6 +249,20 @@ def criterion_rows(
                     "distribution" if swept else cutoffs,
                 )
                 overrides[seed.config_field] = float(value)
+            # Kept as an annotation when the config number wins, so the reviewer
+            # still sees where the distribution would have cut.
+            if (
+                not swept
+                and cand is not None
+                and cand.cutoff is not None
+                and value is not None
+                and float(cand.cutoff) != float(value)
+            ):
+                pct = f", p{cand.cutoff_pctile:g}" if cand.cutoff_pctile is not None else ""
+                notes.append(
+                    f"Distribution cut {seed.config_field}={cand.cutoff:.6g} "
+                    f"({cand.cutoff_source}{pct}); not applied."
+                )
         # A citation needs one number. An either-or criterion has no single one,
         # so it gets none rather than an arbitrary branch's.
         metrics_ = [s.metric for s in branches if s.metric]
@@ -402,7 +416,11 @@ def build(
         candidate_row(by_id[tid], labels[tid]) for tid in labels if by_id[tid].source != "criterion"
     ]
     rows.extend(criterion_rows(by_id, cutoffs=cutoffs, labels=labels))
-    frame = pd.DataFrame(rows, columns=list(REGISTRY_COLUMNS))
+    # Every cutoff is still a single pooled number: choose_cutoff cuts one
+    # stratum per tag. The column is written so the format exists; filling it
+    # is a per-stratum sweep, which is a calibration decision.
+    frame = pd.DataFrame(rows, columns=list(REGISTRY_COLUMNS) + list(OPTIONAL_COLUMNS))
+    frame["cutoff_by_stratum"] = frame["cutoff_by_stratum"].fillna("")
     frame = frame.sort_values(["category", "kind", "tag_id"], kind="stable").reset_index(drop=True)
     _check_metrics_resolve(frame, columns)
 
@@ -433,6 +451,7 @@ def write_sidecar(
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "cutoff_source": cutoffs,
         "distributions_version": dist_version,
+        "provisional": dist_mod.PROVISIONAL_VERSIONS.get(dist_version, ""),
         "source_run_for_columns": source_run,
         "candidates_csv": rel_to_root(candidates_csv),
         "candidates_csv_sha256": sha256_file(candidates_csv),
@@ -445,8 +464,10 @@ def write_sidecar(
             "yet rejected), not a selection.",
             "--cutoffs config only moves the criterion tags; swept tags have no "
             "ScoringConfig equivalent and keep their distribution cutoff either way.",
-            "Derived tags call their criterion's scorer, so their value equals the "
-            "criterion's by construction and no cutoff of theirs lives here.",
+            "Derived tags call their criterion's scorer at the run's ScoringConfig, "
+            "so their value equals the criterion's by construction. cutoff_overrides "
+            "records the numbers this build proposes; the evaluator reports a "
+            "difference but does not apply it.",
             "LLM tags carry no state from code. A consumer must render them as "
             "unanswered, never as off.",
         ],
