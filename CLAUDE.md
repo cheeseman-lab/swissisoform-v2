@@ -275,64 +275,40 @@ consumer picks; retiring either is a later, separate decision.
 
 | column | type | contents |
 |---|---|---|
-| `isoform_tags_states` | `struct<n x bool>`, one field per code-fired tag (42 in v3) | `True` / `False` / **null = not-evaluable** |
-| `isoform_tags_citations` | `struct<n x double>` | the one number each tag rests on |
+| `isoform_tags_states` | `struct<52 x bool>` | `True` / `False` / **null = not-evaluable** |
+| `isoform_tags_citations` | `struct<52 x double>` | the one number each tag rests on |
 | `isoform_tags_registry_version` | `string` | which frozen vocabulary fired |
-| `isoform_tags_registry_sha256` | `string` | content hash of the tag definitions (`TagRegistry.sha256`) — which *build* of that version fired; `merge.py` refuses a campaign mixing two |
 
 **The registry is provisioned reference data**, `data/reference/tags/<version>/`,
-built by `python scripts/setup/build_tag_registry.py --version v4 --cutoffs config`
+built by `python scripts/setup/build_tag_registry.py --version v1 --cutoffs config`
 (mirrors `setup/distributions.py`: same `--version` / `--force` /
 refuse-to-clobber discipline and `_setup.json` provenance). It re-runs the sweep's
 own `propose → apply_filters → choose_cutoff` against distributions `v3` and keeps
 the rows `figures/tag_vocab/tag_candidates.csv` does not mark `remove` — nothing is
 recovered by parsing the CSV's `test` string.
 
-**`v3` is current, the default, and provisional.** It and distributions v3 were
-frozen from the Aug-12 `full_catalog`, which predates the M1 sign flip and gate
-(2a48f89) and PRs #24/#29/#32; `PROVISIONAL_VERSIONS` marks both and `TagModule`
-warns when it fires v3. Re-freeze distributions and the registry (as v4) after the
-next genome-wide run. `distributions.DEFAULT_VERSION` is the one default every
-reader and builder takes.
-
-v3 has 46 tags, 42 code-fired, 16 derived. It is
+**`v3` is current and the default** — 46 tags, 42 code-fired, 16 derived. It is
 v2 plus `S2_biophysics` and `S3_sae`, readmitted after the judge study showed
 their absence was what the tags arm was being marked down for: of the 812
 Structural Characteristics pairs it lost under v2, 84.9% of the judge's own
 reasoning cites the whole-protein biophysical shift S2 carries and 81.5% the SAE
 shift S3 carries. Readmitting them moved S from **−1.05/−1.14 to +0.49/+0.82**.
 
-Both fire at their `ScoringConfig` numbers. The on-disk v3 carries a swept S3
-cutoff (`s3_top_delta_min` 10.0 → 11.37578) in `cutoff_overrides`, but derived
-tags score at the scorer's own config, so the override is logged and not applied
-— firing at it had given the same parquet two S3 answers on 7 of 50 cheeseman50
-rows. `seeds.SWEPT_CUTOFF_CRITERIA` is empty; the builder records the
-distribution's cut in the criterion row's note. Both are immune from Jaccard
-elimination, as ordinary criterion candidates.
+The two take their cutoffs from different places, deliberately. **S2 keeps its
+`ScoringConfig` numbers** — measured on `full_catalog` its three branches sit at
+p88–p89 and roll up to a 20.2% fire rate, mid-band and not measurably broken,
+where the sweep would have put all three at p60 on a bare percentile that *sets*
+the rate rather than discovering it. **S3 takes the swept cutoff**
+(`s3_top_delta_min` 10.0 → 11.37578), via `seeds.SWEPT_CUTOFF_CRITERIA`, which
+makes the cutoff source per-criterion instead of a global `--cutoffs` flag. Both
+are immune from Jaccard elimination, as ordinary criterion candidates.
 
 v3 also fixes a dead tag. `metrics.resolve` had no branch for the `<col>__len`
 metrics the profiler synthesizes, so v2's `cmp_motifs_hits_in_diff_region__len`
 resolved to None on every row of every run — 1 of 40 code-fired tags was dead,
 with one WARNING as the only symptom.
 `setup.tags._check_metrics_resolve` now refuses at build time to freeze a
-threshold tag whose metric no run can resolve. The next build cuts that tag on
-the identical real column `cmp_motifs_n_hits_in_diff_region` instead.
-
-**Firing-time guards that apply to v3 without a rebuild:**
-- A `*_ratio` with a `*_shared` sibling resolves to NA where shared ≤ 0. GRAVY,
-  disorder and the instability index cross zero, and a negative denominator
-  inverts "unique > shared" (`gravy_ratio_hi` was wrong on 31 of 36 cheeseman50
-  rows). The next build drops those three ratios for `tx:<prop>_unique_minus_shared`.
-- A threshold/bool tag is also held to its metric's `seeds.VALIDITY_OVERRIDES`.
-  Unique-region constraint metrics are valid only off `NO_CANONICAL_BASELINE_ORFS`
-  (truncations), M1's own gate. `Tag.label_for(orf_type)` reads "gained" as "lost"
-  on truncations.
-- A `*_changed` bool is re-derived from its `_canonical`/`_isoform` columns: one
-  side present is a change (a signal peptide gained), not-evaluable only when the
-  predictor did not run (`metrics.changed_state`).
-
-Registries may carry an optional `cutoff_by_stratum` (`{orf_type or stratum:
-cutoff}`) that the evaluator applies per row; no build fills it yet.
+threshold tag whose metric no run can resolve.
 
 `v2` (same 44 tags, 39 live) is the faithful record of what the judged runs
 actually fired. `v1` (56/52/16) predates the review pass and is a *historical
@@ -344,11 +320,11 @@ and `UNCALIBRATED_CRITERIA` is gone.
 
 **Four kinds, and only one of them is code.** Adding a tag is adding a row:
 
-| kind | n in v3 | what it is |
+| kind | n in v1 | what it is |
 |---|---|---|
-| `threshold` | 22 | `metric ⋈ cutoff` via `metrics.resolve` |
+| `threshold` | 30 | `metric ⋈ cutoff` via `metrics.resolve` |
 | `derived` | 16 | runs the criterion's own `evidence/<crit>/score` fn |
-| `bool` | 4 | an existing boolean column, tri-stated |
+| `bool` | 6 | an existing boolean column, tri-stated |
 | `llm` | 4 | M/P tool-loop judgment; never fired by code |
 
 **Why all sixteen criteria are `derived`, not thresholds.** Measured on
@@ -358,16 +334,18 @@ criteria the sweep can express, every time by dropping a gate: P1 reads a popula
 not-evaluable, threshold: `False`); M1 is undefined for separate ORFs; M2/P2 gate
 on their own status fields; M1/S2 are either-or roll-ups over two and three inputs.
 Turning "could not evaluate" into "evidence absent" is the exact failure #30 exists
-to remove. A `derived` tag calls the scorer **at the same `ScoringConfig`
-`EvidenceScoringModule` ran at**, so it equals the criterion by construction. The
-registry's `cutoff_overrides` (`{ScoringConfig field: value}`) record the numbers
-a build proposes; `evaluate.fire` logs any that differ and does not apply them.
-Moving a criterion's number is a change to `ScoringConfig`.
+to remove. A `derived` tag calls the scorer, so it equals the criterion **by
+construction** — and its cutoffs still come from the registry, as
+`cutoff_overrides` (`{ScoringConfig field: value}`) folded into the config the
+scorer is handed. Only the numbers move; the gates stay. Multi-threshold criteria
+override only their headline cutoff — P2's `p2_min_shared_len` / `p2_plddt_min` and
+P3's `p3_min_sse_plddt` are gates, not cutoffs, and stay at their config values.
 
-`scripts/tags/check_tag_parity.py` must therefore pass on any parquet fired by
-current code (re-evaluated on cheeseman50 under v3: 16/16; the stored v3 columns,
-fired before this change, show S3 7/50 off, hence `--expect-diff`).
-`--cutoffs distribution` records where the frozen distribution put each criterion.
+`--cutoffs config` reproduces today's scoring exactly (verified:
+`effective_scoring(v1, ScoringConfig()) == ScoringConfig()`, and
+`scripts/tags/check_tag_parity.py` shows every derived tag agreeing row-for-row
+— 16/16 under v1, 14/14 under v2, which carries no S2/S3 tag);
+`--cutoffs distribution` cuts where the frozen distribution put each criterion.
 Build the config one first — a calibration finding must never be confusable with a
 wiring bug. **Two distribution cutoffs are not usable as-is**: swept percentiles on
 counting thresholds land between integers, putting `min_cell_lines` at 1.12 and
