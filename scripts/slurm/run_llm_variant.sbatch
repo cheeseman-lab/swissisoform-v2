@@ -57,32 +57,17 @@ printf '[%s] arm=%s done in %ds (%dm%02ds)\n' \
     "$(date -u +%FT%TZ)" "$ARM" "$took" $((took / 60)) $((took % 60))
 
 # The usage report is where the real cost lands — print it so the log carries it.
-# Under the corpus the run actually used: --corpus is forwardable.
-CORPUS=cheeseman50
-prev=""
-for a in "$@"; do
-    [[ "$prev" == "--corpus" ]] && CORPUS="$a"
-    [[ "$a" == --corpus=* ]] && CORPUS="${a#--corpus=}"
-    prev="$a"
-done
-# `if`, not `[[ -f ]] && ...`: a missing report (--dry-run, --only-category C
-# with no tool loop) left the last command false and Slurm marked a
-# successful arm FAILED.
-usage="data/output/${CORPUS}_${ARM}/llm/_usage_category.json"
-if [[ -f "$usage" ]]; then
-    python - "$usage" <<'PY'
+usage="data/output/cheeseman50_${ARM}/llm/_usage_category.json"
+[[ -f "$usage" ]] && python - "$usage" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))["total"]
 print(f"  single-shot: {d['calls']} calls, {d['input']:,} in / {d['output']:,} out, "
       f"${d['cost_usd']:.2f}")
 PY
-fi
-usage_tools="data/output/${CORPUS}_${ARM}/llm/_usage_category_tools.json"
-if [[ -f "$usage_tools" ]]; then
-    python - "$usage_tools" <<'PY'
+usage_tools="data/output/cheeseman50_${ARM}/llm/_usage_category_tools.json"
+[[ -f "$usage_tools" ]] && python - "$usage_tools" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))["total"]
 print(f"  tool loops:  {d['calls']} calls, {d['input']:,} in / {d['output']:,} out, "
       f"${d['cost_usd']:.2f}")
 PY
-fi
