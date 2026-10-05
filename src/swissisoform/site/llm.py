@@ -659,12 +659,46 @@ def flush_prompt_index() -> None:
     if _PROMPT_DIR is None:
         return
     if _PROMPT_INDEX:
-        (_PROMPT_DIR / f"index_{_PROMPT_PASS}.json").write_text(
-            json.dumps(_PROMPT_INDEX, indent=2, ensure_ascii=False, default=str),
+        index_path = _PROMPT_DIR / f"index_{_PROMPT_PASS}.json"
+        index_path.write_text(
+            json.dumps(_merged_index(index_path), indent=2, ensure_ascii=False, default=str),
             encoding="utf-8",
         )
     print(f"[prompts] captured {len(_PROMPT_INDEX)} prompts (run {_RUN_ID}) -> {_PROMPT_DIR}")
     _report_corpus_drift()
+
+
+def _merged_index(index_path: Path) -> list[dict[str, Any]]:
+    """This run's index entries merged over the existing index, keyed by file.
+
+    The .txt files are overwritten per isoform, so after a partial rerun
+    (``--gene``, ``--only-category``) the corpus is mostly the earlier run's
+    files. Rewriting the index from this run alone dropped those from it — the
+    Sep-25 reruns left three arms' indexes listing 1-12 prompts out of 300.
+    Entries whose file is gone are dropped; every entry keeps its own run_id.
+    """
+    merged: dict[str, dict[str, Any]] = {}
+    if index_path.exists():
+        try:
+            prior = json.loads(index_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 - a corrupt index is rebuilt from this run
+            prior = []
+        for entry in prior if isinstance(prior, list) else []:
+            rel = entry.get("rel") if isinstance(entry, dict) else None
+            if rel and (index_path.parent / rel).exists():
+                merged[rel] = entry
+    for entry in _PROMPT_INDEX:
+        merged[entry["rel"]] = entry
+    return list(merged.values())
+
+
+def _carries_other_runs(stamp_path: Path) -> bool:
+    """Whether a stamp's per-category provenance names any run but this one."""
+    try:
+        runs = json.loads(stamp_path.read_text(encoding="utf-8")).get("category_runs") or {}
+    except Exception:  # noqa: BLE001 - unreadable is reported elsewhere
+        return False
+    return any((r or {}).get("run_id") != _RUN_ID for r in runs.values())
 
 
 def _read_run_id(stamp_path: Path) -> str | None:
@@ -700,7 +734,7 @@ def _report_corpus_drift() -> None:
             )
         return
 
-    foreign, unknown = [], []
+    foreign, unknown, mixed = [], [], []
     for out_file in outputs:
         stamp = out_file.with_suffix(".meta.json")
         run_id = _read_run_id(stamp) if stamp.exists() else None
@@ -708,6 +742,8 @@ def _report_corpus_drift() -> None:
             unknown.append(out_file.parent.name)
         elif run_id != _RUN_ID:
             foreign.append(out_file.parent.name)
+        elif _carries_other_runs(stamp):
+            mixed.append(out_file.parent.name)
 
     def _warn(kind: str, slugs: list[str]) -> None:
         if not slugs:
@@ -721,6 +757,7 @@ def _report_corpus_drift() -> None:
 
     _warn("from a different run", foreign)
     _warn("with no run stamp (written before stamping, or by hand)", unknown)
+    _warn("carrying categories from an earlier run (partial rerun; see category_runs)", mixed)
 
     captured = {entry["rel"] for entry in _PROMPT_INDEX}
     stale = [
@@ -1386,8 +1423,44 @@ def _save_failed_response(
         pass
 
 
+def _category_runs(
+    out_path: Path, results: dict[str, Any], *, model: str, regenerated: set[str] | None
+) -> dict[str, dict[str, Any]]:
+    """Which run produced each category in *results*.
+
+    A partial (``--only-category``) run writes ``categories.json`` whole, the
+    carried-forward verdicts included — so a single file-level ``run_id`` would
+    claim all six for this run, prompt and model and all. Regenerated categories
+    get this run; the rest keep what the previous stamp recorded for them (its
+    own ``category_runs`` entry, or its file-level fields for a stamp that
+    predates per-category provenance).
+    """
+    stamp = out_path.with_suffix(".meta.json")
+    try:
+        prior = json.loads(stamp.read_text(encoding="utf-8")) if stamp.exists() else {}
+    except Exception:  # noqa: BLE001 - an unreadable stamp is "unknown", not fatal
+        prior = {}
+    prior_runs = prior.get("category_runs") or {}
+    this_run = {"run_id": _RUN_ID, "model": model}
+    runs: dict[str, dict[str, Any]] = {}
+    for name in results:
+        if regenerated is None or name in regenerated:
+            runs[name] = this_run
+        else:
+            runs[name] = prior_runs.get(name) or {
+                "run_id": prior.get("run_id"),
+                "model": prior.get("model"),
+            }
+    return runs
+
+
 def _write_category_results(
-    out_path: Path, tis_slug: str, results: dict[str, Any], *, model: str
+    out_path: Path,
+    tis_slug: str,
+    results: dict[str, Any],
+    *,
+    model: str,
+    regenerated: set[str] | None = None,
 ) -> bool:
     """Write ``categories.json`` only when every category produced a verdict.
 
@@ -1397,6 +1470,9 @@ def _write_category_results(
     staged. Holding the write back leaves the isoform genuinely absent, so the
     next run regenerates it. Partial results land in ``categories.partial.json``
     — nothing reads that name — so the good verdicts stay auditable.
+
+    ``regenerated`` names the categories this run produced, for a partial run;
+    ``None`` means all of them. The stamp records it per category.
 
     Returns True when the real file was written.
     """
@@ -1414,11 +1490,14 @@ def _write_category_results(
             file=sys.stderr,
         )
         return False
+    # Read the previous stamp before anything overwrites it.
+    runs = _category_runs(out_path, results, model=model, regenerated=regenerated)
     out_path.write_text(json.dumps(results, indent=2, ensure_ascii=False))
     partial.unlink(missing_ok=True)  # a retry succeeded; don't leave the old partial behind
-    _write_run_stamp(
-        out_path, pass_name="category", model=model, categories=sorted(results)
-    )
+    extra: dict[str, Any] = {"categories": sorted(results), "category_runs": runs}
+    if regenerated is not None:
+        extra["regenerated"] = sorted(regenerated)
+    _write_run_stamp(out_path, pass_name="category", model=model, **extra)
     return True
 
 
@@ -1688,8 +1767,9 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="LETTER",
         help=(
             "Regenerate only these category letters (repeatable); the rest are "
-            "carried forward from the existing categories.json. Needs --force, "
-            "since the isoform's output already exists."
+            "carried forward from the existing categories.json, keeping their own "
+            "provenance in the run stamp. Implies --force for the named categories. "
+            "Isoforms with no categories.json yet are skipped."
         ),
     )
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -1786,8 +1866,21 @@ def main(argv: list[str] | None = None, *, prompts_dir: Path | None = None) -> i
             When ``None``, the module-level ``SYSTEM_PROMPT_PATH`` /
             ``OUTPUT_SCHEMA_PATH`` defaults are used.
     """
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     spec = PASS_REGISTRY[args.pass_name]
+    if args.only_category:
+        if not spec.iterates_categories:
+            parser.error("--only-category applies to --pass category only")
+        try:
+            _selected_categories(args.only_category)
+        except ValueError as e:
+            parser.error(str(e))
+        # Naming a category IS asking for it to be regenerated. Without this the
+        # existence skip fired first and the run printed "0/0 successful, N
+        # reused" — a silent no-op. Every isoform it touches is a merge into an
+        # existing file, so forcing cannot clobber the categories not named.
+        args.force = True
     _begin_run(dry_run=getattr(args, "dry_run", False))
 
     # The evidence slices this pass builds carry threshold language ("qualifies
@@ -2145,6 +2238,29 @@ def _selected_categories(only: list[str] | None) -> list[dict[str, Any]]:
     return picked
 
 
+def _regenerated(only: list[str] | None) -> set[str] | None:
+    """Category names a partial run produces, or ``None`` for a full run."""
+    return {c["name"] for c in _selected_categories(only)} if only else None
+
+
+def _nothing_to_merge_into(out_path: Path, args, gene_name: str, tis_slug: str) -> bool:
+    """Whether a ``--only-category`` run must skip this isoform.
+
+    A partial run merges into an existing ``categories.json``. With none there,
+    it would write a file holding only the named categories — and the skip check
+    downstream is bare existence, so that one-category file would pass for a
+    complete one forever after.
+    """
+    if not args.only_category or out_path.exists():
+        return False
+    print(
+        f"[skip] {gene_name} {tis_slug}: --only-category needs an existing "
+        f"{out_path.name} to merge into; run the full pass for this isoform first",
+        file=sys.stderr,
+    )
+    return True
+
+
 def _seed_results(out_path: Path, only: list[str] | None) -> dict[str, Any]:
     """Prior verdicts for the categories this run is not regenerating.
 
@@ -2320,7 +2436,7 @@ def _run_category_pass(
             records, spec, args, system_prompt, output_schema, tool_configs=tool_configs
         )
 
-    from swissisoform.site.evidence import CATEGORIES, slice_category
+    from swissisoform.site.evidence import slice_category
 
     api_key = os.environ.get("ANTHROPIC_API_KEY") if not args.dry_run else "dry"
     if not api_key:
@@ -2347,6 +2463,8 @@ def _run_category_pass(
                 if args.dry_run:
                     print(f"[skip] {gene_name} {tis_slug_val}: {out_path.name} exists")
                 n_reused += 1
+                continue
+            if _nothing_to_merge_into(out_path, args, gene_name, tis_slug_val):
                 continue
 
             out_dir = args.out / tis_slug_val
@@ -2445,7 +2563,13 @@ def _run_category_pass(
 
             if args.dry_run:
                 continue
-            _write_category_results(out_path, tis_slug_val, results, model=args.model)
+            _write_category_results(
+                out_path,
+                tis_slug_val,
+                results,
+                model=args.model,
+                regenerated=_regenerated(args.only_category),
+            )
 
     if args.dry_run:
         return 0
@@ -2477,7 +2601,7 @@ def _run_category_pass_batch(
     categories are structurally unbatchable, not merely slower. They pay full
     price and are reported separately.
     """
-    from swissisoform.site.evidence import CATEGORIES, slice_category
+    from swissisoform.site.evidence import slice_category
 
     tool_configs = tool_configs or {}
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -2499,6 +2623,8 @@ def _run_category_pass_batch(
             out_path = args.out / spec.output_filename_template.format(tis_slug=tis_slug_val)
             if out_path.exists() and not args.force:
                 n_reused += 1
+                continue
+            if _nothing_to_merge_into(out_path, args, gene_name, tis_slug_val):
                 continue
             iso_with_gene = {**iso, "gene": {"name": gene_name}}
             iso_results.setdefault(tis_slug_val, _seed_results(out_path, args.only_category))
@@ -2607,7 +2733,13 @@ def _run_category_pass_batch(
                 iso_results[tis_slug_val][category["name"]] = {"error": str(e)}
 
     for tis_slug_val, results in iso_results.items():
-        _write_category_results(iso_out[tis_slug_val], tis_slug_val, results, model=args.model)
+        _write_category_results(
+            iso_out[tis_slug_val],
+            tis_slug_val,
+            results,
+            model=args.model,
+            regenerated=_regenerated(args.only_category),
+        )
 
     if items:
         _write_usage_report(args.out, "category", args.model, usage_by_slug, batch=True)
