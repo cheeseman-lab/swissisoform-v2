@@ -71,6 +71,9 @@ class PLMVEPModule:
     """ESM-C masked-marginal variant-effect predictor (SiteModule)."""
 
     MODULE_NAME: str = "plm_vep"
+    # "mean_llr_*" holds mean logP(wt) (higher = more conserved), NOT a
+    # substitution ΔLLR like varianteffect's plm_delta_llr (more negative = more
+    # disruptive). The name is kept for parquet-schema stability.
     OUTPUT_COLUMNS: list[str] = [
         "plm_vep_status",
         "plm_vep_mean_llr_isoform",
