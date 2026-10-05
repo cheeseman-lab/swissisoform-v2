@@ -240,10 +240,12 @@ def _find_truncation_offset(isoform: str, canonical: str) -> int | None:
         return len(can) - len(iso)
 
     # Alt-TIS initiator Met substitutes the canonical residue at the start
-    # position; iso[1:] is then an exact suffix of canonical. The lost prefix is
-    # can[: len(can) - len(iso[1:])], so the isoform "begins" one residue earlier.
+    # position; iso[1:] is then an exact suffix of canonical. The isoform's M
+    # sits on can[len(can) - len(iso)], so the lost prefix is |delta_aa| long and
+    # the substituted residue stays in the shared region (its codon is in both
+    # ORFs, so the genomic unique/shared split counts it shared too).
     if _is_initiator_met_trunc(iso, can):
-        return len(can) - (len(iso) - 1)
+        return len(can) - len(iso)
 
     # Prefix search + tail verification
     check_len = min(20, len(iso))
