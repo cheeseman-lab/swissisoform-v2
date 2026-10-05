@@ -105,7 +105,52 @@ def _scrub(value: Any) -> Any:
 
 def _is_list(value: Any) -> bool:
     """Whether *value* is a row list — pandas hands these back as ndarrays."""
-    return isinstance(value, (list, tuple)) or hasattr(value, "tolist")
+    # `__len__` keeps numpy *scalars* out: they have `tolist` too.
+    return isinstance(value, (list, tuple)) or (
+        hasattr(value, "tolist") and hasattr(value, "__len__")
+    )
+
+
+_MISSING = object()
+
+
+def _as_mapping(value: Any) -> dict[str, Any] | None:
+    """A struct as a dict; a parquet map arrives as ``[[key, value], ...]``."""
+    if isinstance(value, dict):
+        return value
+    if _is_list(value):
+        pairs = list(value)
+        if pairs and all(_is_list(p) and len(list(p)) == 2 for p in pairs):
+            return {str(list(p)[0]): list(p)[1] for p in pairs}
+    return None
+
+
+def _lookup(raw: dict[str, Any], column: str) -> Any:
+    """Resolve one feature-catalog name against a record's ``_raw``, or ``_MISSING``.
+
+    The catalog names columns the way ``export_feature_catalog.read_flat`` sees
+    them — struct leaves dotted (``isoform_massspec_summary.best_hyperscore``),
+    list lengths as ``n_<list column>`` — while ``_raw`` is keyed by top-level
+    parquet column with structs left nested. A bare ``column in raw`` therefore
+    missed every leaf and every count: D's whole mass-spec summary among them.
+    """
+    if column in raw:
+        return raw[column]
+    head, _, rest = column.partition(".")
+    if rest and head in raw:
+        node: Any = raw[head]
+        for part in rest.split("."):
+            mapping = _as_mapping(node)
+            if mapping is None or part not in mapping:
+                return _MISSING
+            node = mapping[part]
+        return node
+    if column.startswith("n_"):
+        parent = _lookup(raw, column[2:])
+        if parent is _MISSING:
+            return _MISSING
+        return len(list(parent)) if _is_list(parent) else None
+    return _MISSING
 
 
 def _clean(value: Any) -> Any:
@@ -189,9 +234,9 @@ def _raw_body(
         dropped: dict[str, int] = {}
         row_counts: dict[str, int] = {}
         for column in columns.get(letter, []):
-            if column not in raw:
+            value = _lookup(raw, column)
+            if value is _MISSING:
                 continue
-            value = raw[column]
             if _is_list(value):
                 rows = list(value)
                 if stripped:
@@ -446,7 +491,8 @@ def _dist_body(
         wanted = dist_mod.stratum_for(record.get("orf_type"))
         fields: dict[str, Any] = {}
         for metric in metrics_by_category.get(category["letter"], []):
-            value = _clean(raw.get(metric))
+            value = _lookup(raw, metric)
+            value = None if value is _MISSING else _clean(value)
             if value is None:
                 continue
             stratum = wanted

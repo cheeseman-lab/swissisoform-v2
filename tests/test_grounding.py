@@ -497,6 +497,87 @@ class TestVerdictExtras:
         assert tools == before
 
 
+class TestCatalogNamesResolve:
+    """Dotted struct leaves and ``n_*`` counts must reach raw and dist.
+
+    The catalog names columns the way the flattened parquet reads, but ``_raw``
+    keeps structs nested — so a flat-key fixture passes while D's whole
+    mass-spec summary is silently dropped. These records are shaped like the
+    real cheeseman50 ones (CBX1 chr17:48076878, a validated truncation).
+    """
+
+    RAW = {
+        "isoform_massspec_summary": {
+            "total_peptides": 2,
+            "unique_peptides": 1,
+            "validated_peptides": 1.0,
+            "pepquery_run": True,
+            "best_hyperscore": 45.87,
+            "min_pvalue": 0.0002,
+            "total_psms": 1.0,
+        },
+        "isoform_massspec_hits": [
+            {"peptide": "MGFSDEDNTWEPEENLDCPDLIAEFLQSQK", "validated": True},
+            {"peptide": "MEKVLDR", "validated": False},
+        ],
+        "isoform_conservation_summary": {
+            "phylop_status": "ok",
+            "region_status": "ok",
+            "unique_region_nt": 126,
+            "shared_region_nt": 429,
+        },
+        "isoform_clinical_summary": {
+            "total_variants": 2054,
+            # A parquet map column serialises as key/value pairs.
+            "by_consequence": [["missense_variant", 173], ["stop_gained", 13]],
+        },
+    }
+    D_COLS = [
+        "isoform_massspec_summary.best_hyperscore",
+        "isoform_massspec_summary.min_pvalue",
+        "isoform_massspec_summary.validated_peptides",
+        "isoform_massspec_summary.total_peptides",
+        "isoform_massspec_summary.total_psms",
+        "n_isoform_massspec_hits",
+    ]
+    C_COLS = [
+        "isoform_conservation_summary.phylop_status",
+        "isoform_conservation_summary.region_status",
+        "isoform_conservation_summary.unique_region_nt",
+    ]
+
+    def test_lookup_walks_structs_maps_and_counts(self):
+        raw = self.RAW
+        assert gr._lookup(raw, "isoform_massspec_summary.best_hyperscore") == 45.87
+        assert gr._lookup(raw, "isoform_clinical_summary.by_consequence.stop_gained") == 13
+        assert gr._lookup(raw, "n_isoform_massspec_hits") == 2
+        assert gr._lookup(raw, "isoform_clinical_summary.by_consequence.intronic") is gr._MISSING
+        assert gr._lookup(raw, "n_isoform_absent_hits") is gr._MISSING
+
+    def test_raw_arm_carries_d3_and_c_status(self):
+        cat = _catalog(
+            [{"feature": c, "category": "D"} for c in self.D_COLS]
+            + [{"feature": c, "category": "C", "dtype": "str"} for c in self.C_COLS]
+        )
+        build = gr._raw_body(gr.category_columns(cat))
+        d = build(_record(self.RAW, "truncated"), {"letter": "D", "name": "Detection"})
+        assert d["evidence"]["isoform_massspec_summary.best_hyperscore"] == 45.87
+        assert d["evidence"]["isoform_massspec_summary.validated_peptides"] == 1.0
+        assert d["evidence"]["n_isoform_massspec_hits"] == 2
+        assert set(d["evidence"]) == set(self.D_COLS)
+        c = build(_record(self.RAW, "truncated"), CATEGORY_C)
+        assert c["evidence"]["isoform_conservation_summary.region_status"] == "ok"
+        assert c["evidence"]["isoform_conservation_summary.unique_region_nt"] == 126
+
+    def test_dist_arm_ranks_dotted_and_derived_metrics(self):
+        numeric = [c for c in self.D_COLS] + ["isoform_conservation_summary.unique_region_nt"]
+        dist = _dist([{"metric": m, "stratum": "truncated", "n": 200} for m in numeric])
+        build = gr._dist_body({"D": self.D_COLS}, dist)
+        body = build(_record(self.RAW, "truncated"), {"letter": "D", "name": "Detection"})
+        assert set(body["fields"]) == set(self.D_COLS)
+        assert body["fields"]["n_isoform_massspec_hits"]["value"] == 2
+
+
 class TestSupersededStrip:
     """P's PAE block means must leave every arm's tool-loop opening, not only criteria's.
 
