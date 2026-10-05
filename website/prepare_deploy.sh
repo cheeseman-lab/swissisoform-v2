@@ -94,6 +94,7 @@ cp ../src/swissisoform/contract.py          src/swissisoform/contract.py
 cp ../src/swissisoform/coords.py            src/swissisoform/coords.py
 cp ../src/swissisoform/clinical/__init__.py src/swissisoform/clinical/__init__.py
 cp ../src/swissisoform/clinical/validate.py src/swissisoform/clinical/validate.py
+cp ../src/swissisoform/clinical/significance.py src/swissisoform/clinical/significance.py
 # variantquery: copy the whole package rather than a hand-listed set of modules.
 # A hardcoded list silently omits any module added later — adding consequence.py
 # without updating the list shipped an image whose scan.py could not import, so

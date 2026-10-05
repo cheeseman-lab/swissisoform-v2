@@ -39,11 +39,12 @@ class TestComputeDiffRegionTruncation:
         iso = "M" + CAN[K:]
         dr = compute_diff_region(ORFType.TRUNCATED, iso, CAN, context="unit")
         assert dr.confidence == "initiator_met"
-        # canonical_end = len(can) - (len(iso) - 1): the M is isoform-unique, so
-        # the lost region is one longer than a naive length delta.
-        assert dr.canonical_end == len(CAN) - (len(iso) - 1) == K
+        # The installed M sits on CAN[K - 1] (a substitution, not a loss), so the
+        # lost region is exactly |delta_aa| = len(can) - len(iso) residues.
+        assert dr.canonical_end == len(CAN) - len(iso) == K - 1
         assert dr.canonical_start == 0
-        assert dr.sequence == CAN[:K]
+        assert dr.sequence == CAN[: K - 1]
+        assert len(dr.sequence) == len(CAN) - len(iso)
         assert dr.isoform_start is None and dr.isoform_end is None
 
     def test_exact_suffix_truncation_stays_tail_verified(self):
