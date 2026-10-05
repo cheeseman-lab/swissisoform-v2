@@ -326,25 +326,60 @@ class TestDerived:
         states, _ = tag_eval.fire(df, [_site()], reg)
         assert states["l1"].isna().all()
 
-    def test_derived_tag_sees_the_registry_cutoff(self):
-        """The gate stays; only the number moves."""
+    def test_derived_tag_scores_at_the_scoring_config_not_the_registry(self, caplog):
+        """A derived tag equals its criterion: a registry override is reported, not applied.
+
+        v3 swept S3 to 11.376 while the scorer used 10.0, so the same parquet
+        carried two S3 answers on 7 of 50 cheeseman50 rows.
+        """
+        site = _site()
+        site.isoform_annotations["sae"] = {
+            "status": "ok",
+            "top_gained_delta_max": 10.5,
+            "top_lost_delta_max": -2.0,
+        }
+        df = _frame(["truncated"], m=[1.0])
+        reg = _registry(
+            _row(
+                tag_id="s3",
+                category="S",
+                kind=reg_mod.KIND_DERIVED,
+                criterion_id="S3_sae",
+                metric="",
+                cutoff=None,
+                cutoff_source="distribution",
+                cutoff_overrides=json.dumps({"s3_top_delta_min": 11.37578}),
+            )
+        )
+        cfg = ScoringConfig()
+        criterion = derived_mod.score_criterion("S3_sae", site, cfg).value
+        with caplog.at_level("WARNING"):
+            states, _ = tag_eval.fire(df, [site], reg, cfg)
+        assert criterion is True
+        assert bool(states["s3"].iloc[0]) is criterion
+        assert "s3_top_delta_min" in caplog.text
+
+    def test_derived_tag_follows_a_non_default_scoring_config(self):
+        """Whatever config the scorer ran at, the tag runs at the same one."""
         site = _site()
         site.isoform_annotations["conservation_frame"] = {
             "summary": {"status": "ok"},
             "primate_mean_pident": 0.6,
         }
         df = _frame(["truncated"], m=[1.0])
-        row = dict(
-            tag_id="c1",
-            kind=reg_mod.KIND_DERIVED,
-            criterion_id="C1_primate_conservation",
-            metric="",
-            cutoff=None,
+        reg = _registry(
+            _row(
+                tag_id="c1",
+                kind=reg_mod.KIND_DERIVED,
+                criterion_id="C1_primate_conservation",
+                metric="",
+                cutoff=None,
+                cutoff_overrides=json.dumps({"c1_pident_min": 0.8}),
+            )
         )
-        strict = _registry(_row(**row, cutoff_overrides=json.dumps({"c1_pident_min": 0.8})))
-        loose = _registry(_row(**row, cutoff_overrides=json.dumps({"c1_pident_min": 0.5})))
-        assert bool(tag_eval.fire(df, [site], strict)[0]["c1"].iloc[0]) is False
-        assert bool(tag_eval.fire(df, [site], loose)[0]["c1"].iloc[0]) is True
+        loose = ScoringConfig(c1_pident_min=0.5)
+        assert bool(tag_eval.fire(df, [site], reg, loose)[0]["c1"].iloc[0]) is True
+        assert bool(tag_eval.fire(df, [site], reg)[0]["c1"].iloc[0]) is False
 
     def test_unknown_criterion_is_a_build_error_not_a_null(self):
         with pytest.raises(KeyError):

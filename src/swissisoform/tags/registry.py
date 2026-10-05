@@ -22,15 +22,14 @@ Four kinds of tag, which is the whole taxonomy:
 ``bool``
     An existing boolean column, read as tri-state.
 ``derived``
-    Runs a scored criterion's own function (see :mod:`swissisoform.tags.derived`),
-    with that criterion's cutoffs taken from ``cutoff_overrides``. This is how all
+    Runs a scored criterion's own function (see :mod:`swissisoform.tags.derived`)
+    at the run's ``ScoringConfig``, so it equals the criterion. ``cutoff_overrides``
+    records the cutoffs the build proposed; they are reported, not applied. This is how all
     sixteen CDLMPS criteria enter the vocabulary, because a bare ``metric ⋈
     cutoff`` demonstrably cannot reproduce them — measured on cheeseman50, 5 of 13
     disagreed with the scorer, every one of them a gate the threshold form drops
     (a fold status of ``too_long`` with the pLDDT column still populated; a
-    criterion undefined for separate ORFs; an either-or over two inputs). Carrying
-    the cutoffs separately is what lets a calibrated registry move a criterion's
-    number *without* also discarding the gates around it.
+    criterion undefined for separate ORFs; an either-or over two inputs).
 ``llm``
     A judgment call for the M/P tool loop. Never fired by code; carried here so
     the vocabulary is complete and so a consumer can render it as *unanswered*
@@ -52,9 +51,9 @@ REF_DIR = ROOT / "data" / "reference" / "tags"
 # v3 is the current vocabulary: v2's 44 tags plus S2_biophysics and S3_sae,
 # readmitted after the judge study showed their absence was what the tags arm
 # was being marked down for — 85% of its losses in Structural Characteristics
-# cite the biophysical or SAE evidence those two carry. S3's cutoff is swept
-# from the frozen distribution (`seeds.SWEPT_CUTOFF_CRITERIA`); S2 keeps its
-# config numbers, which measure well on the genome-wide population.
+# cite the biophysical or SAE evidence those two carry. The on-disk v3 carries a
+# swept S3 cutoff (11.376) in `cutoff_overrides`; the evaluator reports it and
+# fires S3 at the scoring config, like every derived tag.
 #
 # v3 also fixes a dead tag: `metrics.resolve` could not read a `<col>__len`
 # metric, so v2's `cmp_motifs_hits_in_diff_region__len` was null on every row of

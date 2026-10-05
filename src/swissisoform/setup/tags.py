@@ -28,10 +28,12 @@ Two cutoff sources, one flag:
 The flag is global, so a criterion that should be swept while the rest stay
 pinned names itself in ``seeds.SWEPT_CUTOFF_CRITERIA`` instead.
 
-Either way a criterion enters as a ``derived`` tag that runs its own scorer, with
-the cutoff handed to it through ``cutoff_overrides``. Only the numbers move; the
-gates the scorer applies around them do not. Swept tags have no ``ScoringConfig``
-equivalent and carry their distribution cutoff under both flags.
+Either way a criterion enters as a ``derived`` tag that runs its own scorer. Its
+cutoffs are recorded in ``cutoff_overrides``, but the evaluator scores derived
+tags at the run's ``ScoringConfig`` and only *reports* an override that differs —
+so a derived tag always equals its criterion, and a distribution build is a
+proposal for moving ``ScoringConfig``, not a second answer. Swept tags have no
+``ScoringConfig`` equivalent and carry their distribution cutoff under both flags.
 
 Driven by the thin CLI ``scripts/setup/build_tag_registry.py``.
 """
@@ -249,6 +251,20 @@ def criterion_rows(
                     "distribution" if swept else cutoffs,
                 )
                 overrides[seed.config_field] = float(value)
+            # Kept as an annotation when the config number wins, so the reviewer
+            # still sees where the distribution would have cut.
+            if (
+                not swept
+                and cand is not None
+                and cand.cutoff is not None
+                and value is not None
+                and float(cand.cutoff) != float(value)
+            ):
+                pct = f", p{cand.cutoff_pctile:g}" if cand.cutoff_pctile is not None else ""
+                notes.append(
+                    f"Distribution cut {seed.config_field}={cand.cutoff:.6g} "
+                    f"({cand.cutoff_source}{pct}); not applied."
+                )
         # A citation needs one number. An either-or criterion has no single one,
         # so it gets none rather than an arbitrary branch's.
         metrics_ = [s.metric for s in branches if s.metric]
@@ -445,8 +461,10 @@ def write_sidecar(
             "yet rejected), not a selection.",
             "--cutoffs config only moves the criterion tags; swept tags have no "
             "ScoringConfig equivalent and keep their distribution cutoff either way.",
-            "Derived tags call their criterion's scorer, so their value equals the "
-            "criterion's by construction and no cutoff of theirs lives here.",
+            "Derived tags call their criterion's scorer at the run's ScoringConfig, "
+            "so their value equals the criterion's by construction. cutoff_overrides "
+            "records the numbers this build proposes; the evaluator reports a "
+            "difference but does not apply it.",
             "LLM tags carry no state from code. A consumer must render them as "
             "unanswered, never as off.",
         ],

@@ -191,20 +191,19 @@ CRITERION_LABELS: dict[str, str] = {
     "S3_sae": "Interpretable features shift",
 }
 
-# Criteria whose cutoff comes from the frozen distribution rather than from
-# `ScoringConfig`, whatever `--cutoffs` says. Per-criterion because the flag is
-# global: `--cutoffs distribution` would recalibrate all sixteen.
+# Criteria whose registry cutoff comes from the frozen distribution rather than
+# from `ScoringConfig`, whatever `--cutoffs` says. Per-criterion because the flag
+# is global: `--cutoffs distribution` would recalibrate all sixteen.
 #
-# S3 is here and S2 is not, measured on full_catalog (6,462 isoforms) rather
-# than on the cheeseman50 coreset, which over-represents high-SAE-delta
-# isoforms by construction. S2's three branches sit at p88-p89 and fire
-# 11.8-12.9% each, rolling up to 20.2% — mid-band, and the sweep would move all
-# three to p60 (~4x looser, 56.9% roll-up). Neither number is discovered: both
-# are magnitudes, which carry no anchor by design, and no histogram break was
-# found, so the cascade falls through to a bare percentile that *sets* the fire
-# rate. Given that, the existing S2 numbers are kept and only S3 moves
-# (10.0 -> 10.96, 46.1% -> 40.0%).
-SWEPT_CUTOFF_CRITERIA: frozenset[str] = frozenset({"S3_sae"})
+# Empty. v3 put S3 here (s3_top_delta_min 10.0 -> 11.376, a bare p60 on the
+# truncated stratum of the pre-rerun catalog), and firing at it gave the same
+# parquet two S3 answers: `isoform_scoring_criteria.S3_sae` and the S3 tag
+# disagreed on 7 of 50 cheeseman50 rows. Derived tags now score at the scorer's
+# own config regardless (`evaluate.fire`), so a swept number here is only ever a
+# proposal; the builder records the distribution's cut in the row's note.
+# Moving S3 is a change to `ScoringConfig.s3_top_delta_min`, made once against
+# the post-rerun population.
+SWEPT_CUTOFF_CRITERIA: frozenset[str] = frozenset()
 
 # The column the scorer's own per-criterion verdict lands in, once `load_run`
 # flattens the `isoform_scoring_criteria` struct. Reading a criterion here — as
