@@ -1,6 +1,6 @@
 """Turning judgments into arm contrasts.
 
-Five rules, each answering a way this comparison can lie:
+Six rules, each answering a way this comparison can lie:
 
 1. **Pairwise goes through Bradley-Terry with the presentation slot as a fitted
    covariate**, per category, with the status quo pinned at strength 0 so every
@@ -34,6 +34,14 @@ Five rules, each answering a way this comparison can lie:
    ``Nx floor`` ratios cannot be reconstructed from new output.
 5. **Nothing is pooled across categories in a headline.** ``tags`` carries 24 tags
    in S against 3 in D; pooled, vocabulary thinness reads as a framing effect.
+6. **Length is measured, and adjusted for beside the raw fit.** The rubric says
+   "not style or length", but in v3 the longer response won 68.9% of
+   order-consistent pairs (84% in the top quartile of length ratio), and a
+   log-length term took the pooled ``tags`` lead from +0.56/+0.60 to ~0. So the
+   fit is also run with ``beta * log(len_A / len_B)`` as a covariate, and the
+   length-preference relationship is reported as a diagnostic. The adjusted fit
+   is not the "true" ranking -- some length is genuine content -- but an arm
+   effect that vanishes under it is a length effect until shown otherwise.
 """
 
 from __future__ import annotations
@@ -226,20 +234,90 @@ class Call:
     arm_a: str
     arm_b: str
     a_won: bool
+    # Characters of each response as judged; 0 when unknown (pre-provenance builds).
+    len_a: int = 0
+    len_b: int = 0
+
+    @property
+    def has_lengths(self) -> bool:
+        """Whether both lengths are known, so the call can enter a length fit."""
+        return self.len_a > 0 and self.len_b > 0
+
+    @property
+    def log_length_ratio(self) -> float:
+        """``log(len_A / len_B)``; 0 when either length is unknown."""
+        return math.log(self.len_a / self.len_b) if self.has_lengths else 0.0
 
 
-def calls_from_forward(forward: dict[tuple[str, str, str, str], str | None]) -> list[Call]:
-    """Every parsed call, both orders kept; unparseable ones are left out."""
-    return [
-        Call(slug=slug, unit=unit, arm_a=arm_a, arm_b=arm_b, a_won=winner == arm_a)
-        for (slug, unit, arm_a, arm_b), winner in forward.items()
-        if winner is not None
-    ]
+def calls_from_forward(
+    forward: dict[tuple[str, str, str, str], str | None],
+    lengths: dict[tuple[str, str, str, str], tuple[int, int]] | None = None,
+) -> list[Call]:
+    """Every parsed call, both orders kept; unparseable ones are left out.
+
+    *lengths* maps the same ``(slug, unit, arm_a, arm_b)`` key to the two
+    responses' character counts, from the request index.
+    """
+    lengths = lengths or {}
+    out = []
+    for key, winner in forward.items():
+        if winner is None:
+            continue
+        slug, unit, arm_a, arm_b = key
+        len_a, len_b = lengths.get(key, (0, 0))
+        out.append(
+            Call(
+                slug=slug,
+                unit=unit,
+                arm_a=arm_a,
+                arm_b=arm_b,
+                a_won=winner == arm_a,
+                len_a=len_a,
+                len_b=len_b,
+            )
+        )
+    return out
 
 
 def slot_a_rate(calls: Sequence[Call]) -> float | None:
     """Raw share of calls won by slot A -- 0.5 for a judge without position bias."""
     return sum(c.a_won for c in calls) / len(calls) if calls else None
+
+
+def length_preference(calls: Sequence[Call]) -> dict:
+    """How often the longer response wins, overall and by quartile of length ratio.
+
+    Counted over calls whose two responses differ in length. A judge indifferent
+    to length sits at 0.5 in every quartile; one that rewards length climbs with
+    the ratio. Both presentation orders count, so slot bias cancels to first
+    order whenever both orders parsed.
+    """
+    usable = [c for c in calls if c.has_lengths and c.len_a != c.len_b]
+    if not usable:
+        return {"n": 0, "longer_wins_rate": None, "by_quartile": []}
+
+    def longer_won(c: Call) -> bool:
+        return c.a_won == (c.len_a > c.len_b)
+
+    ordered = sorted(usable, key=lambda c: abs(c.log_length_ratio))
+    quartiles = []
+    for q in range(4):
+        chunk = ordered[q * len(ordered) // 4 : (q + 1) * len(ordered) // 4]
+        if not chunk:
+            continue
+        quartiles.append(
+            {
+                "ratio_lo": round(math.exp(abs(chunk[0].log_length_ratio)), 3),
+                "ratio_hi": round(math.exp(abs(chunk[-1].log_length_ratio)), 3),
+                "n": len(chunk),
+                "longer_wins_rate": round(sum(map(longer_won, chunk)) / len(chunk), 4),
+            }
+        )
+    return {
+        "n": len(usable),
+        "longer_wins_rate": round(sum(map(longer_won, usable)) / len(usable), 4),
+        "by_quartile": quartiles,
+    }
 
 
 @dataclass
@@ -248,6 +326,7 @@ class CovariateFit:
 
     strengths: dict[str, float]
     position: float | None = None
+    length: float | None = None
     n_calls: int = 0
 
 
@@ -256,22 +335,27 @@ def fit_bradley_terry(
     *,
     baseline: str = BASELINE,
     position: bool = True,
+    length: bool = False,
     ridge: float = 0.1,
     iterations: int = 100,
     tol: float = 1e-9,
 ) -> CovariateFit:
     """Logistic Bradley-Terry over individual calls, with a slot-A effect.
 
-    ``logit P(slot A wins) = s_A - s_B + delta``, fitted by penalised Newton
+    ``logit P(slot A wins) = s_A - s_B + delta [+ beta * log(len_A / len_B)]``,
+    the length term only with ``length=True`` -- and then only calls whose two
+    lengths are known enter the fit. Fitted by penalised Newton
     (the problem is a 9-parameter logistic regression, so it converges in a
     handful of steps). ``ridge`` is an L2 penalty on the arm strengths only --
     the counterpart of the MM fit's pseudo-win prior, so a clean sweep gets a
     large finite strength instead of an infinite one -- and never touches
-    ``delta``. *baseline* is pinned at 0 when it competed; otherwise strengths are
-    centred on their mean.
+    ``delta`` or ``beta``. *baseline* is pinned at 0 when it competed; otherwise
+    strengths are centred on their mean.
 
     Returns an empty fit when no call survives.
     """
+    if length:
+        calls = [c for c in calls if c.has_lengths]
     arms = sorted({c.arm_a for c in calls} | {c.arm_b for c in calls})
     if not calls or len(arms) < 2:
         return CovariateFit(strengths={}, n_calls=len(calls))
@@ -280,7 +364,7 @@ def fit_bradley_terry(
     free = [a for a in arms if a != anchor]
     col = {a: i for i, a in enumerate(free)}
     n_arm = len(free)
-    n_par = n_arm + int(position)
+    n_par = n_arm + int(position) + int(length)
 
     x = np.zeros((len(calls), n_par))
     y = np.empty(len(calls))
@@ -291,6 +375,8 @@ def fit_bradley_terry(
             x[row, col[c.arm_b]] -= 1.0
         if position:
             x[row, n_arm] = 1.0
+        if length:
+            x[row, n_par - 1] = c.log_length_ratio
         y[row] = 1.0 if c.a_won else 0.0
 
     penalty = np.zeros(n_par)
@@ -331,6 +417,7 @@ def fit_bradley_terry(
     return CovariateFit(
         strengths=strengths,
         position=float(theta[n_arm]) if position else None,
+        length=float(theta[n_par - 1]) if length else None,
         n_calls=len(calls),
     )
 
@@ -417,6 +504,7 @@ class CovariateIntervals:
 
     strengths: dict[str, Interval]
     position: Interval | None = None
+    length: Interval | None = None
     n_calls: int = 0
 
 
@@ -425,6 +513,7 @@ def cluster_bootstrap_fit(
     *,
     baseline: str = BASELINE,
     position: bool = True,
+    length: bool = False,
     n: int = N_BOOTSTRAP,
     seed: int = SEED,
 ) -> CovariateIntervals:
@@ -434,7 +523,7 @@ def cluster_bootstrap_fit(
     effects get intervals too, so a reported position effect carries its own
     uncertainty.
     """
-    kwargs = {"baseline": baseline, "position": position}
+    kwargs = {"baseline": baseline, "position": position, "length": length}
     point = fit_bradley_terry(calls, **kwargs)
     if not point.strengths:
         return CovariateIntervals(strengths={}, n_calls=point.n_calls)
@@ -454,6 +543,8 @@ def cluster_bootstrap_fit(
             draws[arm].append(value)
         if fit.position is not None:
             nuisance["position"].append(fit.position)
+        if fit.length is not None:
+            nuisance["length"].append(fit.length)
 
     def interval(value: float, series: list[float]) -> Interval:
         series = sorted(series)
@@ -471,6 +562,7 @@ def cluster_bootstrap_fit(
         position=(
             None if point.position is None else interval(point.position, nuisance["position"])
         ),
+        length=None if point.length is None else interval(point.length, nuisance["length"]),
         n_calls=point.n_calls,
     )
 

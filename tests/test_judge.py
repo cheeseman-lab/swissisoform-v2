@@ -726,6 +726,90 @@ class TestOrderAwareFit:
         assert c.consistent_by_arm == {"a": 1, "c": 1}
 
 
+class TestLengthAdjustedFit:
+    """A length covariate separates "longer" from "better".
+
+    In v3 the longer response won 68.9% of order-consistent pairs, and a
+    log-length term took the pooled tags lead from +0.56/+0.60 to ~0.
+    """
+
+    TRUTH = {BASELINE: 0.0, "raw_hint": 0.3, "tags_hint": 0.0, "dist_hint": -0.2}
+    MEAN_CHARS = {BASELINE: 900, "raw_hint": 1000, "tags_hint": 1400, "dist_hint": 1100}
+
+    def _calls(self, *, beta: float, delta: float = 0.8, n_slugs: int = 400, seed: int = 21):
+        rng = random.Random(seed)
+        arms = list(self.TRUTH)
+        out = []
+        for slug in (f"iso{i}" for i in range(n_slugs)):
+            chars = {a: int(self.MEAN_CHARS[a] * math.exp(rng.gauss(0, 0.25))) for a in arms}
+            for i, a in enumerate(arms):
+                for b in arms[i + 1 :]:
+                    for x, y in ((a, b), (b, a)):
+                        eta = (
+                            self.TRUTH[x]
+                            - self.TRUTH[y]
+                            + delta
+                            + beta * math.log(chars[x] / chars[y])
+                        )
+                        won = rng.random() < 1 / (1 + math.exp(-eta))
+                        out.append(
+                            W.Call(
+                                slug=slug,
+                                unit="C",
+                                arm_a=x,
+                                arm_b=y,
+                                a_won=won,
+                                len_a=chars[x],
+                                len_b=chars[y],
+                            )
+                        )
+        return out
+
+    def test_length_position_and_arms_are_recovered(self):
+        fit = W.fit_bradley_terry(self._calls(beta=2.0), length=True)
+        assert fit.length == pytest.approx(2.0, abs=0.25)
+        assert fit.position == pytest.approx(0.8, abs=0.1)
+        for arm, value in self.TRUTH.items():
+            assert fit.strengths[arm] == pytest.approx(value, abs=0.12), arm
+
+    def test_without_the_covariate_the_long_arm_is_inflated(self):
+        """The bias the covariate exists to remove: tags is truly 0 but longest."""
+        fit = W.fit_bradley_terry(self._calls(beta=2.0))
+        assert fit.strengths["tags_hint"] > 0.4
+
+    def test_no_length_preference_gives_beta_near_zero(self):
+        fit = W.fit_bradley_terry(self._calls(beta=0.0, seed=4), length=True)
+        assert fit.length == pytest.approx(0.0, abs=0.25)
+        assert fit.strengths["tags_hint"] == pytest.approx(0.0, abs=0.12)
+
+    def test_calls_without_lengths_are_left_out_of_the_length_fit(self):
+        calls = self._calls(beta=1.0, n_slugs=30)
+        unknown = [W.Call(slug="x", unit="C", arm_a=BASELINE, arm_b="raw_hint", a_won=True)]
+        fit = W.fit_bradley_terry(calls + unknown, length=True)
+        assert fit.n_calls == len(calls)
+
+    def test_bootstrap_gives_beta_an_interval(self):
+        fit = W.cluster_bootstrap_fit(self._calls(beta=2.0, n_slugs=60), length=True, n=40)
+        assert fit.length is not None and fit.length.excludes_zero
+
+    def test_length_preference_diagnostic(self):
+        calls = [
+            W.Call(slug="s", unit="C", arm_a="a", arm_b="b", a_won=True, len_a=200, len_b=100),
+            W.Call(slug="s", unit="C", arm_a="b", arm_b="a", a_won=False, len_a=100, len_b=200),
+            W.Call(slug="s", unit="C", arm_a="a", arm_b="c", a_won=False, len_a=110, len_b=100),
+            W.Call(slug="s", unit="C", arm_a="c", arm_b="d", a_won=True, len_a=100, len_b=100),
+        ]
+        out = W.length_preference(calls)
+        assert out["n"] == 3  # equal lengths carry no information
+        assert out["longer_wins_rate"] == pytest.approx(2 / 3, abs=1e-3)
+        assert out["by_quartile"][-1]["longer_wins_rate"] == 1.0
+
+    def test_calls_from_forward_attaches_lengths(self):
+        forward = {("s", "C", "a", "b"): "a"}
+        (call,) = W.calls_from_forward(forward, {("s", "C", "a", "b"): (300, 100)})
+        assert call.log_length_ratio == pytest.approx(math.log(3))
+
+
 class TestJudgedTextProvenance:
     """Results name the exact text they judged, so a mixed or stale file is caught.
 

@@ -72,13 +72,23 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("%d order-consistent comparison(s)", len(comparisons))
 
     # Primary: every parsed call, both orders, with the slot-A effect fitted.
-    calls = W.calls_from_forward(forward)
+    calls = W.calls_from_forward(forward, _lengths(work))
     per_unit_fit = {
         unit: W.cluster_bootstrap_fit([c for c in calls if c.unit == unit], n=args.bootstrap)
         for unit in UNITS
     }
     pooled_fit = W.cluster_bootstrap_fit(calls, n=args.bootstrap)
     position = _position_report(calls, per_unit_fit, pooled_fit)
+
+    # Beside it, not instead: the same fit with a log-length covariate.
+    per_unit_len = {
+        unit: W.cluster_bootstrap_fit(
+            [c for c in calls if c.unit == unit], length=True, n=args.bootstrap
+        )
+        for unit in UNITS
+    }
+    pooled_len = W.cluster_bootstrap_fit(calls, length=True, n=args.bootstrap)
+    length = _length_report(calls, per_unit_len, pooled_len)
 
     # Secondary: the consistent-only fit earlier rounds published.
     per_unit_bt = {
@@ -97,8 +107,11 @@ def main(argv: list[str] | None = None) -> int:
         pooled_bt,
         parse_failures,
         provenance,
+        per_unit_len,
+        pooled_len,
+        length,
     )
-    _print(checks, per_unit_fit, pooled_fit, position, per_unit_bt)
+    _print(checks, per_unit_fit, pooled_fit, position, per_unit_bt, per_unit_len, length)
     return 0
 
 
@@ -118,6 +131,37 @@ def _position_report(calls, per_unit_fit, pooled_fit) -> dict:
             "slot_a_win_rate": None if rate is None else round(rate, 4),
             "delta": None if fit.position is None else _interval(fit.position),
         }
+    return out
+
+
+def _length_report(calls, per_unit_len, pooled_len) -> dict:
+    """Longer-wins rates, median length per arm, and the fitted length log-odds."""
+    out = {}
+    for unit, fit in (*per_unit_len.items(), ("pooled", pooled_len)):
+        subset = calls if unit == "pooled" else [c for c in calls if c.unit == unit]
+        by_arm: dict[str, list[int]] = {}
+        for c in subset:
+            if c.has_lengths:
+                by_arm.setdefault(c.arm_a, []).append(c.len_a)
+                by_arm.setdefault(c.arm_b, []).append(c.len_b)
+        out[unit] = {
+            **W.length_preference(subset),
+            "median_chars_by_arm": {
+                arm: sorted(v)[len(v) // 2] for arm, v in sorted(by_arm.items())
+            },
+            "beta": None if fit.length is None else _interval(fit.length),
+            "n_calls_fitted": fit.n_calls,
+        }
+    return out
+
+
+def _lengths(work: Path) -> dict[tuple[str, str, str, str], tuple[int, int]]:
+    """``{(slug, unit, arm_a, arm_b): (len_a, len_b)}`` from the request index."""
+    out = {}
+    for row in _load_index(work).values():
+        if row.get("len_a") and row.get("len_b"):
+            key = (row["slug"], row["unit"], row["arm_a"], row["arm_b"])
+            out[key] = (row["len_a"], row["len_b"])
     return out
 
 
@@ -278,6 +322,9 @@ def _write(
     pooled_bt,
     parse_failures,
     provenance,
+    per_unit_len,
+    pooled_len,
+    length,
 ) -> None:
     """Persist everything as JSON, plus a TSV of the headline table.
 
@@ -309,6 +356,15 @@ def _write(
         },
         "bradley_terry_pooled": {arm: _interval(i) for arm, i in pooled_fit.strengths.items()},
         "factorial_pooled": W.factorial_effects(pooled_fit.strengths),
+        "length_effect": length,
+        "bradley_terry_length_adjusted_by_unit": {
+            unit: {arm: _interval(i) for arm, i in fit.strengths.items()}
+            for unit, fit in per_unit_len.items()
+        },
+        "bradley_terry_length_adjusted_pooled": {
+            arm: _interval(i) for arm, i in pooled_len.strengths.items()
+        },
+        "factorial_length_adjusted_pooled": W.factorial_effects(pooled_len.strengths),
         "bradley_terry_consistent_only_by_unit": {
             unit: {arm: _interval(i) for arm, i in fit.items()} for unit, fit in per_unit_bt.items()
         },
@@ -328,7 +384,7 @@ def _write(
     logger.info("wrote %s", work)
 
 
-def _print(checks, per_unit_fit, pooled_fit, position, per_unit_bt) -> None:
+def _print(checks, per_unit_fit, pooled_fit, position, per_unit_bt, per_unit_len, length) -> None:
     """The tables a reader actually needs."""
     per_unit_strengths = {unit: fit.strengths for unit, fit in per_unit_fit.items()}
     print("\n=== resolution floor (status quo judged against its own replicate) ===")
@@ -367,6 +423,23 @@ def _print(checks, per_unit_fit, pooled_fit, position, per_unit_bt) -> None:
     print("\n=== Bradley-Terry strength vs the status quo, per unit (order-aware) ===")
     print("    (log-odds; * = bootstrap CI excludes zero)")
     _print_table(per_unit_strengths)
+
+    print("\n=== length preference (the rubric says length should not matter) ===")
+    for unit in (*UNITS, "pooled"):
+        entry = length.get(unit) or {}
+        beta = entry.get("beta")
+        if not entry.get("n") or beta is None:
+            continue
+        top = entry["by_quartile"][-1]["longer_wins_rate"] if entry["by_quartile"] else None
+        print(
+            f"  {unit:10s} longer wins {entry['longer_wins_rate']:6.1%} "
+            f"(top quartile {top:.1%})   "
+            f"beta {beta['point']:+5.2f} [{beta['lo']:+5.2f}, {beta['hi']:+5.2f}] per log-ratio"
+        )
+
+    print("\n=== Bradley-Terry, length-adjusted (same fit + beta * log(len_A/len_B)) ===")
+    print("    (an arm effect that vanishes here is a length effect until shown otherwise)")
+    _print_table({unit: fit.strengths for unit, fit in per_unit_len.items()})
 
     print("\n=== consistent-only Bradley-Terry (earlier rounds' readout; not the headline) ===")
     _print_table(per_unit_bt)

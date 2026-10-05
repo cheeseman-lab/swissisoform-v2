@@ -57,6 +57,7 @@ Per cell: C(9,2)=36 pairs × 2 presentation orders = 72 calls.
 | Bradley-Terry per category, status quo pinned at 0 | every number reads as log-odds vs what we ship |
 | Both orders kept, slot-A effect fitted and reported | Prometheus 2 has position bias; dropping the pairs it splits lets whatever decides agreement carry the ranking |
 | Consistent-only fit kept as a secondary readout, drops counted per arm | comparable to earlier rounds, and the filter's reach is visible |
+| Length-adjusted fit beside the raw one, longer-wins rate reported | the judge rewards length despite the rubric; an effect that vanishes under the covariate is a length effect |
 | Cluster bootstrap over isoforms | the 7 units of one isoform share evidence and are not independent |
 | Everything in floor units | see below |
 | Nothing pooled across categories in a headline | S has 24 tags, D has 3 |
