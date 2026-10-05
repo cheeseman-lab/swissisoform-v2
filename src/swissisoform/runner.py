@@ -801,17 +801,17 @@ def _attach_tags(
         return TagModule(registry, cfg).annotate_frame(paired, all_sites)
     except (TagRegistryError, TagEvaluationError) as exc:
         logger.warning(
-            "Tags: %s/%s/%s are absent from this run. %s",
-            *TagModule.OUTPUT_COLUMNS,
+            "Tags: %s are absent from this run. %s",
+            "/".join(TagModule.OUTPUT_COLUMNS),
             exc,
         )
         return paired
     except Exception:
         logger.exception(
-            "Tags: %s/%s/%s are absent from this run — unexpected failure in the "
+            "Tags: %s are absent from this run — unexpected failure in the "
             "tag layer. This is a bug; the run continues because every other "
             "column is correct.",
-            *TagModule.OUTPUT_COLUMNS,
+            "/".join(TagModule.OUTPUT_COLUMNS),
         )
         return paired
 

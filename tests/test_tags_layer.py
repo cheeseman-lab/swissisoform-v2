@@ -15,6 +15,7 @@ from swissisoform.config import PipelineConfig, ScoringConfig
 from swissisoform.models import ORFType, TranslationInitiationSite
 from swissisoform.modules.tags import (
     CITATIONS_COLUMN,
+    SHA256_COLUMN,
     STATES_COLUMN,
     VERSION_COLUMN,
     TagModule,
@@ -120,6 +121,25 @@ class TestRegistry:
 
     def test_empty_overrides_is_an_empty_dict(self):
         assert _registry(_row()).get("t").cutoff_overrides == {}
+
+    def test_content_hash_tracks_definitions_not_the_name(self):
+        """A version rebuilt in place with a moved cutoff must not look identical."""
+        a = _registry(_row(cutoff=1.0), version="v3")
+        assert a.sha256 == _registry(_row(cutoff=1.0), version="v9").sha256
+        assert a.sha256 != _registry(_row(cutoff=1.5), version="v3").sha256
+        assert len(a.sha256) == 64
+
+    def test_v3_is_marked_provisional(self):
+        assert "re-freeze" in _registry(_row(), version="v3").provisional
+        assert _registry(_row(), version="vtest").provisional == ""
+
+    def test_one_distributions_version_default_everywhere(self):
+        """The sweep, the builder and the reader must default to the same version."""
+        from swissisoform import distributions as dist_mod
+        from swissisoform.setup import tags as build_mod
+
+        assert build_mod.DEFAULT_DIST_VERSION == dist_mod.DEFAULT_VERSION
+        assert dist_mod.DEFAULT_VERSION in dist_mod.PROVISIONAL_VERSIONS
 
 
 # ---------------------------------------------------------------------------
@@ -442,6 +462,7 @@ class TestModule:
         out = TagModule(reg, PipelineConfig()).annotate_frame(df, sites)
 
         assert list(out[VERSION_COLUMN]) == ["v7", "v7"]
+        assert list(out[SHA256_COLUMN]) == [reg.sha256, reg.sha256]
         assert out[STATES_COLUMN].iloc[0] == {"hi": False}
         assert out[STATES_COLUMN].iloc[1] == {"hi": True}
         assert out[CITATIONS_COLUMN].iloc[1] == {"hi": 3.0}

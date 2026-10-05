@@ -70,7 +70,7 @@ from swissisoform.tags.registry import (
 
 DEFAULT_CATALOG = ROOT / "figures" / "clustering_dims" / "feature_space" / "feature_catalog.csv"
 DEFAULT_CANDIDATES = ROOT / "figures" / "tag_vocab" / "tag_candidates.csv"
-DEFAULT_DIST_VERSION = "v3"
+DEFAULT_DIST_VERSION = dist_mod.DEFAULT_VERSION
 DEFAULT_RUN = "full_catalog"
 
 # The sweep's `kind` vocabulary is narrower than the registry's — it has no notion
@@ -86,9 +86,6 @@ REJECT_DECISIONS = frozenset({"remove", "drop"})
 
 class TagBuildError(RuntimeError):
     """Raised when the candidate table and the sweep cannot be reconciled."""
-
-
-
 
 
 
@@ -449,6 +446,7 @@ def write_sidecar(
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "cutoff_source": cutoffs,
         "distributions_version": dist_version,
+        "provisional": dist_mod.PROVISIONAL_VERSIONS.get(dist_version, ""),
         "source_run_for_columns": source_run,
         "candidates_csv": rel_to_root(candidates_csv),
         "candidates_csv_sha256": sha256_file(candidates_csv),

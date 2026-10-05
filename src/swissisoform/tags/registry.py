@@ -38,8 +38,9 @@ Four kinds of tag, which is the whole taxonomy:
 
 from __future__ import annotations
 
+import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,14 @@ REF_DIR = ROOT / "data" / "reference" / "tags"
 # vocabulary under the v1 name — so the on-disk v1 is a historical artifact, not
 # a rebuildable one.
 DEFAULT_VERSION = "v3"
+# v3 is cut from the provisional v3 distributions (see
+# `distributions.PROVISIONAL_VERSIONS`); rebuild it after the re-freeze.
+PROVISIONAL_VERSIONS: dict[str, str] = {
+    "v3": (
+        "cut from the provisional v3 distributions (Aug-12 full_catalog); "
+        "rebuild after the next genome-wide run and distributions re-freeze"
+    ),
+}
 
 REGISTRY_FILE = "registry.parquet"
 SIDECAR_FILE = "_setup.json"
@@ -173,6 +182,24 @@ class TagRegistry:
     version: str
     tags: tuple[Tag, ...]
     provenance: dict[str, Any]
+
+    @property
+    def sha256(self) -> str:
+        """Content hash of the tag definitions — what fires, not when it was built.
+
+        A version name alone cannot tell two builds apart (v3 was rebuilt in place
+        once, 44 -> 46 tags), so every parquet stamps this beside the name. Hashed
+        over the parsed :class:`Tag` fields rather than the parquet bytes, so it
+        is stable across pyarrow versions and changes exactly when a label,
+        metric, direction, cutoff or validity does.
+        """
+        payload = json.dumps([asdict(t) for t in self.tags], sort_keys=True, default=str)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    @property
+    def provisional(self) -> str:
+        """Why this version must be rebuilt, or ``""`` for a settled one."""
+        return PROVISIONAL_VERSIONS.get(self.version, "")
 
     def __len__(self) -> int:
         """Number of tags, code-fired or not."""
@@ -306,6 +333,7 @@ def load(version: str = DEFAULT_VERSION, root: Path | None = None) -> TagRegistr
 __all__ = [
     "CODE_FIRED_KINDS",
     "DEFAULT_VERSION",
+    "PROVISIONAL_VERSIONS",
     "KIND_BOOL",
     "KIND_DERIVED",
     "KIND_LLM",
