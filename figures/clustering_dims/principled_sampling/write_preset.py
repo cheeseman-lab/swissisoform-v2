@@ -21,6 +21,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -31,6 +32,7 @@ from export_feature_catalog import ROOT  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 CORESET_CSV = HERE / "coreset_50.csv"
+PROVENANCE_JSON = HERE / "coreset_provenance.json"
 COMBINED = ROOT / "data" / "output" / "filtered" / "all_samples_combined.parquet"
 OUT_TOML = ROOT / "presets" / "cheeseman50.toml"
 
@@ -45,7 +47,7 @@ ORF_LABEL = {
 SOURCE_LABEL = {
     "anchor": "anchor",
     "rare_fill": "rare-type fill",
-    "sampler": "sampler",
+    "sampler": "per-type sampler",
 }
 
 
@@ -87,7 +89,28 @@ def resolve(coreset: pd.DataFrame, combined: pd.DataFrame) -> pd.DataFrame:
     return merged
 
 
-def render(picks: pd.DataFrame) -> str:
+def provenance_lines(prov: dict | None) -> list[str]:
+    """Header comment lines naming what the panel was built from."""
+    if not prov:
+        return [
+            "# Provenance: none recorded — this panel predates coreset_provenance.json,",
+            "# so its source parquet and code commit are unknown.",
+        ]
+    code = prov.get("code") or {}
+    commit = (code.get("commit") or "unknown")[:12] + ("+dirty" if code.get("dirty") else "")
+    lines = [f"# Built {prov.get('built_at')} at commit {commit} from:"]
+    for src in prov.get("source_parquet", []):
+        lines.append(f"#   {src['path']}  sha256 {src['sha256'][:16]}")
+    catalog = prov.get("feature_catalog") or {}
+    if catalog:
+        lines.append(f"#   {catalog['path']}  sha256 {catalog['sha256'][:16]}")
+    lines.append(
+        "# Full record: figures/clustering_dims/principled_sampling/coreset_provenance.json"
+    )
+    return lines
+
+
+def render(picks: pd.DataFrame, prov: dict | None = None) -> str:
     """Render the preset, grouped by gene, in the cheeseman13 style."""
     counts = picks["orf_type"].value_counts()
     by_source = picks["source"].value_counts()
@@ -105,8 +128,11 @@ def render(picks: pd.DataFrame) -> str:
         "#                  uorf / internal_oof / 3utr_orf / uoorf — the four types",
         "#                  the global sampler never reaches, being 0.3-4.9% of the",
         "#                  pool. Yields each type's max, min and most typical.",
-        f"#   {by_source.get('sampler', 0)} sampler        n=6 sampler over the MFA feature",
-        "#                  space (all-ORF, 6,462 x 391), one isoform per gene.",
+        f"#   {by_source.get('sampler', 0)} per-type sampler  extended and truncated, each",
+        "#                  sampled in its own paired-ORF MFA space (every feature,",
+        "#                  unique-vs-shared contrasts included), one isoform per gene.",
+        "#",
+        *provenance_lines(prov),
         "#",
         "# ORF types: " + ", ".join(f"{ORF_LABEL[t]} {n}" for t, n in counts.items()),
         "#",
@@ -156,7 +182,8 @@ def main() -> None:
             + annotated[["gene_name", "tis_id"]].to_string(index=False)
         )
 
-    Path(args.out).write_text(render(picks))
+    prov = json.loads(PROVENANCE_JSON.read_text()) if PROVENANCE_JSON.exists() else None
+    Path(args.out).write_text(render(picks, prov))
     print(f"wrote {len(picks)} isoforms across {picks['gene_name'].nunique()} genes to {args.out}")
     print(picks["source"].value_counts().to_string())
     print(picks["orf_type"].value_counts().to_string())

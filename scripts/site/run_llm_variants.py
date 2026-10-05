@@ -293,10 +293,21 @@ def run_arm(variant: variants_mod.Variant, args: argparse.Namespace) -> int:
         variant.hints,
         out_dir,
     )
+    # Stamped beside every output and into the usage report, so an arm's
+    # verdicts say which grounding, hint level and frozen references made them.
+    run_meta = {
+        "arm": variant.arm_id,
+        "corpus": args.corpus,
+        "hints": variant.hints,
+        **grounding.provenance(
+            variant.grounding, dist_version=args.dist_version, tag_version=args.tag_registry
+        ),
+    }
+
     previous_body = evidence.use_category_body(builder)
     restores = _install_tool_extras(extras)
     try:
-        return llm.main(argv, prompts_dir=prompts) or 0
+        return llm.main(argv, prompts_dir=prompts, run_meta=run_meta) or 0
     finally:
         for restore in restores:
             restore()

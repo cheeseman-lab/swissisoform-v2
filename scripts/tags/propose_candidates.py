@@ -8,9 +8,8 @@ Outputs (default ``figures/tag_vocab/``):
     tag_candidates.csv    one row per surviving candidate — fill in `decision`
 
 Usage:
-    python scripts/tags/propose_candidates.py --run full_catalog --version v2
-    python scripts/tags/propose_candidates.py --run cheeseman50 --version v2 \
-        --out /tmp/$USER/tags_smoke
+    python scripts/tags/propose_candidates.py --run full_catalog
+    python scripts/tags/propose_candidates.py --run cheeseman50 --out ./tmp/tags_smoke
 """
 
 from __future__ import annotations
@@ -39,7 +38,11 @@ def main(argv: list[str] | None = None) -> int:
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--run", help="Run name under data/output/")
     g.add_argument("--parquet", type=Path, help="Explicit all_paired.parquet path")
-    p.add_argument("--version", default="v2", help="Distributions version (default: v2)")
+    p.add_argument(
+        "--version",
+        default=dist_mod.DEFAULT_VERSION,
+        help=f"Distributions version (default: {dist_mod.DEFAULT_VERSION})",
+    )
     p.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
     p.add_argument("--coreset", type=Path, default=DEFAULT_CORESET)
     p.add_argument("--out", type=Path, default=DEFAULT_OUT)

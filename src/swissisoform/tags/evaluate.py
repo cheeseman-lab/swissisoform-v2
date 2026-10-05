@@ -19,7 +19,9 @@ Threshold and boolean tags evaluate vectorized over the run frame, so a cutoff
 derived from the frozen distributions is applied to exactly the column it was
 derived from. Derived tags call their criterion's scorer per site (see
 :mod:`swissisoform.tags.derived`), which needs the site objects — hence
-:func:`fire` taking both, aligned positionally.
+:func:`fire` taking both, aligned positionally. They score at the same
+``ScoringConfig`` as ``EvidenceScoringModule``, so a derived tag cannot disagree
+with the criterion it mirrors.
 """
 
 from __future__ import annotations
@@ -33,8 +35,10 @@ import pandas as pd
 
 from swissisoform import metrics
 from swissisoform.config import ScoringConfig
+from swissisoform.distributions import stratum_for
 from swissisoform.models import TranslationInitiationSite
 from swissisoform.tags import derived as derived_tags
+from swissisoform.tags import seeds
 from swissisoform.tags.registry import (
     KIND_BOOL,
     KIND_DERIVED,
@@ -57,22 +61,47 @@ def _validity_mask(df: pd.DataFrame, tag: Tag) -> np.ndarray:
 
     An empty ``valid_for`` means "everywhere" rather than "nowhere": a registry row
     that forgot to declare validity should not silently blank the whole column.
+
+    A threshold or boolean tag is also held to its metric's hand-declared validity
+    (``seeds.VALIDITY_OVERRIDES``). That declaration is a fact about the metric,
+    not a calibration, so it applies to registries frozen before it was written —
+    v3 carries ``n_constrained_positions_unique_hi`` as valid everywhere, and it
+    fired on 13 of 18 cheeseman50 extensions where M1 itself is not evaluable.
+    Derived tags are exempt: their scorer applies its own gates.
     """
-    if not tag.valid_for:
-        return np.ones(len(df), dtype=bool)
-    return df["orf_type"].astype("string").isin(tag.valid_for).to_numpy(dtype=bool)
+    orf = df["orf_type"].astype("string")
+    mask = np.ones(len(df), dtype=bool)
+    if tag.valid_for:
+        mask &= orf.isin(tag.valid_for).to_numpy(dtype=bool)
+    declared = seeds.declared_validity(tag.metric) if tag.kind != KIND_DERIVED else None
+    if declared is not None:
+        mask &= orf.isin(declared).to_numpy(dtype=bool)
+    return mask
+
+
+def _cutoffs(df: pd.DataFrame, tag: Tag) -> np.ndarray:
+    """Per-row cutoff: the row's ``orf_type``, then its stratum, then ``tag.cutoff``."""
+    default = np.nan if tag.cutoff is None else float(tag.cutoff)
+    if not tag.cutoff_by_stratum:
+        return np.full(len(df), default)
+    by = tag.cutoff_by_stratum
+    return np.array(
+        [by.get(str(o), by.get(stratum_for(o), default)) for o in df["orf_type"]],
+        dtype="float64",
+    )
 
 
 def _threshold_state(df: pd.DataFrame, tag: Tag) -> tuple[pd.Series, pd.Series] | None:
     """``(state, citation)`` for a threshold tag, or None if unresolvable here."""
     values = metrics.resolve(tag.metric, df)
-    if values is None or tag.cutoff is None:
+    if values is None or (tag.cutoff is None and not tag.cutoff_by_stratum):
         return None
     arr = pd.to_numeric(values, errors="coerce").to_numpy(dtype="float64")
+    cut = _cutoffs(df, tag)
     with np.errstate(invalid="ignore"):
-        hit = arr >= tag.cutoff if tag.direction == ">=" else arr < tag.cutoff
+        hit = arr >= cut if tag.direction == ">=" else arr < cut
     state = pd.array(hit, dtype=STATE_DTYPE)
-    state[np.isnan(arr)] = pd.NA
+    state[np.isnan(arr) | np.isnan(cut)] = pd.NA
     return pd.Series(state, index=df.index), pd.Series(arr, index=df.index)
 
 
@@ -84,10 +113,13 @@ def _bool_state(df: pd.DataFrame, tag: Tag) -> tuple[pd.Series, pd.Series] | Non
     """
     if tag.metric not in df.columns:
         return None
-    state = (
-        df[tag.metric]
-        .astype("object")
-        .map(lambda v: pd.NA if v is None or (isinstance(v, float) and pd.isna(v)) else bool(v))
+    # A categorical change flag is re-derived so a one-sided None reads as
+    # gained/lost rather than unknown (see metrics.changed_state).
+    raw = metrics.changed_state(tag.metric, df)
+    if raw is None:
+        raw = df[tag.metric]
+    state = raw.astype("object").map(
+        lambda v: pd.NA if v is None or (isinstance(v, float) and pd.isna(v)) else bool(v)
     )
     return (
         pd.Series(pd.array(state.to_numpy(), dtype=STATE_DTYPE), index=df.index),
@@ -122,11 +154,12 @@ def _derived_state(
 def effective_scoring(reg: TagRegistry, base: ScoringConfig) -> ScoringConfig:
     """*base* with every ``cutoff_overrides`` entry in *reg* applied.
 
-    This is what makes a calibrated registry usable without loss: the criterion
-    scorers keep their gates (status checks, ORF-type validity, either-or
-    roll-ups) and only their numbers move. Building the config here rather than
-    at the call site means a run can never fire tags at one set of cutoffs while
-    believing it used another.
+    The config a calibrated registry *proposes*. :func:`fire` does not score
+    derived tags with it — they run at the scorer's own config, so a derived tag
+    and its ``isoform_scoring_criteria`` entry can never disagree — but uses it
+    to report which criterion numbers the registry would move. Under v3 that was
+    S3 alone (10.0 -> 11.376), and firing at it gave the same parquet two S3
+    answers on 7 of 50 cheeseman50 rows.
 
     **Overrides are partial, deliberately.** A criterion may consult several
     thresholds while the sweep only ever cuts its headline metric — P2 also reads
@@ -158,6 +191,24 @@ def effective_scoring(reg: TagRegistry, base: ScoringConfig) -> ScoringConfig:
     return dataclasses.replace(base, **overrides)
 
 
+def _warn_unapplied_overrides(reg: TagRegistry, cfg: ScoringConfig) -> None:
+    """Log the criterion cutoffs *reg* would move, which firing does not apply."""
+    proposed = effective_scoring(reg, cfg)
+    moved = {
+        f.name: (getattr(cfg, f.name), getattr(proposed, f.name))
+        for f in dataclasses.fields(ScoringConfig)
+        if getattr(cfg, f.name) != getattr(proposed, f.name)
+    }
+    if moved:
+        logger.warning(
+            "Tags: registry %s proposes criterion cutoffs that differ from the scoring "
+            "config (%s). Derived tags fire at the scoring config so they match "
+            "isoform_scoring_criteria; the registry numbers are not applied.",
+            reg.version,
+            ", ".join(f"{k} {a!r} -> {b!r}" for k, (a, b) in sorted(moved.items())),
+        )
+
+
 def fire(
     df: pd.DataFrame,
     sites: list[TranslationInitiationSite],
@@ -172,9 +223,10 @@ def fire(
         sites: The TIS objects for those rows, in row order. Required by derived
             tags; may be empty only if the registry has none.
         reg: The frozen registry.
-        cfg: Base scoring thresholds. The registry's ``cutoff_overrides`` are
-            applied on top (see :func:`effective_scoring`), so the numbers the
-            scorers use are the frozen ones. Defaults to ``ScoringConfig()``.
+        cfg: The scoring thresholds ``EvidenceScoringModule`` ran at. Derived
+            tags score at exactly these, so each equals its criterion by
+            construction; a registry ``cutoff_overrides`` entry that differs is
+            reported, not applied. Defaults to ``ScoringConfig()``.
 
     Returns:
         ``(states, citations)``. ``states`` is nullable-boolean, ``citations`` is
@@ -194,7 +246,8 @@ def fire(
             f"{len(sites)} sites for {len(df)} rows — derived tags need the TIS objects "
             "in row order (build them as [s for g in genes for s in g.tis_sites])"
         )
-    cfg = effective_scoring(reg, cfg or ScoringConfig())
+    cfg = cfg or ScoringConfig()
+    _warn_unapplied_overrides(reg, cfg)
 
     states: dict[str, pd.Series] = {}
     citations: dict[str, pd.Series] = {}
