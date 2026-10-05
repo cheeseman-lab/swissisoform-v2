@@ -142,6 +142,17 @@ class Tag:
         """Whether the evaluator produces a state for this tag."""
         return self.kind in CODE_FIRED_KINDS and not self.blocked
 
+    def label_for(self, orf_type: str | None) -> str:
+        """The label as it reads for one isoform.
+
+        A truncation's unique region is the canonical stretch the isoform *lost*,
+        so a label claiming something was gained there reads backwards. The
+        direction comes from the ORF type, not from the label table.
+        """
+        if orf_type == "truncated" and self.label.endswith(" gained"):
+            return self.label[: -len(" gained")] + " lost"
+        return self.label
+
     @property
     def test(self) -> str:
         """One-line plain-English statement of what fires this tag."""

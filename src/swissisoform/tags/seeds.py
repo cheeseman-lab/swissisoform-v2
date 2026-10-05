@@ -12,11 +12,18 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from swissisoform.contract import NO_CANONICAL_BASELINE_ORFS
 from swissisoform.distributions import SEPARATE_ORF_TYPES
 from swissisoform.metrics import SIGNED_REGION_PROPERTIES
 
 PAIRED_ORF_TYPES: tuple[str, ...] = ("extended", "truncated")
 ALL_ORF_TYPES: tuple[str, ...] = PAIRED_ORF_TYPES + SEPARATE_ORF_TYPES
+# ORF types whose unique region was canonical coding sequence — the only ones a
+# unique-region constraint signal measures anything on. Derived from the same
+# constant M1's scorer gates on, so the tag layer and the criterion cannot drift.
+CANONICAL_BASELINE_ORF_TYPES: tuple[str, ...] = tuple(
+    t for t in ALL_ORF_TYPES if t not in {o.value for o in NO_CANONICAL_BASELINE_ORFS}
+)
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +267,6 @@ def anchor_for(metric: str) -> tuple[float, str] | None:
 # fill rate is a fact about the pipeline.
 VALIDITY_OVERRIDES: dict[str, tuple[str, ...]] = {
     # No shared region ⇒ no denominator, no retained core to compare.
-    "isoform_variant_intersection_gnomad_depletion_ratio": PAIRED_ORF_TYPES,
     "isoform_variant_intersection_disease_enrichment_ratio": PAIRED_ORF_TYPES,
     "isoform_structure_rmsd_shared": PAIRED_ORF_TYPES,
     "isoform_structure_shared_region_len": PAIRED_ORF_TYPES,
@@ -271,10 +277,28 @@ VALIDITY_OVERRIDES: dict[str, tuple[str, ...]] = {
     "tx:min_shared_plddt": PAIRED_ORF_TYPES,
     "tx:sae_top_delta": PAIRED_ORF_TYPES,
     **{f"tx:{p}_unique_minus_shared": PAIRED_ORF_TYPES for p in SIGNED_REGION_PROPERTIES},
-    # The unique region of an extension was never coding, so neither germline
-    # signal measures protein constraint there (see category-pass.txt).
-    "isoform_plm_vep_constraint_enrichment": ("truncated",),
+    # The unique region of an extension (or of a separate ORF) was never coding,
+    # so no germline-constraint signal measures protein constraint there — M1's
+    # NO_CANONICAL_BASELINE_ORFS gate (see category-pass.txt).
+    **{
+        m: CANONICAL_BASELINE_ORF_TYPES
+        for m in (
+            "isoform_plm_vep_constraint_enrichment",
+            "isoform_plm_vep_constraint_delta",
+            "isoform_plm_vep_n_constrained_positions_unique",
+            "isoform_variant_intersection_gnomad_depletion_ratio",
+        )
+    },
 }
+
+
+def declared_validity(metric: str) -> tuple[str, ...] | None:
+    """The hand-declared ORF types *metric* is defined for, or None if undeclared.
+
+    The evaluator enforces this at firing time as well, so a registry frozen
+    before an override was added still cannot fire where the metric is undefined.
+    """
+    return VALIDITY_OVERRIDES.get(metric)
 
 
 def validity_for(metric: str, null_pattern: str | None) -> tuple[str, ...]:

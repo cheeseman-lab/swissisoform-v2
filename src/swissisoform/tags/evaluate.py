@@ -35,6 +35,7 @@ from swissisoform import metrics
 from swissisoform.config import ScoringConfig
 from swissisoform.models import TranslationInitiationSite
 from swissisoform.tags import derived as derived_tags
+from swissisoform.tags import seeds
 from swissisoform.tags.registry import (
     KIND_BOOL,
     KIND_DERIVED,
@@ -57,10 +58,22 @@ def _validity_mask(df: pd.DataFrame, tag: Tag) -> np.ndarray:
 
     An empty ``valid_for`` means "everywhere" rather than "nowhere": a registry row
     that forgot to declare validity should not silently blank the whole column.
+
+    A threshold or boolean tag is also held to its metric's hand-declared validity
+    (``seeds.VALIDITY_OVERRIDES``). That declaration is a fact about the metric,
+    not a calibration, so it applies to registries frozen before it was written —
+    v3 carries ``n_constrained_positions_unique_hi`` as valid everywhere, and it
+    fired on 13 of 18 cheeseman50 extensions where M1 itself is not evaluable.
+    Derived tags are exempt: their scorer applies its own gates.
     """
-    if not tag.valid_for:
-        return np.ones(len(df), dtype=bool)
-    return df["orf_type"].astype("string").isin(tag.valid_for).to_numpy(dtype=bool)
+    orf = df["orf_type"].astype("string")
+    mask = np.ones(len(df), dtype=bool)
+    if tag.valid_for:
+        mask &= orf.isin(tag.valid_for).to_numpy(dtype=bool)
+    declared = seeds.declared_validity(tag.metric) if tag.kind != KIND_DERIVED else None
+    if declared is not None:
+        mask &= orf.isin(declared).to_numpy(dtype=bool)
+    return mask
 
 
 def _threshold_state(df: pd.DataFrame, tag: Tag) -> tuple[pd.Series, pd.Series] | None:

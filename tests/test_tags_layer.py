@@ -202,6 +202,33 @@ class TestFire:
         # A tag that did not apply cites nothing, even though the column has a value.
         assert pd.isna(citations["paired"].iloc[1])
 
+    def test_declared_validity_overrides_a_stale_registry(self):
+        """A unique-region constraint count is undefined where M1 is: off the canonical frame."""
+        metric = "isoform_plm_vep_n_constrained_positions_unique"
+        reg = _registry(_row(tag_id="nc", metric=metric, cutoff=0.5, valid_for=ALL_ORF))
+        df = _frame(["extended", "truncated", "uorf"], **{metric: [11.0, 3.0, 4.0]})
+        states, citations = tag_eval.fire(df, [], reg)
+        assert pd.isna(states["nc"].iloc[0])
+        assert bool(states["nc"].iloc[1]) is True
+        assert pd.isna(states["nc"].iloc[2])
+        assert pd.isna(citations["nc"].iloc[0])
+
+    def test_constraint_validity_tracks_the_m1_gate(self):
+        from swissisoform.contract import NO_CANONICAL_BASELINE_ORFS
+        from swissisoform.tags import seeds
+
+        gated = {o.value for o in NO_CANONICAL_BASELINE_ORFS}
+        allowed = seeds.declared_validity("isoform_plm_vep_n_constrained_positions_unique")
+        assert allowed == ("truncated",)
+        assert not gated & set(allowed)
+
+    def test_label_direction_follows_orf_type(self):
+        tag = _registry(_row(label="Constrained residues gained")).get("t")
+        assert tag.label_for("truncated") == "Constrained residues lost"
+        assert tag.label_for("extended") == "Constrained residues gained"
+        both = _registry(_row(label="Domain gained or lost")).get("t")
+        assert both.label_for("truncated") == "Domain gained or lost"
+
     def test_empty_valid_for_means_everywhere(self):
         reg = _registry(_row(tag_id="any", metric="m", cutoff=0.0, valid_for=""))
         df = _frame(["uorf"], m=[5.0])
