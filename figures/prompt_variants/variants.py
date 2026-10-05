@@ -4,14 +4,12 @@ Four groundings x two hint levels. Kept in one place so the driver and anything
 that later reads the corpora cannot disagree about what an arm was.
 
 The two axes are not independent, and the write-up has to say so. ``-hint``
-removes only hint *content*: the per-member interpretation hints in ``criteria``
-(~18 strings) and the per-tag ``means`` in ``tags`` (one per criterion-backed
-tag, 14). The system Directionality block — including the P2 confidence gate —
-is kept in every arm, so the hint effect is not confounded with a gate effect.
-``raw`` and ``dist`` have no hint content, so their ``-hint`` arm is the same
-prompt and payload as their ``+hint`` arm: a free replicate, i.e. a run-to-run
-noise floor, not a hint measurement. That asymmetry is a property of the
-framings, not a bug — but it means "the hint effect" exists in two arms only.
+removes the system Directionality block everywhere; on top of that it removes
+per-member interpretation hints in ``criteria`` (~18 strings) and in ``tags``
+(one ``means`` per criterion-backed tag, 14), while ``raw`` and ``dist`` have
+none to remove. That asymmetry is a property of the framings, not a bug — but
+it means "the hint effect" is not one number across the matrix, and it is not
+even the same *kind* of difference in the two arms that have one.
 """
 
 from __future__ import annotations
