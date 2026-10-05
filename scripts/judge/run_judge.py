@@ -47,6 +47,7 @@ from swissisoform.judge.serve import (  # noqa: E402
     Request,
     completed_ids,
     fits_context,
+    foreign_results,
     order_by_cell,
     read_requests,
 )
@@ -163,7 +164,22 @@ def main(argv: list[str] | None = None) -> int:
         return _compare_backends(judge, requests, work, args.compare_backends, args.cell)
 
     results_path = work / "results.jsonl"
-    done = set() if args.force else completed_ids(results_path)
+    build_ids = {r.build_id for r in requests}
+    if len(build_ids) != 1 or "" in build_ids:
+        raise SystemExit(
+            f"{requests_path} carries build ids {sorted(build_ids)}; rebuild it with "
+            "scripts/judge/build_requests.py so every request names one build"
+        )
+    (build_id,) = build_ids
+    foreign = 0 if args.force else foreign_results(results_path, build_id)
+    if foreign:
+        # Appending would mix two builds in one file, and analyze.py would then
+        # fit judgments of text the current requests no longer contain.
+        raise SystemExit(
+            f"{results_path} holds {foreign} result(s) from another request build "
+            f"(current {build_id}). Move it aside, or pass --force to start over."
+        )
+    done = set() if args.force else completed_ids(results_path, build_id)
     todo = [r for r in order_by_cell(requests) if r.id not in done]
     if args.limit:
         todo = todo[: args.limit]

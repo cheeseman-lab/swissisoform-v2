@@ -10,8 +10,8 @@ recorded as scalars, so rebuilding in place changes what every existing tag mean
 Bump ``--version`` instead, and keep ``--force`` for genuine do-overs.
 
 Usage:
-    python scripts/setup/build_distributions.py --run full_catalog --version v1
-    python scripts/setup/build_distributions.py --run cheeseman50 --out /tmp/$USER/dist_smoke
+    python scripts/setup/build_distributions.py --run full_catalog --version v4
+    python scripts/setup/build_distributions.py --run cheeseman50 --out ./tmp/dist_smoke
 """
 
 from __future__ import annotations

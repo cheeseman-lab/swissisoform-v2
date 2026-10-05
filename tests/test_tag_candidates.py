@@ -357,6 +357,35 @@ def test_transform_resolve_matches_a_raw_column_read():
     assert metrics.resolve("nope", df) is None
 
 
+def test_list_length_is_nan_for_a_missing_list_not_a_crash():
+    """The runtime frame holds NaN for a skipped module; len(nan) used to raise."""
+    df = pd.DataFrame({"cmp_x_hits": [[1, 2], None, float("nan"), np.array([3])]})
+    got = metrics.resolve("cmp_x_hits__len", df)
+    assert got.iloc[0] == 2.0 and got.iloc[3] == 1.0
+    assert got.iloc[1:3].isna().all()
+
+
+def test_list_length_with_a_count_twin_is_dropped_as_a_duplicate():
+    """``<col>__len`` defers to the catalog's real count column when one exists."""
+    catalog = pd.DataFrame(
+        [
+            {"feature": "cmp_motifs_n_hits_in_diff_region", "duplicate_of": None},
+            {
+                "feature": "n_cmp_motifs_hits_in_diff_region",
+                "duplicate_of": "cmp_motifs_n_hits_in_diff_region",
+            },
+        ]
+    )
+    by_feature = C._catalog_index(catalog)
+    assert (
+        C._catalog_flag(by_feature, "cmp_motifs_hits_in_diff_region__len", "duplicate_of")
+        == "cmp_motifs_n_hits_in_diff_region"
+    )
+    assert pd.isna(
+        C._catalog_flag(by_feature, "cmp_motifs_n_hits_in_diff_region", "duplicate_of")
+    )
+
+
 def test_anchor_rules_do_not_fire_on_percent_identity():
     """1.0 is a ceiling for identity, not a null hypothesis — no anchor."""
     assert seeds.anchor_for("isoform_conservation_frame_primate_mean_pident") is None
@@ -369,3 +398,63 @@ def test_paired_only_metrics_declare_paired_validity():
     assert seeds.validity_for("isoform_structure_rmsd_shared", None) == seeds.PAIRED_ORF_TYPES
     assert set(seeds.validity_for("some_other_metric", None)) == set(seeds.ALL_ORF_TYPES)
     assert seeds.validity_for("x", "absent_for_separate_orfs") == seeds.PAIRED_ORF_TYPES
+
+
+# ── Sign-safe region comparisons ──────────────────────────────────────────
+
+
+def test_region_ratio_is_not_evaluable_over_a_non_positive_denominator():
+    """unique -0.6 / shared -0.3 is 2.0, but the unique region is the more hydrophilic."""
+    df = pd.DataFrame(
+        {
+            "cmp_biophysics_gravy_unique": [-0.6, 0.4, -0.2],
+            "cmp_biophysics_gravy_shared": [-0.3, 0.2, 0.5],
+            "cmp_biophysics_gravy_ratio": [2.0, 2.0, -0.4],
+        }
+    )
+    ratio = metrics.resolve("cmp_biophysics_gravy_ratio", df)
+    assert pd.isna(ratio.iloc[0])
+    assert list(ratio.iloc[1:]) == [2.0, -0.4]
+    diff = metrics.resolve("tx:gravy_unique_minus_shared", df)
+    assert np.allclose(diff, [-0.3, 0.2, -0.7])
+
+
+def test_unique_minus_shared_anchors_at_zero_and_is_paired_only():
+    assert seeds.anchor_for("tx:gravy_unique_minus_shared")[0] == 0.0
+    assert seeds.validity_for("tx:disorder_unique_minus_shared", None) == seeds.PAIRED_ORF_TYPES
+    assert seeds.label_for("tx:gravy_unique_minus_shared", ">=") == "Unique region more hydrophobic"
+
+
+class _StubDist:
+    """Just enough of :class:`Distributions` for ``apply_filters``."""
+
+    def __init__(self, mins: dict[str, float]) -> None:
+        self._mins = mins
+
+    def summary(self, metric: str, stratum: str = "all") -> dict | None:
+        if metric not in self._mins:
+            return None
+        return {"n": 500, "fill_rate": 1.0, "min": self._mins[metric], "max": 9.0}
+
+
+def test_sweep_drops_a_ratio_whose_denominator_crosses_zero():
+    def cand(metric: str) -> C.Candidate:
+        return C.Candidate(
+            tag_id=C._slug(f"{metric}_hi"), category="S", label=metric, metric=metric,
+            kind="code", direction=">=", valid_for=seeds.PAIRED_ORF_TYPES, source="sweep",
+        )
+
+    dist = _StubDist(
+        {
+            "cmp_biophysics_gravy_ratio": -5.0,
+            "cmp_biophysics_gravy_shared": -2.8,
+            "cmp_biophysics_pI_ratio": 0.2,
+            "cmp_biophysics_pI_shared": 2.5,
+        }
+    )
+    funnel = C.Funnel()
+    kept = C.apply_filters(
+        [cand("cmp_biophysics_gravy_ratio"), cand("cmp_biophysics_pI_ratio")], dist, {}, funnel
+    )
+    assert [c.metric for c in kept] == ["cmp_biophysics_pI_ratio"]
+    assert funnel.dropped == {"ratio over a sign-crossing denominator": 1}

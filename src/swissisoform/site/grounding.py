@@ -83,6 +83,19 @@ LEAK_SUFFIXES: tuple[str, ...] = ("_enriched",)
 # grounding difference, and it would dominate M's comparison.
 STRIP_LISTS_FOR: frozenset[str] = frozenset({"M"})
 
+# Integers that name a thing rather than measure it. A percentile of an SAE
+# feature index read as "one of the highest-indexed features (97th percentile)"
+# in six dist outputs (audit38_S).
+IDENTIFIER_SUFFIXES: tuple[str, ...] = ("_feature_index",)
+# Catalog exclude reasons and name suffixes that keep a categorical column out of
+# `dist`'s plain-value block: nothing in them is evidence about the isoform.
+DIST_SKIP_REASONS: frozenset[str] = frozenset({"identifier", "free_text", "constant", "all_null"})
+DIST_SKIP_SUFFIXES: tuple[str, ...] = ("_bigwig", "hal_path")
+# Metrics where a smaller value is the stronger result. Their percentile is
+# ascending like every other, so a high one means *weak* significance — read
+# backwards in about half the dist D outputs (audit38_D).
+LOWER_IS_STRONGER_MARKERS: tuple[str, ...] = ("pvalue", "p_value", "qvalue")
+
 
 class GroundingError(RuntimeError):
     """Raised when a grounding cannot be built for the records in hand."""
@@ -109,7 +122,52 @@ def _scrub(value: Any) -> Any:
 
 def _is_list(value: Any) -> bool:
     """Whether *value* is a row list — pandas hands these back as ndarrays."""
-    return isinstance(value, (list, tuple)) or hasattr(value, "tolist")
+    # `__len__` keeps numpy *scalars* out: they have `tolist` too.
+    return isinstance(value, (list, tuple)) or (
+        hasattr(value, "tolist") and hasattr(value, "__len__")
+    )
+
+
+_MISSING = object()
+
+
+def _as_mapping(value: Any) -> dict[str, Any] | None:
+    """A struct as a dict; a parquet map arrives as ``[[key, value], ...]``."""
+    if isinstance(value, dict):
+        return value
+    if _is_list(value):
+        pairs = list(value)
+        if pairs and all(_is_list(p) and len(list(p)) == 2 for p in pairs):
+            return {str(list(p)[0]): list(p)[1] for p in pairs}
+    return None
+
+
+def _lookup(raw: dict[str, Any], column: str) -> Any:
+    """Resolve one feature-catalog name against a record's ``_raw``, or ``_MISSING``.
+
+    The catalog names columns the way ``export_feature_catalog.read_flat`` sees
+    them — struct leaves dotted (``isoform_massspec_summary.best_hyperscore``),
+    list lengths as ``n_<list column>`` — while ``_raw`` is keyed by top-level
+    parquet column with structs left nested. A bare ``column in raw`` therefore
+    missed every leaf and every count: D's whole mass-spec summary among them.
+    """
+    if column in raw:
+        return raw[column]
+    head, _, rest = column.partition(".")
+    if rest and head in raw:
+        node: Any = raw[head]
+        for part in rest.split("."):
+            mapping = _as_mapping(node)
+            if mapping is None or part not in mapping:
+                return _MISSING
+            node = mapping[part]
+        return node
+    if column.startswith("n_"):
+        parent = _lookup(raw, column[2:])
+        if parent is _MISSING:
+            return _MISSING
+        return len(list(parent)) if _is_list(parent) else None
+    return _MISSING
 
 
 def _clean(value: Any) -> Any:
@@ -163,7 +221,37 @@ def numeric_category_columns(
     out: dict[str, list[str]] = {}
     for letter, sub in sel.groupby("category"):
         out[str(letter)] = [
-            c for c in sub["feature"].astype(str) if c in profiled and not _leaks(c)
+            c
+            for c in sub["feature"].astype(str)
+            if c in profiled and not _leaks(c) and not c.endswith(IDENTIFIER_SUFFIXES)
+        ]
+    return out
+
+
+def categorical_category_columns(catalog: pd.DataFrame) -> dict[str, list[str]]:
+    """``{letter: [column, ...]}`` — what ``dist`` carries as plain values.
+
+    A percentile only exists for a number, but the categorical outputs are often
+    the finding itself: the DeepLoc compartment and its ``*_changed`` flag, the
+    SignalP/TargetP calls, a module's ``status``. Dropping them left the dist arm
+    reasoning about relocalization from probability deltas alone (audit38_L:
+    3-4 false relocalizations per 18). Identifier-valued integers ride here too,
+    because ranking a feature *index* is meaningless.
+
+    Excluded: identifiers, free text, constants and file paths — none of which a
+    reader of the category could act on.
+    """
+    sel = catalog[(catalog["category"].isin(list("CDLMPS"))) & (catalog["pane"] != "canonical")]
+    reasons = sel["exclude_reason"] if "exclude_reason" in sel else pd.Series("", index=sel.index)
+    is_text = sel["dtype"].isin(["str", "bool"]) & ~reasons.isin(list(DIST_SKIP_REASONS))
+    is_id = sel["feature"].astype(str).str.endswith(IDENTIFIER_SUFFIXES)
+    sel = sel[is_text | is_id]
+    out: dict[str, list[str]] = {}
+    for letter, sub in sel.groupby("category"):
+        out[str(letter)] = [
+            c
+            for c in sub["feature"].astype(str)
+            if not _leaks(c) and not c.endswith(DIST_SKIP_SUFFIXES)
         ]
     return out
 
@@ -192,15 +280,26 @@ def _raw_body(
         evidence: dict[str, Any] = {}
         dropped: dict[str, int] = {}
         row_counts: dict[str, int] = {}
+        emitted: dict[str, list[Any]] = {}
         for column in columns.get(letter, []):
-            if column not in raw:
+            value = _lookup(raw, column)
+            if value is _MISSING:
                 continue
-            value = raw[column]
             if _is_list(value):
                 rows = list(value)
                 if stripped:
                     row_counts[column] = len(rows)
                     continue
+                # `cmp_*_hits_in_diff_region` is the isoform list filtered to the
+                # differential region, so wherever the whole list is in the region
+                # (every extension and separate ORF) the two columns are the same
+                # rows. Serialising them twice made the model count each peptide
+                # twice (audit38_D: UBE2M "seven validated", actually five).
+                twin = next((c for c, r in emitted.items() if rows and r == rows), None)
+                if twin is not None:
+                    evidence[column] = {"same_rows_as": twin, "n_rows": len(rows)}
+                    continue
+                emitted[column] = rows
                 kept, n_dropped = rows[:MAX_LIST_ROWS], max(0, len(rows) - MAX_LIST_ROWS)
                 evidence[column] = kept
                 if n_dropped:
@@ -428,9 +527,17 @@ def _open_question(tag: reg_mod.Tag, record: dict[str, Any]) -> dict[str, Any]:
 
 
 def _dist_body(
-    metrics_by_category: dict[str, list[str]], dist: dist_mod.Distributions
+    metrics_by_category: dict[str, list[str]],
+    dist: dist_mod.Distributions,
+    calls_by_category: dict[str, list[str]] | None = None,
 ) -> Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]:
     """Every profiled numeric field with its value and its population percentile.
+
+    Plus ``calls``: the category's categorical outputs as plain values (see
+    :func:`categorical_category_columns`), so the arm differs from the others in
+    how numbers are contextualised, not in which findings it is shown. A p- or
+    q-value entry is flagged ``lower_is_stronger`` because its percentile is
+    ascending like every other.
 
     Two traps in the distributions read-side, both handled here:
 
@@ -455,7 +562,8 @@ def _dist_body(
         wanted = dist_mod.stratum_for(record.get("orf_type"))
         fields: dict[str, Any] = {}
         for metric in metrics_by_category.get(category["letter"], []):
-            value = _clean(raw.get(metric))
+            value = _lookup(raw, metric)
+            value = None if value is _MISSING else _clean(value)
             if value is None:
                 continue
             stratum = wanted
@@ -473,9 +581,20 @@ def _dist_body(
             }
             for point in ("p05", "p25", "p50", "p75", "p95"):
                 entry[point] = info.get(point)
+            if any(m in metric.lower() for m in LOWER_IS_STRONGER_MARKERS):
+                entry["lower_is_stronger"] = True
             fields[metric] = entry
+        calls: dict[str, Any] = {}
+        for column in (calls_by_category or {}).get(category["letter"], []):
+            value = _lookup(raw, column)
+            value = None if value is _MISSING else _clean(value)
+            if value is not None:
+                calls[column] = value
+        body: dict[str, Any] = {"fields": fields}
+        if calls:
+            body["calls"] = calls
         return {
-            "fields": fields,
+            **body,
             "reference_population": {
                 "version": dist.version,
                 "source_run": (dist.provenance.get("source_run") or "unknown"),
@@ -526,7 +645,47 @@ def build(
     if mode == "raw":
         return _raw_body(category_columns(catalog), strip_lists_for)
     dist = dist_mod.load(dist_version)
-    return _dist_body(numeric_category_columns(catalog, dist), dist)
+    return _dist_body(
+        numeric_category_columns(catalog, dist), dist, categorical_category_columns(catalog)
+    )
+
+
+def provenance(
+    mode: str,
+    *,
+    catalog_csv: Path = DEFAULT_CATALOG,
+    dist_version: str = DEFAULT_DIST_VERSION,
+    tag_version: str = DEFAULT_TAG_VERSION,
+) -> dict[str, Any]:
+    """The reference artifacts one grounding's payload is built from, for the run stamp.
+
+    Each arm reads different frozen inputs — the tag registry, the
+    distributions, the feature catalog — so two arms' outputs are only
+    comparable when those are pinned too.
+    """
+    from swissisoform.setup._common import rel_to_root, sha256_file
+
+    out: dict[str, Any] = {"grounding": mode}
+    if mode == "tags":
+        reg = reg_mod.load(tag_version)
+        out["tag_registry"] = {
+            "version": reg.version,
+            "built_at": reg.provenance.get("built_at"),
+            "distributions_version": reg.provenance.get("distributions_version"),
+        }
+    if mode in ("raw", "dist"):
+        out["feature_catalog"] = {
+            "path": rel_to_root(Path(catalog_csv).resolve()),
+            "sha256": sha256_file(Path(catalog_csv)),
+        }
+    if mode == "dist":
+        dist = dist_mod.load(dist_version)
+        out["distributions"] = {
+            "version": dist.version,
+            "source_parquet_sha256": dist.provenance.get("source_parquet_sha256"),
+            "built_at": dist.provenance.get("built_at"),
+        }
+    return out
 
 
 def strip_hints(record: dict[str, Any]) -> dict[str, Any]:
@@ -627,11 +786,13 @@ __all__ = [
     "STRIP_LISTS_FOR",
     "GroundingError",
     "build",
+    "categorical_category_columns",
     "category_columns",
     "dump",
     "install_verdict_extras",
     "llm_tag_ids",
     "numeric_category_columns",
+    "provenance",
     "strip_hints",
     "verdict_extra_fields",
 ]

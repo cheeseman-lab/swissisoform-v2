@@ -132,6 +132,27 @@ class TestCacheKey:
             "w", "swissprot:human", ["AAAR"]
         )
 
+    def test_a_staged_fasta_keys_on_content_not_path(self, tmp_path):
+        """Two checkouts share results; a refreshed proteome at one path does not."""
+        a, b = tmp_path / "a" / "db.fasta", tmp_path / "b" / "db.fasta"
+        for p in (a, b):
+            p.parent.mkdir()
+            p.write_text(">sp|P1|X\nMAAA\n")
+        assert _pepquery_cache_key("w", str(a), ["AAAR"]) == _pepquery_cache_key(
+            "w", str(b), ["AAAR"]
+        )
+        before = _pepquery_cache_key("w", str(a), ["AAAR"])
+        a.write_text(">sp|P1|X\nMAAA\n>sp|P2|Y\nMCCC\n")
+        assert _pepquery_cache_key("w", str(a), ["AAAR"]) != before
+
+
+def test_proteome_sidecar_does_not_share_the_jar_s_directory():
+    """write_sidecar writes _setup.json in its dir; sharing one overwrote the other."""
+    from swissisoform.setup import databases as db
+
+    assert db.PEPQUERY_DB_FASTA.parent != db.PEPQUERY_DIR
+    assert db.PEPQUERY_DB_FASTA.parent == db.PEPQUERY_DB_DIR
+
 
 class TestParsePepqueryOutput:
     def test_no_file_returns_empty(self, tmp_path):

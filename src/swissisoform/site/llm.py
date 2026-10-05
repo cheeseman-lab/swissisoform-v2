@@ -27,6 +27,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -158,10 +159,46 @@ class Prompt:
         return (len(self.system) + len(self.user)) // 4
 
 
+# Splice markers in the tracked category prompts (figures/prompt_variants/
+# assemble.py varies the blocks they delimit). They are authoring structure, not
+# instructions, so they must never reach a model — production included.
+PROMPT_BLOCK_RE = re.compile(r"^<!-- @block:([a-z_]+) -->$")
+PROMPT_END_RE = re.compile(r"^<!-- @end -->$")
+
+
+def collapse_blank_lines(lines: list[str]) -> str:
+    """Join *lines*, squeezing runs of blank lines and trimming trailing ones."""
+    kept: list[str] = []
+    for line in lines:
+        if not line.strip() and kept and not kept[-1].strip():
+            continue
+        kept.append(line)
+    while kept and not kept[-1].strip():
+        kept.pop()
+    return "\n".join(kept)
+
+
+def strip_prompt_markers(text: str) -> str:
+    """*text* with every ``@block`` / ``@end`` marker line removed.
+
+    The one stripping rule both readers share: production through
+    :func:`load_system_prompt`, and the prompt-variant harness through
+    ``assemble.render``. Two copies is how the harness's "status quo" arm and the
+    prompt production actually sends drift apart.
+    """
+    lines = [
+        line
+        for line in text.splitlines()
+        if not (PROMPT_BLOCK_RE.match(line.strip()) or PROMPT_END_RE.match(line.strip()))
+    ]
+    return collapse_blank_lines(lines)
+
+
 def load_system_prompt(path: Path | None = None) -> str:
     """Load the system prompt, erroring early if missing.
 
     Reads ``SYSTEM_PROMPT_PATH`` at call time (so tests can monkeypatch it).
+    Splice markers are stripped (:func:`strip_prompt_markers`).
     """
     path = path or SYSTEM_PROMPT_PATH
     if not path.exists():
@@ -169,7 +206,7 @@ def load_system_prompt(path: Path | None = None) -> str:
             f"System prompt not found at {path}. "
             "Agent A is responsible for producing scripts/site/prompts/system.txt."
         )
-    return path.read_text(encoding="utf-8").strip()
+    return strip_prompt_markers(path.read_text(encoding="utf-8")).strip()
 
 
 def load_output_schema(path: Path | None = None) -> dict[str, Any]:
@@ -417,6 +454,7 @@ def _write_usage_report(
     out_dir.mkdir(parents=True, exist_ok=True)
     report = {
         "run_id": _RUN_ID,
+        **_RUN_PROVENANCE,
         "pass": pass_name,
         "model": model,
         "batch": batch,
@@ -447,6 +485,12 @@ def _write_usage_report(
 # not one. The id does not prevent that; it makes it checkable from the files.
 _RUN_ID: str = ""
 _RUN_MODE: str = "live"
+# What the run was built from, stamped beside every output and into the usage
+# report: the code (commit + dirty flag), the source parquet behind the evidence
+# records, and whatever the caller adds (an arm's grounding, hint level and
+# reference versions). Without it, "same commit, same corpus" between two arms
+# was unverifiable from the files (audit38_P).
+_RUN_PROVENANCE: dict[str, Any] = {}
 
 
 def _begin_run(dry_run: bool) -> str:
@@ -454,7 +498,51 @@ def _begin_run(dry_run: bool) -> str:
     global _RUN_ID, _RUN_MODE
     _RUN_ID = f"{_utc_now().strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(3)}"
     _RUN_MODE = "dry_run" if dry_run else "live"
+    _RUN_PROVENANCE.clear()
+    _RUN_PROVENANCE["code"] = _code_provenance()
     return _RUN_ID
+
+
+def _code_provenance() -> dict[str, Any]:
+    """``{commit, dirty}`` for the checkout this module runs from; ``None``s if unknown.
+
+    ``dirty`` counts tracked changes only: an untracked scratch file does not
+    change what ran, an edited prompt or module does.
+    """
+
+    def vcs(*cmd: str) -> str | None:
+        try:
+            done = subprocess.run(
+                ["git", "-C", str(ROOT), *cmd], capture_output=True, text=True, timeout=10
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return done.stdout if done.returncode == 0 else None
+
+    commit = vcs("rev-parse", "HEAD")
+    status = vcs("status", "--porcelain", "--untracked-files=no")
+    return {
+        "commit": commit.strip() if commit else None,
+        "dirty": bool(status.strip()) if status is not None else None,
+    }
+
+
+def _source_provenance(records_dir: Path) -> dict[str, Any]:
+    """The evidence records' source parquet and its sha256, when it sits beside them.
+
+    The standard layout is ``data/output/{run}/llm_evidence/`` next to
+    ``data/output/{run}/all_paired.parquet``; anything else records the records
+    path alone rather than guessing.
+    """
+    from swissisoform.setup._common import rel_to_root, sha256_file
+
+    records_dir = Path(records_dir).resolve()
+    out: dict[str, Any] = {"records": rel_to_root(records_dir)}
+    parquet = records_dir.parent / "all_paired.parquet"
+    if parquet.is_file():
+        out["source_parquet"] = rel_to_root(parquet)
+        out["source_parquet_sha256"] = sha256_file(parquet)
+    return out
 
 
 def _utc_now() -> datetime:
@@ -476,6 +564,7 @@ def _write_run_stamp(out_path: Path, *, pass_name: str, model: str, **extra: Any
         "pass": pass_name,
         "model": model,
         "prompts_captured": _PROMPT_DIR is not None,
+        **_RUN_PROVENANCE,
         **extra,
     }
     out_path.with_suffix(".meta.json").write_text(
@@ -571,7 +660,12 @@ def record_prompt(
     if _PROMPT_DIR is None:
         return
 
-    fields: dict[str, Any] = {"run_id": _RUN_ID, "run_mode": _RUN_MODE}
+    code = _RUN_PROVENANCE.get("code") or {}
+    fields: dict[str, Any] = {
+        "run_id": _RUN_ID,
+        "run_mode": _RUN_MODE,
+        "code_commit": f"{code.get('commit')}{'+dirty' if code.get('dirty') else ''}",
+    }
     fields.update({k: v for k, v in meta.items() if v is not None})
     fields["model"] = params.get("model")
     fields["max_tokens"] = params.get("max_tokens")
@@ -623,12 +717,46 @@ def flush_prompt_index() -> None:
     if _PROMPT_DIR is None:
         return
     if _PROMPT_INDEX:
-        (_PROMPT_DIR / f"index_{_PROMPT_PASS}.json").write_text(
-            json.dumps(_PROMPT_INDEX, indent=2, ensure_ascii=False, default=str),
+        index_path = _PROMPT_DIR / f"index_{_PROMPT_PASS}.json"
+        index_path.write_text(
+            json.dumps(_merged_index(index_path), indent=2, ensure_ascii=False, default=str),
             encoding="utf-8",
         )
     print(f"[prompts] captured {len(_PROMPT_INDEX)} prompts (run {_RUN_ID}) -> {_PROMPT_DIR}")
     _report_corpus_drift()
+
+
+def _merged_index(index_path: Path) -> list[dict[str, Any]]:
+    """This run's index entries merged over the existing index, keyed by file.
+
+    The .txt files are overwritten per isoform, so after a partial rerun
+    (``--gene``, ``--only-category``) the corpus is mostly the earlier run's
+    files. Rewriting the index from this run alone dropped those from it — the
+    Sep-25 reruns left three arms' indexes listing 1-12 prompts out of 300.
+    Entries whose file is gone are dropped; every entry keeps its own run_id.
+    """
+    merged: dict[str, dict[str, Any]] = {}
+    if index_path.exists():
+        try:
+            prior = json.loads(index_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 - a corrupt index is rebuilt from this run
+            prior = []
+        for entry in prior if isinstance(prior, list) else []:
+            rel = entry.get("rel") if isinstance(entry, dict) else None
+            if rel and (index_path.parent / rel).exists():
+                merged[rel] = entry
+    for entry in _PROMPT_INDEX:
+        merged[entry["rel"]] = entry
+    return list(merged.values())
+
+
+def _carries_other_runs(stamp_path: Path) -> bool:
+    """Whether a stamp's per-category provenance names any run but this one."""
+    try:
+        runs = json.loads(stamp_path.read_text(encoding="utf-8")).get("category_runs") or {}
+    except Exception:  # noqa: BLE001 - unreadable is reported elsewhere
+        return False
+    return any((r or {}).get("run_id") != _RUN_ID for r in runs.values())
 
 
 def _read_run_id(stamp_path: Path) -> str | None:
@@ -664,7 +792,7 @@ def _report_corpus_drift() -> None:
             )
         return
 
-    foreign, unknown = [], []
+    foreign, unknown, mixed = [], [], []
     for out_file in outputs:
         stamp = out_file.with_suffix(".meta.json")
         run_id = _read_run_id(stamp) if stamp.exists() else None
@@ -672,6 +800,8 @@ def _report_corpus_drift() -> None:
             unknown.append(out_file.parent.name)
         elif run_id != _RUN_ID:
             foreign.append(out_file.parent.name)
+        elif _carries_other_runs(stamp):
+            mixed.append(out_file.parent.name)
 
     def _warn(kind: str, slugs: list[str]) -> None:
         if not slugs:
@@ -685,6 +815,7 @@ def _report_corpus_drift() -> None:
 
     _warn("from a different run", foreign)
     _warn("with no run stamp (written before stamping, or by hand)", unknown)
+    _warn("carrying categories from an earlier run (partial rerun; see category_runs)", mixed)
 
     captured = {entry["rel"] for entry in _PROMPT_INDEX}
     stale = [
@@ -1364,8 +1495,45 @@ def _save_failed_response(
         pass
 
 
+def _category_runs(
+    out_path: Path, results: dict[str, Any], *, model: str, regenerated: set[str] | None
+) -> dict[str, dict[str, Any]]:
+    """Which run produced each category in *results*.
+
+    A partial (``--only-category``) run writes ``categories.json`` whole, the
+    carried-forward verdicts included — so a single file-level ``run_id`` would
+    claim all six for this run, prompt and model and all. Regenerated categories
+    get this run; the rest keep what the previous stamp recorded for them (its
+    own ``category_runs`` entry, or its file-level fields for a stamp that
+    predates per-category provenance).
+    """
+    stamp = out_path.with_suffix(".meta.json")
+    try:
+        prior = json.loads(stamp.read_text(encoding="utf-8")) if stamp.exists() else {}
+    except Exception:  # noqa: BLE001 - an unreadable stamp is "unknown", not fatal
+        prior = {}
+    prior_runs = prior.get("category_runs") or {}
+    this_run = {"run_id": _RUN_ID, "model": model, "code": _RUN_PROVENANCE.get("code")}
+    runs: dict[str, dict[str, Any]] = {}
+    for name in results:
+        if regenerated is None or name in regenerated:
+            runs[name] = this_run
+        else:
+            runs[name] = prior_runs.get(name) or {
+                "run_id": prior.get("run_id"),
+                "model": prior.get("model"),
+                "code": prior.get("code"),
+            }
+    return runs
+
+
 def _write_category_results(
-    out_path: Path, tis_slug: str, results: dict[str, Any], *, model: str
+    out_path: Path,
+    tis_slug: str,
+    results: dict[str, Any],
+    *,
+    model: str,
+    regenerated: set[str] | None = None,
 ) -> bool:
     """Write ``categories.json`` only when every category produced a read.
 
@@ -1375,6 +1543,9 @@ def _write_category_results(
     staged. Holding the write back leaves the isoform genuinely absent, so the
     next run regenerates it. Partial results land in ``categories.partial.json``
     — nothing reads that name — so the good reads stay auditable.
+
+    ``regenerated`` names the categories this run produced, for a partial run;
+    ``None`` means all of them. The stamp records it per category.
 
     Returns True when the real file was written.
     """
@@ -1392,11 +1563,14 @@ def _write_category_results(
             file=sys.stderr,
         )
         return False
+    # Read the previous stamp before anything overwrites it.
+    runs = _category_runs(out_path, results, model=model, regenerated=regenerated)
     out_path.write_text(json.dumps(results, indent=2, ensure_ascii=False))
     partial.unlink(missing_ok=True)  # a retry succeeded; don't leave the old partial behind
-    _write_run_stamp(
-        out_path, pass_name="category", model=model, categories=sorted(results)
-    )
+    extra: dict[str, Any] = {"categories": sorted(results), "category_runs": runs}
+    if regenerated is not None:
+        extra["regenerated"] = sorted(regenerated)
+    _write_run_stamp(out_path, pass_name="category", model=model, **extra)
     return True
 
 
@@ -1452,6 +1626,28 @@ def _tidy_violation(msg: str, limit: int = 140) -> str:
     return f"{msg[: limit - 60]}… {msg[-50:]}"
 
 
+def _top_level_violations(payload: dict[str, Any], schema: dict[str, Any]) -> list[str]:
+    """``required``, ``enum`` and string-length checks on top-level fields only."""
+    out = [
+        f"<root>: {k!r} is a required property"
+        for k in schema.get("required", [])
+        if k not in payload
+    ]
+    for name, sub in (schema.get("properties") or {}).items():
+        if name not in payload or not isinstance(sub, dict):
+            continue
+        value = payload[name]
+        if "enum" in sub and value not in sub["enum"]:
+            out.append(f"{name}: {value!r} is not one of {sub['enum']}")
+        if isinstance(value, str):
+            if "maxLength" in sub and len(value) > sub["maxLength"]:
+                # Worded as jsonschema words it, so the rejection reads the same.
+                out.append(f"{name}: is too long ({len(value)} > maxLength {sub['maxLength']})")
+            if "minLength" in sub and len(value) < sub["minLength"]:
+                out.append(f"{name}: shorter than minLength {sub['minLength']}")
+    return out
+
+
 def _verdict_violations(payload: Any, schema: dict[str, Any]) -> list[str]:
     """Why this verdict payload is unusable, or ``[]`` if it is fine.
 
@@ -1461,11 +1657,77 @@ def _verdict_violations(payload: Any, schema: dict[str, Any]) -> list[str]:
     if not isinstance(payload, dict):
         return [f"payload is {type(payload).__name__}, expected object"]
     out = [_tidy_violation(v) for v in validate_against_schema(payload, schema)]
+    if _try_import_jsonschema() is None:
+        # validate_against_schema is best-effort and returns [] without
+        # jsonschema — which silently switched the reasoning cap off in an env
+        # missing that (declared) dependency. The verdict checks that matter are
+        # top-level, so hold them here regardless.
+        out += _top_level_violations(payload, schema)
     for field, value in payload.items():
         text = value if isinstance(value, str) else json.dumps(value, default=str)
         if _VERDICT_MARKUP.search(text):
             out.append(f"{field}: contains tool-call markup, expected plain text")
     return out
+
+
+def _checked_single_shot(
+    prompt: Prompt,
+    response_text: str,
+    *,
+    output_schema: dict[str, Any],
+    model: str,
+    temperature: float,
+    max_tokens: int,
+    api_key: str,
+) -> tuple[dict[str, Any], int]:
+    """Parse a single-shot verdict and hold it to the schema; return ``(payload, retries)``.
+
+    The structured-output decoder accepts ``maxLength`` and ignores it, so the
+    reasoning cap was enforced only on the tool-loop path (by
+    :func:`_verdict_violations`) — the four single-shot categories kept
+    over-long reads, up to 88% of one arm's outputs (audit38_synthesis). Same
+    check here: a violating verdict is re-asked once, with the rejection and its
+    own text, so the model shortens it rather than starting over (an identical
+    re-send at temperature 0 would return the same text). A second violation
+    raises, which the caller records as that category's error — except a read
+    that is still only too long, which the caller cuts with :func:`_cap_reasoning`.
+
+    Raises:
+        ValueError: The verdict still violates the schema after one retry.
+    """
+    payload = _parse_category_read(response_text, output_schema)
+    violations = _verdict_violations(payload, output_schema)
+    if not violations:
+        return payload, 0
+    retry = Prompt(
+        system=prompt.system,
+        user=(
+            f"{prompt.user}\n\nYour previous response was rejected: "
+            f"{'; '.join(violations)}. Re-emit the complete JSON verdict, fixing only "
+            f"that — keep the verdict and the substance, cut the wording.\n\n"
+            f"Previous response:\n{response_text}"
+        ),
+    )
+    payload = _parse_category_read(
+        call_llm(
+            retry,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            api_key=api_key,
+            output_schema=output_schema,
+        ),
+        output_schema,
+    )
+    # A read that is only still too long is not lost: the caller's
+    # _cap_reasoning cuts it back to a whole sentence and flags it. Anything
+    # else wrong after the retry is an error.
+    violations = [
+        v for v in _verdict_violations(payload, output_schema) if "is too long" not in v
+    ]
+    if violations:
+        raise ValueError("verdict failed the schema after one retry: " + "; ".join(violations))
+    return payload, 1
 
 
 def _premature_verdict_msg(*, min_data_calls: int, n_data_calls: int, terminal_tool: str) -> str:
@@ -1760,8 +2022,9 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="LETTER",
         help=(
             "Regenerate only these category letters (repeatable); the rest are "
-            "carried forward from the existing categories.json. Needs --force, "
-            "since the isoform's output already exists."
+            "carried forward from the existing categories.json, keeping their own "
+            "provenance in the run stamp. Implies --force for the named categories. "
+            "Isoforms with no categories.json yet are skipped."
         ),
     )
     parser.add_argument(
@@ -1859,7 +2122,12 @@ def _print_dry_run(gene: str, prompt: Prompt, model: str) -> None:
     print()
 
 
-def main(argv: list[str] | None = None, *, prompts_dir: Path | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    prompts_dir: Path | None = None,
+    run_meta: dict[str, Any] | None = None,
+) -> int:
     """CLI entry point. Returns process exit code.
 
     Args:
@@ -1868,10 +2136,28 @@ def main(argv: list[str] | None = None, *, prompts_dir: Path | None = None) -> i
             non-default passes resolve their prompt/schema files relative to it.
             When ``None``, the module-level ``SYSTEM_PROMPT_PATH`` /
             ``OUTPUT_SCHEMA_PATH`` defaults are used.
+        run_meta: Extra provenance to stamp beside every output and into the
+            usage report — the prompt-variant driver passes the arm here.
     """
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     spec = PASS_REGISTRY[args.pass_name]
+    if args.only_category:
+        if not spec.iterates_categories:
+            parser.error("--only-category applies to --pass category only")
+        try:
+            _selected_categories(args.only_category)
+        except ValueError as e:
+            parser.error(str(e))
+        # Naming a category IS asking for it to be regenerated. Without this the
+        # existence skip fired first and the run printed "0/0 successful, N
+        # reused" — a silent no-op. Every isoform it touches is a merge into an
+        # existing file, so forcing cannot clobber the categories not named.
+        args.force = True
     _begin_run(dry_run=getattr(args, "dry_run", False))
+    _RUN_PROVENANCE["source"] = _source_provenance(args.records)
+    if run_meta:
+        _RUN_PROVENANCE["run_meta"] = run_meta
 
     # The evidence slices this pass builds carry threshold language ("qualifies
     # when length >= 6 aa AND plddt_mean >= 0.70") that must match the run whose
@@ -2099,7 +2385,7 @@ def _tool_categories(args, prompts_root: Path, records=None) -> dict[str, dict[s
         else:
             tools, dispatch_for = _tool_setup(letter, args, records)
         out[letter] = {
-            "system": prompt_path.read_text(encoding="utf-8").strip(),
+            "system": load_system_prompt(prompt_path),
             "tools": tools,
             "dispatch_for": dispatch_for,
             # A tool loop may validate its verdict against a different schema than
@@ -2144,17 +2430,50 @@ SUPERSEDED_BY_TOOLS: dict[str, tuple[str, ...]] = {
 }
 
 
+_SUPERSEDED_NOTE = (
+    "Pre-computed PAE block means are omitted here: query pae_block "
+    "over the ranges you care about instead of reading a fixed "
+    "diff/body partition."
+)
+
+
+def _drop_keys(value: Any, keys: frozenset[str]) -> tuple[Any, int]:
+    """Copy of *value* with *keys* removed at every depth, and how many went."""
+    if isinstance(value, dict):
+        out, n = {}, 0
+        for k, v in value.items():
+            if k in keys:
+                n += 1
+                continue
+            out[k], m = _drop_keys(v, keys)
+            n += m
+        return out, n
+    if isinstance(value, list):
+        items = [_drop_keys(v, keys) for v in value]
+        return [v for v, _ in items], sum(m for _, m in items)
+    return value, 0
+
+
 def _strip_superseded_evidence(
     category_record: dict[str, Any], letter: str
 ) -> dict[str, Any]:
-    """Drop evidence columns this category's readers replace. Returns a copy."""
+    """Drop evidence columns this category's readers replace. Returns a copy.
+
+    Every grounding goes through here, not only the ``members``-shaped one. The
+    alternative payloads carry the same columns under other keys — a tag's
+    ``metrics``, the raw arm's ``evidence``, the dist arm's ``fields`` — and an
+    early return on "no members" handed exactly those arms the answers the
+    criteria arm is denied. So a foreign shape is walked whole and the note
+    lands once at its top level; the ``members`` shape keeps its per-member note.
+    """
     cols = SUPERSEDED_BY_TOOLS.get(letter)
     if not cols:
         return category_record
-    # Same guard as _strip_hits_for_tools: a grounding that does not key on
-    # ``members`` must come back untouched, not gain an empty one.
     if "members" not in category_record:
-        return category_record
+        stripped, n_dropped = _drop_keys(category_record, frozenset(cols))
+        if n_dropped:
+            stripped["_superseded_note"] = _SUPERSEDED_NOTE
+        return stripped
     members = []
     for member in category_record.get("members") or []:
         evidence = member.get("evidence")
@@ -2164,11 +2483,7 @@ def _strip_superseded_evidence(
         dropped = [c for c in cols if c in evidence]
         kept = {k: v for k, v in evidence.items() if k not in cols}
         if dropped:
-            kept["_superseded_note"] = (
-                "Pre-computed PAE block means are omitted here: query pae_block "
-                "over the ranges you care about instead of reading a fixed "
-                "diff/body partition."
-            )
+            kept["_superseded_note"] = _SUPERSEDED_NOTE
         members.append({**member, "evidence": kept})
     return {**category_record, "members": members}
 
@@ -2199,6 +2514,29 @@ def _selected_categories(only: list[str] | None) -> list[dict[str, Any]]:
             f"have {', '.join(c['letter'] for c in CATEGORIES)}"
         )
     return picked
+
+
+def _regenerated(only: list[str] | None) -> set[str] | None:
+    """Category names a partial run produces, or ``None`` for a full run."""
+    return {c["name"] for c in _selected_categories(only)} if only else None
+
+
+def _nothing_to_merge_into(out_path: Path, args, gene_name: str, tis_slug: str) -> bool:
+    """Whether a ``--only-category`` run must skip this isoform.
+
+    A partial run merges into an existing ``categories.json``. With none there,
+    it would write a file holding only the named categories — and the skip check
+    downstream is bare existence, so that one-category file would pass for a
+    complete one forever after.
+    """
+    if not args.only_category or out_path.exists():
+        return False
+    print(
+        f"[skip] {gene_name} {tis_slug}: --only-category needs an existing "
+        f"{out_path.name} to merge into; run the full pass for this isoform first",
+        file=sys.stderr,
+    )
+    return True
 
 
 def _seed_results(out_path: Path, only: list[str] | None) -> dict[str, Any]:
@@ -2395,7 +2733,7 @@ def _run_category_pass(
             records, spec, args, system_prompt, output_schema, tool_configs=tool_configs
         )
 
-    from swissisoform.site.evidence import CATEGORIES, slice_category
+    from swissisoform.site.evidence import slice_category
 
     api_key = os.environ.get("ANTHROPIC_API_KEY") if not args.dry_run else "dry"
     if not api_key:
@@ -2422,6 +2760,8 @@ def _run_category_pass(
                 if args.dry_run:
                     print(f"[skip] {gene_name} {tis_slug_val}: {out_path.name} exists")
                 n_reused += 1
+                continue
+            if _nothing_to_merge_into(out_path, args, gene_name, tis_slug_val):
                 continue
 
             out_dir = args.out / tis_slug_val
@@ -2497,8 +2837,20 @@ def _run_category_pass(
                             api_key=api_key,
                             output_schema=output_schema,
                         )
-                        _add_usage(usage_by_slug, tis_slug_val, _drain_usage())
-                        payload = _parse_category_read(response_text, output_schema)
+                        try:
+                            payload, _retries = _checked_single_shot(
+                                prompt,
+                                response_text,
+                                output_schema=output_schema,
+                                model=args.model,
+                                temperature=args.temperature,
+                                max_tokens=args.max_tokens,
+                                api_key=api_key,
+                            )
+                        finally:
+                            # The first call's usage, plus a retry's if one ran.
+                            _usage, _calls = _drain_all_usage()
+                            _add_usage(usage_by_slug, tis_slug_val, _usage, calls=max(_calls, 1))
                     _emit_schema_warnings(
                         payload, output_schema,
                         f"{tis_slug_val}/{category['name']}",
@@ -2520,7 +2872,13 @@ def _run_category_pass(
 
             if args.dry_run:
                 continue
-            _write_category_results(out_path, tis_slug_val, results, model=args.model)
+            _write_category_results(
+                out_path,
+                tis_slug_val,
+                results,
+                model=args.model,
+                regenerated=_regenerated(args.only_category),
+            )
 
     if args.dry_run:
         return 0
@@ -2552,7 +2910,7 @@ def _run_category_pass_batch(
     categories are structurally unbatchable, not merely slower. They pay full
     price and are reported separately.
     """
-    from swissisoform.site.evidence import CATEGORIES, slice_category
+    from swissisoform.site.evidence import slice_category
 
     tool_configs = tool_configs or {}
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -2574,6 +2932,8 @@ def _run_category_pass_batch(
             out_path = args.out / spec.output_filename_template.format(tis_slug=tis_slug_val)
             if out_path.exists() and not args.force:
                 n_reused += 1
+                continue
+            if _nothing_to_merge_into(out_path, args, gene_name, tis_slug_val):
                 continue
             iso_with_gene = {**iso, "gene": {"name": gene_name}}
             iso_results.setdefault(tis_slug_val, _seed_results(out_path, args.only_category))
@@ -2623,6 +2983,8 @@ def _run_category_pass_batch(
     )
 
     usage_by_slug: dict[str, dict[str, int]] = {}
+    retry_usage_by_slug: dict[str, dict[str, int]] = {}
+    prompts_by_cid = dict(items)
     n_ok = 0
     for cid, (tis_slug_val, cat_name) in meta.items():
         r = responses.get(cid) or {"text": None, "usage": _empty_usage(), "error": "missing result"}
@@ -2632,7 +2994,22 @@ def _run_category_pass_batch(
             iso_results[tis_slug_val][cat_name] = {"error": r["error"] or "empty"}
             continue
         try:
-            payload = _parse_category_read(r["text"], output_schema)
+            try:
+                # A retry cannot ride the batch (it is already back), so it is a
+                # direct call — billed at full price and reported separately.
+                payload, _retries = _checked_single_shot(
+                    prompts_by_cid[cid],
+                    r["text"],
+                    output_schema=output_schema,
+                    model=args.model,
+                    temperature=args.temperature,
+                    max_tokens=args.max_tokens,
+                    api_key=api_key,
+                )
+            finally:
+                _usage, _calls = _drain_all_usage()
+                if _calls:
+                    _add_usage(retry_usage_by_slug, tis_slug_val, _usage, calls=_calls)
             _emit_schema_warnings(
                 payload, output_schema, f"{tis_slug_val}/{cat_name}",
                 verbose=getattr(args, "verbose", False),
@@ -2682,12 +3059,20 @@ def _run_category_pass_batch(
                 iso_results[tis_slug_val][category["name"]] = {"error": str(e)}
 
     for tis_slug_val, results in iso_results.items():
-        _write_category_results(iso_out[tis_slug_val], tis_slug_val, results, model=args.model)
+        _write_category_results(
+            iso_out[tis_slug_val],
+            tis_slug_val,
+            results,
+            model=args.model,
+            regenerated=_regenerated(args.only_category),
+        )
 
     if items:
         _write_usage_report(args.out, "category", args.model, usage_by_slug, batch=True)
     if tool_usage_by_slug:
         _write_usage_report(args.out, "category_tools", args.model, tool_usage_by_slug)
+    if retry_usage_by_slug:
+        _write_usage_report(args.out, "category_retry", args.model, retry_usage_by_slug)
     total = len(items) + n_tool_calls
     print(
         f"category: {n_ok}/{len(items)} successful (batch)"

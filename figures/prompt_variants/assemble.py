@@ -28,18 +28,20 @@ blocks an arm needs to vary:
     to write "C1/C2/C3" and cite thresholds the payload never showed (audit38_C).
 
 Markers are stripped in **every** arm, so the ``+hint`` `criteria` assembly is the
-base file verbatim. ``tests/test_prompt_variants.py`` asserts exactly that.
+base file verbatim — and production strips them by the same rule
+(``llm.strip_prompt_markers``, applied in ``llm.load_system_prompt``), so that arm
+is the prompt production sends. ``tests/test_prompt_variants.py`` asserts both.
 """
 
 from __future__ import annotations
 
 import json
-import re
 import shutil
 from pathlib import Path
 
-BLOCK_RE = re.compile(r"^<!-- @block:([a-z_]+) -->$")
-END_RE = re.compile(r"^<!-- @end -->$")
+from swissisoform.site.llm import PROMPT_BLOCK_RE as BLOCK_RE
+from swissisoform.site.llm import PROMPT_END_RE as END_RE
+from swissisoform.site.llm import collapse_blank_lines
 
 BASE_PROMPTS: tuple[str, ...] = (
     "category-pass.txt",
@@ -163,7 +165,9 @@ CONTRACTS: dict[str, str] = {
         "as raw column names and values, with NO pre-computed verdicts and no guidance "
         "about which ones matter. Some are uninformative or redundant; deciding which "
         "carry signal is your job. A `truncated` or `hits_note` block, when present, "
-        "states exactly how many rows were withheld and why."
+        "states exactly how many rows were withheld and why. A list column given as "
+        "`{same_rows_as, n_rows}` holds exactly the rows of the column it names: they "
+        "are the same records, so count them once."
     ),
     "tags": (
         _IDENTITY + "`tags` — a controlled vocabulary of binary findings, each already "
@@ -184,7 +188,13 @@ CONTRACTS: dict[str, str] = {
         "that population's five-number summary (p05/p25/p50/p75/p95). There are no "
         "verdicts and no thresholds: a value's importance is what its position in the "
         "distribution tells you. `stratum` names which population it was ranked "
-        "against, and `reference_population` says what that population is."
+        "against, and `reference_population` says what that population is. A field "
+        "flagged `lower_is_stronger` (p- and q-values) reads the other way round: a LOW "
+        "pctile is the strong result, and a high pctile means weaker significance than "
+        "most of the population. `calls` carries the category's categorical outputs — "
+        "predicted compartments and signals, targeting calls, module statuses, "
+        "`*_changed` flags and feature identifiers — as plain values with no "
+        "percentile; an identifier names a feature and has no magnitude."
     ),
 }
 
@@ -199,7 +209,7 @@ CONTRACTS: dict[str, str] = {
 NOUNS: dict[str, str] = {
     "raw": "the metrics in `evidence`",
     "tags": "the tags in `tags`",
-    "dist": "the fields in `fields`",
+    "dist": "the entries in `fields` and `calls`",
 }
 # Appended in the `+hint` arms only. `means` is the criterion's own
 # interpretation_hint, so leaving it unconditional would give `tags_nohint` the
@@ -217,7 +227,7 @@ _TERMINOLOGY = (
 _NA = {
     "raw": "a metric that is null",
     "tags": "a tag whose state is `not_evaluable`",
-    "dist": "a field absent from `fields`",
+    "dist": "a field absent from both `fields` and `calls`",
 }
 
 
@@ -364,14 +374,7 @@ def render(text: str, *, grounding: str, hints: bool, is_tool_prompt: bool = Fal
 
 def _collapse_blank_runs(lines: list[str]) -> str:
     """Join, squeezing runs of blank lines a deletion may have left behind."""
-    kept: list[str] = []
-    for line in lines:
-        if not line.strip() and kept and not kept[-1].strip():
-            continue
-        kept.append(line)
-    while kept and not kept[-1].strip():
-        kept.pop()
-    return "\n".join(kept) + "\n"
+    return collapse_blank_lines(lines) + "\n"
 
 
 def materialize(

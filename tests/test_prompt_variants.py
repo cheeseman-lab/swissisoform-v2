@@ -19,6 +19,8 @@ sys.path.insert(0, str(ROOT / "figures" / "prompt_variants"))
 import assemble as A  # noqa: E402
 import variants as V  # noqa: E402
 
+from swissisoform.site import llm  # noqa: E402
+
 BASE = ROOT / "scripts" / "site" / "prompts"
 
 SAMPLE = """<!-- @block:input_contract -->
@@ -159,6 +161,19 @@ class TestBasePrompts:
             if not (ln.strip().startswith("<!-- @block:") or ln.strip() == "<!-- @end -->")
         )
         assert _norm(out) == _norm(stripped)
+
+    @pytest.mark.parametrize("name", A.BASE_PROMPTS)
+    def test_production_loader_strips_every_marker(self, name):
+        """Production reads these files too; a marker is not an instruction."""
+        assert "<!--" not in llm.load_system_prompt(BASE / name)
+
+    @pytest.mark.parametrize("name", A.BASE_PROMPTS)
+    def test_status_quo_arm_is_what_production_sends(self, name):
+        text = (BASE / name).read_text(encoding="utf-8")
+        status_quo = A.render(
+            text, grounding="criteria", hints=True, is_tool_prompt=name != A.BASE_PROMPTS[0]
+        )
+        assert status_quo.strip() == llm.load_system_prompt(BASE / name)
 
     @pytest.mark.parametrize("name", A.BASE_PROMPTS)
     def test_n_terminal_rule_survives_hint_stripping(self, name):

@@ -33,7 +33,20 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
 REF_DIR = ROOT / "data" / "reference" / "distributions"
-DEFAULT_VERSION = "v1"
+# The one current distributions version. Every reader and builder takes its
+# default from here (the sweep, the registry builder, build_distributions), so a
+# default run cannot cut one table against v2 and the registry against v3.
+#
+# v3 is PROVISIONAL: frozen from full_catalog (Aug 12-13), which predates the M1
+# sign flip and extension gate (2a48f89) and the #24/#29/#32 merges. Re-freeze it,
+# and the tag registry cut from it, after the next genome-wide run.
+DEFAULT_VERSION = "v3"
+PROVISIONAL_VERSIONS: dict[str, str] = {
+    "v3": (
+        "frozen from the Aug-12 full_catalog, before 2a48f89 and PRs #24/#29/#32; "
+        "re-freeze after the next genome-wide run"
+    ),
+}
 
 # 101-point grid: one quantile per whole percentile, so percentile rank resolves
 # to 1 point. Denormalised p01/p05/... columns are read off this same grid.
