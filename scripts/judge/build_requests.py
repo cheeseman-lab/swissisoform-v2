@@ -35,9 +35,9 @@ from swissisoform.judge import (  # noqa: E402
     SYNTHESIS_UNIT,
 )
 from swissisoform.judge import prompts as PR  # noqa: E402
+from swissisoform.judge import provenance as PV  # noqa: E402
 from swissisoform.judge import rubrics as RB  # noqa: E402
-from swissisoform.judge.corpus import Corpus, load_corpus  # noqa: E402
-from swissisoform.judge.provenance import INDEX_NAME, build_digest, text_sha  # noqa: E402
+from swissisoform.judge.corpus import Corpus, arm_dir, load_corpus  # noqa: E402
 from swissisoform.judge.reference import (  # noqa: E402
     REFERENCE_BUDGET_TOKENS,
     ReferenceBuilder,
@@ -52,6 +52,7 @@ from swissisoform.judge.serve import (  # noqa: E402
     estimate_tokens,
     write_requests,
 )
+from swissisoform.site import grounding  # noqa: E402
 from swissisoform.site.llm import load_records  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -75,7 +76,59 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=REFERENCE_BUDGET_TOKENS,
         help="Token budget for the reference payload",
     )
+    p.add_argument(
+        "--tag-version",
+        default=None,
+        help="Tag registry for the reference. Default: the one the tags arms ran with",
+    )
+    p.add_argument(
+        "--dist-version",
+        default=None,
+        help="Distribution version for the reference. Default: the one the dist arms ran with",
+    )
+    p.add_argument(
+        "--allow-provenance-mismatch",
+        action="store_true",
+        help=(
+            "Build even when arm provenance is missing or disagrees with the reference. "
+            "Every problem is recorded in requests_meta.json, and analyze.py will "
+            "refuse the results unless given the same flag."
+        ),
+    )
     return p.parse_args(argv)
+
+
+def _reference_provenance(corpus: Corpus, args: argparse.Namespace) -> dict:
+    """Read each arm's recorded runs and decide the reference's versions from them.
+
+    The reference has to carry the inputs the arms ran on. The v3 build used tag
+    registry v1 for every reference while the tags arms ran on v2/v3, so a cutoff
+    those arms were shown read as fabricated in 22-25% of their outputs. Refuses
+    (``SystemExit``) on any disagreement unless ``--allow-provenance-mismatch``.
+    """
+    sources = PV.source_fingerprint(ROOT / "data" / "output" / args.corpus)
+    arm_runs = {arm: PV.effective_runs(arm_dir(arm, args.corpus)) for arm in corpus.arms}
+    resolved, problems = PV.reconcile(
+        arm_runs, sources, tag_version=args.tag_version, dist_version=args.dist_version
+    )
+    if problems and not args.allow_provenance_mismatch:
+        listed = "\n  ".join(problems[:20])
+        raise SystemExit(
+            f"arm provenance does not support one shared reference ({len(problems)} "
+            f"problem(s)):\n  {listed}\nRe-run the affected arms with "
+            "scripts/site/run_llm_variants.py, or pass --allow-provenance-mismatch "
+            "(recorded, and analyze.py will ask for it too)."
+        )
+    for problem in problems:
+        logger.warning("provenance (allowed by override): %s", problem)
+    return {
+        **resolved,
+        "tag_version": resolved["tag_version"] or grounding.DEFAULT_TAG_VERSION,
+        "dist_version": resolved["dist_version"] or grounding.DEFAULT_DIST_VERSION,
+        "sources": sources,
+        "problems": problems,
+        "allowed_by_override": bool(problems) and args.allow_provenance_mismatch,
+    }
 
 
 def _tokenizer():
@@ -120,9 +173,17 @@ def main(argv: list[str] | None = None) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     corpus = load_corpus(args.corpus)
+    provenance = _reference_provenance(corpus, args)
     records = load_records(ROOT / "data" / "output" / args.corpus / "llm_evidence")
     isos = isoform_records(records)
-    builder = ReferenceBuilder.build()
+    builder = ReferenceBuilder.build(
+        tag_version=provenance["tag_version"], dist_version=provenance["dist_version"]
+    )
+    logger.info(
+        "reference: tag registry %s, distributions %s",
+        provenance["tag_version"],
+        provenance["dist_version"],
+    )
 
     tokenizer = _tokenizer()
 
@@ -196,20 +257,20 @@ def main(argv: list[str] | None = None) -> int:
                             arm_a=first,
                             arm_b=second,
                             order=order,
-                            sha_a=text_sha(text_a),
-                            sha_b=text_sha(text_b),
+                            sha_a=PV.text_sha(text_a),
+                            sha_b=PV.text_sha(text_b),
                             len_a=len(text_a),
                             len_b=len(text_b),
                         )
                     )
                     _note_if_at_risk(prompt, at_risk, slug, unit)
 
-    build_id = build_digest((r.id, r.prompt) for r in requests)
+    build_id = PV.build_digest((r.id, r.prompt) for r in requests)
     requests = [dataclasses.replace(r, build_id=build_id) for r in requests]
     path = out_dir / "requests.jsonl"
     n = write_requests(requests, path)
-    _write_index(requests, out_dir / INDEX_NAME)
-    _summarise(requests, at_risk, path, n, out_dir, trimmed, count_tokens, build_id)
+    _write_index(requests, out_dir / PV.INDEX_NAME)
+    _summarise(requests, at_risk, path, n, out_dir, trimmed, count_tokens, build_id, provenance)
     return 1 if at_risk else 0
 
 
@@ -242,6 +303,7 @@ def _summarise(
     trimmed: list[dict],
     count_tokens,
     build_id: str,
+    provenance: dict,
 ) -> None:
     """Print and persist the shape of what was built."""
     by_unit: dict[str, int] = {}
@@ -257,6 +319,7 @@ def _summarise(
 
     meta = {
         "build_id": build_id,
+        "provenance": provenance,
         "n_requests": n,
         "by_unit": by_unit,
         "longest_prompt_est_tokens": longest,

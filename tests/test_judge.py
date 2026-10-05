@@ -875,6 +875,109 @@ class TestJudgedTextProvenance:
         assert {"build_id", "sha_a", "sha_b"} <= set(SV.Result.__dataclass_fields__)
 
 
+class TestArmProvenance:
+    """The shared reference carries the inputs the arms ran on, or the build refuses.
+
+    Every v3 reference carried tag registry v1 while the tags arms ran on v2/v3,
+    so a cutoff those arms were shown read as fabricated in 22-25% of outputs.
+    """
+
+    SOURCES = {"records": "r1", "all_paired": "p1", "variants_long": "v1"}
+
+    @staticmethod
+    def _arm(tmp_path, arm, *runs, stamps=None):
+        out = tmp_path / arm
+        for i, run_id in enumerate(stamps if stamps is not None else [r["run_id"] for r in runs]):
+            iso = out / f"iso{i}"
+            iso.mkdir(parents=True)
+            (iso / "categories.meta.json").write_text(json.dumps({"run_id": run_id}))
+        for run in runs:
+            PV.record_arm_run(out, run)
+        return out
+
+    def _run(self, run_id, grounding, **kw):
+        return {
+            "run_id": run_id,
+            "pass": "category",
+            "grounding": grounding,
+            "tag_registry": "v3",
+            "dist_version": "v3",
+            "sources": dict(self.SOURCES),
+            **kw,
+        }
+
+    def test_record_appends_rather_than_overwrites(self, tmp_path):
+        self._arm(tmp_path, "tags_hint", self._run("a", "tags"), self._run("b", "tags"))
+        data = json.loads((tmp_path / "tags_hint" / PV.ARM_PROVENANCE).read_text())
+        assert [r["run_id"] for r in data["runs"]] == ["a", "b"]
+
+    def test_effective_runs_are_the_ones_still_on_disk(self, tmp_path):
+        out = self._arm(
+            tmp_path,
+            "tags_hint",
+            self._run("old", "tags", tag_registry="v1"),
+            self._run("new", "tags"),
+            stamps=["new", "new", "manual"],
+        )
+        runs, unrecorded = PV.effective_runs(out)
+        assert [r["run_id"] for r in runs] == ["new"]
+        assert unrecorded == {"manual"}
+
+    def test_reference_takes_the_tags_arms_registry(self, tmp_path):
+        arm_runs = {
+            "tags_hint": PV.effective_runs(
+                self._arm(tmp_path, "tags_hint", self._run("t1", "tags"))
+            ),
+            "criteria_hint": PV.effective_runs(
+                self._arm(tmp_path, "criteria_hint", self._run("c1", "criteria", tag_registry="v1"))
+            ),
+        }
+        resolved, problems = PV.reconcile(arm_runs, self.SOURCES)
+        assert problems == []
+        assert resolved["tag_version"] == "v3"  # criteria's registry is irrelevant
+        assert resolved["per_arm"]["tags_hint"]["run_ids"] == ["t1"]
+
+    def test_disagreeing_tags_arms_are_refused(self, tmp_path):
+        arm_runs = {
+            "tags_hint": PV.effective_runs(
+                self._arm(tmp_path, "tags_hint", self._run("t1", "tags", tag_registry="v2"))
+            ),
+            "tags_nohint": PV.effective_runs(
+                self._arm(tmp_path, "tags_nohint", self._run("t2", "tags"))
+            ),
+        }
+        _, problems = PV.reconcile(arm_runs, self.SOURCES)
+        assert any("tag registry" in p for p in problems)
+
+    def test_explicit_version_must_match_the_arms(self, tmp_path):
+        arm_runs = {
+            "tags_hint": PV.effective_runs(self._arm(tmp_path, "tags_hint", self._run("t", "tags")))
+        }
+        resolved, problems = PV.reconcile(arm_runs, self.SOURCES, tag_version="v1")
+        assert resolved["tag_version"] == "v1"
+        assert any("'v1' requested" in p for p in problems)
+
+    def test_different_source_data_is_refused(self, tmp_path):
+        stale = self._run("d", "dist", sources={**self.SOURCES, "all_paired": "older"})
+        arm_runs = {"dist_hint": PV.effective_runs(self._arm(tmp_path, "dist_hint", stale))}
+        _, problems = PV.reconcile(arm_runs, self.SOURCES)
+        assert problems == [
+            "dist_hint: run d used a different all_paired than the reference is built from"
+        ]
+
+    def test_unrecorded_outputs_are_refused(self, tmp_path):
+        out = self._arm(tmp_path, "raw_hint", stamps=["legacy"])
+        _, problems = PV.reconcile({"raw_hint": PV.effective_runs(out)}, self.SOURCES)
+        assert len(problems) == 1 and "no provenance record" in problems[0]
+
+    def test_records_digest_tracks_content(self, tmp_path):
+        (tmp_path / "A.json").write_text("{}")
+        first = PV.records_digest(tmp_path)
+        (tmp_path / "A.json").write_text('{"x": 1}')
+        assert PV.records_digest(tmp_path) != first
+        assert PV.records_digest(tmp_path / "missing") is None
+
+
 class TestConstants:
     def test_seven_units_six_categories_plus_synthesis(self):
         assert len(UNITS) == 7

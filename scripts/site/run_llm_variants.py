@@ -43,6 +43,7 @@ sys.path.insert(0, str(ROOT / "figures" / "prompt_variants"))
 import assemble  # noqa: E402
 import variants as variants_mod  # noqa: E402
 
+from swissisoform.judge import provenance  # noqa: E402
 from swissisoform.site import evidence, grounding, llm  # noqa: E402
 from swissisoform.tags import registry as reg_mod  # noqa: E402
 
@@ -180,6 +181,36 @@ def _common_argv(
     return argv
 
 
+def _record_provenance(
+    variant: variants_mod.Variant, args: argparse.Namespace, out_dir: Path, pass_name: str
+) -> None:
+    """Record what this run was given, keyed by the run id llm.py stamped.
+
+    The judge builds its shared reference from these: the tags block has to be
+    the registry version the tags arms ran with, and every arm has to have run on
+    the evidence the reference is built from. Nothing else records either, and
+    the v3 reference got the registry wrong. A dry run makes no outputs, so it
+    records nothing.
+    """
+    if args.dry_run or not llm._RUN_ID:
+        return
+    provenance.record_arm_run(
+        out_dir,
+        {
+            "run_id": llm._RUN_ID,
+            "arm": variant.arm_id,
+            "grounding": variant.grounding,
+            "hints": variant.hints,
+            "pass": pass_name,
+            "tag_registry": args.tag_registry,
+            "dist_version": args.dist_version,
+            "only_category": args.only_category or [],
+            "gene": args.gene,
+            "sources": provenance.source_fingerprint(ROOT / "data" / "output" / args.corpus),
+        },
+    )
+
+
 def run_synthesis_arm(variant: variants_mod.Variant, args: argparse.Namespace) -> int:
     """Run the synthesis pass over one arm's category verdicts.
 
@@ -207,7 +238,11 @@ def run_synthesis_arm(variant: variants_mod.Variant, args: argparse.Namespace) -
     argv += _common_argv(out_dir, records, variants_long, variant.capture_dir(args.corpus), args)
 
     logger.info("arm %s: synthesis over %s", variant.arm_id, out_dir)
-    return llm.main(argv) or 0
+    try:
+        return llm.main(argv) or 0
+    finally:
+        # Also on failure: whatever outputs the run did write carry its stamp.
+        _record_provenance(variant, args, out_dir, "synthesis")
 
 
 def run_arm(variant: variants_mod.Variant, args: argparse.Namespace) -> int:
@@ -266,6 +301,8 @@ def run_arm(variant: variants_mod.Variant, args: argparse.Namespace) -> int:
         for restore in restores:
             restore()
         evidence.use_category_body(previous_body)
+        # Also on failure: whatever outputs the run did write carry its stamp.
+        _record_provenance(variant, args, out_dir, "category")
 
 
 def main(argv: list[str] | None = None) -> int:

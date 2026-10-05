@@ -201,8 +201,16 @@ def _provenance(work: Path, rows: list[dict], args: argparse.Namespace) -> dict:
     bad = {k: v for k, v in checks.items() if k != "n_results" and v}
     if not build_id or not index:
         bad["no_build_record"] = 1
+    # Arm-vs-reference problems the build was told to tolerate are not tolerated
+    # here by default: a build override must be repeated at fit time.
+    arm_side = meta.get("provenance") or {}
+    if arm_side.get("problems"):
+        bad["arm_provenance_problems"] = len(arm_side["problems"])
+    elif not arm_side:
+        bad["no_arm_provenance"] = 1
     report = {
         "build_id": build_id,
+        "reference": arm_side,
         "results": checks,
         "mismatch": bool(bad),
         "allowed_by_override": bool(bad) and args.allow_provenance_mismatch,

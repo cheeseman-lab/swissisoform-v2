@@ -18,7 +18,10 @@ science.
 python scripts/judge/run_checks.py
 
 # 2. Build the requests. Ordered by cell so each reference prefix is prefilled
-#    once for the ~108 calls that share it.
+#    once for the ~108 calls that share it. The reference takes its tag registry
+#    and distribution version from what the arms ran with (each arm run records
+#    them in llm/_arm_provenance.json), and the build refuses arms whose outputs
+#    came from unrecorded runs, other source data, or disagreeing versions.
 python scripts/judge/build_requests.py
 
 # 3. Gates, before the expensive run. Each is minutes; the run is hours.
