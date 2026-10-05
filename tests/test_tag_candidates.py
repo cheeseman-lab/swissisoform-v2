@@ -365,6 +365,27 @@ def test_list_length_is_nan_for_a_missing_list_not_a_crash():
     assert got.iloc[1:3].isna().all()
 
 
+def test_list_length_with_a_count_twin_is_dropped_as_a_duplicate():
+    """``<col>__len`` defers to the catalog's real count column when one exists."""
+    catalog = pd.DataFrame(
+        [
+            {"feature": "cmp_motifs_n_hits_in_diff_region", "duplicate_of": None},
+            {
+                "feature": "n_cmp_motifs_hits_in_diff_region",
+                "duplicate_of": "cmp_motifs_n_hits_in_diff_region",
+            },
+        ]
+    )
+    by_feature = C._catalog_index(catalog)
+    assert (
+        C._catalog_flag(by_feature, "cmp_motifs_hits_in_diff_region__len", "duplicate_of")
+        == "cmp_motifs_n_hits_in_diff_region"
+    )
+    assert pd.isna(
+        C._catalog_flag(by_feature, "cmp_motifs_n_hits_in_diff_region", "duplicate_of")
+    )
+
+
 def test_anchor_rules_do_not_fire_on_percent_identity():
     """1.0 is a ceiling for identity, not a null hypothesis — no anchor."""
     assert seeds.anchor_for("isoform_conservation_frame_primate_mean_pident") is None

@@ -439,7 +439,7 @@ TAG_LABELS: dict[tuple[str, str], str] = {
     ("isoform_structure_ptm_canonical", ">="): "Confident canonical fold",
     # ── S, structural characteristics ──────────────────────────────────
     ("cmp_interproscan_n_real_domains_changed_in_diff_region", ">="): "Domain gained or lost",
-    ("cmp_motifs_hits_in_diff_region__len", ">="): "Motifs in unique region",
+    ("cmp_motifs_n_hits_in_diff_region", ">="): "Motifs in unique region",
     ("tx:sae_top_delta", ">="): "Interpretable features shift",
     ("abs:isoform_sae_top_gained_delta_max", ">="): "Strong feature gained",
     ("tx:abs_gravy_delta", ">="): "Hydropathy shifts",

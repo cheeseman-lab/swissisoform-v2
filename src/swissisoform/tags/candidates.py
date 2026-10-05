@@ -611,10 +611,18 @@ class Funnel:
 
 
 def _catalog_flag(by_feature: dict[str, pd.Series], metric: str, key: str) -> Any:
-    """Catalog field for a metric, resolving a magnitude back to its signed column."""
+    """Catalog field for a metric, resolving a magnitude back to its signed column.
+
+    A synthesized ``<col>__len`` reads the catalog's ``n_<col>`` row, which is
+    where the catalog records that a count column already carries the length —
+    ``cmp_motifs_hits_in_diff_region__len`` equals ``cmp_motifs_n_hits_in_diff_region``
+    on every full_catalog row, and the sweep should cut the real column.
+    """
     row = by_feature.get(metric)
     if row is None and metric.startswith(metrics.ABS_PREFIX):
         row = by_feature.get(metric[len(metrics.ABS_PREFIX):])
+    if row is None and metric.endswith(metrics.LEN_SUFFIX):
+        row = by_feature.get(f"n_{metric[: -len(metrics.LEN_SUFFIX)]}")
     return None if row is None else row.get(key)
 
 
