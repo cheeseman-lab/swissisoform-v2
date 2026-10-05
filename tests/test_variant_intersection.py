@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from swissisoform.models import ORFType, TranslationInitiationSite
+from swissisoform.models import DifferentialRegion, ORFType, TranslationInitiationSite
 from swissisoform.modules.variant_intersection import VariantIntersectionModule
 
 
@@ -114,6 +114,47 @@ class TestBasicIntersection:
         out = mod.annotate_site(site)
         assert out["n_pathogenic_in_unique_region"] == 1
         assert out["n_pathogenic_in_shared_region"] == 0
+
+
+class TestSeparateOrf:
+    """A separate ORF shares no frame with the canonical, so it has no shared region."""
+
+    def test_internal_oof_variants_are_all_unique(self):
+        # Out-of-frame ORF [1010,1020) sits inside the canonical CDS [1000,1030).
+        mod = VariantIntersectionModule()
+        site = _site(
+            orf_exons=[(1010, 1020)],
+            canonical_orf_exons=[(1000, 1030)],
+            hits=[_hit(1012, sig="Pathogenic"), _hit(1015), _hit(1025)],
+        )
+        site.orf_type = ORFType.INTERNAL_OUT_OF_FRAME
+        site.isoform_protein = "MXX"
+        site.diff_region = DifferentialRegion(isoform_start=0, isoform_end=3, sequence="MXX")
+        out = mod.annotate_site(site)
+
+        # The canonical-only variant at 1025 is not this isoform's; the two inside
+        # the ORF are unique, even though the canonical CDS covers them too.
+        assert out["n_total"] == 2
+        assert out["n_dropped_outside_coding"] == 1
+        assert out["n_in_unique_region"] == 2
+        assert out["n_in_shared_region"] == 0
+        assert out["n_pathogenic_in_unique_region"] == 1
+        assert out["shared_region_nt"] == 0
+        assert out["unique_region_nt"] == 10
+        assert all(h["in_isoform_unique"] and not h["in_isoform_shared"] for h in out["hits"])
+
+    def test_uoorf_matched_as_extension_keeps_its_shared_region(self):
+        mod = VariantIntersectionModule()
+        site = _site(
+            orf_exons=[(900, 930), (1000, 1030)],
+            canonical_orf_exons=[(1000, 1030)],
+            hits=[_hit(910), _hit(1010)],
+        )
+        site.orf_type = ORFType.UOORF
+        site.diff_region = DifferentialRegion(isoform_start=0, isoform_end=3, sequence="MXX")
+        out = mod.annotate_site(site)
+        assert out["n_in_unique_region"] == 1
+        assert out["n_in_shared_region"] == 1
 
 
 class TestMissingInputs:

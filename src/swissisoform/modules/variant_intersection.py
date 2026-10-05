@@ -18,10 +18,14 @@ Post-processes the raw variant list attached to a TIS by
    - truncation: ``canonical_orf \\ isoform_orf`` (sequence lost from
      canonical). The truncation's unique residues live in canonical-protein
      space; ``isoform_protein_pos`` will be ``None`` for them.
+   - separate ORF (uORF / uoORF / altORF / internal / 3'UTR ORF with no
+     sequence-verified canonical relationship): the whole ``isoform_orf``.
+     It shares no reading frame with the canonical CDS, so a nucleotide it
+     overlaps is not a shared residue and there is no shared region.
 3. Filters the hit list to variants that fall inside *some* coding region
-   we care about (canonical ORF ∪ isoform ORF), dropping pure-intronic /
-   pure-UTR variants — those would just bloat the parquet without carrying
-   isoform-relevant signal.
+   we care about (canonical ORF ∪ isoform ORF; only the isoform ORF for a
+   separate ORF), dropping pure-intronic / pure-UTR variants — those would
+   just bloat the parquet without carrying isoform-relevant signal.
 
 Aggregates: total / unique / shared / pathogenic-in-each.
 """
@@ -43,6 +47,24 @@ logger = logging.getLogger(__name__)
 def _is_pathogenic(hit: dict[str, Any]) -> bool:
     """Return True for a Pathogenic / Likely pathogenic call (not Conflicting)."""
     return is_pathogenic(hit.get("clinical_significance"))
+
+
+def _is_separate_orf(site: TranslationInitiationSite) -> bool:
+    """True when the ORF shares no reading frame, and so no region, with the canonical.
+
+    A uoORF can still sequence-match the canonical as an in-frame extension or
+    truncation (``compute_diff_region`` checks); that case keeps a shared region.
+    """
+    if site.orf_type in (ORFType.ANNOTATED, ORFType.EXTENDED, ORFType.TRUNCATED):
+        return False
+    dr = site.diff_region
+    if dr is not None:
+        if dr.canonical_end is not None:
+            return False
+        iso_len = len((site.isoform_protein or "").rstrip("*"))
+        if dr.isoform_end is not None and dr.isoform_end < iso_len:
+            return False
+    return True
 
 
 def _density_ratio(
@@ -146,12 +168,16 @@ class VariantIntersectionModule:
         # they live in the isoform.
         is_truncation = site.orf_type == ORFType.TRUNCATED
         unique_space = "canonical" if is_truncation else "isoform"
-        # No missing-skeleton guard: an ORF with no canonical counterpart is entirely
-        # unique, which is the right answer for scoring. (The parquet writer takes the
-        # opposite view — see ``coords.unique_shared_intervals``.)
-        unique, shared = unique_shared_intervals(
-            is_truncation, site.orf_exons, site.canonical_orf_exons
-        )
+        separate_orf = _is_separate_orf(site)
+        if separate_orf:
+            unique, shared = [tuple(e) for e in site.orf_exons], []
+        else:
+            # No missing-skeleton guard: an ORF with no canonical counterpart is
+            # entirely unique, which is the right answer for scoring. (The parquet
+            # writer takes the opposite view — see ``coords.unique_shared_intervals``.)
+            unique, shared = unique_shared_intervals(
+                is_truncation, site.orf_exons, site.canonical_orf_exons
+            )
 
         # Re-validate every variant in the isoform's reading frame, writing
         # isoform_* fields onto each dict in place. Caches by tis_id so calls
@@ -186,7 +212,9 @@ class VariantIntersectionModule:
                     field_prefix=None,
                 )
 
-        canonical_orf = site.canonical_orf_exons or []
+        # A separate ORF's variants are only the ones inside it: a canonical-CDS
+        # variant elsewhere is neither unique nor shared for this isoform.
+        canonical_orf = [] if separate_orf else (site.canonical_orf_exons or [])
 
         hits_out: list[dict[str, Any]] = []
         n_unique = 0

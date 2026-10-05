@@ -319,6 +319,54 @@ class TestFrameAwareConsequence:
         assert out["hits"][0]["effect_damaging"] is False
 
 
+class TestSeparateOrfStartCodon:
+    def test_internal_oof_start_codon_variant_reports_start_lost(self, tmp_path):
+        """CCT3-style: the ORF's start codon also lies in the canonical CDS.
+
+        Genomic overlap with the canonical used to tag the codon-0 hit shared, so
+        the canonical-frame ``missense_variant`` won over the isoform-frame
+        ``start_lost``. A separate ORF has no shared region, so the hit is unique
+        and its own start-codon effect is reported.
+        """
+        from swissisoform.modules.variant_intersection import VariantIntersectionModule
+
+        hit = {
+            "source": "gnomAD",
+            "variant_id": "v",
+            "chrom": "chr1",
+            "genomic_pos": 1012,
+            "ref": "A",
+            "alt": "G",
+            "consequence": "missense_variant",
+            "protein_pos": 3,
+            "aa_ref": "A",
+            "aa_alt": "V",
+            "isoform_protein_pos": 0,
+            "isoform_consequence": "start_lost",
+            "isoform_aa_ref": "I",
+            "isoform_aa_alt": "V",
+            "clinical_significance": None,
+        }
+        site = _tis(
+            orf_type=ORFType.INTERNAL_OUT_OF_FRAME,
+            isoform_protein="MKT*",
+            diff_region=DifferentialRegion(isoform_start=0, isoform_end=3, sequence="MKT"),
+        )
+        _seed_aa_logprobs(tmp_path, "MKT*", {})
+        site.orf_exons = [(1011, 1020)]
+        site.canonical_orf_exons = [(1000, 1030)]
+        site.isoform_annotations["clinical"] = {"hits": [hit], "summary": {}}
+        site.isoform_annotations["variant_intersection"] = (
+            VariantIntersectionModule().annotate_site(site)
+        )
+        out = VariantEffectModule(PipelineConfig(), plm_cache_dir=tmp_path).annotate_site(site)
+        got = out["hits"][0]
+        assert got["in_isoform_shared"] is False
+        assert got["effect_consequence"] == "start_lost"
+        assert got["plm_status"] == "start_codon"
+        assert got["effect_lof"] is True
+
+
 class TestSiteModuleContract:
     def test_run_does_not_drop_sites(self, synthetic_tis, tmp_path):
         mod = VariantEffectModule(PipelineConfig(), plm_cache_dir=tmp_path)
