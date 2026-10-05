@@ -885,8 +885,12 @@ PEPQUERY_DB_URL = (
     "https://ftp.uniprot.org/pub/databases/uniprot/current_release/"
     "knowledgebase/reference_proteomes/Eukaryota/UP000005640/UP000005640_9606.fasta.gz"
 )
-PEPQUERY_DB_GZ = PEPQUERY_DIR / "UP000005640_9606.fasta.gz"
-PEPQUERY_DB_FASTA = PEPQUERY_DIR / "UP000005640_9606.fasta"
+# Its own subdirectory, because write_sidecar always writes `_setup.json` in
+# the directory it is given: staged beside the jar, the proteome's sidecar and
+# the jar's overwrote each other, whichever ran last.
+PEPQUERY_DB_DIR = PEPQUERY_DIR / "db"
+PEPQUERY_DB_GZ = PEPQUERY_DB_DIR / "UP000005640_9606.fasta.gz"
+PEPQUERY_DB_FASTA = PEPQUERY_DB_DIR / "UP000005640_9606.fasta"
 
 
 def setup_pepquery(refresh: bool = False) -> None:
@@ -967,7 +971,7 @@ def setup_pepquery_db(refresh: bool = False) -> None:
         logger.info("pepquery-db: %s already exists — skipping", PEPQUERY_DB_FASTA)
         return
 
-    PEPQUERY_DIR.mkdir(parents=True, exist_ok=True)
+    PEPQUERY_DB_DIR.mkdir(parents=True, exist_ok=True)
     logger.info("pepquery-db: downloading %s", PEPQUERY_DB_URL)
     run(["wget", "-q", "--show-progress", PEPQUERY_DB_URL, "-O", str(PEPQUERY_DB_GZ)])
 
@@ -991,7 +995,7 @@ def setup_pepquery_db(refresh: bool = False) -> None:
     )
 
     write_sidecar(
-        PEPQUERY_DIR,
+        PEPQUERY_DB_DIR,
         source_url=PEPQUERY_DB_URL,
         version="UP000005640_9606",
         artifact=PEPQUERY_DB_FASTA,
