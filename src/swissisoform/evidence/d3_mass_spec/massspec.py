@@ -876,9 +876,20 @@ def _regroup_by_gene(
 def _pepquery_cache_key(
     dataset: str, reference_db: str, peptides: list[str], mods_sig: str = ""
 ) -> str:
-    """Stable hash over ``(dataset, db, modification flags, peptide list)``."""
+    """Stable hash over ``(dataset, db, modification flags, peptide list)``.
+
+    A ``reference_db`` that is a file (the staged proteome) enters as its
+    content sha256, not its path: an absolute path differs per checkout, and a
+    ``--refresh`` that pulls a newer ``current_release`` proteome to the same
+    path would otherwise hit results searched against the old one.
+    """
     import hashlib
 
+    db_path = Path(reference_db)
+    if db_path.is_file():
+        from swissisoform.setup._common import sha256_file
+
+        reference_db = f"sha256:{sha256_file(db_path)}"
     payload = "\n".join([dataset, reference_db, mods_sig, *peptides]).encode("ascii")
     return hashlib.sha1(payload, usedforsecurity=False).hexdigest()[:16]
 
