@@ -978,6 +978,66 @@ class TestArmProvenance:
         assert PV.records_digest(tmp_path / "missing") is None
 
 
+class TestToolResults:
+    """M/P arms read through tools; the judge sees that data or the output says it did not."""
+
+    TRACE = {
+        "turns": [
+            {
+                "tool_results": [
+                    {
+                        "name": "query_variants",
+                        "input": {"region": "unique"},
+                        "result": {"rows": [{"pos": i, "hgvsp": f"p.X{i}Y"} for i in range(200)]},
+                    },
+                    {"name": "emit_verdict", "rejected": "too early"},
+                ]
+            },
+            {"tool_results": [{"name": "variant_effect_stats", "input": {}, "result": {"n": 7}}]},
+        ]
+    }
+
+    def test_renders_each_data_call_within_budget(self):
+        out = RF.render_tool_results(self.TRACE, 1_500)
+        assert out.startswith(RF.TOOL_RESULTS_HEADER)
+        assert 'query_variants({"region": "unique"})' in out
+        assert 'variant_effect_stats({}) -> {"n": 7}' in out
+        assert "chars cut" in out  # the 200-row table was cut, not the small call
+        assert "emit_verdict" not in out  # a rejected verdict is not evidence
+        assert len(out) < 1_500 + 200
+
+    def test_calls_past_the_budget_are_counted(self):
+        trace = {
+            "turns": [
+                {"tool_results": [{"name": f"t{i}", "input": {}, "result": "x" * 300}]}
+                for i in range(20)
+            ]
+        }
+        out = RF.render_tool_results(trace, 1_000)
+        assert "further tool call(s) not shown" in out
+
+    def test_no_trace_is_none_so_the_call_is_marked_tool_blind(self):
+        assert RF.render_tool_results(None, 1_000) is None
+
+    def test_corpus_loads_traces_for_tool_units_only(self, tmp_path, monkeypatch):
+        from swissisoform.judge import corpus as CO
+
+        monkeypatch.setattr(CO, "ROOT", tmp_path)
+        iso = tmp_path / "data" / "output" / "c_criteria_hint" / "llm" / "iso1"
+        iso.mkdir(parents=True)
+        cats = {name: {"reasoning": name} for name in ("Mutation Landscape", "Conservation")}
+        (iso / "categories.json").write_text(json.dumps(cats))
+        (iso / "M_trace.json").write_text(json.dumps(self.TRACE))
+        (iso / "C_trace.json").write_text(json.dumps(self.TRACE))
+        corpus = CO.load_corpus("c", arms=(BASELINE,))
+        assert corpus.get(BASELINE, "iso1", "M").trace == self.TRACE
+        assert corpus.get(BASELINE, "iso1", "C").trace is None
+
+    def test_requests_default_to_not_tool_blind(self):
+        """Old request files lack the flag; analyze.py treats a missing index as blind."""
+        assert SV.Request(id="r", slug="s", unit="M", rubric="pw", prompt="p").tool_blind is False
+
+
 class TestConstants:
     def test_seven_units_six_categories_plus_synthesis(self):
         assert len(UNITS) == 7

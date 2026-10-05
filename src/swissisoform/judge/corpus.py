@@ -17,6 +17,7 @@ from swissisoform.judge import (
     CATEGORY_NAMES,
     DEFAULT_CORPUS,
     SYNTHESIS_UNIT,
+    TOOL_UNITS,
     UNITS,
 )
 
@@ -36,6 +37,8 @@ class Output:
     unit: str
     reasoning: str
     payload: dict[str, Any]
+    # The tool-loop transcript (``{letter}_trace.json``) for M and P, else None.
+    trace: dict[str, Any] | None = None
 
     @property
     def text(self) -> str:
@@ -140,12 +143,19 @@ def load_corpus(
                     if letter is None:
                         continue
                     seen.add(slug)
+                    trace_path = iso_dir / f"{letter}_trace.json"
+                    trace = (
+                        json.loads(trace_path.read_text(encoding="utf-8"))
+                        if letter in TOOL_UNITS and trace_path.exists()
+                        else None
+                    )
                     outputs[(arm, slug, letter)] = Output(
                         arm=arm,
                         slug=slug,
                         unit=letter,
                         reasoning=entry.get("reasoning") or "",
                         payload=entry,
+                        trace=trace,
                     )
             syn = iso_dir / "synthesis.json"
             if syn.exists():

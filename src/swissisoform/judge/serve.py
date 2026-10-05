@@ -71,6 +71,8 @@ class Request:
     len_a: int = 0
     len_b: int = 0
     build_id: str = ""
+    # An M/P call judged without the tool results its arms read.
+    tool_blind: bool = False
 
     @property
     def cell(self) -> tuple[str, str]:

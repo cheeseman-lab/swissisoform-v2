@@ -28,6 +28,7 @@ from swissisoform.judge import (  # noqa: E402
     DEFAULT_CORPUS,
     REPLICATE,
     SYNTHESIS_UNIT,
+    TOOL_UNITS,
     UNITS,
 )
 from swissisoform.judge import prompts as PR  # noqa: E402
@@ -112,6 +113,14 @@ def main(argv: list[str] | None = None) -> int:
         length,
     )
     _print(checks, per_unit_fit, pooled_fit, position, per_unit_bt, per_unit_len, length)
+    blind = {u: v for u, v in _tool_blind(work).items() if v}
+    if blind:
+        print(
+            "\n  !! tool-blind: "
+            + ", ".join(f"{u} {v:.0%}" for u, v in blind.items())
+            + " of calls were judged without the tool results the arms read"
+            "\n     (rebuild with build_requests.py --tool-results-chars N to show them)."
+        )
     return 0
 
 
@@ -152,6 +161,23 @@ def _length_report(calls, per_unit_len, pooled_len) -> dict:
             "beta": None if fit.length is None else _interval(fit.length),
             "n_calls_fitted": fit.n_calls,
         }
+    return out
+
+
+def _tool_blind(work: Path) -> dict[str, float]:
+    """Share of each tool unit's requests judged without the arms' tool results.
+
+    A pre-provenance build has no flag, and every M/P call in it was tool-blind,
+    so an empty index counts as fully blind rather than as unknown.
+    """
+    rows = [r for r in _load_index(work).values() if r.get("unit") in TOOL_UNITS]
+    if not rows:
+        return dict.fromkeys(TOOL_UNITS, 1.0)
+    out = {}
+    for unit in TOOL_UNITS:
+        subset = [r for r in rows if r["unit"] == unit]
+        if subset:
+            out[unit] = round(sum(bool(r.get("tool_blind")) for r in subset) / len(subset), 4)
     return out
 
 
@@ -341,8 +367,12 @@ def _write(
     pairs, kept for comparison with earlier rounds and never the headline.
     """
     per_unit_strengths = {unit: fit.strengths for unit, fit in per_unit_fit.items()}
+    tool_blind = _tool_blind(work)
     payload = {
         "provenance": provenance,
+        # Share of each M/P unit's calls judged without the tool results the arms
+        # read; any non-zero value means those scores rest on partial evidence.
+        "tool_blind": tool_blind,
         "resolution_floor": _resolution_floor(per_unit_strengths, pooled_fit.strengths),
         "position_effect": position,
         "judge_reliability": {
@@ -382,11 +412,13 @@ def _write(
         json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
     )
 
-    lines = ["unit\tarm\tbt_point\tbt_lo\tbt_hi\texcludes_zero"]
+    lines = ["unit\tarm\tbt_point\tbt_lo\tbt_hi\texcludes_zero\ttool_blind"]
     for unit, fit in per_unit_fit.items():
+        blind = int(tool_blind.get(unit, 0.0) > 0)
         for arm, i in fit.strengths.items():
             lines.append(
-                f"{unit}\t{arm}\t{i.point:.4f}\t{i.lo:.4f}\t{i.hi:.4f}\t{int(i.excludes_zero)}"
+                f"{unit}\t{arm}\t{i.point:.4f}\t{i.lo:.4f}\t{i.hi:.4f}"
+                f"\t{int(i.excludes_zero)}\t{blind}"
             )
     (work / "bradley_terry.tsv").write_text("\n".join(lines) + "\n", encoding="utf-8")
     logger.info("wrote %s", work)

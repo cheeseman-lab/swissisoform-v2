@@ -101,6 +101,11 @@ real"; a third of them are not.
 - **M and P are excluded from the fabrication check.** Their arms queried the full
   variant/structure tables through tool readers while the reference holds a 30-row
   sample (30 of 13,690 on the worst M cell).
+- **M and P are judged tool-blind by default.** For the same reason the judge does
+  not see what those arms read. `build_requests.py --tool-results-chars N` shows
+  each M/P response with up to N characters of its own run's tool results;
+  otherwise every such request carries `tool_blind`, and `analysis.json` /
+  `bradley_terry.tsv` mark the M/P scores as tool-blind.
 - **No reference answers**, so verdicts are noisier than Prometheus's published
   benchmarks.
 - **One rubric, gated on the anchor pairs.** Each pair states the same conclusion

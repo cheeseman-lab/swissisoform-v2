@@ -385,6 +385,55 @@ def _largest_list_key(reference: dict[str, Any]) -> str | None:
     return max(sizes, key=lambda k: sizes[k]) if sizes else None
 
 
+TOOL_RESULTS_HEADER = (
+    "[Tool results retrieved during this response's own run -- evidence to check "
+    "it against, not part of the response]"
+)
+
+
+def render_tool_results(trace: dict[str, Any] | None, budget_chars: int) -> str | None:
+    """The data an M/P arm read through its tool loop, cut to *budget_chars*.
+
+    M and P arms answer through tool calls whose results are not in the opening
+    payload, so the shared reference -- which caps hit rows at 30 -- cannot show
+    what they read (30 of 13,690 rows on the worst M cell). Judged without it, a
+    correct number the arm fetched looks unsupported. This renders each data
+    call as ``name(input) -> result`` in order, splitting the budget evenly so
+    one large table cannot crowd out the rest, and says how much was cut.
+
+    Returns None when there is no trace, so the caller can mark the call
+    tool-blind rather than show an empty block.
+    """
+    if not trace:
+        return None
+    calls = [
+        r
+        for turn in trace.get("turns") or []
+        for r in turn.get("tool_results") or []
+        if "result" in r
+    ]
+    if not calls:
+        return f"{TOOL_RESULTS_HEADER}\n(no data tool calls in the trace)"
+    share = max(budget_chars // len(calls), 200)
+    lines = [TOOL_RESULTS_HEADER]
+    used = len(TOOL_RESULTS_HEADER)
+    shown = 0
+    for call in calls:
+        args = json.dumps(call.get("input") or {}, ensure_ascii=False, sort_keys=True)
+        body = json.dumps(call["result"], ensure_ascii=False, default=str, sort_keys=True)
+        if len(body) > share:
+            body = body[:share] + f" ... [{len(body) - share} chars cut]"
+        line = f"{call.get('name')}({args}) -> {body}"
+        if used + len(line) > budget_chars and shown:
+            break
+        lines.append(line)
+        used += len(line) + 1
+        shown += 1
+    if shown < len(calls):
+        lines.append(f"[{len(calls) - shown} further tool call(s) not shown]")
+    return "\n".join(lines)
+
+
 def isoform_records(records: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """``{tis_slug: isoform_record}``, with the gene folded in.
 

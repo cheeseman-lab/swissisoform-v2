@@ -33,6 +33,7 @@ from swissisoform.judge import (  # noqa: E402
     CATEGORY_LETTERS,
     DEFAULT_CORPUS,
     SYNTHESIS_UNIT,
+    TOOL_UNITS,
 )
 from swissisoform.judge import prompts as PR  # noqa: E402
 from swissisoform.judge import provenance as PV  # noqa: E402
@@ -44,6 +45,7 @@ from swissisoform.judge.reference import (  # noqa: E402
     fit_reference,
     isoform_records,
     render,
+    render_tool_results,
 )
 from swissisoform.judge.serve import (  # noqa: E402
     MAX_MODEL_LEN,
@@ -75,6 +77,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=REFERENCE_BUDGET_TOKENS,
         help="Token budget for the reference payload",
+    )
+    p.add_argument(
+        "--tool-results-chars",
+        type=int,
+        default=0,
+        help=(
+            "Show each M/P response with up to this many characters of the tool "
+            "results its own run retrieved. 0 (default) judges M/P tool-blind, and "
+            "every such request and the analysis say so"
+        ),
     )
     p.add_argument(
         "--tag-version",
@@ -206,12 +218,26 @@ def main(argv: list[str] | None = None) -> int:
                 logger.warning("cell (%s, %s) has %d arm(s) — skipping", slug, unit, len(arms))
                 continue
 
+            # M/P arms read through tools; show each response with its own run's
+            # results when asked, and spend that out of this cell's reference budget
+            # (by the largest digest, so every arm meets the same reference).
+            digests: dict[str, str | None] = {}
+            cell_budget = args.budget
+            if unit in TOOL_UNITS and args.tool_results_chars > 0:
+                digests = {
+                    arm: render_tool_results(
+                        corpus.get(arm, slug, unit).trace, args.tool_results_chars
+                    )
+                    for arm in arms
+                }
+                cell_budget -= 2 * max(count_tokens(d or "") for d in digests.values())
+
             # One fitted reference per cell, reused by all 9 arms -- trimming has
             # to be identical across arms or they stop being comparable.
             shared = None
             if unit != SYNTHESIS_UNIT:
                 fitted = fit_reference(
-                    builder.category(record, unit), count_tokens, budget=args.budget
+                    builder.category(record, unit), count_tokens, budget=cell_budget
                 )
                 shared = render(fitted.reference)
                 if fitted.trimmed:
@@ -239,11 +265,14 @@ def main(argv: list[str] | None = None) -> int:
                         )
                     text_a = corpus.get(first, slug, unit).text
                     text_b = corpus.get(second, slug, unit).text
+                    tool_blind = unit in TOOL_UNITS and not (
+                        digests.get(first) and digests.get(second)
+                    )
                     prompt = PR.chat(
                         PR.relative_prompt(
                             instruction=instruction,
-                            response_a=text_a,
-                            response_b=text_b,
+                            response_a=_with_tools(text_a, digests.get(first)),
+                            response_b=_with_tools(text_b, digests.get(second)),
                             rubric=RB.pairwise().criterion,
                         )
                     )
@@ -261,6 +290,7 @@ def main(argv: list[str] | None = None) -> int:
                             sha_b=PV.text_sha(text_b),
                             len_a=len(text_a),
                             len_b=len(text_b),
+                            tool_blind=tool_blind,
                         )
                     )
                     _note_if_at_risk(prompt, at_risk, slug, unit)
@@ -272,6 +302,15 @@ def main(argv: list[str] | None = None) -> int:
     _write_index(requests, out_dir / PV.INDEX_NAME)
     _summarise(requests, at_risk, path, n, out_dir, trimmed, count_tokens, build_id, provenance)
     return 1 if at_risk else 0
+
+
+def _with_tools(text: str, digest: str | None) -> str:
+    """A response followed by its run's tool results, when there are any.
+
+    ``sha_*`` and ``len_*`` stay those of the response alone: the digest is
+    evidence shown beside it, not something the arm wrote.
+    """
+    return f"{text}\n\n{digest}" if digest else text
 
 
 def _write_index(requests: list[Request], path: Path) -> None:
@@ -320,6 +359,7 @@ def _summarise(
     meta = {
         "build_id": build_id,
         "provenance": provenance,
+        "n_tool_blind": sum(r.tool_blind for r in requests),
         "n_requests": n,
         "by_unit": by_unit,
         "longest_prompt_est_tokens": longest,
