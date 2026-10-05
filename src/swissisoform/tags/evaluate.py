@@ -35,6 +35,7 @@ import pandas as pd
 
 from swissisoform import metrics
 from swissisoform.config import ScoringConfig
+from swissisoform.distributions import stratum_for
 from swissisoform.models import TranslationInitiationSite
 from swissisoform.tags import derived as derived_tags
 from swissisoform.tags import seeds
@@ -78,16 +79,29 @@ def _validity_mask(df: pd.DataFrame, tag: Tag) -> np.ndarray:
     return mask
 
 
+def _cutoffs(df: pd.DataFrame, tag: Tag) -> np.ndarray:
+    """Per-row cutoff: the row's ``orf_type``, then its stratum, then ``tag.cutoff``."""
+    default = np.nan if tag.cutoff is None else float(tag.cutoff)
+    if not tag.cutoff_by_stratum:
+        return np.full(len(df), default)
+    by = tag.cutoff_by_stratum
+    return np.array(
+        [by.get(str(o), by.get(stratum_for(o), default)) for o in df["orf_type"]],
+        dtype="float64",
+    )
+
+
 def _threshold_state(df: pd.DataFrame, tag: Tag) -> tuple[pd.Series, pd.Series] | None:
     """``(state, citation)`` for a threshold tag, or None if unresolvable here."""
     values = metrics.resolve(tag.metric, df)
-    if values is None or tag.cutoff is None:
+    if values is None or (tag.cutoff is None and not tag.cutoff_by_stratum):
         return None
     arr = pd.to_numeric(values, errors="coerce").to_numpy(dtype="float64")
+    cut = _cutoffs(df, tag)
     with np.errstate(invalid="ignore"):
-        hit = arr >= tag.cutoff if tag.direction == ">=" else arr < tag.cutoff
+        hit = arr >= cut if tag.direction == ">=" else arr < cut
     state = pd.array(hit, dtype=STATE_DTYPE)
-    state[np.isnan(arr)] = pd.NA
+    state[np.isnan(arr) | np.isnan(cut)] = pd.NA
     return pd.Series(state, index=df.index), pd.Series(arr, index=df.index)
 
 

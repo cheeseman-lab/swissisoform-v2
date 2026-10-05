@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -108,6 +108,17 @@ REGISTRY_COLUMNS: tuple[str, ...] = (
     "note",
 )
 
+# Columns a registry may carry but need not: absent from versions built before
+# they existed, so `from_frame` reads them with a default instead of refusing.
+#
+# ``cutoff_by_stratum`` is JSON ``{stratum: cutoff}`` for a threshold tag whose
+# number should differ by ORF type — a stratum is an ``orf_type`` or the
+# ``separate`` roll-up (``distributions.stratum_for``). A row's own ``orf_type``
+# wins over its roll-up, and a stratum with no entry falls back to ``cutoff``.
+# One pooled cutoff makes `length_ratio_hi` fire on 0.2% of extensions and 28.5%
+# of truncations; this is the format that lets a build fix that.
+OPTIONAL_COLUMNS: tuple[str, ...] = ("cutoff_by_stratum",)
+
 
 class TagRegistryError(RuntimeError):
     """Raised when a registry version is missing or unreadable."""
@@ -144,6 +155,7 @@ class Tag:
     source: str
     blocked: str
     note: str
+    cutoff_by_stratum: dict[str, float] = field(default_factory=dict)
 
     @property
     def code_fired(self) -> bool:
@@ -170,6 +182,10 @@ class Tag:
             return f"derived predicate for {self.criterion_id}"
         if self.kind == KIND_BOOL:
             return f"{self.metric} is true"
+        if self.cutoff_by_stratum:
+            per = ", ".join(f"{k} {v:.6g}" for k, v in sorted(self.cutoff_by_stratum.items()))
+            rest = "" if self.cutoff is None else f"; else {self.cutoff:.6g}"
+            return f"{self.metric} {self.direction} by stratum ({per}{rest})"
         if self.cutoff is None:
             return f"{self.metric} {self.direction} (no cutoff)"
         return f"{self.metric} {self.direction} {self.cutoff:.6g}"
@@ -291,6 +307,7 @@ def from_frame(version: str, frame: pd.DataFrame, provenance: dict[str, Any]) ->
             source=_str(row["source"]),
             blocked=_str(row["blocked"]),
             note=_str(row["note"]),
+            cutoff_by_stratum=_overrides(row.get("cutoff_by_stratum")),
         )
         for _, row in frame.iterrows()
     )
@@ -338,6 +355,7 @@ __all__ = [
     "KIND_DERIVED",
     "KIND_LLM",
     "KIND_THRESHOLD",
+    "OPTIONAL_COLUMNS",
     "REGISTRY_COLUMNS",
     "REGISTRY_FILE",
     "SIDECAR_FILE",

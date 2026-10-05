@@ -61,6 +61,7 @@ from swissisoform.tags.registry import (
     KIND_DERIVED,
     KIND_LLM,
     KIND_THRESHOLD,
+    OPTIONAL_COLUMNS,
     REGISTRY_COLUMNS,
     REGISTRY_FILE,
     SIDECAR_FILE,
@@ -415,7 +416,11 @@ def build(
         candidate_row(by_id[tid], labels[tid]) for tid in labels if by_id[tid].source != "criterion"
     ]
     rows.extend(criterion_rows(by_id, cutoffs=cutoffs, labels=labels))
-    frame = pd.DataFrame(rows, columns=list(REGISTRY_COLUMNS))
+    # Every cutoff is still a single pooled number: choose_cutoff cuts one
+    # stratum per tag. The column is written so the format exists; filling it
+    # is a per-stratum sweep, which is a calibration decision.
+    frame = pd.DataFrame(rows, columns=list(REGISTRY_COLUMNS) + list(OPTIONAL_COLUMNS))
+    frame["cutoff_by_stratum"] = frame["cutoff_by_stratum"].fillna("")
     frame = frame.sort_values(["category", "kind", "tag_id"], kind="stable").reset_index(drop=True)
     _check_metrics_resolve(frame, columns)
 

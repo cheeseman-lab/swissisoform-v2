@@ -249,6 +249,22 @@ class TestFire:
         both = _registry(_row(label="Domain gained or lost")).get("t")
         assert both.label_for("truncated") == "Domain gained or lost"
 
+    def test_per_stratum_cutoff(self):
+        """One checkbox, one meaning per ORF type: the row's stratum picks the cutoff."""
+        row = _row(tag_id="hi", metric="m", cutoff=5.0)
+        frame = pd.DataFrame([row], columns=list(reg_mod.REGISTRY_COLUMNS))
+        frame["cutoff_by_stratum"] = json.dumps({"extended": 1.0, "separate": 3.0})
+        reg = reg_mod.from_frame("v", frame, {})
+        assert "by stratum" in reg.get("hi").test
+        df = _frame(["extended", "truncated", "uorf", "uorf"], m=[2.0, 2.0, 2.0, 4.0])
+        states, _ = tag_eval.fire(df, [], reg)
+        # extended cuts at 1.0, truncated falls back to 5.0, uorf rolls up to separate.
+        assert [bool(v) for v in states["hi"]] == [True, False, False, True]
+
+    def test_registry_without_the_optional_column_still_loads(self):
+        assert "cutoff_by_stratum" not in reg_mod.REGISTRY_COLUMNS
+        assert _registry(_row()).get("t").cutoff_by_stratum == {}
+
     def test_empty_valid_for_means_everywhere(self):
         reg = _registry(_row(tag_id="any", metric="m", cutoff=0.0, valid_for=""))
         df = _frame(["uorf"], m=[5.0])
