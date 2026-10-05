@@ -245,6 +245,48 @@ class TestFire:
         # A boolean has no number behind it.
         assert citations["b"].isna().all()
 
+    def test_one_sided_none_on_a_changed_flag_is_a_change(self):
+        """No signal peptide on one side and a cleavage site on the other is a gain.
+
+        Rows: gained, lost, both absent with the predictor run on both, both
+        present and equal, and the predictor not run on one side.
+        """
+        base = "cmp_signalp_signalp_cleavage_site"
+        reg = _registry(
+            _row(tag_id="cs", kind=reg_mod.KIND_BOOL, metric=f"{base}_changed", cutoff=None)
+        )
+        df = _frame(
+            ["extended"] * 5,
+            **{
+                f"{base}_changed": [None, None, False, False, None],
+                f"{base}_canonical": [None, "CS pos: 20-21", None, "CS pos: 9", None],
+                f"{base}_isoform": ["CS pos: 23-24", None, None, "CS pos: 9", "CS pos: 4"],
+                "cmp_signalp_signalp_prediction_canonical": ["OTHER", "SP", "OTHER", "SP", None],
+                "cmp_signalp_signalp_prediction_isoform": ["SP", "OTHER", "OTHER", "SP", "SP"],
+            },
+        )
+        states, _ = tag_eval.fire(df, [], reg)
+        got = [None if pd.isna(v) else bool(v) for v in states["cs"]]
+        assert got == [True, True, False, False, None]
+
+    def test_changed_flag_without_a_run_indicator(self):
+        """Without the prediction pair, only both-missing is not-evaluable."""
+        base = "cmp_localization_deeploc_signals"
+        reg = _registry(
+            _row(tag_id="sig", kind=reg_mod.KIND_BOOL, metric=f"{base}_changed", cutoff=None)
+        )
+        df = _frame(
+            ["truncated"] * 3,
+            **{
+                f"{base}_changed": [None, False, False],
+                f"{base}_canonical": ["Nuclear localization signal", None, "NES"],
+                f"{base}_isoform": [None, None, "NES"],
+            },
+        )
+        states, _ = tag_eval.fire(df, [], reg)
+        got = [None if pd.isna(v) else bool(v) for v in states["sig"]]
+        assert got == [True, None, False]
+
     def test_missing_column_yields_an_all_null_column_not_a_missing_one(self):
         """The struct's fields must depend on the registry, not on the run."""
         reg = _registry(_row(tag_id="absent", metric="nope", cutoff=1.0))

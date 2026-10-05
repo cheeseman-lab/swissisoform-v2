@@ -543,6 +543,11 @@ def evaluate(df: pd.DataFrame, cands: Iterable[Candidate]) -> dict[str, np.ndarr
             raw = df[cand.metric] if cand.metric in df.columns else None
             if raw is None:
                 continue
+            # Same reading the evaluator fires with, so the sweep's rate is the
+            # runtime rate.
+            changed = metrics.changed_state(cand.metric, df)
+            if changed is not None:
+                raw = changed
             fired = raw.map({True: 1, False: 0}).to_numpy(dtype="float64", na_value=np.nan)
             state = np.where(np.isnan(fired), -1.0, fired)
             state = np.where(~orf.isin(cand.valid_for).to_numpy(), -1.0, state)
