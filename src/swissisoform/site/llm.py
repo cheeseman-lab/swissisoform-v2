@@ -1612,6 +1612,28 @@ def _tidy_violation(msg: str, limit: int = 140) -> str:
     return f"{msg[: limit - 60]}… {msg[-50:]}"
 
 
+def _top_level_violations(payload: dict[str, Any], schema: dict[str, Any]) -> list[str]:
+    """``required``, ``enum`` and string-length checks on top-level fields only."""
+    out = [
+        f"<root>: {k!r} is a required property"
+        for k in schema.get("required", [])
+        if k not in payload
+    ]
+    for name, sub in (schema.get("properties") or {}).items():
+        if name not in payload or not isinstance(sub, dict):
+            continue
+        value = payload[name]
+        if "enum" in sub and value not in sub["enum"]:
+            out.append(f"{name}: {value!r} is not one of {sub['enum']}")
+        if isinstance(value, str):
+            if "maxLength" in sub and len(value) > sub["maxLength"]:
+                # Worded as jsonschema words it, so the rejection reads the same.
+                out.append(f"{name}: is too long ({len(value)} > maxLength {sub['maxLength']})")
+            if "minLength" in sub and len(value) < sub["minLength"]:
+                out.append(f"{name}: shorter than minLength {sub['minLength']}")
+    return out
+
+
 def _verdict_violations(payload: Any, schema: dict[str, Any]) -> list[str]:
     """Why this verdict payload is unusable, or ``[]`` if it is fine.
 
@@ -1621,11 +1643,70 @@ def _verdict_violations(payload: Any, schema: dict[str, Any]) -> list[str]:
     if not isinstance(payload, dict):
         return [f"payload is {type(payload).__name__}, expected object"]
     out = [_tidy_violation(v) for v in validate_against_schema(payload, schema)]
+    if _try_import_jsonschema() is None:
+        # validate_against_schema is best-effort and returns [] without
+        # jsonschema — which silently switched the reasoning cap off in an env
+        # missing that (declared) dependency. The verdict checks that matter are
+        # top-level, so hold them here regardless.
+        out += _top_level_violations(payload, schema)
     for field, value in payload.items():
         text = value if isinstance(value, str) else json.dumps(value, default=str)
         if _VERDICT_MARKUP.search(text):
             out.append(f"{field}: contains tool-call markup, expected plain text")
     return out
+
+
+def _checked_single_shot(
+    prompt: Prompt,
+    response_text: str,
+    *,
+    output_schema: dict[str, Any],
+    model: str,
+    temperature: float,
+    max_tokens: int,
+    api_key: str,
+) -> tuple[dict[str, Any], int]:
+    """Parse a single-shot verdict and hold it to the schema; return ``(payload, retries)``.
+
+    The structured-output decoder accepts ``maxLength`` and ignores it, so the
+    reasoning cap was enforced only on the tool-loop path (by
+    :func:`_verdict_violations`) — the four single-shot categories kept
+    over-long reads, up to 88% of one arm's outputs (audit38_synthesis). Same
+    check here: a violating verdict is re-asked once, with the rejection and its
+    own text, so the model shortens it rather than starting over (an identical
+    re-send at temperature 0 would return the same text). A second violation
+    raises, which the caller records as that category's error.
+
+    Raises:
+        ValueError: The verdict still violates the schema after one retry.
+    """
+    payload = parse_response(response_text)
+    violations = _verdict_violations(payload, output_schema)
+    if not violations:
+        return payload, 0
+    retry = Prompt(
+        system=prompt.system,
+        user=(
+            f"{prompt.user}\n\nYour previous response was rejected: "
+            f"{'; '.join(violations)}. Re-emit the complete JSON verdict, fixing only "
+            f"that — keep the verdict and the substance, cut the wording.\n\n"
+            f"Previous response:\n{response_text}"
+        ),
+    )
+    payload = parse_response(
+        call_llm(
+            retry,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            api_key=api_key,
+            output_schema=output_schema,
+        )
+    )
+    violations = _verdict_violations(payload, output_schema)
+    if violations:
+        raise ValueError("verdict failed the schema after one retry: " + "; ".join(violations))
+    return payload, 1
 
 
 def _premature_verdict_msg(*, min_data_calls: int, n_data_calls: int, terminal_tool: str) -> str:
@@ -2609,8 +2690,20 @@ def _run_category_pass(
                             api_key=api_key,
                             output_schema=output_schema,
                         )
-                        _add_usage(usage_by_slug, tis_slug_val, _drain_usage())
-                        payload = parse_response(response_text)
+                        try:
+                            payload, _retries = _checked_single_shot(
+                                prompt,
+                                response_text,
+                                output_schema=output_schema,
+                                model=args.model,
+                                temperature=args.temperature,
+                                max_tokens=args.max_tokens,
+                                api_key=api_key,
+                            )
+                        finally:
+                            # The first call's usage, plus a retry's if one ran.
+                            _usage, _calls = _drain_all_usage()
+                            _add_usage(usage_by_slug, tis_slug_val, _usage, calls=max(_calls, 1))
                     _emit_schema_warnings(
                         payload, output_schema,
                         f"{tis_slug_val}/{category['name']}",
@@ -2743,6 +2836,8 @@ def _run_category_pass_batch(
     )
 
     usage_by_slug: dict[str, dict[str, int]] = {}
+    retry_usage_by_slug: dict[str, dict[str, int]] = {}
+    prompts_by_cid = dict(items)
     n_ok = 0
     for cid, (tis_slug_val, cat_name) in meta.items():
         r = responses.get(cid) or {"text": None, "usage": _empty_usage(), "error": "missing result"}
@@ -2752,7 +2847,22 @@ def _run_category_pass_batch(
             iso_results[tis_slug_val][cat_name] = {"error": r["error"] or "empty"}
             continue
         try:
-            payload = parse_response(r["text"])
+            try:
+                # A retry cannot ride the batch (it is already back), so it is a
+                # direct call — billed at full price and reported separately.
+                payload, _retries = _checked_single_shot(
+                    prompts_by_cid[cid],
+                    r["text"],
+                    output_schema=output_schema,
+                    model=args.model,
+                    temperature=args.temperature,
+                    max_tokens=args.max_tokens,
+                    api_key=api_key,
+                )
+            finally:
+                _usage, _calls = _drain_all_usage()
+                if _calls:
+                    _add_usage(retry_usage_by_slug, tis_slug_val, _usage, calls=_calls)
             _emit_schema_warnings(
                 payload, output_schema, f"{tis_slug_val}/{cat_name}",
                 verbose=getattr(args, "verbose", False),
@@ -2814,6 +2924,8 @@ def _run_category_pass_batch(
         _write_usage_report(args.out, "category", args.model, usage_by_slug, batch=True)
     if tool_usage_by_slug:
         _write_usage_report(args.out, "category_tools", args.model, tool_usage_by_slug)
+    if retry_usage_by_slug:
+        _write_usage_report(args.out, "category_retry", args.model, retry_usage_by_slug)
     total = len(items) + n_tool_calls
     print(
         f"category: {n_ok}/{len(items)} successful (batch)"

@@ -1969,6 +1969,44 @@ def test_every_output_is_stamped_with_code_source_and_arm_provenance(
     assert fields["code_commit"].startswith(stamp["code"]["commit"])
 
 
+def test_single_shot_overlong_reasoning_is_re_asked_once(
+    mod, monkeypatch, tmp_path, category_records, capsys
+):
+    """maxLength is ignored by the decoder, so it is enforced after the fact."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    sent: list = []
+
+    def fake(prompt, **kw):
+        sent.append(prompt.user)
+        mod._record_usage(None)
+        retry = "Your previous response was rejected" in prompt.user
+        text = "short and sharp" if retry else "x" * 1600
+        return json.dumps({"verdict": "neutral", "reasoning": text})
+
+    monkeypatch.setattr(mod, "call_llm", fake)
+    out_dir = tmp_path / "out"
+    assert mod.main(_category_run_args(category_records, out_dir, ["--no-tools"])) == 0
+    results = json.loads((out_dir / mod._tis_slug(TIS_ID) / "categories.json").read_text())
+    assert {v["reasoning"] for v in results.values()} == {"short and sharp"}
+    assert len(sent) == 12  # six categories, each asked twice
+    assert "maxLength" in sent[1] or "too long" in sent[1] or "1500" in sent[1]
+    usage = json.loads((out_dir / "_usage_category.json").read_text())
+    assert usage["total"]["calls"] == 12
+
+
+def test_single_shot_still_overlong_after_retry_is_an_error_not_a_verdict(
+    mod, monkeypatch, tmp_path, category_records
+):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    monkeypatch.setattr(mod, "call_llm", _verdict_says("x" * 1600))
+    out_dir = tmp_path / "out"
+    assert mod.main(_category_run_args(category_records, out_dir, ["--no-tools"])) == 1
+    iso_dir = out_dir / mod._tis_slug(TIS_ID)
+    assert not (iso_dir / "categories.json").exists()
+    partial = json.loads((iso_dir / "categories.partial.json").read_text())
+    assert all("after one retry" in v["error"] for v in partial.values())
+
+
 def test_only_category_skips_an_isoform_with_nothing_to_merge_into(
     mod, monkeypatch, tmp_path, category_records, variants_long, only_m, capsys
 ):
