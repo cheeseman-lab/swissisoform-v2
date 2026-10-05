@@ -60,15 +60,44 @@ def main(argv: list[str] | None = None) -> int:
     comparisons, checks = W.resolve_orders(forward)
     logger.info("%d order-consistent comparison(s)", len(comparisons))
 
+    # Primary: every parsed call, both orders, with the slot-A effect fitted.
+    calls = W.calls_from_forward(forward)
+    per_unit_fit = {
+        unit: W.cluster_bootstrap_fit([c for c in calls if c.unit == unit], n=args.bootstrap)
+        for unit in UNITS
+    }
+    pooled_fit = W.cluster_bootstrap_fit(calls, n=args.bootstrap)
+    position = _position_report(calls, per_unit_fit, pooled_fit)
+
+    # Secondary: the consistent-only fit earlier rounds published.
     per_unit_bt = {
         unit: W.cluster_bootstrap_bt([c for c in comparisons if c.unit == unit], n=args.bootstrap)
         for unit in UNITS
     }
     pooled_bt = W.cluster_bootstrap_bt(comparisons, n=args.bootstrap)
 
-    _write(work, checks, per_unit_bt, pooled_bt, parse_failures)
-    _print(checks, per_unit_bt, pooled_bt)
+    _write(work, checks, per_unit_fit, pooled_fit, position, per_unit_bt, pooled_bt, parse_failures)
+    _print(checks, per_unit_fit, pooled_fit, position, per_unit_bt)
     return 0
+
+
+def _interval(i) -> dict:
+    """An :class:`~swissisoform.judge.weigh.Interval` as rounded JSON."""
+    return {"point": round(i.point, 4), "lo": round(i.lo, 4), "hi": round(i.hi, 4)}
+
+
+def _position_report(calls, per_unit_fit, pooled_fit) -> dict:
+    """Raw slot-A win rate and the fitted slot-A log-odds, per unit and pooled."""
+    out = {}
+    for unit, fit in (*per_unit_fit.items(), ("pooled", pooled_fit)):
+        subset = calls if unit == "pooled" else [c for c in calls if c.unit == unit]
+        rate = W.slot_a_rate(subset)
+        out[unit] = {
+            "n_calls": len(subset),
+            "slot_a_win_rate": None if rate is None else round(rate, 4),
+            "delta": None if fit.position is None else _interval(fit.position),
+        }
+    return out
 
 
 def _parse(path: Path):
@@ -146,40 +175,50 @@ def _resolution_floor(per_unit_bt, pooled_bt) -> dict:
     return out
 
 
-def _write(work, checks, per_unit_bt, pooled_bt, parse_failures) -> None:
-    """Persist everything as JSON, plus a TSV of the headline table."""
+def _write(
+    work, checks, per_unit_fit, pooled_fit, position, per_unit_bt, pooled_bt, parse_failures
+) -> None:
+    """Persist everything as JSON, plus a TSV of the headline table.
+
+    ``bradley_terry_*`` is the order-aware fit over every parsed call;
+    ``bradley_terry_consistent_only_*`` is the older fit over order-agreeing
+    pairs, kept for comparison with earlier rounds and never the headline.
+    """
+    per_unit_strengths = {unit: fit.strengths for unit, fit in per_unit_fit.items()}
     payload = {
-        "resolution_floor": _resolution_floor(per_unit_bt, pooled_bt),
+        "resolution_floor": _resolution_floor(per_unit_strengths, pooled_fit.strengths),
+        "position_effect": position,
         "judge_reliability": {
             unit: {
                 "consistent": c.consistent,
                 "inconsistent": c.inconsistent,
+                "inconsistent_slot_a_both_orders": c.inconsistent_slot_a,
                 "unparseable": c.unparseable,
                 "inconsistency_rate": round(c.inconsistency_rate, 4),
+                "inconsistent_by_arm": dict(sorted(c.inconsistent_by_arm.items())),
+                "consistent_by_arm": dict(sorted(c.consistent_by_arm.items())),
             }
             for unit, c in checks.items()
         },
         "n_unparseable_completions": parse_failures,
         "bradley_terry_by_unit": {
-            unit: {
-                arm: {"point": round(i.point, 4), "lo": round(i.lo, 4), "hi": round(i.hi, 4)}
-                for arm, i in fit.items()
-            }
-            for unit, fit in per_unit_bt.items()
+            unit: {arm: _interval(i) for arm, i in fit.strengths.items()}
+            for unit, fit in per_unit_fit.items()
         },
-        "bradley_terry_pooled": {
-            arm: {"point": round(i.point, 4), "lo": round(i.lo, 4), "hi": round(i.hi, 4)}
-            for arm, i in pooled_bt.items()
+        "bradley_terry_pooled": {arm: _interval(i) for arm, i in pooled_fit.strengths.items()},
+        "factorial_pooled": W.factorial_effects(pooled_fit.strengths),
+        "bradley_terry_consistent_only_by_unit": {
+            unit: {arm: _interval(i) for arm, i in fit.items()} for unit, fit in per_unit_bt.items()
         },
-        "factorial_pooled": W.factorial_effects(pooled_bt),
+        "bradley_terry_consistent_only_pooled": {arm: _interval(i) for arm, i in pooled_bt.items()},
     }
     (work / "analysis.json").write_text(
         json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
     )
 
     lines = ["unit\tarm\tbt_point\tbt_lo\tbt_hi\texcludes_zero"]
-    for unit, fit in per_unit_bt.items():
-        for arm, i in fit.items():
+    for unit, fit in per_unit_fit.items():
+        for arm, i in fit.strengths.items():
             lines.append(
                 f"{unit}\t{arm}\t{i.point:.4f}\t{i.lo:.4f}\t{i.hi:.4f}\t{int(i.excludes_zero)}"
             )
@@ -187,26 +226,30 @@ def _write(work, checks, per_unit_bt, pooled_bt, parse_failures) -> None:
     logger.info("wrote %s", work)
 
 
-def _print(
-    checks,
-    per_unit_bt,
-    pooled_bt,
-    pa_per_unit=None,
-    pa_pooled=None,
-    pa_delta=None,
-    pa_delta_per_unit=None,
-) -> None:
+def _print(checks, per_unit_fit, pooled_fit, position, per_unit_bt) -> None:
     """The tables a reader actually needs."""
+    per_unit_strengths = {unit: fit.strengths for unit, fit in per_unit_fit.items()}
     print("\n=== resolution floor (status quo judged against its own replicate) ===")
     print("    (log-odds; an effect inside +/- half-width is one framing judged twice)")
     for unit in (*UNITS, "pooled"):
-        i = (pooled_bt if unit == "pooled" else per_unit_bt.get(unit, {})).get(REPLICATE)
+        source = pooled_fit.strengths if unit == "pooled" else per_unit_strengths.get(unit, {})
+        i = source.get(REPLICATE)
         if i is not None:
             print(
-                f"  {unit:10s} {i.point:+6.2f} [{i.lo:+5.2f}, {i.hi:+5.2f}]"
-                f"   +/-{i.half_width:.2f}"
+                f"  {unit:10s} {i.point:+6.2f} [{i.lo:+5.2f}, {i.hi:+5.2f}]   +/-{i.half_width:.2f}"
             )
     print("  This should straddle zero — it is the same framing on both sides.")
+
+    print("\n=== position effect (slot A's advantage, fitted beside the arms) ===")
+    for unit in (*UNITS, "pooled"):
+        entry = position.get(unit) or {}
+        delta = entry.get("delta")
+        if delta is None:
+            continue
+        print(
+            f"  {unit:10s} slot A wins {entry['slot_a_win_rate']:6.1%}   "
+            f"delta {delta['point']:+5.2f} [{delta['lo']:+5.2f}, {delta['hi']:+5.2f}]"
+        )
 
     print("\n=== judge reliability (pairs decided both ways, by order) ===")
     for unit in UNITS:
@@ -214,32 +257,20 @@ def _print(
         if c:
             print(
                 f"  {unit:10s} {c.inconsistency_rate:6.1%} inconsistent "
-                f"({c.consistent} kept, {c.inconsistent} dropped, {c.unparseable} unparsed)"
+                f"({c.consistent} consistent, {c.inconsistent} inconsistent of which "
+                f"{c.inconsistent_slot_a} slot-A both times, {c.unparseable} unparsed)"
             )
+    print("  Inconsistent pairs stay in the order-aware fit; per-arm counts are in analysis.json.")
 
-    print("\n=== Bradley-Terry strength vs the status quo, per unit ===")
+    print("\n=== Bradley-Terry strength vs the status quo, per unit (order-aware) ===")
     print("    (log-odds; * = bootstrap CI excludes zero)")
-    header = f"  {'arm':20s}" + "".join(f"{u:>12s}" for u in UNITS)
-    print(header)
-    for arm in (*ARMS, REPLICATE):
-        if arm == BASELINE:
-            continue
-        row = f"  {arm:20s}"
-        for unit in UNITS:
-            fit = per_unit_bt.get(unit, {})
-            i = fit.get(arm)
-            row += (
-                f"{'':>12s}"
-                if i is None
-                else f"{i.point:+8.2f}{'*' if i.excludes_zero else ' '}   "
-            )
-        print(row)
+    _print_table(per_unit_strengths)
 
-    # The replicate's own numbers now head the output as the resolution floor;
-    # printing them twice invited reading them as two separate checks.
+    print("\n=== consistent-only Bradley-Terry (earlier rounds' readout; not the headline) ===")
+    _print_table(per_unit_bt)
 
     print("\n=== factorial (pooled; grounding and hint main effects) ===")
-    eff = W.factorial_effects(pooled_bt)
+    eff = W.factorial_effects(pooled_fit.strengths)
     for axis, values in eff.items():
         print(f"  {axis}:")
         for level, value in sorted(values.items(), key=lambda kv: -kv[1]):
@@ -250,6 +281,24 @@ def _print(
         "be one category."
     )
     print(f"\n  (synthesis unit = {SYNTHESIS_UNIT!r}, judged pairwise)")
+
+
+def _print_table(per_unit: dict) -> None:
+    """One arm-by-unit table of strengths."""
+    header = f"  {'arm':20s}" + "".join(f"{u:>12s}" for u in UNITS)
+    print(header)
+    for arm in (*ARMS, REPLICATE):
+        if arm == BASELINE:
+            continue
+        row = f"  {arm:20s}"
+        for unit in UNITS:
+            i = per_unit.get(unit, {}).get(arm)
+            row += (
+                f"{'':>12s}"
+                if i is None
+                else f"{i.point:+8.2f}{'*' if i.excludes_zero else ' '}   "
+            )
+        print(row)
 
 
 if __name__ == "__main__":

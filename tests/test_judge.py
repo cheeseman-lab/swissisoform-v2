@@ -8,6 +8,7 @@ clustering, a rubric that cannot fail a bad answer.
 from __future__ import annotations
 
 import json
+import math
 import random
 
 import pytest
@@ -637,6 +638,90 @@ class TestBradleyTerryArmSet:
     def test_baseline_stays_pinned_at_zero(self):
         fit = W.bradley_terry(self._comparisons())
         assert fit[BASELINE] == pytest.approx(0.0)
+
+
+def _simulate_calls(
+    truth: dict[str, float], *, delta: float, n_slugs: int, seed: int, unit: str = "C"
+) -> list[W.Call]:
+    """Both presentation orders of every pair, drawn from a known position-aware BT."""
+    rng = random.Random(seed)
+    arms = list(truth)
+    out = []
+    for slug in (f"iso{i}" for i in range(n_slugs)):
+        for i, a in enumerate(arms):
+            for b in arms[i + 1 :]:
+                for first, second in ((a, b), (b, a)):
+                    eta = truth[first] - truth[second] + delta
+                    won = rng.random() < 1 / (1 + math.exp(-eta))
+                    out.append(W.Call(slug=slug, unit=unit, arm_a=first, arm_b=second, a_won=won))
+    return out
+
+
+class TestOrderAwareFit:
+    """The slot-A advantage is fitted, not filtered.
+
+    Slot A won 68-76% of calls on the real corpus, and the consistent-only fit
+    rested on the ~46% of pairs that happened to agree.
+    """
+
+    TRUTH = {BASELINE: 0.0, "raw_hint": 0.5, "tags_hint": -0.4, REPLICATE: 0.0}
+
+    def test_position_and_arm_effects_are_recovered(self):
+        calls = _simulate_calls(self.TRUTH, delta=1.0, n_slugs=400, seed=3)
+        fit = W.fit_bradley_terry(calls)
+        assert fit.position == pytest.approx(1.0, abs=0.1)
+        for arm, value in self.TRUTH.items():
+            assert fit.strengths[arm] == pytest.approx(value, abs=0.1), arm
+
+    def test_no_position_bias_gives_delta_near_zero(self):
+        calls = _simulate_calls(self.TRUTH, delta=0.0, n_slugs=400, seed=5)
+        assert W.fit_bradley_terry(calls).position == pytest.approx(0.0, abs=0.08)
+
+    def test_the_baseline_is_pinned(self):
+        calls = _simulate_calls(self.TRUTH, delta=0.7, n_slugs=50, seed=9)
+        assert W.fit_bradley_terry(calls).strengths[BASELINE] == 0.0
+
+    def test_a_sweep_stays_finite(self):
+        calls = [
+            W.Call(slug=f"i{i}", unit="C", arm_a=a, arm_b=b, a_won=a == "raw_hint")
+            for i in range(50)
+            for a, b in (("raw_hint", BASELINE), (BASELINE, "raw_hint"))
+        ]
+        value = W.fit_bradley_terry(calls).strengths["raw_hint"]
+        assert 1.0 < value < 100.0
+
+    def test_empty_is_empty(self):
+        assert W.fit_bradley_terry([]).strengths == {}
+
+    def test_bootstrap_gives_the_position_effect_an_interval(self):
+        calls = _simulate_calls(self.TRUTH, delta=1.0, n_slugs=60, seed=13)
+        fit = W.cluster_bootstrap_fit(calls, n=50)
+        assert fit.position is not None and fit.position.excludes_zero
+        assert fit.position.lo < fit.position.point < fit.position.hi
+        assert set(fit.strengths) == set(self.TRUTH)
+
+    def test_calls_from_forward_keeps_both_orders_and_skips_unparsed(self):
+        forward = {
+            ("s", "C", "a", "b"): "a",
+            ("s", "C", "b", "a"): "b",  # slot A both times: inconsistent, still a call
+            ("s", "D", "a", "b"): None,
+        }
+        calls = W.calls_from_forward(forward)
+        assert len(calls) == 2 and all(c.a_won for c in calls)
+        assert W.slot_a_rate(calls) == 1.0
+
+    def test_inconsistent_drops_are_counted_per_arm_and_by_slot(self):
+        forward = {
+            ("s", "C", "a", "b"): "a",
+            ("s", "C", "b", "a"): "b",  # slot A won both: position
+            ("s", "C", "a", "c"): "a",
+            ("s", "C", "c", "a"): "a",  # consistent
+        }
+        _, checks = W.resolve_orders(forward)
+        c = checks["C"]
+        assert c.inconsistent == 1 and c.inconsistent_slot_a == 1
+        assert c.inconsistent_by_arm == {"a": 1, "b": 1}
+        assert c.consistent_by_arm == {"a": 1, "c": 1}
 
 
 class TestConstants:

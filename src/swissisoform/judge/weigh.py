@@ -2,24 +2,21 @@
 
 Five rules, each answering a way this comparison can lie:
 
-1. **Pairwise goes through Bradley-Terry**, per category, with the status quo
-   pinned at strength 0 so every number reads as log-odds better than what we ship.
-   A position-aware variant was built and removed. It modelled the slot-A
-   advantage as a nuisance parameter -- ``P(slot-A wins) = sigmoid(s_A - s_B +
-   delta)`` -- which kept all 21,035 parsed comparisons instead of the 4,156 that
-   agreed, and measured delta at +0.797 pooled (0.29 in synthesis to 1.71 in L).
-   It was correct and it validated: the replicate came out at +0.013 against
-   +0.046 for the filter. But it changed only the *magnitudes*, shrinking every
-   effect ~2.3x, and left the ordering identical. Given the judge discriminates so
-   weakly that position explains 5-10x more of each verdict than arm quality, the
-   ordering is the only durable output, so the extra machinery bought nothing the
-   conclusion rests on. Disagreements also turned out to carry almost no
-   information about which arm is better -- pairs that disagreed involved arms only
-   1.07x closer than pairs that agreed, not the clear separation the model assumes.
-2. **Order-inconsistent pairs are dropped, not split.** Prometheus 2 has
-   documented position bias; a pair the judge decides differently by presentation
-   order carries no information, and splitting it half-and-half would dilute real
-   signal toward zero. The drop rate is reported as judge reliability.
+1. **Pairwise goes through Bradley-Terry with the presentation slot as a fitted
+   covariate**, per category, with the status quo pinned at strength 0 so every
+   number reads as log-odds better than what we ship:
+   ``P(slot-A wins) = sigmoid(s_A - s_B + delta)``. Both orders of every pair are
+   kept, and ``delta`` -- the judge's slot-A advantage -- is estimated and
+   reported beside the arm strengths. An earlier round removed this model
+   because it left the arm *ordering* unchanged while shrinking magnitudes
+   ~2.3x; but slot A wins 68-76% of calls, and fitting only the order-agreeing
+   pairs lets whatever else decides agreement carry the ranking unseen.
+2. **Order-inconsistent pairs are counted, never silently dropped.** The
+   consistent-only Bradley-Terry fit that earlier rounds published is still
+   computed as a secondary readout, but its drops are reported per unit *and*
+   per arm, together with how many of them went to slot A both times -- so a
+   reader can see which arms the filter removed and that position, not a
+   change of mind, removed them.
 3. **Uncertainty comes from a cluster bootstrap over isoforms**, resampling
    isoforms rather than judgments. The 7 units of one isoform share evidence and
    are not independent; a naive bootstrap would report intervals several times too
@@ -44,8 +41,10 @@ from __future__ import annotations
 import math
 import random
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Sequence
+
+import numpy as np
 
 from swissisoform.judge import ARMS, BASELINE, REPLICATE
 
@@ -72,6 +71,12 @@ class OrderCheck:
     consistent: int = 0
     inconsistent: int = 0
     unparseable: int = 0
+    # Inconsistent pairs where slot A won both presentations -- position, not a
+    # change of mind about the arms.
+    inconsistent_slot_a: int = 0
+    # Per arm: how many of its pairs were dropped as inconsistent, and how many kept.
+    inconsistent_by_arm: dict[str, int] = field(default_factory=dict)
+    consistent_by_arm: dict[str, int] = field(default_factory=dict)
 
     @property
     def total(self) -> int:
@@ -88,7 +93,10 @@ class OrderCheck:
 def resolve_orders(
     forward: dict[tuple[str, str, str, str], str | None],
 ) -> tuple[list[Comparison], dict[str, OrderCheck]]:
-    """Keep only pairs both presentation orders agree on.
+    """Keep only pairs both presentation orders agree on, counting what was dropped.
+
+    This is the secondary, consistent-only readout; :func:`fit_bradley_terry` is
+    the primary one and keeps every parsed call.
 
     Args:
         forward: ``{(slug, unit, arm_a, arm_b): winner}`` where ``winner`` is the
@@ -114,10 +122,17 @@ def resolve_orders(
         if winner is None or reverse is None:
             checks[unit].unparseable += 1
             continue
+        check = checks[unit]
         if winner != reverse:
-            checks[unit].inconsistent += 1
+            check.inconsistent += 1
+            if winner == arm_a:
+                check.inconsistent_slot_a += 1
+            for arm in (arm_a, arm_b):
+                check.inconsistent_by_arm[arm] = check.inconsistent_by_arm.get(arm, 0) + 1
             continue
-        checks[unit].consistent += 1
+        check.consistent += 1
+        for arm in (arm_a, arm_b):
+            check.consistent_by_arm[arm] = check.consistent_by_arm.get(arm, 0) + 1
         loser = arm_b if winner == arm_a else arm_a
         out.append(Comparison(slug=slug, unit=unit, winner=winner, loser=loser))
     return out, dict(checks)
@@ -202,6 +217,124 @@ def bradley_terry(
     return log
 
 
+@dataclass(frozen=True)
+class Call:
+    """One presentation of one pair: who sat in slot A, who in slot B, who won."""
+
+    slug: str
+    unit: str
+    arm_a: str
+    arm_b: str
+    a_won: bool
+
+
+def calls_from_forward(forward: dict[tuple[str, str, str, str], str | None]) -> list[Call]:
+    """Every parsed call, both orders kept; unparseable ones are left out."""
+    return [
+        Call(slug=slug, unit=unit, arm_a=arm_a, arm_b=arm_b, a_won=winner == arm_a)
+        for (slug, unit, arm_a, arm_b), winner in forward.items()
+        if winner is not None
+    ]
+
+
+def slot_a_rate(calls: Sequence[Call]) -> float | None:
+    """Raw share of calls won by slot A -- 0.5 for a judge without position bias."""
+    return sum(c.a_won for c in calls) / len(calls) if calls else None
+
+
+@dataclass
+class CovariateFit:
+    """Arm strengths plus the nuisance effects fitted beside them."""
+
+    strengths: dict[str, float]
+    position: float | None = None
+    n_calls: int = 0
+
+
+def fit_bradley_terry(
+    calls: Sequence[Call],
+    *,
+    baseline: str = BASELINE,
+    position: bool = True,
+    ridge: float = 0.1,
+    iterations: int = 100,
+    tol: float = 1e-9,
+) -> CovariateFit:
+    """Logistic Bradley-Terry over individual calls, with a slot-A effect.
+
+    ``logit P(slot A wins) = s_A - s_B + delta``, fitted by penalised Newton
+    (the problem is a 9-parameter logistic regression, so it converges in a
+    handful of steps). ``ridge`` is an L2 penalty on the arm strengths only --
+    the counterpart of the MM fit's pseudo-win prior, so a clean sweep gets a
+    large finite strength instead of an infinite one -- and never touches
+    ``delta``. *baseline* is pinned at 0 when it competed; otherwise strengths are
+    centred on their mean.
+
+    Returns an empty fit when no call survives.
+    """
+    arms = sorted({c.arm_a for c in calls} | {c.arm_b for c in calls})
+    if not calls or len(arms) < 2:
+        return CovariateFit(strengths={}, n_calls=len(calls))
+
+    anchor = baseline if baseline in arms else arms[0]
+    free = [a for a in arms if a != anchor]
+    col = {a: i for i, a in enumerate(free)}
+    n_arm = len(free)
+    n_par = n_arm + int(position)
+
+    x = np.zeros((len(calls), n_par))
+    y = np.empty(len(calls))
+    for row, c in enumerate(calls):
+        if c.arm_a in col:
+            x[row, col[c.arm_a]] += 1.0
+        if c.arm_b in col:
+            x[row, col[c.arm_b]] -= 1.0
+        if position:
+            x[row, n_arm] = 1.0
+        y[row] = 1.0 if c.a_won else 0.0
+
+    penalty = np.zeros(n_par)
+    penalty[:n_arm] = ridge
+    theta = np.zeros(n_par)
+
+    def objective(t: np.ndarray) -> float:
+        eta = x @ t
+        return float(y @ eta - np.logaddexp(0.0, eta).sum() - 0.5 * (penalty * t * t).sum())
+
+    current = objective(theta)
+    for _ in range(iterations):
+        p = 1.0 / (1.0 + np.exp(-(x @ theta)))
+        grad = x.T @ (y - p) - penalty * theta
+        hess = (x * (p * (1.0 - p))[:, None]).T @ x + np.diag(penalty)
+        try:
+            step = np.linalg.solve(hess, grad)
+        except np.linalg.LinAlgError:
+            step = np.linalg.lstsq(hess, grad, rcond=None)[0]
+        # Step-halving keeps Newton monotone on a near-separable bootstrap draw.
+        scale = 1.0
+        trial = theta + step
+        value = objective(trial)
+        while value < current - 1e-12 and scale >= 1e-6:
+            scale /= 2
+            trial = theta + scale * step
+            value = objective(trial)
+        if value < current - 1e-12:
+            break  # no ascent direction left: converged as far as floats allow
+        theta, previous, current = trial, current, value
+        if abs(current - previous) < tol and float(np.abs(scale * step).max()) < 1e-6:
+            break
+
+    strengths = {anchor: 0.0, **{a: float(theta[col[a]]) for a in free}}
+    if anchor != baseline:
+        mean = sum(strengths.values()) / len(strengths)
+        strengths = {a: v - mean for a, v in strengths.items()}
+    return CovariateFit(
+        strengths=strengths,
+        position=float(theta[n_arm]) if position else None,
+        n_calls=len(calls),
+    )
+
+
 @dataclass
 class Interval:
     """A point estimate with a bootstrap percentile interval."""
@@ -276,6 +409,70 @@ def cluster_bootstrap_bt(
             n=len(series),
         )
     return out
+
+
+@dataclass
+class CovariateIntervals:
+    """A covariate fit with isoform-clustered bootstrap intervals."""
+
+    strengths: dict[str, Interval]
+    position: Interval | None = None
+    n_calls: int = 0
+
+
+def cluster_bootstrap_fit(
+    calls: Sequence[Call],
+    *,
+    baseline: str = BASELINE,
+    position: bool = True,
+    n: int = N_BOOTSTRAP,
+    seed: int = SEED,
+) -> CovariateIntervals:
+    """:func:`fit_bradley_terry` with isoform-clustered percentile intervals.
+
+    Same resampling unit as :func:`cluster_bootstrap_bt`, and the nuisance
+    effects get intervals too, so a reported position effect carries its own
+    uncertainty.
+    """
+    kwargs = {"baseline": baseline, "position": position}
+    point = fit_bradley_terry(calls, **kwargs)
+    if not point.strengths:
+        return CovariateIntervals(strengths={}, n_calls=point.n_calls)
+
+    by_slug: dict[str, list[Call]] = defaultdict(list)
+    for c in calls:
+        by_slug[c.slug].append(c)
+    slugs = sorted(by_slug)
+
+    rng = random.Random(seed)
+    draws: dict[str, list[float]] = defaultdict(list)
+    nuisance: dict[str, list[float]] = defaultdict(list)
+    for _ in range(n):
+        picked = [slugs[rng.randrange(len(slugs))] for _ in range(len(slugs))]
+        fit = fit_bradley_terry([c for s in picked for c in by_slug[s]], **kwargs)
+        for arm, value in fit.strengths.items():
+            draws[arm].append(value)
+        if fit.position is not None:
+            nuisance["position"].append(fit.position)
+
+    def interval(value: float, series: list[float]) -> Interval:
+        series = sorted(series)
+        if not series:
+            return Interval(point=value, lo=value, hi=value, n=0)
+        return Interval(
+            point=value,
+            lo=series[int(0.025 * (len(series) - 1))],
+            hi=series[int(0.975 * (len(series) - 1))],
+            n=len(series),
+        )
+
+    return CovariateIntervals(
+        strengths={arm: interval(v, draws[arm]) for arm, v in point.strengths.items()},
+        position=(
+            None if point.position is None else interval(point.position, nuisance["position"])
+        ),
+        n_calls=point.n_calls,
+    )
 
 
 def factorial_effects(

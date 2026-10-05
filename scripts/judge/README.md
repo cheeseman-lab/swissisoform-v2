@@ -51,7 +51,8 @@ Per cell: C(9,2)=36 pairs × 2 presentation orders = 72 calls.
 | rule | why |
 |---|---|
 | Bradley-Terry per category, status quo pinned at 0 | every number reads as log-odds vs what we ship |
-| Order-inconsistent pairs dropped, not split | Prometheus 2 has position bias; splitting dilutes real signal |
+| Both orders kept, slot-A effect fitted and reported | Prometheus 2 has position bias; dropping the pairs it splits lets whatever decides agreement carry the ranking |
+| Consistent-only fit kept as a secondary readout, drops counted per arm | comparable to earlier rounds, and the filter's reach is visible |
 | Cluster bootstrap over isoforms | the 7 units of one isoform share evidence and are not independent |
 | Everything in floor units | see below |
 | Nothing pooled across categories in a headline | S has 24 tags, D has 3 |
@@ -99,9 +100,10 @@ real"; a third of them are not.
   support is equal by construction and only economy can decide. The rubric has to
   prefer the terse read in both presentation orders.
 - **Prometheus has a total position bias on this corpus.** Given identical text in
-  both slots it picked A in 35 of 35 decided comparisons. Only order-consistent
-  pairs count as verdicts; without that filter the ranking would reflect request
-  order.
+  both slots it picked A in 35 of 35 decided comparisons. Every call is fitted
+  with the slot as a covariate (`position_effect` in `analysis.json`), so the
+  ranking does not reflect request order and does not rest on the subset of
+  pairs the judge happened to decide the same way twice.
 - **48 references were trimmed to fit the 32,768 context**, 25 of them hard
   truncated (all synthesis, 3 isoforms), retaining a median 28,397 of the 29,000
   budget. `requests_meta.json` lists every one; a trimmed cell is weaker evidence.
