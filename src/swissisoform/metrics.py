@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
+import numpy as np
 import pandas as pd
 
 from swissisoform.config import CELL_LINES
@@ -312,7 +313,12 @@ def resolve(metric: str, df: pd.DataFrame) -> pd.Series | None:
         column = metric[: -len(LEN_SUFFIX)]
         if column not in df.columns:
             return None
-        return df[column].map(lambda v: float("nan") if v is None else float(len(v)))
+        # Anything but a sequence is a missing list. In the runtime frame that is
+        # NaN, not None (a row whose module the comparator skipped), and
+        # `len(nan)` raised — which `_attach_tags` swallows by dropping every tag.
+        return df[column].map(
+            lambda v: float(len(v)) if isinstance(v, (list, tuple, np.ndarray)) else float("nan")
+        )
     tx = BY_METRIC.get(metric)
     if tx is not None:
         return tx.fn(df) if tx.available(set(df.columns)) else None

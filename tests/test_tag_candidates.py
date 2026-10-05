@@ -357,6 +357,14 @@ def test_transform_resolve_matches_a_raw_column_read():
     assert metrics.resolve("nope", df) is None
 
 
+def test_list_length_is_nan_for_a_missing_list_not_a_crash():
+    """The runtime frame holds NaN for a skipped module; len(nan) used to raise."""
+    df = pd.DataFrame({"cmp_x_hits": [[1, 2], None, float("nan"), np.array([3])]})
+    got = metrics.resolve("cmp_x_hits__len", df)
+    assert got.iloc[0] == 2.0 and got.iloc[3] == 1.0
+    assert got.iloc[1:3].isna().all()
+
+
 def test_anchor_rules_do_not_fire_on_percent_identity():
     """1.0 is a ceiling for identity, not a null hypothesis — no anchor."""
     assert seeds.anchor_for("isoform_conservation_frame_primate_mean_pident") is None
