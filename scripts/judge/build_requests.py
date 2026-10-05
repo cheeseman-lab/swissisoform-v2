@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import itertools
 import json
 import logging
@@ -36,6 +37,7 @@ from swissisoform.judge import (  # noqa: E402
 from swissisoform.judge import prompts as PR  # noqa: E402
 from swissisoform.judge import rubrics as RB  # noqa: E402
 from swissisoform.judge.corpus import Corpus, load_corpus  # noqa: E402
+from swissisoform.judge.provenance import INDEX_NAME, build_digest, text_sha  # noqa: E402
 from swissisoform.judge.reference import (  # noqa: E402
     REFERENCE_BUDGET_TOKENS,
     ReferenceBuilder,
@@ -174,11 +176,13 @@ def main(argv: list[str] | None = None) -> int:
                                 budget=args.budget,
                             ).reference
                         )
+                    text_a = corpus.get(first, slug, unit).text
+                    text_b = corpus.get(second, slug, unit).text
                     prompt = PR.chat(
                         PR.relative_prompt(
                             instruction=instruction,
-                            response_a=corpus.get(first, slug, unit).text,
-                            response_b=corpus.get(second, slug, unit).text,
+                            response_a=text_a,
+                            response_b=text_b,
                             rubric=RB.pairwise().criterion,
                         )
                     )
@@ -192,14 +196,29 @@ def main(argv: list[str] | None = None) -> int:
                             arm_a=first,
                             arm_b=second,
                             order=order,
+                            sha_a=text_sha(text_a),
+                            sha_b=text_sha(text_b),
+                            len_a=len(text_a),
+                            len_b=len(text_b),
                         )
                     )
                     _note_if_at_risk(prompt, at_risk, slug, unit)
 
+    build_id = build_digest((r.id, r.prompt) for r in requests)
+    requests = [dataclasses.replace(r, build_id=build_id) for r in requests]
     path = out_dir / "requests.jsonl"
     n = write_requests(requests, path)
-    _summarise(requests, at_risk, path, n, out_dir, trimmed, count_tokens)
+    _write_index(requests, out_dir / INDEX_NAME)
+    _summarise(requests, at_risk, path, n, out_dir, trimmed, count_tokens, build_id)
     return 1 if at_risk else 0
+
+
+def _write_index(requests: list[Request], path: Path) -> None:
+    """Every request minus its prompt, so analysis need not parse the 1 GB file."""
+    with path.open("w", encoding="utf-8") as handle:
+        for r in requests:
+            row = {k: v for k, v in dataclasses.asdict(r).items() if k != "prompt"}
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def _note_if_at_risk(prompt: str, sink: list[dict], slug: str, unit: str) -> None:
@@ -222,6 +241,7 @@ def _summarise(
     out_dir: Path,
     trimmed: list[dict],
     count_tokens,
+    build_id: str,
 ) -> None:
     """Print and persist the shape of what was built."""
     by_unit: dict[str, int] = {}
@@ -236,6 +256,7 @@ def _summarise(
         longest_real = max(longest_real, count_tokens(r.prompt))
 
     meta = {
+        "build_id": build_id,
         "n_requests": n,
         "by_unit": by_unit,
         "longest_prompt_est_tokens": longest,

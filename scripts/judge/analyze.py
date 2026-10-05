@@ -31,6 +31,7 @@ from swissisoform.judge import (  # noqa: E402
     UNITS,
 )
 from swissisoform.judge import prompts as PR  # noqa: E402
+from swissisoform.judge import provenance as PV  # noqa: E402
 from swissisoform.judge import weigh as W  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -43,6 +44,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--corpus", default=DEFAULT_CORPUS)
     p.add_argument("--dir", type=Path, default=None)
     p.add_argument("--bootstrap", type=int, default=W.N_BOOTSTRAP)
+    p.add_argument(
+        "--allow-provenance-mismatch",
+        action="store_true",
+        help=(
+            "Fit even when results cannot all be tied to the current request build. "
+            "The mismatch counts are still recorded in analysis.json."
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -54,7 +63,9 @@ def main(argv: list[str] | None = None) -> int:
     if not results_path.exists():
         raise SystemExit(f"no results at {results_path}; run scripts/judge/run_judge.py")
 
-    forward, parse_failures = _parse(results_path)
+    rows = _load_rows(results_path)
+    provenance = _provenance(work, rows, args)
+    forward, parse_failures = _parse(rows)
     logger.info("%d pairwise call(s), %d unparseable", len(forward), parse_failures)
 
     comparisons, checks = W.resolve_orders(forward)
@@ -76,7 +87,17 @@ def main(argv: list[str] | None = None) -> int:
     }
     pooled_bt = W.cluster_bootstrap_bt(comparisons, n=args.bootstrap)
 
-    _write(work, checks, per_unit_fit, pooled_fit, position, per_unit_bt, pooled_bt, parse_failures)
+    _write(
+        work,
+        checks,
+        per_unit_fit,
+        pooled_fit,
+        position,
+        per_unit_bt,
+        pooled_bt,
+        parse_failures,
+        provenance,
+    )
     _print(checks, per_unit_fit, pooled_fit, position, per_unit_bt)
     return 0
 
@@ -100,24 +121,96 @@ def _position_report(calls, per_unit_fit, pooled_fit) -> dict:
     return out
 
 
-def _parse(path: Path):
-    """``(forward, n_unparseable)`` from a results file."""
+def _load_rows(path: Path) -> list[dict]:
+    """Every results row, in file order."""
+    with path.open(encoding="utf-8") as handle:
+        return [json.loads(line) for line in handle if line.strip()]
+
+
+def _load_index(work: Path) -> dict[str, dict]:
+    """``{request_id: request-without-prompt}``, or empty when the build has none."""
+    path = work / PV.INDEX_NAME
+    if not path.exists():
+        return {}
+    with path.open(encoding="utf-8") as handle:
+        rows = (json.loads(line) for line in handle if line.strip())
+        return {row["id"]: row for row in rows}
+
+
+def _provenance(work: Path, rows: list[dict], args: argparse.Namespace) -> dict:
+    """Tie every result to the current request build, or refuse to fit.
+
+    A results file that resumes across a rebuild ends up holding judgments of two
+    different request sets, and nothing downstream can tell them apart: the v3
+    fit mixed 14,700 carried-over v2 rows with 10,500 fresh ones. So unless
+    ``--allow-provenance-mismatch`` is passed, any row that is not in the current
+    build, carries a different (or no) build id, or names different response text
+    stops the analysis here. Also reports which judged responses have changed on
+    disk since, which does not invalidate the fit but means the arm outputs are
+    no longer the text that was scored.
+    """
+    meta_path = work / "requests_meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+    build_id = meta.get("build_id") or (meta.get("provenance") or {}).get("build_id") or ""
+    index = _load_index(work)
+    checks = PV.check_results(rows, index, build_id)
+    bad = {k: v for k, v in checks.items() if k != "n_results" and v}
+    if not build_id or not index:
+        bad["no_build_record"] = 1
+    report = {
+        "build_id": build_id,
+        "results": checks,
+        "mismatch": bool(bad),
+        "allowed_by_override": bool(bad) and args.allow_provenance_mismatch,
+        "stale_on_disk": _stale_on_disk(index.values(), args.corpus),
+    }
+    if bad and not args.allow_provenance_mismatch:
+        raise SystemExit(
+            f"results in {work} cannot all be tied to request build {build_id or '(none)'}: "
+            f"{bad}. Re-run scripts/judge/run_judge.py --force against the current "
+            "requests, or pass --allow-provenance-mismatch to fit anyway."
+        )
+    if bad:
+        logger.warning("provenance mismatch allowed by override: %s", bad)
+    stale = report["stale_on_disk"]
+    if stale.get("n_stale"):
+        logger.warning(
+            "%d of %d judged response(s) differ on disk now: %s",
+            stale["n_stale"],
+            stale["n_judged"],
+            stale["stale_by_arm"],
+        )
+    return report
+
+
+def _stale_on_disk(index, corpus_name: str) -> dict:
+    """:func:`provenance.stale_on_disk` against the corpus as it is now, if loadable."""
+    index = list(index)
+    if not index:
+        return {"checked": False, "reason": "no request index"}
+    from swissisoform.judge.corpus import CorpusError, load_corpus
+
+    try:
+        corpus = load_corpus(corpus_name, require_complete=False)
+    except CorpusError as exc:
+        return {"checked": False, "reason": str(exc)}
+    current = {key: PV.text_sha(out.text) for key, out in corpus.outputs.items()}
+    return {"checked": True, **PV.stale_on_disk(index, current)}
+
+
+def _parse(rows: list[dict]):
+    """``(forward, n_unparseable)`` from results rows."""
     forward: dict[tuple[str, str, str, str], str | None] = {}
     failures = 0
-    with path.open(encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            row = json.loads(line)
-            rid, completion = row["id"], row.get("completion", "")
-            parts = rid.split("|")
-            if parts[0] == "pw":
-                _, slug, unit, arm_a, arm_b, _order = parts
-                winner = _winner(row, completion, arm_a, arm_b)
-                if winner is None:
-                    failures += 1
-                forward[(slug, unit, arm_a, arm_b)] = winner
+    for row in rows:
+        rid, completion = row["id"], row.get("completion", "")
+        parts = rid.split("|")
+        if parts[0] == "pw":
+            _, slug, unit, arm_a, arm_b, _order = parts
+            winner = _winner(row, completion, arm_a, arm_b)
+            if winner is None:
+                failures += 1
+            forward[(slug, unit, arm_a, arm_b)] = winner
     return forward, failures
 
 
@@ -176,7 +269,15 @@ def _resolution_floor(per_unit_bt, pooled_bt) -> dict:
 
 
 def _write(
-    work, checks, per_unit_fit, pooled_fit, position, per_unit_bt, pooled_bt, parse_failures
+    work,
+    checks,
+    per_unit_fit,
+    pooled_fit,
+    position,
+    per_unit_bt,
+    pooled_bt,
+    parse_failures,
+    provenance,
 ) -> None:
     """Persist everything as JSON, plus a TSV of the headline table.
 
@@ -186,6 +287,7 @@ def _write(
     """
     per_unit_strengths = {unit: fit.strengths for unit, fit in per_unit_fit.items()}
     payload = {
+        "provenance": provenance,
         "resolution_floor": _resolution_floor(per_unit_strengths, pooled_fit.strengths),
         "position_effect": position,
         "judge_reliability": {

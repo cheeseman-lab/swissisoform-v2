@@ -16,9 +16,11 @@ import pytest
 from swissisoform.judge import ARMS, BASELINE, REPLICATE, UNITS
 from swissisoform.judge import checks as K
 from swissisoform.judge import prompts as PR
+from swissisoform.judge import provenance as PV
 from swissisoform.judge import quantize as Q
 from swissisoform.judge import reference as RF
 from swissisoform.judge import rubrics as RB
+from swissisoform.judge import serve as SV
 from swissisoform.judge import weigh as W
 from swissisoform.judge.weigh import Comparison
 
@@ -722,6 +724,71 @@ class TestOrderAwareFit:
         assert c.inconsistent == 1 and c.inconsistent_slot_a == 1
         assert c.inconsistent_by_arm == {"a": 1, "b": 1}
         assert c.consistent_by_arm == {"a": 1, "c": 1}
+
+
+class TestJudgedTextProvenance:
+    """Results name the exact text they judged, so a mixed or stale file is caught.
+
+    The v3 fit mixed 14,700 carried-over v2 rows with 10,500 fresh ones, and its
+    judged outputs had been regenerated on disk before anyone read it.
+    """
+
+    def test_build_digest_ignores_order_but_not_content(self):
+        pairs = [("r1", "prompt one"), ("r2", "prompt two")]
+        assert PV.build_digest(pairs) == PV.build_digest(reversed(pairs))
+        assert PV.build_digest(pairs) != PV.build_digest([("r1", "prompt one"), ("r2", "x")])
+
+    def test_check_results_counts_every_failure_kind(self):
+        index = {
+            "a": {"id": "a", "sha_a": "1", "sha_b": "2"},
+            "b": {"id": "b", "sha_a": "3", "sha_b": "4"},
+            "c": {"id": "c", "sha_a": "5", "sha_b": "6"},
+        }
+        rows = [
+            {"id": "a", "build_id": "B", "sha_a": "1", "sha_b": "2"},  # fine
+            {"id": "b", "sha_a": "3", "sha_b": "4"},  # pre-provenance row
+            {"id": "c", "build_id": "B", "sha_a": "5", "sha_b": "X"},  # different text
+            {"id": "z", "build_id": "B"},  # not in this build
+        ]
+        assert PV.check_results(rows, index, "B") == {
+            "n_results": 4,
+            "not_in_requests": 1,
+            "other_build": 1,
+            "sha_mismatch": 1,
+        }
+
+    def test_stale_on_disk_names_the_regenerated_arm(self):
+        index = [
+            {"slug": "s", "unit": "C", "arm_a": "x", "arm_b": "y", "sha_a": "hx", "sha_b": "hy"},
+            {"slug": "s", "unit": "C", "arm_a": "y", "arm_b": "x", "sha_a": "hy", "sha_b": "hx"},
+        ]
+        current = {("x", "s", "C"): "hx", ("y", "s", "C"): "regenerated"}
+        out = PV.stale_on_disk(index, current)
+        assert out == {"n_judged": 2, "n_stale": 1, "stale_by_arm": {"y": 1}}
+
+    def test_resume_counts_only_the_current_build(self, tmp_path):
+        path = tmp_path / "results.jsonl"
+        path.write_text(
+            "\n".join(
+                json.dumps(r)
+                for r in (
+                    {"id": "r1", "build_id": "old"},
+                    {"id": "r2", "build_id": "new"},
+                    {"id": "r3"},
+                )
+            )
+            + "\n{truncated",
+            encoding="utf-8",
+        )
+        assert SV.completed_ids(path) == {"r1", "r2", "r3"}
+        assert SV.completed_ids(path, "new") == {"r2"}
+        assert SV.foreign_results(path, "new") == 2
+
+    def test_result_carries_the_request_fingerprint(self):
+        """Old request files without the fields still load."""
+        req = SV.Request(id="r", slug="s", unit="C", rubric="pw", prompt="p")
+        assert req.build_id == "" and req.sha_a == "" and req.len_a == 0
+        assert {"build_id", "sha_a", "sha_b"} <= set(SV.Result.__dataclass_fields__)
 
 
 class TestConstants:

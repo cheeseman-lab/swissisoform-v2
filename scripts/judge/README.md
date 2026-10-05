@@ -27,10 +27,14 @@ sbatch ... scripts/slurm/run_judge.sbatch --sanity-anchor
 sbatch ... scripts/slurm/run_judge.sbatch --self-consistency
 
 # 4. Score. bf16 on 2x A100-80, resumable: results.jsonl is append-only and
-#    completed ids are skipped.
+#    completed ids are skipped -- within one request build. Every request and
+#    result carries the build id and the sha256 of both responses, and a results
+#    file holding another build's rows is refused rather than appended to.
 sbatch ... scripts/slurm/run_judge.sbatch --batch-size 64
 
-# 5. Weigh.
+# 5. Weigh. Refuses results it cannot tie to the current build
+#    (--allow-provenance-mismatch to override, recorded in analysis.json), and
+#    reports judged responses whose text on disk has changed since.
 python scripts/judge/analyze.py
 ```
 
