@@ -1501,9 +1501,12 @@ def _salvaged(
     """
     salvaged = _strip_verdict_markup(bad_verdicts[-1])
     if not str(salvaged.get("reasoning") or "").strip():
+        trace["outcome"] = "salvage_empty"
+        trace["n_data_calls"] = n_data_calls
         raise ToolLoopError(
             f"no read validated in {turns} turns, and truncating the last payload "
-            "left no reasoning — nothing to salvage"
+            "left no reasoning — nothing to salvage",
+            trace,
         )
     trace["outcome"] = "emit_verdict_salvaged"
     trace["n_data_calls"] = n_data_calls

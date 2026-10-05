@@ -2437,6 +2437,26 @@ def test_two_bad_text_verdicts_are_salvaged(mod, monkeypatch):
     assert verdict["reasoning"] == "Fold is modest."
 
 
+def test_salvage_that_leaves_no_reasoning_raises_with_its_trace(mod, monkeypatch):
+    """All-markup reasoning cannot ship empty; the failure keeps its trace."""
+    empty = {"reasoning": '</reasoning>\n<parameter name="evidence_used">'}
+    script = [
+        *_data_turns(),
+        _Response([_text(json.dumps(empty))], stop_reason="end_turn"),
+        _Response([_text(json.dumps(empty))], stop_reason="end_turn"),
+    ]
+    monkeypatch.setattr(mod, "_try_import_anthropic", lambda: _fake_anthropic(script, []))
+
+    with pytest.raises(mod.ToolLoopError, match="nothing to salvage") as exc:
+        mod.run_tool_loop(
+            system="S", user="U", tools=[], dispatch=_dispatch_ok,
+            model="claude-sonnet-5", max_tokens=1000, api_key="k",
+            verdict_schema=_SCHEMA,
+        )
+    assert exc.value.trace["outcome"] == "salvage_empty"
+    assert exc.value.trace["turns"]
+
+
 def test_two_premature_text_verdicts_raise_rather_than_salvage(mod, monkeypatch):
     """A premature verdict is not corrupt, so it is never collected for salvage."""
     script = [
