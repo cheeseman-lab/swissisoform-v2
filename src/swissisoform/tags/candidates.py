@@ -641,6 +641,17 @@ def apply_filters(
             if lo is None or hi is None or lo == hi:
                 funnel.drop("constant")
                 continue
+            # A region ratio over a denominator that goes negative is not
+            # monotone in "unique > shared" (metrics.RATIO_SUFFIX); its signed
+            # `tx:<prop>_unique_minus_shared` twin carries the claim instead.
+            if cand.metric.endswith(metrics.RATIO_SUFFIX):
+                shared = dist.summary(
+                    f"{cand.metric[: -len(metrics.RATIO_SUFFIX)]}{metrics.SHARED_SUFFIX}",
+                    STRATUM_ALL,
+                )
+                if shared is not None and (shared.get("min") or 0.0) < 0:
+                    funnel.drop("ratio over a sign-crossing denominator")
+                    continue
         # A tag belongs to a category. Metrics the catalog cannot assign a CDLMPS
         # letter to are coordinates and identity fields (`position`, `orf_exons`),
         # which cannot be any category's checkbox.

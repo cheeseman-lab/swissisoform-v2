@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass, field
 
 from swissisoform.distributions import SEPARATE_ORF_TYPES
+from swissisoform.metrics import SIGNED_REGION_PROPERTIES
 
 PAIRED_ORF_TYPES: tuple[str, ...] = ("extended", "truncated")
 ALL_ORF_TYPES: tuple[str, ...] = PAIRED_ORF_TYPES + SEPARATE_ORF_TYPES
@@ -226,6 +227,7 @@ def seeds_for_criterion(criterion_id: str) -> tuple[CriterionSeed, ...]:
 ANCHOR_RULES: tuple[tuple[re.Pattern[str], float, str], ...] = (
     (re.compile(r"(_ratio|_enrichment)$"), 1.0, "ratio null hypothesis"),
     (re.compile(r"_delta(_max)?$"), 0.0, "no change"),
+    (re.compile(r"_unique_minus_shared$"), 0.0, "regions do not differ"),
     (re.compile(r"phylop"), 0.0, "neutral evolution"),
 )
 
@@ -268,6 +270,7 @@ VALIDITY_OVERRIDES: dict[str, tuple[str, ...]] = {
     "isoform_conservation_phastcons_shared_region_mean": PAIRED_ORF_TYPES,
     "tx:min_shared_plddt": PAIRED_ORF_TYPES,
     "tx:sae_top_delta": PAIRED_ORF_TYPES,
+    **{f"tx:{p}_unique_minus_shared": PAIRED_ORF_TYPES for p in SIGNED_REGION_PROPERTIES},
     # The unique region of an extension was never coding, so neither germline
     # signal measures protein constraint there (see category-pass.txt).
     "isoform_plm_vep_constraint_enrichment": ("truncated",),
@@ -419,7 +422,12 @@ TAG_LABELS: dict[tuple[str, str], str] = {
     ("tx:abs_gravy_delta", ">="): "Hydropathy shifts",
     ("tx:abs_fraction_charged_delta", ">="): "Charge shifts",
     ("tx:abs_disorder_delta", ">="): "Disorder shifts",
-    ("cmp_biophysics_gravy_ratio", ">="): "Unique region hydrophobic",
+    ("tx:gravy_unique_minus_shared", ">="): "Unique region more hydrophobic",
+    ("tx:gravy_unique_minus_shared", "<"): "Unique region more hydrophilic",
+    ("tx:disorder_unique_minus_shared", ">="): "Unique region more disordered",
+    ("tx:disorder_unique_minus_shared", "<"): "Unique region more ordered",
+    ("tx:instability_index_unique_minus_shared", ">="): "Unique region less stable",
+    ("tx:instability_index_unique_minus_shared", "<"): "Unique region more stable",
     ("cmp_biophysics_aromaticity_ratio", ">="): "Unique region aromatic",
     ("cmp_biophysics_pipi_propensity_ratio", ">="): "Unique region pi-pi prone",
     ("cmp_biophysics_mean_window_entropy_ratio", ">="): "Unique region high entropy",
@@ -428,11 +436,9 @@ TAG_LABELS: dict[tuple[str, str], str] = {
     ("cmp_biophysics_length_ratio", ">="): "Long unique region",
     ("cmp_biophysics_aa_diversity_ratio", ">="): "Unique region varied",
     # Re-derived from the *_enriched booleans: same claim, distribution cutoff.
-    ("cmp_biophysics_disorder_ratio", ">="): "Unique region disordered",
     ("cmp_biophysics_fraction_disorder_promoting_ratio", ">="): "Disorder-promoting residues",
     ("cmp_biophysics_fraction_charged_ratio", ">="): "Unique region charged",
     ("cmp_biophysics_pI_ratio", ">="): "Unique region more basic",
-    ("cmp_biophysics_instability_index_ratio", ">="): "Unique region unstable",
     ("cmp_biophysics_llps_score_ratio", ">="): "Phase-separation prone",
     ("cmp_biophysics_prionlike_fraction_ratio", ">="): "Prion-like unique region",
     ("cmp_biophysics_fraction_lcr_ratio", ">="): "Low-complexity unique region",
