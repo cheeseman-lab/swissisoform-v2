@@ -97,6 +97,24 @@ class TestBasicIntersection:
         assert out["n_pathogenic_in_unique_region"] == 1
         assert out["n_pathogenic_in_shared_region"] == 1
 
+    def test_conflicting_and_uncertain_not_tallied_as_pathogenic(self):
+        """'Conflicting classifications of pathogenicity' contains 'pathogenic'."""
+        mod = VariantIntersectionModule()
+        site = _site(
+            orf_exons=[(900, 930), (1000, 1030)],
+            canonical_orf_exons=[(1000, 1030)],
+            hits=[
+                _hit(910, sig="Conflicting classifications of pathogenicity"),
+                _hit(915, sig="Pathogenic/Likely pathogenic"),
+                _hit(920, sig="Uncertain significance"),
+                _hit(1010, sig="Conflicting classifications of pathogenicity"),
+                _hit(1020, sig="Likely benign"),
+            ],
+        )
+        out = mod.annotate_site(site)
+        assert out["n_pathogenic_in_unique_region"] == 1
+        assert out["n_pathogenic_in_shared_region"] == 0
+
 
 class TestMissingInputs:
     def test_no_skeleton(self):

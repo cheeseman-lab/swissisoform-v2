@@ -36,6 +36,7 @@ from markupsafe import escape
 # Single source of truth for the CDLMPS category → member mapping. Lives in the
 # backend evidence module (which the LLM per-category pass also consumes) and is
 # copied into the site package by prepare_deploy.sh, so UI and LLM never drift.
+from swissisoform.clinical.significance import is_pathogenic
 from swissisoform.site.evidence import CATEGORIES as _CATEGORIES
 from swissisoform.site.evidence import p3_min_sse_length as _p3_min_sse_length
 from swissisoform.site.evidence import p3_min_sse_plddt as _p3_min_sse_plddt
@@ -476,11 +477,7 @@ def _build_isoform(
     # rather than the variant-intersection module so we get hgvsp + source.
     variants_all = _to_record_list(row.get("isoform_clinical_hits"))
     variants_in_unique = [v for v in variants_all if v.get("in_isoform_unique")]
-    pathogenic = [
-        v
-        for v in variants_in_unique
-        if (v.get("clinical_significance") or "").lower().startswith(("pathogenic", "likely"))
-    ]
+    pathogenic = [v for v in variants_in_unique if is_pathogenic(v.get("clinical_significance"))]
 
     isoform_cif = _lookup_isoform_cif(struct_index, gene, tis_id)
     canonical_cif = struct_index.get((gene, "canonical"))

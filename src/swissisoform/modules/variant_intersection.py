@@ -32,6 +32,7 @@ import logging
 from copy import deepcopy
 from typing import Any
 
+from swissisoform.clinical.significance import is_pathogenic
 from swissisoform.clinical.validate import ConsequenceValidator
 from swissisoform.coords import position_in_intervals, unique_shared_intervals
 from swissisoform.models import ORFType, TranslationInitiationSite
@@ -40,9 +41,8 @@ logger = logging.getLogger(__name__)
 
 
 def _is_pathogenic(hit: dict[str, Any]) -> bool:
-    """Return True when the hit carries a clinical_significance containing 'pathogenic'."""
-    sig = hit.get("clinical_significance")
-    return bool(sig) and "pathogenic" in str(sig).lower()
+    """Return True for a Pathogenic / Likely pathogenic call (not Conflicting)."""
+    return is_pathogenic(hit.get("clinical_significance"))
 
 
 def _density_ratio(
