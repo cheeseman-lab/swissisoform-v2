@@ -15,6 +15,7 @@ import re
 from collections import Counter
 from typing import Any
 
+from swissisoform.clinical.significance import is_pathogenic
 from swissisoform.clinical.validate import ConsequenceValidator
 from swissisoform.config import PipelineConfig
 from swissisoform.models import TranslationInitiationSite
@@ -65,11 +66,7 @@ def _build_summary(hits: list[dict[str, Any]]) -> dict[str, Any]:
     """
     by_source: dict[str, int] = dict(Counter(h["source"] for h in hits))
     by_consequence: dict[str, int] = dict(Counter(h["consequence"] for h in hits))
-    pathogenic_count = sum(
-        1
-        for h in hits
-        if h.get("clinical_significance") and "pathogenic" in h["clinical_significance"].lower()
-    )
+    pathogenic_count = sum(1 for h in hits if is_pathogenic(h.get("clinical_significance")))
     return {
         "total_variants": len(hits),
         "by_source": by_source,
