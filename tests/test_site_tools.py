@@ -10,8 +10,9 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from swissisoform.clinical.significance import is_pathogenic
 from swissisoform.site import tools as t
-from swissisoform.site.evidence import clinsig_family
+from swissisoform.site.evidence import clinsig_family, clinsig_rank
 
 TIS_A = "chr1:100:+:ATG:ENST_A"
 TIS_B = "chr2:200:+:CTG:ENST_B"
@@ -128,6 +129,29 @@ def test_clinsig_family_buckets_every_observed_spelling(value, expected):
 def test_conflicting_is_not_counted_as_pathogenic():
     """'Conflicting classifications of pathogenicity' contains 'pathogenic'."""
     assert clinsig_family("Conflicting classifications of pathogenicity") != "pathogenic"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("Pathogenic", True),
+        ("Pathogenic/Likely pathogenic", True),
+        ("Likely pathogenic", True),
+        ("Conflicting classifications of pathogenicity", False),
+        ("Likely benign", False),
+        ("Uncertain significance", False),
+        (None, False),
+    ],
+)
+def test_is_pathogenic_matches_only_the_pathogenic_family(value, expected):
+    assert is_pathogenic(value) is expected
+
+
+def test_clinsig_rank_does_not_surface_conflicting_as_pathogenic():
+    assert clinsig_rank({"clinical_significance": "Pathogenic"}) == 0
+    assert clinsig_rank({"clinical_significance": "Likely pathogenic"}) == 1
+    conflicting = {"clinical_significance": "Conflicting classifications of pathogenicity"}
+    assert clinsig_rank(conflicting) == 3
 
 
 # ── _iso filtering ────────────────────────────────────────────────────────
