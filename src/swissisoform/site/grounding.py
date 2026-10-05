@@ -276,6 +276,7 @@ def _raw_body(
         evidence: dict[str, Any] = {}
         dropped: dict[str, int] = {}
         row_counts: dict[str, int] = {}
+        emitted: dict[str, list[Any]] = {}
         for column in columns.get(letter, []):
             value = _lookup(raw, column)
             if value is _MISSING:
@@ -285,6 +286,16 @@ def _raw_body(
                 if stripped:
                     row_counts[column] = len(rows)
                     continue
+                # `cmp_*_hits_in_diff_region` is the isoform list filtered to the
+                # differential region, so wherever the whole list is in the region
+                # (every extension and separate ORF) the two columns are the same
+                # rows. Serialising them twice made the model count each peptide
+                # twice (audit38_D: UBE2M "seven validated", actually five).
+                twin = next((c for c, r in emitted.items() if rows and r == rows), None)
+                if twin is not None:
+                    evidence[column] = {"same_rows_as": twin, "n_rows": len(rows)}
+                    continue
+                emitted[column] = rows
                 kept, n_dropped = rows[:MAX_LIST_ROWS], max(0, len(rows) - MAX_LIST_ROWS)
                 evidence[column] = kept
                 if n_dropped:

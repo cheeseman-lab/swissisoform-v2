@@ -60,7 +60,9 @@ CONTRACTS: dict[str, str] = {
         "as raw column names and values, with NO pre-computed verdicts and no guidance "
         "about which ones matter. Some are uninformative or redundant; deciding which "
         "carry signal is your job. A `truncated` or `hits_note` block, when present, "
-        "states exactly how many rows were withheld and why."
+        "states exactly how many rows were withheld and why. A list column given as "
+        "`{same_rows_as, n_rows}` holds exactly the rows of the column it names: they "
+        "are the same records, so count them once."
     ),
     "tags": (
         _IDENTITY + "`tags` — a controlled vocabulary of binary findings, each already "

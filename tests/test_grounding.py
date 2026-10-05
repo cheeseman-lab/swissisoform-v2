@@ -202,6 +202,50 @@ class TestRaw:
         assert "isoform_hits" not in body["evidence"]
         assert body["hits_note"]["n_rows"]["isoform_hits"] == 99
 
+    def test_identical_hit_lists_are_sent_once(self):
+        """On an extension the diff-region hit list is the isoform list, row for row."""
+        cat = _catalog(
+            [
+                {"feature": "isoform_massspec_hits", "category": "D", "dtype": "list"},
+                {
+                    "feature": "cmp_massspec_hits_in_diff_region",
+                    "category": "D",
+                    "pane": "cmp",
+                    "dtype": "list",
+                },
+            ]
+        )
+        hits = [
+            {"peptide": "MAGTMGK", "validated": True},
+            {"peptide": "DATAATR", "validated": False},
+        ]
+        raw = {"isoform_massspec_hits": hits, "cmp_massspec_hits_in_diff_region": list(hits)}
+        ev_d = self._build(cat)(_record(raw), {"letter": "D", "name": "Detection"})["evidence"]
+        assert ev_d["isoform_massspec_hits"] == hits
+        assert ev_d["cmp_massspec_hits_in_diff_region"] == {
+            "same_rows_as": "isoform_massspec_hits",
+            "n_rows": 2,
+        }
+
+    def test_different_hit_lists_are_both_sent(self):
+        cat = _catalog(
+            [
+                {"feature": "isoform_massspec_hits", "category": "D", "dtype": "list"},
+                {
+                    "feature": "cmp_massspec_hits_in_diff_region",
+                    "category": "D",
+                    "pane": "cmp",
+                    "dtype": "list",
+                },
+            ]
+        )
+        raw = {
+            "isoform_massspec_hits": [{"p": 1}, {"p": 2}],
+            "cmp_massspec_hits_in_diff_region": [],
+        }
+        ev_d = self._build(cat)(_record(raw), {"letter": "D", "name": "Detection"})["evidence"]
+        assert ev_d["cmp_massspec_hits_in_diff_region"] == []
+
     def test_missing_column_is_skipped_not_nulled(self):
         cat = _catalog([{"feature": "isoform_absent"}])
         body = self._build(cat)(_record({}), CATEGORY_C)
