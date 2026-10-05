@@ -1042,6 +1042,73 @@ def test_no_tools_path_still_sends_the_hits(
     assert not any("deliberately omitted" in p for p in prompts)
 
 
+_CAP_SCHEMA = {"properties": {"reasoning": {"type": "string", "maxLength": 60}}}
+
+
+def test_cap_reasoning_cuts_back_to_a_whole_sentence(mod):
+    """Over the cap: cut at the last sentence that fits, marked in text and record."""
+    text = "First point holds. Second point tempers it. Third point runs far past the cap."
+    out = mod._cap_reasoning({"reasoning": text}, _CAP_SCHEMA)
+    assert out["reasoning"] == "First point holds. Second point tempers it. […]"
+    assert out["reasoning_truncated"] is True
+    assert len(out["reasoning"]) <= 60
+    # Deterministic, and a read under the cap is returned untouched.
+    assert mod._cap_reasoning({"reasoning": text}, _CAP_SCHEMA) == out
+    short = {"reasoning": "Fits."}
+    assert mod._cap_reasoning(short, _CAP_SCHEMA) is short
+    assert mod._cap_reasoning({"reasoning": text}, {}) == {"reasoning": text}
+
+
+def test_cap_reasoning_falls_back_to_a_word_break(mod):
+    """One run-on sentence longer than the cap still ends on a whole word."""
+    out = mod._cap_reasoning({"reasoning": "word " * 30}, _CAP_SCHEMA)
+    assert out["reasoning"].endswith("word […]")
+    assert len(out["reasoning"]) <= 60
+
+
+def test_parse_category_read_recloses_a_cut_off_object(mod):
+    """The observed break — reasoning closed early, trailing comma — is recovered."""
+    cut = '{"reasoning": "The fold holds. The helix is gained but at low confid",'
+    out = mod._parse_category_read(cut, _CAP_SCHEMA)
+    assert out == {"reasoning": "The fold holds. […]", "reasoning_truncated": True}
+    # Intact reasoning with only the optional tail lost needs no cut.
+    assert mod._parse_category_read('{"reasoning": "Complete.",', _CAP_SCHEMA) == {
+        "reasoning": "Complete."
+    }
+
+
+def test_parse_category_read_still_raises_on_other_breaks(mod):
+    """An unterminated string or a non-read is not guessed at."""
+    for bad in ('{"reasoning": "never closed', "not json", '{"other": 1,'):
+        with pytest.raises(json.JSONDecodeError):
+            mod._parse_category_read(bad, _CAP_SCHEMA)
+
+
+def test_category_pass_caps_over_long_and_cut_off_reads(
+    mod, monkeypatch, tmp_path, category_records
+):
+    """End-to-end: neither shape fails the category or ships over the schema cap."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    limit = mod._reasoning_limit(mod.load_output_schema(
+        ROOT / "scripts" / "site" / "prompts" / "output_schemas" / "category_read.json"
+    ))
+    long_text = "A measured sentence that carries one point. " * 60
+    replies = iter(
+        [json.dumps({"reasoning": long_text})] * 3
+        + ['{"reasoning": "Bottom line first. Then a clause cut mid",'] * 3
+    )
+    monkeypatch.setattr(mod, "call_llm", lambda *a, **kw: next(replies))
+    out_dir = tmp_path / "out"
+    rc = mod.main(_category_run_args(category_records, out_dir, ["--no-tools"]))
+    assert rc == 0
+    payload = json.loads((out_dir / mod._tis_slug(TIS_ID) / "categories.json").read_text())
+    assert len(payload) == 6
+    for read in payload.values():
+        assert read["reasoning_truncated"] is True
+        assert len(read["reasoning"]) <= limit
+        assert read["reasoning"].endswith(". […]")
+
+
 def test_category_pass_writes_a_separate_tool_usage_report(
     mod, monkeypatch, tmp_path, category_records, variants_long, only_m
 ):

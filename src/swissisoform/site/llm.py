@@ -1526,6 +1526,84 @@ def _strip_verdict_markup(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+# Appended to a reasoning cut back to fit the schema's cap. The record also gets
+# ``reasoning_truncated: True`` so the cut is machine-visible, not just visible.
+_TRUNCATION_MARK = " […]"
+_SENTENCE_END = re.compile(r"[.!?][\"')\]]*(?=\s|$)")
+
+
+def _reasoning_limit(schema: dict[str, Any] | None) -> int | None:
+    """The ``reasoning`` maxLength the schema declares, if any."""
+    prop = ((schema or {}).get("properties") or {}).get("reasoning") or {}
+    limit = prop.get("maxLength")
+    return limit if isinstance(limit, int) and limit > len(_TRUNCATION_MARK) else None
+
+
+def _cap_reasoning(
+    payload: Any, schema: dict[str, Any] | None, *, mid_sentence: bool = False
+) -> Any:
+    """Cut an over-long ``reasoning`` back to its last whole sentence, marked.
+
+    The decoder ignores ``maxLength`` and the single-shot path only warns, so
+    without this an over-cap read was shipped as-is on most paths. Deterministic
+    by construction: the same text always yields the same cut. Falls back to the
+    last word break when no sentence ends inside the budget.
+
+    Args:
+        payload: A category read; anything else is returned unchanged.
+        schema: The output schema whose ``reasoning.maxLength`` is the cap.
+        mid_sentence: The text is known to stop mid-sentence (a repaired cut-off
+            response), so cut back to a sentence boundary even under the cap.
+    """
+    limit = _reasoning_limit(schema)
+    text = payload.get("reasoning") if isinstance(payload, dict) else None
+    if limit is None or not isinstance(text, str):
+        return payload
+    text = text.rstrip()
+    ends_cleanly = bool(_SENTENCE_END.search(text[-4:]))
+    if len(text) <= limit and (ends_cleanly or not mid_sentence):
+        return payload
+    head = text[: limit - len(_TRUNCATION_MARK)]
+    ends = [m.end() for m in _SENTENCE_END.finditer(head)]
+    cut = ends[-1] if ends else (head.rfind(" ") if " " in head else len(head))
+    kept = head[:cut].rstrip()
+    if not kept:
+        return payload
+    print(
+        f"    [truncated] reasoning cut from {len(text)} to {len(kept)} chars at a "
+        "sentence boundary",
+        file=sys.stderr,
+    )
+    return {**payload, "reasoning": kept + _TRUNCATION_MARK, "reasoning_truncated": True}
+
+
+def _parse_category_read(text: str, schema: dict[str, Any] | None) -> dict[str, Any]:
+    """Parse a single-shot category read, recovering a response cut off after ``reasoning``.
+
+    The one recoverable break is an object closed early with the ``reasoning``
+    string itself intact — ``{"reasoning": "…",`` — which is what an over-long
+    read has produced. That is re-closed and its reasoning cut back to a whole
+    sentence. Anything else (an unterminated string, a non-object, no reasoning)
+    raises the original ``JSONDecodeError``.
+    """
+    try:
+        return parse_response(text)
+    except json.JSONDecodeError as original:
+        stub = text.strip()
+        if stub.startswith("```"):  # same fence handling as parse_response
+            stub = stub.split("\n", 1)[1] if "\n" in stub else stub
+        stub = stub.removesuffix("```").rstrip().rstrip(",").rstrip()
+        try:
+            payload = json.loads(stub if stub.endswith("}") else stub + "}")
+        except json.JSONDecodeError:
+            raise original from None
+        if not (isinstance(payload, dict) and str(payload.get("reasoning") or "").strip()):
+            raise original from None
+        payload = _cap_reasoning(payload, schema, mid_sentence=True)
+        print("    [repaired] category read was cut off; re-closed the object", file=sys.stderr)
+        return payload
+
+
 def _emit_schema_warnings(
     payload: dict[str, Any], schema: dict[str, Any], label: str, *, verbose: bool
 ) -> None:
@@ -2417,13 +2495,13 @@ def _run_category_pass(
                             output_schema=output_schema,
                         )
                         _add_usage(usage_by_slug, tis_slug_val, _drain_usage())
-                        payload = parse_response(response_text)
+                        payload = _parse_category_read(response_text, output_schema)
                     _emit_schema_warnings(
                         payload, output_schema,
                         f"{tis_slug_val}/{category['name']}",
                         verbose=getattr(args, "verbose", False),
                     )
-                    results[category["name"]] = payload
+                    results[category["name"]] = _cap_reasoning(payload, output_schema)
                     n_ok += 1
                 except Exception as e:
                     if tool_config is not None:
@@ -2551,12 +2629,12 @@ def _run_category_pass_batch(
             iso_results[tis_slug_val][cat_name] = {"error": r["error"] or "empty"}
             continue
         try:
-            payload = parse_response(r["text"])
+            payload = _parse_category_read(r["text"], output_schema)
             _emit_schema_warnings(
                 payload, output_schema, f"{tis_slug_val}/{cat_name}",
                 verbose=getattr(args, "verbose", False),
             )
-            iso_results[tis_slug_val][cat_name] = payload
+            iso_results[tis_slug_val][cat_name] = _cap_reasoning(payload, output_schema)
             n_ok += 1
         except Exception as e:
             print(f"[{cid}] {cat_name} parse FAIL: {e}", file=sys.stderr)
@@ -2592,7 +2670,7 @@ def _run_category_pass_batch(
                     f"{tis_slug_val}/{category['name']}",
                     verbose=getattr(args, "verbose", False),
                 )
-                iso_results[tis_slug_val][category["name"]] = payload
+                iso_results[tis_slug_val][category["name"]] = _cap_reasoning(payload, output_schema)
                 n_tool_ok += 1
             except Exception as e:
                 _tool_usage, _tool_turns = _drain_all_usage()
