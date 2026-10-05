@@ -2023,17 +2023,50 @@ SUPERSEDED_BY_TOOLS: dict[str, tuple[str, ...]] = {
 }
 
 
+_SUPERSEDED_NOTE = (
+    "Pre-computed PAE block means are omitted here: query pae_block "
+    "over the ranges you care about instead of reading a fixed "
+    "diff/body partition."
+)
+
+
+def _drop_keys(value: Any, keys: frozenset[str]) -> tuple[Any, int]:
+    """Copy of *value* with *keys* removed at every depth, and how many went."""
+    if isinstance(value, dict):
+        out, n = {}, 0
+        for k, v in value.items():
+            if k in keys:
+                n += 1
+                continue
+            out[k], m = _drop_keys(v, keys)
+            n += m
+        return out, n
+    if isinstance(value, list):
+        items = [_drop_keys(v, keys) for v in value]
+        return [v for v, _ in items], sum(m for _, m in items)
+    return value, 0
+
+
 def _strip_superseded_evidence(
     category_record: dict[str, Any], letter: str
 ) -> dict[str, Any]:
-    """Drop evidence columns this category's readers replace. Returns a copy."""
+    """Drop evidence columns this category's readers replace. Returns a copy.
+
+    Every grounding goes through here, not only the ``members``-shaped one. The
+    alternative payloads carry the same columns under other keys — a tag's
+    ``metrics``, the raw arm's ``evidence``, the dist arm's ``fields`` — and an
+    early return on "no members" handed exactly those arms the answers the
+    criteria arm is denied. So a foreign shape is walked whole and the note
+    lands once at its top level; the ``members`` shape keeps its per-member note.
+    """
     cols = SUPERSEDED_BY_TOOLS.get(letter)
     if not cols:
         return category_record
-    # Same guard as _strip_hits_for_tools: a grounding that does not key on
-    # ``members`` must come back untouched, not gain an empty one.
     if "members" not in category_record:
-        return category_record
+        stripped, n_dropped = _drop_keys(category_record, frozenset(cols))
+        if n_dropped:
+            stripped["_superseded_note"] = _SUPERSEDED_NOTE
+        return stripped
     members = []
     for member in category_record.get("members") or []:
         evidence = member.get("evidence")
@@ -2043,11 +2076,7 @@ def _strip_superseded_evidence(
         dropped = [c for c in cols if c in evidence]
         kept = {k: v for k, v in evidence.items() if k not in cols}
         if dropped:
-            kept["_superseded_note"] = (
-                "Pre-computed PAE block means are omitted here: query pae_block "
-                "over the ranges you care about instead of reading a fixed "
-                "diff/body partition."
-            )
+            kept["_superseded_note"] = _SUPERSEDED_NOTE
         members.append({**member, "evidence": kept})
     return {**category_record, "members": members}
 

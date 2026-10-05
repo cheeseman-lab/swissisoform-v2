@@ -16,6 +16,7 @@ import pytest
 from swissisoform import distributions as dist_mod
 from swissisoform.site import evidence as ev
 from swissisoform.site import grounding as gr
+from swissisoform.site import llm
 from swissisoform.tags import registry as reg_mod
 
 CATEGORY_C = {"letter": "C", "name": "Conservation", "members": []}
@@ -494,6 +495,82 @@ class TestVerdictExtras:
         before = copy.deepcopy(tools)
         gr.install_verdict_extras(tools, {})()
         assert tools == before
+
+
+class TestSupersededStrip:
+    """P's PAE block means must leave every arm's tool-loop opening, not only criteria's.
+
+    ``pae_block()`` recomputes all three, so carrying them hands the loop its own
+    answers; the strip used to return early on any payload without ``members``,
+    which is every arm but criteria.
+    """
+
+    PAE = llm.SUPERSEDED_BY_TOOLS["P"]
+    CATEGORY_P = {"letter": "P", "name": "Predicted Structure", "members": []}
+
+    def _raw(self) -> dict:
+        return {
+            **{c: 4.2 for c in self.PAE},
+            "isoform_structure_pae_status": "ok",
+            "isoform_structure_plddt_diffregion_mean": 0.8,
+            "isoform_tags_states": {"p1_structured_extension": True},
+            "isoform_tags_citations": {"p1_structured_extension": 0.8},
+        }
+
+    def _opening(self, builder) -> dict:
+        previous = ev.use_category_body(builder)
+        try:
+            sliced = ev.slice_category(_record(self._raw()), self.CATEGORY_P)
+        finally:
+            ev.use_category_body(previous)
+        return llm._strip_superseded_evidence(sliced, "P")
+
+    def _assert_stripped(self, opening: dict) -> None:
+        text = json.dumps(opening, default=str)
+        assert not [c for c in self.PAE if c in text]
+        # Availability metadata is kept on purpose: it saves a wasted call.
+        assert "isoform_structure_pae_status" in text
+
+    def test_criteria_members_shape(self):
+        evidence = {**{c: 1.0 for c in self.PAE}, "isoform_structure_pae_status": "ok"}
+        record = {"members": [{"evidence": evidence}]}
+        out = llm._strip_superseded_evidence(record, "P")
+        self._assert_stripped(out)
+        assert "_superseded_note" in out["members"][0]["evidence"]
+
+    def test_raw_arm(self):
+        cat = _catalog(
+            [{"feature": c, "category": "P"} for c in self.PAE]
+            + [{"feature": "isoform_structure_pae_status", "category": "P", "dtype": "str"}]
+        )
+        out = self._opening(gr._raw_body(gr.category_columns(cat)))
+        self._assert_stripped(out)
+        assert out["_superseded_note"]
+
+    def test_tags_arm(self):
+        reg = _registry(
+            _tag_row(
+                tag_id="p1_structured_extension",
+                category="P",
+                kind=reg_mod.KIND_DERIVED,
+                metric="isoform_structure_plddt_diffregion_mean",
+                criterion_id="P1_structured_extension",
+            )
+        )
+        out = self._opening(gr._tags_body(reg))
+        self._assert_stripped(out)
+        # The criterion's other supporting numbers survive the strip.
+        assert out["tags"][0]["metrics"]["isoform_structure_plddt_diffregion_mean"] == 0.8
+
+    def test_dist_arm(self):
+        dist = _dist([{"metric": c, "stratum": "extended", "n": 200} for c in self.PAE])
+        out = self._opening(gr._dist_body({"P": list(self.PAE)}, dist))
+        assert set(out["fields"]) == set()
+        assert out["_superseded_note"]
+
+    def test_other_letters_untouched(self):
+        record = {"evidence": {self.PAE[0]: 1.0}}
+        assert llm._strip_superseded_evidence(record, "C") is record
 
 
 class TestBuild:
