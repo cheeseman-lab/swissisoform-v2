@@ -79,6 +79,19 @@ LEAK_SUFFIXES: tuple[str, ...] = ("_enriched",)
 # grounding difference, and it would dominate M's comparison.
 STRIP_LISTS_FOR: frozenset[str] = frozenset({"M"})
 
+# Integers that name a thing rather than measure it. A percentile of an SAE
+# feature index read as "one of the highest-indexed features (97th percentile)"
+# in six dist outputs (audit38_S).
+IDENTIFIER_SUFFIXES: tuple[str, ...] = ("_feature_index",)
+# Catalog exclude reasons and name suffixes that keep a categorical column out of
+# `dist`'s plain-value block: nothing in them is evidence about the isoform.
+DIST_SKIP_REASONS: frozenset[str] = frozenset({"identifier", "free_text", "constant", "all_null"})
+DIST_SKIP_SUFFIXES: tuple[str, ...] = ("_bigwig", "hal_path")
+# Metrics where a smaller value is the stronger result. Their percentile is
+# ascending like every other, so a high one means *weak* significance — read
+# backwards in about half the dist D outputs (audit38_D).
+LOWER_IS_STRONGER_MARKERS: tuple[str, ...] = ("pvalue", "p_value", "qvalue")
+
 
 class GroundingError(RuntimeError):
     """Raised when a grounding cannot be built for the records in hand."""
@@ -204,7 +217,37 @@ def numeric_category_columns(
     out: dict[str, list[str]] = {}
     for letter, sub in sel.groupby("category"):
         out[str(letter)] = [
-            c for c in sub["feature"].astype(str) if c in profiled and not _leaks(c)
+            c
+            for c in sub["feature"].astype(str)
+            if c in profiled and not _leaks(c) and not c.endswith(IDENTIFIER_SUFFIXES)
+        ]
+    return out
+
+
+def categorical_category_columns(catalog: pd.DataFrame) -> dict[str, list[str]]:
+    """``{letter: [column, ...]}`` — what ``dist`` carries as plain values.
+
+    A percentile only exists for a number, but the categorical outputs are often
+    the finding itself: the DeepLoc compartment and its ``*_changed`` flag, the
+    SignalP/TargetP calls, a module's ``status``. Dropping them left the dist arm
+    reasoning about relocalization from probability deltas alone (audit38_L:
+    3-4 false relocalizations per 18). Identifier-valued integers ride here too,
+    because ranking a feature *index* is meaningless.
+
+    Excluded: identifiers, free text, constants and file paths — none of which a
+    reader of the category could act on.
+    """
+    sel = catalog[(catalog["category"].isin(list("CDLMPS"))) & (catalog["pane"] != "canonical")]
+    reasons = sel["exclude_reason"] if "exclude_reason" in sel else pd.Series("", index=sel.index)
+    is_text = sel["dtype"].isin(["str", "bool"]) & ~reasons.isin(list(DIST_SKIP_REASONS))
+    is_id = sel["feature"].astype(str).str.endswith(IDENTIFIER_SUFFIXES)
+    sel = sel[is_text | is_id]
+    out: dict[str, list[str]] = {}
+    for letter, sub in sel.groupby("category"):
+        out[str(letter)] = [
+            c
+            for c in sub["feature"].astype(str)
+            if not _leaks(c) and not c.endswith(DIST_SKIP_SUFFIXES)
         ]
     return out
 
@@ -464,9 +507,17 @@ def _open_question(tag: reg_mod.Tag, record: dict[str, Any]) -> dict[str, Any]:
 
 
 def _dist_body(
-    metrics_by_category: dict[str, list[str]], dist: dist_mod.Distributions
+    metrics_by_category: dict[str, list[str]],
+    dist: dist_mod.Distributions,
+    calls_by_category: dict[str, list[str]] | None = None,
 ) -> Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]:
     """Every profiled numeric field with its value and its population percentile.
+
+    Plus ``calls``: the category's categorical outputs as plain values (see
+    :func:`categorical_category_columns`), so the arm differs from the others in
+    how numbers are contextualised, not in which findings it is shown. A p- or
+    q-value entry is flagged ``lower_is_stronger`` because its percentile is
+    ascending like every other.
 
     Two traps in the distributions read-side, both handled here:
 
@@ -510,9 +561,20 @@ def _dist_body(
             }
             for point in ("p05", "p25", "p50", "p75", "p95"):
                 entry[point] = info.get(point)
+            if any(m in metric.lower() for m in LOWER_IS_STRONGER_MARKERS):
+                entry["lower_is_stronger"] = True
             fields[metric] = entry
+        calls: dict[str, Any] = {}
+        for column in (calls_by_category or {}).get(category["letter"], []):
+            value = _lookup(raw, column)
+            value = None if value is _MISSING else _clean(value)
+            if value is not None:
+                calls[column] = value
+        body: dict[str, Any] = {"fields": fields}
+        if calls:
+            body["calls"] = calls
         return {
-            "fields": fields,
+            **body,
             "reference_population": {
                 "version": dist.version,
                 "source_run": (dist.provenance.get("source_run") or "unknown"),
@@ -563,7 +625,9 @@ def build(
     if mode == "raw":
         return _raw_body(category_columns(catalog), strip_lists_for)
     dist = dist_mod.load(dist_version)
-    return _dist_body(numeric_category_columns(catalog, dist), dist)
+    return _dist_body(
+        numeric_category_columns(catalog, dist), dist, categorical_category_columns(catalog)
+    )
 
 
 def strip_hints(record: dict[str, Any]) -> dict[str, Any]:

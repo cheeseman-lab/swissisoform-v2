@@ -81,7 +81,13 @@ CONTRACTS: dict[str, str] = {
         "that population's five-number summary (p05/p25/p50/p75/p95). There are no "
         "verdicts and no thresholds: a value's importance is what its position in the "
         "distribution tells you. `stratum` names which population it was ranked "
-        "against, and `reference_population` says what that population is."
+        "against, and `reference_population` says what that population is. A field "
+        "flagged `lower_is_stronger` (p- and q-values) reads the other way round: a LOW "
+        "pctile is the strong result, and a high pctile means weaker significance than "
+        "most of the population. `calls` carries the category's categorical outputs — "
+        "predicted compartments and signals, targeting calls, module statuses, "
+        "`*_changed` flags and feature identifiers — as plain values with no "
+        "percentile; an identifier names a feature and has no magnitude."
     ),
 }
 
@@ -96,7 +102,7 @@ CONTRACTS: dict[str, str] = {
 NOUNS: dict[str, str] = {
     "raw": "the metrics in `evidence`",
     "tags": "the tags in `tags`",
-    "dist": "the fields in `fields`",
+    "dist": "the entries in `fields` and `calls`",
 }
 # Appended in the `+hint` arms only. `means` is the criterion's own
 # interpretation_hint, so leaving it unconditional would give `tags_nohint` the
@@ -114,7 +120,7 @@ _TERMINOLOGY = (
 _NA = {
     "raw": "a metric that is null",
     "tags": "a tag whose state is `not_evaluable`",
-    "dist": "a field absent from `fields`",
+    "dist": "a field absent from both `fields` and `calls`",
 }
 
 

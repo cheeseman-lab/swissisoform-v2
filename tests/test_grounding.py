@@ -426,6 +426,112 @@ class TestDist:
         )
         assert body["fields"] == {}
 
+    def test_categorical_calls_ride_alongside_the_percentiles(self):
+        """The DeepLoc call and its changed flag are the L finding, not context."""
+        cat = _catalog(
+            [
+                {
+                    "feature": "isoform_localization_deeploc_prediction",
+                    "category": "L",
+                    "dtype": "str",
+                    "exclude_reason": "categorical",
+                },
+                {
+                    "feature": "cmp_localization_deeploc_prediction_changed",
+                    "category": "L",
+                    "pane": "cmp",
+                    "dtype": "bool",
+                    "exclude_reason": "binary",
+                },
+                {
+                    "feature": "isoform_conservation_summary.phylop_status",
+                    "category": "L",
+                    "dtype": "str",
+                    "exclude_reason": "status_string",
+                },
+                {
+                    "feature": "isoform_structure_isoform_hash",
+                    "category": "L",
+                    "dtype": "str",
+                    "exclude_reason": "identifier",
+                },
+                {
+                    "feature": "isoform_conservation_summary.phylop_bigwig",
+                    "category": "L",
+                    "dtype": "str",
+                    "exclude_reason": "status_string",
+                },
+                {
+                    "feature": "cmp_biophysics_gravy_enriched",
+                    "category": "L",
+                    "pane": "cmp",
+                    "dtype": "bool",
+                    "exclude_reason": "binary",
+                },
+            ]
+        )
+        calls = gr.categorical_category_columns(cat)["L"]
+        assert calls == [
+            "isoform_localization_deeploc_prediction",
+            "cmp_localization_deeploc_prediction_changed",
+            "isoform_conservation_summary.phylop_status",
+        ]
+        dist = _dist([{"metric": "isoform_a", "stratum": "extended", "n": 200}])
+        raw = {
+            "isoform_a": 1.0,
+            "isoform_localization_deeploc_prediction": "Nucleus",
+            "cmp_localization_deeploc_prediction_changed": False,
+            "isoform_conservation_summary": {"phylop_status": "ok"},
+        }
+        body = gr._dist_body({"L": ["isoform_a"]}, dist, {"L": calls})(
+            _record(raw), {"letter": "L", "name": "Localization"}
+        )
+        assert body["calls"] == {
+            "isoform_localization_deeploc_prediction": "Nucleus",
+            "cmp_localization_deeploc_prediction_changed": False,
+            "isoform_conservation_summary.phylop_status": "ok",
+        }
+        assert "pctile" in body["fields"]["isoform_a"]
+
+    def test_feature_index_is_a_call_not_a_ranked_metric(self):
+        cat = _catalog(
+            [
+                {
+                    "feature": "isoform_sae_top_gained_feature_index",
+                    "category": "S",
+                    "dtype": "int",
+                },
+                {"feature": "isoform_sae_n_features", "category": "S", "dtype": "int"},
+            ]
+        )
+        dist = _dist(
+            [
+                {"metric": m, "stratum": dist_mod.STRATUM_ALL, "n": 200}
+                for m in ("isoform_sae_top_gained_feature_index", "isoform_sae_n_features")
+            ]
+        )
+        assert gr.numeric_category_columns(cat, dist)["S"] == ["isoform_sae_n_features"]
+        assert gr.categorical_category_columns(cat)["S"] == ["isoform_sae_top_gained_feature_index"]
+
+    def test_p_values_are_flagged_lower_is_stronger(self):
+        metrics = [
+            "isoform_massspec_summary.min_pvalue",
+            "tis_pvalue",
+            "fisher_qvalue",
+            "isoform_a",
+        ]
+        dist = _dist([{"metric": m, "stratum": "extended", "n": 200} for m in metrics])
+        raw = {
+            "isoform_massspec_summary": {"min_pvalue": 0.001},
+            "tis_pvalue": 0.2,
+            "fisher_qvalue": 0.05,
+            "isoform_a": 3.0,
+        }
+        fields = gr._dist_body({"D": metrics}, dist)(_record(raw), CATEGORY_C | {"letter": "D"})[
+            "fields"
+        ]
+        assert {m for m, f in fields.items() if f.get("lower_is_stronger")} == set(metrics[:3])
+
     def test_reference_population_is_declared(self):
         """A percentile against full_catalog is not a percentile against this corpus."""
         dist = _dist([{"metric": "isoform_a", "stratum": "extended", "n": 200}])
