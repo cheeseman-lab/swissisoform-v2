@@ -1938,6 +1938,37 @@ def test_only_category_reruns_one_category_and_keeps_the_rest_s_provenance(
     assert {r for rel, r in by_rel.items() if rel != c_rel} == {first["run_id"]}
 
 
+def test_every_output_is_stamped_with_code_source_and_arm_provenance(
+    mod, monkeypatch, tmp_path, category_records, variants_long, only_m, capture_dir
+):
+    """Same commit, same corpus and same arm must be checkable from the files."""
+    import hashlib
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    monkeypatch.setattr(mod, "call_llm", _verdict_says("x"))
+    monkeypatch.setattr(
+        mod, "_try_import_anthropic", lambda: _fake_anthropic(_emit_verdict_script(), [])
+    )
+    parquet = category_records.parent / "all_paired.parquet"
+    parquet.write_bytes(b"not really a parquet")
+    out_dir = tmp_path / "out"
+    argv = _live_capture_args(category_records, out_dir, variants_long, capture_dir)
+    assert mod.main(argv, run_meta={"arm": "tags_hint", "grounding": "tags"}) == 0
+
+    stamp = json.loads((out_dir / mod._tis_slug(TIS_ID) / "categories.meta.json").read_text())
+    assert len(stamp["code"]["commit"]) == 40 and isinstance(stamp["code"]["dirty"], bool)
+    expected = hashlib.sha256(b"not really a parquet").hexdigest()
+    assert stamp["source"]["source_parquet_sha256"] == expected
+    assert stamp["run_meta"] == {"arm": "tags_hint", "grounding": "tags"}
+    assert all(r["code"] == stamp["code"] for r in stamp["category_runs"].values())
+    usage = json.loads((out_dir / "_usage_category.json").read_text())
+    assert usage["code"] == stamp["code"] and usage["run_meta"]["arm"] == "tags_hint"
+    fields, _, _ = _split_capture(
+        (capture_dir / "category" / mod._tis_slug(TIS_ID) / "C.txt").read_text(encoding="utf-8")
+    )
+    assert fields["code_commit"].startswith(stamp["code"]["commit"])
+
+
 def test_only_category_skips_an_isoform_with_nothing_to_merge_into(
     mod, monkeypatch, tmp_path, category_records, variants_long, only_m, capsys
 ):

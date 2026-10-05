@@ -813,5 +813,15 @@ class TestBuild:
         with pytest.raises(gr.GroundingError, match="unknown grounding"):
             gr.build("percentiles")
 
+    def test_provenance_pins_the_catalog_a_raw_arm_reads(self, tmp_path):
+        import hashlib
+
+        csv = tmp_path / "catalog.csv"
+        csv.write_text("feature,category\nisoform_a,C\n")
+        prov = gr.provenance("raw", catalog_csv=csv)
+        assert prov["grounding"] == "raw"
+        assert prov["feature_catalog"]["sha256"] == hashlib.sha256(csv.read_bytes()).hexdigest()
+        assert gr.provenance("criteria") == {"grounding": "criteria"}
+
     def test_dump_is_json(self):
         assert json.loads(gr.dump({"a": 1})) == {"a": 1}

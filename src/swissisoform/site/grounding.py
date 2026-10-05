@@ -641,6 +641,44 @@ def build(
     )
 
 
+def provenance(
+    mode: str,
+    *,
+    catalog_csv: Path = DEFAULT_CATALOG,
+    dist_version: str = DEFAULT_DIST_VERSION,
+    tag_version: str = DEFAULT_TAG_VERSION,
+) -> dict[str, Any]:
+    """The reference artifacts one grounding's payload is built from, for the run stamp.
+
+    Each arm reads different frozen inputs — the tag registry, the
+    distributions, the feature catalog — so two arms' outputs are only
+    comparable when those are pinned too.
+    """
+    from swissisoform.setup._common import rel_to_root, sha256_file
+
+    out: dict[str, Any] = {"grounding": mode}
+    if mode == "tags":
+        reg = reg_mod.load(tag_version)
+        out["tag_registry"] = {
+            "version": reg.version,
+            "built_at": reg.provenance.get("built_at"),
+            "distributions_version": reg.provenance.get("distributions_version"),
+        }
+    if mode in ("raw", "dist"):
+        out["feature_catalog"] = {
+            "path": rel_to_root(Path(catalog_csv).resolve()),
+            "sha256": sha256_file(Path(catalog_csv)),
+        }
+    if mode == "dist":
+        dist = dist_mod.load(dist_version)
+        out["distributions"] = {
+            "version": dist.version,
+            "source_parquet_sha256": dist.provenance.get("source_parquet_sha256"),
+            "built_at": dist.provenance.get("built_at"),
+        }
+    return out
+
+
 def strip_hints(record: dict[str, Any]) -> dict[str, Any]:
     """Remove every ``interpretation_hint`` from a built category slice.
 
@@ -739,11 +777,13 @@ __all__ = [
     "STRIP_LISTS_FOR",
     "GroundingError",
     "build",
+    "categorical_category_columns",
     "category_columns",
     "dump",
     "install_verdict_extras",
     "llm_tag_ids",
     "numeric_category_columns",
+    "provenance",
     "strip_hints",
     "verdict_extra_fields",
 ]

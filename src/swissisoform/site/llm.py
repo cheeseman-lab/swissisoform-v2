@@ -27,6 +27,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -453,6 +454,7 @@ def _write_usage_report(
     out_dir.mkdir(parents=True, exist_ok=True)
     report = {
         "run_id": _RUN_ID,
+        **_RUN_PROVENANCE,
         "pass": pass_name,
         "model": model,
         "batch": batch,
@@ -483,6 +485,12 @@ def _write_usage_report(
 # not one. The id does not prevent that; it makes it checkable from the files.
 _RUN_ID: str = ""
 _RUN_MODE: str = "live"
+# What the run was built from, stamped beside every output and into the usage
+# report: the code (commit + dirty flag), the source parquet behind the evidence
+# records, and whatever the caller adds (an arm's grounding, hint level and
+# reference versions). Without it, "same commit, same corpus" between two arms
+# was unverifiable from the files (audit38_P).
+_RUN_PROVENANCE: dict[str, Any] = {}
 
 
 def _begin_run(dry_run: bool) -> str:
@@ -490,7 +498,51 @@ def _begin_run(dry_run: bool) -> str:
     global _RUN_ID, _RUN_MODE
     _RUN_ID = f"{_utc_now().strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(3)}"
     _RUN_MODE = "dry_run" if dry_run else "live"
+    _RUN_PROVENANCE.clear()
+    _RUN_PROVENANCE["code"] = _code_provenance()
     return _RUN_ID
+
+
+def _code_provenance() -> dict[str, Any]:
+    """``{commit, dirty}`` for the checkout this module runs from; ``None``s if unknown.
+
+    ``dirty`` counts tracked changes only: an untracked scratch file does not
+    change what ran, an edited prompt or module does.
+    """
+
+    def vcs(*cmd: str) -> str | None:
+        try:
+            done = subprocess.run(
+                ["git", "-C", str(ROOT), *cmd], capture_output=True, text=True, timeout=10
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return done.stdout if done.returncode == 0 else None
+
+    commit = vcs("rev-parse", "HEAD")
+    status = vcs("status", "--porcelain", "--untracked-files=no")
+    return {
+        "commit": commit.strip() if commit else None,
+        "dirty": bool(status.strip()) if status is not None else None,
+    }
+
+
+def _source_provenance(records_dir: Path) -> dict[str, Any]:
+    """The evidence records' source parquet and its sha256, when it sits beside them.
+
+    The standard layout is ``data/output/{run}/llm_evidence/`` next to
+    ``data/output/{run}/all_paired.parquet``; anything else records the records
+    path alone rather than guessing.
+    """
+    from swissisoform.setup._common import rel_to_root, sha256_file
+
+    records_dir = Path(records_dir).resolve()
+    out: dict[str, Any] = {"records": rel_to_root(records_dir)}
+    parquet = records_dir.parent / "all_paired.parquet"
+    if parquet.is_file():
+        out["source_parquet"] = rel_to_root(parquet)
+        out["source_parquet_sha256"] = sha256_file(parquet)
+    return out
 
 
 def _utc_now() -> datetime:
@@ -512,6 +564,7 @@ def _write_run_stamp(out_path: Path, *, pass_name: str, model: str, **extra: Any
         "pass": pass_name,
         "model": model,
         "prompts_captured": _PROMPT_DIR is not None,
+        **_RUN_PROVENANCE,
         **extra,
     }
     out_path.with_suffix(".meta.json").write_text(
@@ -607,7 +660,12 @@ def record_prompt(
     if _PROMPT_DIR is None:
         return
 
-    fields: dict[str, Any] = {"run_id": _RUN_ID, "run_mode": _RUN_MODE}
+    code = _RUN_PROVENANCE.get("code") or {}
+    fields: dict[str, Any] = {
+        "run_id": _RUN_ID,
+        "run_mode": _RUN_MODE,
+        "code_commit": f"{code.get('commit')}{'+dirty' if code.get('dirty') else ''}",
+    }
     fields.update({k: v for k, v in meta.items() if v is not None})
     fields["model"] = params.get("model")
     fields["max_tokens"] = params.get("max_tokens")
@@ -1441,7 +1499,7 @@ def _category_runs(
     except Exception:  # noqa: BLE001 - an unreadable stamp is "unknown", not fatal
         prior = {}
     prior_runs = prior.get("category_runs") or {}
-    this_run = {"run_id": _RUN_ID, "model": model}
+    this_run = {"run_id": _RUN_ID, "model": model, "code": _RUN_PROVENANCE.get("code")}
     runs: dict[str, dict[str, Any]] = {}
     for name in results:
         if regenerated is None or name in regenerated:
@@ -1450,6 +1508,7 @@ def _category_runs(
             runs[name] = prior_runs.get(name) or {
                 "run_id": prior.get("run_id"),
                 "model": prior.get("model"),
+                "code": prior.get("code"),
             }
     return runs
 
@@ -1856,7 +1915,12 @@ def _print_dry_run(gene: str, prompt: Prompt, model: str) -> None:
     print()
 
 
-def main(argv: list[str] | None = None, *, prompts_dir: Path | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    prompts_dir: Path | None = None,
+    run_meta: dict[str, Any] | None = None,
+) -> int:
     """CLI entry point. Returns process exit code.
 
     Args:
@@ -1865,6 +1929,8 @@ def main(argv: list[str] | None = None, *, prompts_dir: Path | None = None) -> i
             non-default passes resolve their prompt/schema files relative to it.
             When ``None``, the module-level ``SYSTEM_PROMPT_PATH`` /
             ``OUTPUT_SCHEMA_PATH`` defaults are used.
+        run_meta: Extra provenance to stamp beside every output and into the
+            usage report — the prompt-variant driver passes the arm here.
     """
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1882,6 +1948,9 @@ def main(argv: list[str] | None = None, *, prompts_dir: Path | None = None) -> i
         # existing file, so forcing cannot clobber the categories not named.
         args.force = True
     _begin_run(dry_run=getattr(args, "dry_run", False))
+    _RUN_PROVENANCE["source"] = _source_provenance(args.records)
+    if run_meta:
+        _RUN_PROVENANCE["run_meta"] = run_meta
 
     # The evidence slices this pass builds carry threshold language ("qualifies
     # when length >= 6 aa AND plddt_mean >= 0.70") that must match the run whose
