@@ -158,10 +158,46 @@ class Prompt:
         return (len(self.system) + len(self.user)) // 4
 
 
+# Splice markers in the tracked category prompts (figures/prompt_variants/
+# assemble.py varies the blocks they delimit). They are authoring structure, not
+# instructions, so they must never reach a model — production included.
+PROMPT_BLOCK_RE = re.compile(r"^<!-- @block:([a-z_]+) -->$")
+PROMPT_END_RE = re.compile(r"^<!-- @end -->$")
+
+
+def collapse_blank_lines(lines: list[str]) -> str:
+    """Join *lines*, squeezing runs of blank lines and trimming trailing ones."""
+    kept: list[str] = []
+    for line in lines:
+        if not line.strip() and kept and not kept[-1].strip():
+            continue
+        kept.append(line)
+    while kept and not kept[-1].strip():
+        kept.pop()
+    return "\n".join(kept)
+
+
+def strip_prompt_markers(text: str) -> str:
+    """*text* with every ``@block`` / ``@end`` marker line removed.
+
+    The one stripping rule both readers share: production through
+    :func:`load_system_prompt`, and the prompt-variant harness through
+    ``assemble.render``. Two copies is how the harness's "status quo" arm and the
+    prompt production actually sends drift apart.
+    """
+    lines = [
+        line
+        for line in text.splitlines()
+        if not (PROMPT_BLOCK_RE.match(line.strip()) or PROMPT_END_RE.match(line.strip()))
+    ]
+    return collapse_blank_lines(lines)
+
+
 def load_system_prompt(path: Path | None = None) -> str:
     """Load the system prompt, erroring early if missing.
 
     Reads ``SYSTEM_PROMPT_PATH`` at call time (so tests can monkeypatch it).
+    Splice markers are stripped (:func:`strip_prompt_markers`).
     """
     path = path or SYSTEM_PROMPT_PATH
     if not path.exists():
@@ -169,7 +205,7 @@ def load_system_prompt(path: Path | None = None) -> str:
             f"System prompt not found at {path}. "
             "Agent A is responsible for producing scripts/site/prompts/system.txt."
         )
-    return path.read_text(encoding="utf-8").strip()
+    return strip_prompt_markers(path.read_text(encoding="utf-8")).strip()
 
 
 def load_output_schema(path: Path | None = None) -> dict[str, Any]:
@@ -1978,7 +2014,7 @@ def _tool_categories(args, prompts_root: Path, records=None) -> dict[str, dict[s
         else:
             tools, dispatch_for = _tool_setup(letter, args, records)
         out[letter] = {
-            "system": prompt_path.read_text(encoding="utf-8").strip(),
+            "system": load_system_prompt(prompt_path),
             "tools": tools,
             "dispatch_for": dispatch_for,
             # A tool loop may validate its verdict against a different schema than

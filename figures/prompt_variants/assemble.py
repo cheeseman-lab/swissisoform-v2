@@ -21,18 +21,20 @@ blocks an arm needs to vary:
     the N/C-terminal confusion the PR #24 audit found the prompt had fixed.
 
 Markers are stripped in **every** arm, so the ``+hint`` `criteria` assembly is the
-base file verbatim. ``tests/test_prompt_variants.py`` asserts exactly that.
+base file verbatim — and production strips them by the same rule
+(``llm.strip_prompt_markers``, applied in ``llm.load_system_prompt``), so that arm
+is the prompt production sends. ``tests/test_prompt_variants.py`` asserts both.
 """
 
 from __future__ import annotations
 
 import json
-import re
 import shutil
 from pathlib import Path
 
-BLOCK_RE = re.compile(r"^<!-- @block:([a-z_]+) -->$")
-END_RE = re.compile(r"^<!-- @end -->$")
+from swissisoform.site.llm import PROMPT_BLOCK_RE as BLOCK_RE
+from swissisoform.site.llm import PROMPT_END_RE as END_RE
+from swissisoform.site.llm import collapse_blank_lines
 
 BASE_PROMPTS: tuple[str, ...] = (
     "category-pass.txt",
@@ -259,14 +261,7 @@ def render(text: str, *, grounding: str, hints: bool, is_tool_prompt: bool = Fal
 
 def _collapse_blank_runs(lines: list[str]) -> str:
     """Join, squeezing runs of blank lines a deletion may have left behind."""
-    kept: list[str] = []
-    for line in lines:
-        if not line.strip() and kept and not kept[-1].strip():
-            continue
-        kept.append(line)
-    while kept and not kept[-1].strip():
-        kept.pop()
-    return "\n".join(kept) + "\n"
+    return collapse_blank_lines(lines) + "\n"
 
 
 def materialize(
