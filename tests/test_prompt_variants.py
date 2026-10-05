@@ -25,6 +25,10 @@ SAMPLE = """<!-- @block:input_contract -->
 You receive: the old contract.
 <!-- @end -->
 
+<!-- @block:roster -->
+- C Conservation: C1 a member.
+<!-- @end -->
+
 Middle text that never varies.
 
 <!-- @block:directionality -->
@@ -36,6 +40,18 @@ Directionality — get these right:
 <!-- @end -->
 
 Trailing text.
+
+<!-- @block:id_examples -->
+Never write C1.
+<!-- @end -->
+
+<!-- @block:id_example -->
+Bad: "C1 reports 97.7%."
+<!-- @end -->
+
+<!-- @block:machinery -->
+Never cite the `state` or a threshold.
+<!-- @end -->
 """
 
 
@@ -50,7 +66,7 @@ def _norm(text: str) -> str:
 
 class TestParse:
     def test_finds_every_section(self):
-        assert sorted(A.parse_blocks(SAMPLE)) == sorted(A.SECTIONS)
+        assert sorted(A.parse_blocks(SAMPLE)) == sorted(A.SECTIONS + A.ID_SECTIONS)
 
     def test_unclosed_block_rejected(self):
         with pytest.raises(A.AssembleError, match="never closed"):
@@ -96,11 +112,13 @@ class TestRender:
         )
         assert _norm(out) == _norm(stripped)
 
-    def test_nohint_drops_the_directionality_block_only(self):
-        out = A.render(SAMPLE, grounding="criteria", hints=False)
-        assert "Directionality" not in out
-        assert "Middle text that never varies." in out
-        assert "Trailing text." in out
+    def test_nohint_keeps_the_directionality_block(self):
+        """The hint axis varies hint content only; dropping the system rules too
+        made a hint effect indistinguishable from a gate effect.
+        """
+        assert A.render(SAMPLE, grounding="criteria", hints=False) == A.render(
+            SAMPLE, grounding="criteria", hints=True
+        )
 
     def test_grounding_swaps_the_contract(self):
         out = A.render(SAMPLE, grounding="tags", hints=True)
@@ -128,7 +146,8 @@ class TestBasePrompts:
     def test_declares_every_section_exactly_once(self, name):
         """One missing marker and an arm silently keeps a block it should swap."""
         spans = A.parse_blocks((BASE / name).read_text(encoding="utf-8"))
-        assert sorted(spans) == sorted(A.SECTIONS)
+        shared = name == A.BASE_PROMPTS[0]
+        assert sorted(spans) == sorted(A.SECTIONS + (A.ID_SECTIONS if shared else ()))
 
     @pytest.mark.parametrize("name", A.BASE_PROMPTS)
     def test_hint_on_round_trips_to_the_tracked_file(self, name):
@@ -157,10 +176,46 @@ class TestBasePrompts:
         assert "SEPARATE ORF" in out
 
     @pytest.mark.parametrize("name", A.BASE_PROMPTS)
-    def test_directionality_is_gone_when_hints_are_off(self, name):
+    @pytest.mark.parametrize("grounding", ["criteria", "raw", "tags", "dist"])
+    def test_directionality_and_p2_gate_survive_hint_stripping(self, name, grounding):
         text = (BASE / name).read_text(encoding="utf-8")
-        out = A.render(text, grounding="criteria", hints=False)
-        assert "Directionality — get these right" not in out
+        tool = name != A.BASE_PROMPTS[0]
+        out = A.render(text, grounding=grounding, hints=False, is_tool_prompt=tool)
+        assert "Directionality — get these right" in out
+        if name != "category-pass-M.txt":
+            assert "RMSD" in out and "pLDDT" in out
+
+    @pytest.mark.parametrize("hints", [True, False])
+    @pytest.mark.parametrize("grounding", sorted(A.ID_FREE_GROUNDINGS))
+    def test_id_free_arms_name_no_member_ids_or_thresholds(self, grounding, hints):
+        """raw/dist payloads carry neither; the prompt taught them to write both."""
+        text = (BASE / A.BASE_PROMPTS[0]).read_text(encoding="utf-8")
+        out = A.render(text, grounding=grounding, hints=hints)
+        assert not re.findall(r"\b[CDLMPS][1-3]\b", out)
+        # The dist contract's own "no thresholds" and the tempering rule, whose
+        # anchors (pLDDT 0.70, ratio 1.0, phyloP 0) mean something outside the
+        # pipeline, are the permitted mentions.
+        body = re.sub(r"The one exception is tempering\..*?\n\n", "", out, flags=re.S)
+        assert "threshold" not in body.lower().replace("no thresholds", "")
+        assert "`reason`" not in body and "`state`" not in body
+        assert "Directionality — get these right" in out
+        assert "core-fold change (Cα RMSD) is only meaningful" in out
+
+    @pytest.mark.parametrize("grounding", ["raw", "tags", "dist"])
+    def test_swapped_contract_keeps_the_role_sentence(self, grounding):
+        text = (BASE / A.BASE_PROMPTS[0]).read_text(encoding="utf-8")
+        out = A.render(text, grounding=grounding, hints=True)
+        assert out.startswith("You are interpreting ONE evidence CATEGORY")
+
+    @pytest.mark.parametrize("grounding", ["criteria", "tags"])
+    def test_member_backed_arms_keep_the_roster(self, grounding):
+        text = (BASE / A.BASE_PROMPTS[0]).read_text(encoding="utf-8")
+        assert "C1 primate AA-identity" in A.render(text, grounding=grounding, hints=True)
+
+    def test_id_free_rendering_needs_the_roster_block(self):
+        no_roster = re.sub(r"<!-- @block:roster -->.*?<!-- @end -->\n", "", SAMPLE, flags=re.S)
+        with pytest.raises(A.AssembleError, match="roster"):
+            A.render(no_roster, grounding="raw", hints=True)
 
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 You are interpreting ONE evidence CATEGORY for an alternative protein isoform (an alt-TIS isoform: an N-terminal extension, a truncation, or a uORF/altORF) in SwissIsoform v2. You receive: (1) the isoform's identity (gene, transcript, ORF type, lengths, differential sequence, and `differential_region_location` — an explicit statement of where the differential region sits; trust it verbatim over any prior about this gene); (2) the category name and letter; and (3) its `members` — every submodule in the category, each with its label, its pre-computed value (True/False/None) and reason string where scored, the raw metrics that feed it, and an interpretation_hint that states the submodule's exact meaning and directionality. Trust each hint over any prior assumption.
 <!-- @end -->
 
+<!-- @block:roster -->
 The six categories (CDLMPS) and their members:
 - C Conservation: C1 primate AA-identity, C2 mammalian AA-identity, C3 absolute phyloP constraint over the unique region.
 - D Detection: D1 multi-cell-line reproducibility, D2 initiation efficiency (start-site usage), D3 unique-peptide mass spec.
@@ -9,6 +10,7 @@ The six categories (CDLMPS) and their members:
 - M Mutation Landscape: M1 germline tolerance/constraint, M2 disease-variant density enrichment.
 - P Predicted Structure: P1 unique-region folding (pLDDT only), P2 shared-region core-fold perturbation (Cα RMSD), P3 secondary structure — a helix or strand gained (extension) or lost (truncation) in the differential region.
 - S Structural Characteristics: S1 real-InterPro-domain gain/loss, S2 whole-protein biophysical shift (isoform vs canonical gravy/charge/disorder |delta| — scored), S3 differential ESM-C sparse-autoencoder interpretability features (scored MAGNITUDE check: the strongest shared-feature activation shift must exceed a threshold; gained/lost counts are context only).
+<!-- @end -->
 
 Your job: read ALL of the category's members together and form ONE integrated judgment for the category, then write it up bottom-line first. Weigh the members jointly — a category is only as strong as the evidence that actually fired. Decide what the combined evidence means biologically for THIS isoform's differential region (an extension ADDS sequence at the N-terminus; a truncation REMOVES sequence from the N-terminus), and cite the specific numbers that sharpen that read.
 
@@ -36,7 +38,9 @@ When a category's members are all None / not evaluable, say plainly what was mis
 
 Do not introduce any fact the input does not state. Emit valid JSON matching the appended schema; no Markdown code fences.
 
+<!-- @block:machinery -->
 Cite the measurement, not the machinery. Never cite the scoring apparatus: cutoffs, the `test` string, `state` (on / off / not_evaluable), tag or criterion ids, the registry version, how many rows the payload showed you, or whether something "fired", "passed", "cleared" or "met" a threshold. Several `reason` strings quote the configured threshold — do not repeat it. A cutoff is a reading aid, not a finding: it marks roughly where a value stops being unremarkable, which is useful for calibrating your own confidence and is not something to report. Write "the extension is confidently folded", not "pLDDT 0.76, above the 0.70 threshold".
+<!-- @end -->
 
 The one exception is tempering. When you pull a claim back because confidence is low, the conventional threshold is the clearest way to say why, and you may name it: "the helix is nominally gained, but at pLDDT 0.58 — below the 0.70 usually taken as confident — the geometry is not trustworthy here." Use it when it does work, never as decoration. Anchors that carry meaning outside this pipeline, and so may be invoked that way: pLDDT 0.70 (confident prediction), an enrichment or depletion ratio of 1.0 (no concentration either way), phyloP 0 (neutral evolution). Every other number in the payload is a calibration choice of ours with no outside meaning — never present one as a standard. Never report that a value cleared, exceeded, met or fell short of a standard, however you phrase it: "above the threshold", "well above the level treated as notable", "beats the cutoff", "comfortably in range" are all the same move, and naming no number does not make it one. State what was measured and what it came to, and let the size speak for itself — "the strongest shared-feature activation shifts by 13.7", not "the shift, at 13.7, is well above the level treated as notable".
 
@@ -46,13 +50,17 @@ The read appears under this isoform's header, which already shows the gene, ORF 
 The notes above on direction, coordinates and ORF type are for your reasoning, not for the reader. Never explain why a check applies or how it works for this ORF type.
 - START with the bottom line: the most decision-relevant signal and what it means here.
 - THEN one or two relationships that matter — which measurements corroborate each other and which temper the read. Each relationship sentence joins two measurements ("A agrees with B, so …" or "A, but B …") and says what that implies; a sentence about one measurement alone is inventory, so keep those to the bottom line. Do not explain why two measurements are independent or how they were made.
+<!-- @block:id_examples -->
 - Name each measurement by what it measures ("primate amino-acid identity", "the unique-peptide mass-spec check", "whole-protein hydropathy/charge/disorder shift", "the shared-core fold RMSD"). NEVER write the submodule ID codes (C1, D3, S2, …) in the reasoning. Give the two or three numbers that carry the read — unusually large or small, or the one that tempers a claim.
+<!-- @end -->
 - Give each finding once, as a number or in words: do not restate a number you just gave ("…, meaning X is unchanged"), and do not list the raw inputs behind a summary value.
 - A tempering point is one clause, not a sentence of justification.
 - Close with one short sentence on what this means, not a restatement.
 - When nothing could be assessed, say what was missing and why, in one or two sentences.
 
+<!-- @block:id_example -->
 Example — Bad, cites the machinery and reads as an inventory: "All three conservation members fired positively. C1 reports 97.7% primate identity, C2 93.4% mammalian, C3 phyloP 3.4 over the region." Good, the same evidence as interplay: "The removed segment is under purifying selection: primate and mammalian identity agree (97.7% and 93.4%), so this is not one clade's artefact, and phyloP of 3.4 confirms it at the nucleotide level. Its loss is likely consequential."
+<!-- @end -->
 
 Example — Bad, explains the mechanics to the reader: "Because this is a truncation, any diagnostic peptide would have to come from the new N-terminal junction in shared-region coordinates rather than from the removed segment itself, but that junction peptide was not found." Good: "No junction peptide was detected."
 
