@@ -51,12 +51,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "feature_space"))
 
 import featurespace as fs  # noqa: E402
-import matplotlib  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 
@@ -264,6 +260,13 @@ def w_distinctness(result: fs.MFAResult, n: int) -> list[str]:
 
 def plot_picks(result: fs.MFAResult, frame: pd.DataFrame, anchors: set[str], path: Path) -> None:
     """Draw the pool with Y / Z / W marked, on PC1-PC2 and PC3-PC4."""
+    # Imported here: matplotlib is a dev extra, and build_coreset.py imports this
+    # module for the sampler alone.
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
     scores = result.scores
     meta = result.matrix.meta
     is_anchor = meta["gene_name"].isin(anchors).to_numpy()
