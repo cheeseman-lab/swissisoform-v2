@@ -317,6 +317,38 @@ class TestFrameAwareConsequence:
             PipelineConfig(), plm_cache_dir=tmp_path, alphamissense=am
         ).annotate_site(site)
         assert out["hits"][0]["effect_damaging"] is False
+        # Not attached either: a canonical-frame score on an isoform-frame residue
+        # is what the tool caveat calls absent by construction.
+        assert out["hits"][0]["am_pathogenicity"] is None
+        assert out["hits"][0]["am_class"] is None
+        assert out["n_scored_am"] == 0
+
+    def test_alphamissense_absent_on_unmapped_separate_orf_unique(self, tmp_path):
+        # A separate-ORF unique hit with no isoform mapping still is not canonical
+        # coding sequence, so AlphaMissense must not be looked up for it.
+        am = _StubAM(
+            {("chr1", 100, "C", "T"): {"am_pathogenicity": 0.08, "am_class": "likely_benign"}}
+        )
+        hit = _vi_hit(in_isoform_unique=True)
+        site = _with_intersection(_tis(orf_type=ORFType.UORF), [hit])
+        out = VariantEffectModule(
+            PipelineConfig(), plm_cache_dir=tmp_path, alphamissense=am
+        ).annotate_site(site)
+        assert out["hits"][0]["am_pathogenicity"] is None
+        assert out["mean_am_pathogenicity_unique"] is None
+
+    def test_alphamissense_kept_on_truncation_unique(self, tmp_path):
+        # A truncation's unique region is canonical CDS: AlphaMissense applies.
+        am = _StubAM(
+            {("chr1", 100, "C", "T"): {"am_pathogenicity": 0.95, "am_class": "likely_pathogenic"}}
+        )
+        hit = _vi_hit(in_isoform_unique=True)
+        site = _with_intersection(_tis(orf_type=ORFType.TRUNCATED), [hit])
+        out = VariantEffectModule(
+            PipelineConfig(), plm_cache_dir=tmp_path, alphamissense=am
+        ).annotate_site(site)
+        assert out["hits"][0]["am_pathogenicity"] == 0.95
+        assert out["n_am_pathogenic_in_unique"] == 1
 
 
 class TestSeparateOrfStartCodon:
