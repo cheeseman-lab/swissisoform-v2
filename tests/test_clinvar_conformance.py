@@ -45,10 +45,14 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from swissisoform import coords
+
+if TYPE_CHECKING:
+    from swissisoform.variantquery.index import OrfRecord
 
 REPO = Path(__file__).resolve().parents[1]
 CLINVAR = REPO / "data" / "reference" / "clinvar" / "variant_summary.parquet"
@@ -150,14 +154,35 @@ def _slide_window(seq: str, start: int, length: int) -> tuple[int, int]:
     return d5, d3
 
 
-def _our_event(record, entry) -> dict | None:
+def _first_changed_residue(cds: str, mutant: str) -> int:
+    """0-based index of the first residue that differs between two translations.
+
+    What HGVS names a frameshift by (``p.Gly306fs``): the first amino acid whose
+    letter changes, which can be a codon or more after the first one the indel
+    touches. Computed here from the sequence, not from the classifier.
+    """
+    from Bio.Seq import Seq
+
+    def protein(seq: str) -> str:
+        return str(Seq(seq[: len(seq) - len(seq) % 3]).translate())
+
+    ref, alt = protein(cds), protein(mutant)
+    for i, (a, b) in enumerate(zip(ref, alt)):
+        if a != b:
+            return i
+    return min(len(ref), len(alt))
+
+
+def _our_event(record: OrfRecord, entry: dict) -> dict | None:
     """Where the variant sits in the canonical CDS, independent of the classifier.
 
     Computed from exons and alleles alone so it can judge the classifier: a row whose
     changed bases are coding here is coding, whatever the classifier said.
     Returns the ClinVar-comparable ``c.`` anchor (first changed base for a
-    substitution or deletion, the left flank for an insertion) and the window a
-    repeat lets it slide over. None when no changed base is coding.
+    substitution or deletion, the left flank for an insertion), the window a
+    repeat lets it slide over, and for a length change the first residue whose
+    letter changes. None when any changed base is not coding (see
+    :func:`_partial_span` for those).
     """
     exons = record.exons_for("canonical")
     cds = record.cds_for("canonical")
@@ -171,15 +196,20 @@ def _our_event(record, entry) -> dict | None:
             return None
         first = min(offsets)
         anchor = first + 1
+        first_changed = None
         if len(ref_changed) == len(alt_changed):
             window = (0, 0)
         else:
             window = _slide_window(cds, first, len(ref_changed) - len(alt_changed))
+            replaced = alt_changed if record.strand == "+" else coords.revcomp(alt_changed)
+            mutant = cds[:first] + replaced + cds[first + len(ref_changed) :]
+            first_changed = _first_changed_residue(cds, mutant)
         return {
             "anchor": anchor,
             "window": window,
             "kind": "del_or_sub",
             "codons": (first // 3, (first + len(ref_changed) - 1) // 3),
+            "first_changed": first_changed,
         }
     left, right = pos_map.get(start - 1), pos_map.get(start)
     if left is None or right is None:
@@ -192,6 +222,37 @@ def _our_event(record, entry) -> dict | None:
         "window": _slide_window(mutant, point, len(inserted)),
         "kind": "ins",
         "codons": (point // 3, point // 3),
+        "first_changed": _first_changed_residue(cds, mutant),
+    }
+
+
+def _partial_span(record: OrfRecord, entry: dict) -> dict | None:
+    """A variant whose changed bases are only *partly* coding in the canonical CDS.
+
+    :func:`_our_event` returns None for these, so without this they were never
+    asserted — and they are exactly the spans whose class depends on where they
+    leave the coding sequence. Returns the coding offsets the span touches and
+    whether any non-coding base is intronic to the ORF (inside the genomic envelope
+    of its coding bases). None when the span is wholly coding or wholly not, or is
+    a pure insertion.
+    """
+    exons = record.exons_for("canonical")
+    if not exons:
+        return None
+    pos_map = dict(coords.iter_coding_positions(exons, record.strand))
+    start, ref_changed, _alt_changed = coords.changed_bases(
+        entry["pos"], entry["ref"], entry["alt"]
+    )
+    if not ref_changed:
+        return None
+    positions = range(start, start + len(ref_changed))
+    mapped = [pos_map[p] for p in positions if p in pos_map]
+    if not mapped or len(mapped) == len(ref_changed):
+        return None
+    gmin, gmax = min(pos_map), max(pos_map)
+    return {
+        "mapped": mapped,
+        "intronic": any(gmin < p < gmax for p in positions if p not in pos_map),
     }
 
 
@@ -385,6 +446,15 @@ def test_scan_and_the_pipeline_agree_on_every_hit(matrix, index, tmp_path):
         if pipeline["protein_pos"] is not None:
             assert hit.residue == pipeline["protein_pos"], where
         compared += 1
+    # Per variant, not per hit: a variant overlapping two ORFs yields two hits, which
+    # a count could trade against a variant that yielded none.
+    hit_lines = {hit.line_no for hit in result.hits}
+    missing = [
+        f"{e['chrom']}:{e['pos']} {e['ref']}>{e['alt']}"
+        for line_no, e in sorted(by_line.items())
+        if line_no not in hit_lines
+    ]
+    assert not missing, f"{len(missing)} of {len(entries)} variants got no hit: {missing[:25]}"
     assert compared >= len(entries), f"only {compared} hits for {len(entries)} variants"
 
 
@@ -455,8 +525,10 @@ def _residue_matches(klass: str, entry: dict, event: dict, ours: int) -> bool:
         return False
     if klass == "frameshift":
         # ClinVar names the first residue whose letter changes, which can be a codon
-        # after the first one the event touches.
-        return ours + 1 <= clinvar
+        # after the first one the event touches — so compare against that residue,
+        # worked out from the sequence. "Anywhere at or after ours" accepted any
+        # ClinVar residue however far downstream.
+        return event["first_changed"] is not None and clinvar == event["first_changed"] + 1
     if klass == "insertion" and "dup" not in entry["protein"]:
         # We number the first inserted residue — HGVS's right-hand flank.
         return clinvar + 1 in (ours + 1, ours + 2)
@@ -536,22 +608,48 @@ def test_an_indel_padded_outside_its_exon_is_classified_on_what_it_changes(matri
         ("padding_outside_exon", "-"), []
     )
     checked = 0
+    edge_checked = 0
     for entry in entries:
-        if _our_event(entry["record"], entry) is None:
-            continue  # nothing it changes is coding here either
         out = classify(validator, entry["record"], "canonical", entry)
-        assert out["consequence"] not in (None, "intronic"), entry["name"]
-        checked += 1
-    assert checked, "no exon-edge indel with coding changed bases was sampled"
+        if _our_event(entry["record"], entry) is not None:
+            # Every changed base is coding: classified on what it changes.
+            assert out["consequence"] not in (None, "intronic"), entry["name"]
+            checked += 1
+            continue
+        partial = _partial_span(entry["record"], entry)
+        if partial is None:
+            continue  # nothing it changes is coding here either
+        # Partly coding: where the span leaves the coding sequence decides the class.
+        if partial["intronic"]:
+            expected = {"splice_acceptor_variant", "splice_donor_variant"}
+        elif min(partial["mapped"]) < 3:
+            expected = {"start_lost"}
+        else:
+            expected = None  # out through the 3' end: the length class stands
+        where = f"{entry['name']}: partly coding span, we say {out['consequence']}"
+        if expected:
+            assert out["consequence"] in expected, where
+        else:
+            assert out["consequence"] not in (None, "intronic"), where
+        edge_checked += 1
+    # Partly coding spans are not required: ClinVar's ``(p.`` filter tends to drop
+    # them (splice and 5'UTR changes are often named ``p.?`` or not at all). The
+    # synthetic cases in test_clinical_validate_orf.py are their guaranteed coverage.
+    assert checked, (
+        f"no exon-edge indel with coding changed bases was sampled "
+        f"({edge_checked} partly coding spans were)"
+    )
 
     chrom, pos, ref, alt = GNB1_EXON_EDGE
     records = [
         r for r in index.lookup_span(chrom, pos, pos + len(ref) - 1) if r.gene_name == "GNB1"
     ]
-    if records:
-        pinned = {"pos": pos, "ref": ref, "alt": alt}
-        outs = {classify(validator, r, "canonical", pinned)["consequence"] for r in records}
-        assert "frameshift_variant" in outs, outs
+    # Asserted, not skipped: an index without GNB1 here would pass the pinned case
+    # without ever running it.
+    assert records, f"pinned GNB1 exon-edge case {chrom}:{pos} not found in {INDEX}"
+    pinned = {"pos": pos, "ref": ref, "alt": alt}
+    outs = {classify(validator, r, "canonical", pinned)["consequence"] for r in records}
+    assert "frameshift_variant" in outs, outs
 
 
 # ----------------------------------------------------------------------
