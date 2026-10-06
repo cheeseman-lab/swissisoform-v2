@@ -459,10 +459,25 @@ class ConsequenceValidator:
             # is the whole point: the overrun is now reported rather than silently
             # producing a call that looks fully resolved.
             #
+            # Where the span leaves decides what it means, and two exits are answered
+            # before the length delta is: an exon edge inside the ORF (a splice site)
+            # and the start codon. The length delta counts every base in REF/ALT,
+            # intronic and UTR ones included, so it is the wrong question there.
+            edge = _span_edge_effect(
+                pos_map=pos_map,
+                coding_seq=coding_seq,
+                strand=strand,
+                span_start=span_start,
+                span_offsets=span_offsets,
+            )
+            if edge is not None:
+                return edge
+
             # For a substitution the class *depends* on translation, so a span that
-            # leaves the coding sequence leaves nothing to say: it is intronic. That
-            # is the second of the two ways a variant is called intronic — the first
-            # (above) is a span that maps nowhere and carries no residue.
+            # leaves the coding sequence at the 3' end leaves nothing to say: it is
+            # intronic. That is the second of the two ways a variant is called
+            # intronic — the first (above) is a span that maps nowhere and carries no
+            # residue.
             return {
                 "consequence": indel_term or "intronic",
                 "protein_pos": min(mapped) // 3,
@@ -834,6 +849,89 @@ def _translate_cached(seq: str) -> str:
     each used to retranslate the whole reference.
     """
     return _translate(seq)
+
+
+def _span_edge_effect(
+    *,
+    pos_map: dict[int, int],
+    coding_seq: str,
+    strand: str,
+    span_start: int,
+    span_offsets: list[int | None],
+) -> dict[str, Any] | None:
+    """Classify a span that is partly coding by *where* it leaves the coding sequence.
+
+    Two exits change the answer, and neither is visible in the REF/ALT length delta,
+    which counts the non-coding bases too:
+
+    * **Into an intron inside the ORF** — a splice site. A span that crosses an exon
+      edge from the intron side always takes the intronic base next to the exon,
+      which is the +1/+2 (donor) or -1/-2 (acceptor) dinucleotide, so the exon is no
+      longer spliced as annotated. ``AAGC>A`` over an acceptor removes one coding
+      base and two intronic ones; its delta of -3 read as ``inframe_deletion``,
+      which is outside ``LOF_CONSEQUENCES``. Reported as VEP does,
+      ``splice_acceptor_variant`` / ``splice_donor_variant``, whatever the delta.
+    * **Out of the 5' end, through the start codon** — the bases removed or
+      rewritten include the initiator, which a span reaching in from the 5'UTR
+      destroys whatever the delta: ``c.-3_3del`` is ``p.Met1?``. The substitution
+      and in-ORF indel paths ask :func:`start_codon_effect` about codon 0, and so
+      does this one, with the lost bases unknown (``N``).
+
+    "Inside the ORF" is the genomic envelope of the coding bases: a non-coding base
+    between the first and last coding base is intronic to this ORF, one outside it is
+    UTR or flank. Mapped offsets are in mRNA order, so the start-codon test needs no
+    strand; the donor/acceptor side does.
+
+    Returns:
+        The result dict, or None when neither applies (a span leaving through the
+        3' end) and the caller's length-delta answer stands.
+    """
+    positions = range(span_start, span_start + len(span_offsets))
+    coding = [p for p, o in zip(positions, span_offsets, strict=True) if o is not None]
+    noncoding = [p for p, o in zip(positions, span_offsets, strict=True) if o is None]
+    mapped = [o for o in span_offsets if o is not None]
+    gmin, gmax = min(pos_map), max(pos_map)
+
+    intronic = [p for p in noncoding if gmin < p < gmax]
+    if intronic:
+        # Plus strand: an intron below the coding bases precedes the exon in mRNA
+        # order, so it is the acceptor side. The minus strand reads the other way.
+        # Intronic bases on both sides (or between them) mean the span takes a whole
+        # exon edge pair; that is reported as the acceptor, the first one in mRNA
+        # order.
+        below = any(p < min(coding) for p in intronic)
+        above = any(p > max(coding) for p in intronic)
+        upstream = below if strand == "+" else above
+        downstream = above if strand == "+" else below
+        side = "donor" if downstream and not upstream else "acceptor"
+        return {
+            "consequence": f"splice_{side}_variant",
+            "protein_pos": min(mapped) // 3,
+            "aa_ref": None,
+            "aa_alt": None,
+            "codon_ref": None,
+            "codon_alt": None,
+            "note": (
+                f"changes {len(mapped)} coding base(s) and {len(intronic)} intronic "
+                f"base(s) across the exon's splice {side}"
+            ),
+            "validated": True,
+        }
+
+    if coding_seq and min(mapped) < 3:
+        start_override, start_note = start_codon_effect(coding_seq[:3], "NNN")
+        if start_override:
+            return {
+                "consequence": start_override,
+                "protein_pos": 0,
+                "aa_ref": _translate_cached(coding_seq)[:1],
+                "aa_alt": "",
+                "codon_ref": coding_seq[:3],
+                "codon_alt": None,
+                "note": f"{start_note} by a change running in from the 5'UTR",
+                "validated": True,
+            }
+    return None
 
 
 def _indel_result(
