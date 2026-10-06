@@ -566,3 +566,32 @@ class TestSpanClassification:
         out = self.classify(113, "AAAGG", "A")
         assert out["consequence"] == "frameshift_variant"
         assert "leaves the ORF" in out["note"]
+
+    # -- an insertion before the stop codon, which the ORF excludes ------
+
+    def test_an_insertion_before_the_stop_codon_is_coding(self):
+        """``c.15_16insT``: after the last sense base, before the (excluded) stop.
+
+        Only one neighbour is in the ORF, because the ORF stops at its last sense
+        base — but the inserted base still shifts the frame through the stop.
+        """
+        out = self.classify(115, "A", "AT")
+        assert out["consequence"] == "frameshift_variant"
+        assert out["protein_pos"] == 5
+        assert out["validated"]
+
+    def test_an_inframe_insertion_before_the_stop_codon_is_coding(self):
+        out = self.classify(115, "A", "ATTT")
+        assert out["consequence"] == "inframe_insertion"
+        assert out["protein_pos"] == 5
+
+    def test_a_minus_strand_insertion_before_the_stop_codon_is_coding(self):
+        """On the minus strand the stop sits below the ORF: between 100 and 101."""
+        out = self.classify(100, "C", "CT", strand="-")
+        assert out["consequence"] == "frameshift_variant"
+        assert out["protein_pos"] == 5
+
+    def test_an_insertion_before_the_start_codon_adds_no_coding_bases(self):
+        """The 5' end has no excluded codon: an insertion there is in the UTR."""
+        assert self.classify(100, "C", "CT")["consequence"] == "intronic"
+        assert self.classify(115, "A", "AT", strand="-")["consequence"] == "intronic"

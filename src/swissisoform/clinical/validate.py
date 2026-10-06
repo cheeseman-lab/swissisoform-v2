@@ -427,6 +427,30 @@ class ConsequenceValidator:
             # map: with one side outside the coding sequence the insertion sits at an
             # exon edge or just outside the ORF, where it adds no coding bases.
             left, right = pos_map.get(span_start - 1), pos_map.get(span_start)
+            # One exception: the ORF ends at its last *sense* base and excludes the
+            # stop codon, so an insertion between the two has only one coding
+            # neighbour and yet adds bases to the reading frame — c.15_16insT shifts
+            # it through the stop. The 3' neighbour in mRNA order is the higher
+            # genomic base on the plus strand and the lower one on the minus strand.
+            # (pos_map alone cannot tell this from a CDS that ends exactly at an exon
+            # end with the stop in the next exon; that rare layout is read the same
+            # way, as it was before the both-neighbours rule.)
+            last = max(pos_map.values())
+            five_prime, three_prime = (left, right) if strand == "+" else (right, left)
+            if five_prime == last and three_prime is None and indel_term:
+                return {
+                    "consequence": indel_term,
+                    "protein_pos": (last + 1) // 3,
+                    "aa_ref": None,
+                    "aa_alt": None,
+                    "codon_ref": None,
+                    "codon_alt": None,
+                    "note": (
+                        "inserted between the last sense codon and the stop codon; "
+                        "residues past the CDS cannot be named"
+                    ),
+                    "validated": True,
+                }
             span_offsets = (
                 [min(left, right) + 1] if left is not None and right is not None else [None]
             )
