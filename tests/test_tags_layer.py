@@ -249,6 +249,30 @@ class TestFire:
         both = _registry(_row(label="Domain gained or lost")).get("t")
         assert both.label_for("truncated") == "Domain gained or lost"
 
+    def test_a_truncation_reads_the_unique_region_as_lost(self):
+        def label(text: str, orf_type: str, metric: str = "m") -> str:
+            return _registry(_row(label=text, metric=metric)).get("t").label_for(orf_type)
+
+        assert label("Unique region more basic", "truncated") == "Lost region more basic"
+        assert label("Long unique region", "truncated") == "Long lost region"
+        assert label("Motifs in unique region", "truncated") == "Motifs in lost region"
+        assert label("Unique region under selection", "truncated") == (
+            "Lost region under selection"
+        )
+        # An extension adds the region; a separate ORF is wholly unique.
+        assert label("Unique region more basic", "extended") == "Unique region more basic"
+        assert label("Unique region more basic", "uorf") == "Unique region more basic"
+        assert label("Constrained residues gained", "uorf") == "Constrained residues gained"
+        assert label("Domain gained or lost", "truncated") == "Domain gained or lost"
+        assert label("Basic unique region", "truncated") == "Basic lost region"
+
+    def test_an_sae_feature_gained_is_not_a_region_lost(self):
+        """SAE's "gained" is a feature the isoform gained, not the region's direction."""
+        tag = _registry(
+            _row(label="Strong feature gained", metric="abs:isoform_sae_top_gained_delta_max")
+        ).get("t")
+        assert tag.label_for("truncated") == "Strong feature gained"
+
     def test_per_stratum_cutoff(self):
         """One checkbox, one meaning per ORF type: the row's stratum picks the cutoff."""
         row = _row(tag_id="hi", metric="m", cutoff=5.0)
