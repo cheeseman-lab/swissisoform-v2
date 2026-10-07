@@ -410,6 +410,10 @@ def compare_structures(
             out["rmsd_shared_status"] = "no_shared_region"
         else:
             n = min(len(iso_shared), len(can_shared))
+            if diff_region_confidence == "initiator_met":
+                # The shared region opens on the installed Met, which substitutes
+                # the canonical residue there; pair only the residue-identical rest.
+                n -= 1
             if n < 3:  # too few points for a meaningful superposition
                 out["rmsd_shared_status"] = "no_shared_region"
             else:

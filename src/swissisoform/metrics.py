@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
+import numpy as np
 import pandas as pd
 
 from swissisoform.config import CELL_LINES
@@ -41,6 +42,22 @@ ABS_PREFIX = "abs:"
 # named it; both sides read this constant so the two cannot drift.
 LEN_SUFFIX = "__len"
 
+# Unique-vs-shared region ratios (`cmp_biophysics_<prop>_ratio`). ``ratio >= c``
+# only means "unique exceeds shared" when the shared denominator is positive: for
+# a property that crosses zero (GRAVY, Top-IDP disorder, instability index) a
+# negative denominator flips the inequality, so unique -0.6 / shared -0.3 reads
+# 2.0 — "more hydrophobic" for a region that is more hydrophilic. The comparator
+# already refuses ``enriched`` in that case (compare/paired.py); :func:`resolve`
+# applies the same guard to the ratio itself.
+RATIO_SUFFIX = "_ratio"
+SHARED_SUFFIX = "_shared"
+UNIQUE_SUFFIX = "_unique"
+
+# Properties whose region ratio is not sign-safe, carried instead as the signed
+# difference ``unique - shared`` (`tx:<prop>_unique_minus_shared`). Zero is then
+# a real null and the sign is the direction.
+SIGNED_REGION_PROPERTIES: tuple[str, ...] = ("gravy", "disorder", "instability_index")
+
 # Cell lines the expression columns are emitted for, in report order.
 SAMPLES = CELL_LINES
 
@@ -53,6 +70,19 @@ def _num(name: str) -> Callable[[pd.DataFrame], pd.Series]:
 def _abs_num(name: str) -> Callable[[pd.DataFrame], pd.Series]:
     """Read one numeric column as a magnitude (S2 scores |delta|)."""
     return lambda df: pd.to_numeric(df[name], errors="coerce").abs()
+
+
+def _region_difference(prop: str) -> Callable[[pd.DataFrame], pd.Series]:
+    """``unique - shared`` for one biophysical property, NaN where either is missing."""
+
+    def fn(df: pd.DataFrame) -> pd.Series:
+        stem = f"cmp_biophysics_{prop}"
+        pair = df.reindex(columns=[f"{stem}{UNIQUE_SUFFIX}", f"{stem}{SHARED_SUFFIX}"]).apply(
+            pd.to_numeric, errors="coerce"
+        )
+        return pair.iloc[:, 0] - pair.iloc[:, 1]
+
+    return fn
 
 
 def n_cell_lines(df: pd.DataFrame) -> pd.Series:
@@ -230,6 +260,14 @@ TRANSFORMS: tuple[Transform, ...] = (
         "abs_disorder_delta", _abs_num("cmp_biophysics_disorder_delta"), "S",
         "|disorder delta|", ("cmp_biophysics_disorder_delta",),
     ),
+    *(
+        Transform(
+            f"{prop}_unique_minus_shared", _region_difference(prop), "S",
+            f"{prop} (unique region minus shared region)",
+            (f"cmp_biophysics_{prop}{UNIQUE_SUFFIX}", f"cmp_biophysics_{prop}{SHARED_SUFFIX}"),
+        )
+        for prop in SIGNED_REGION_PROPERTIES
+    ),
 )
 
 BY_NAME: dict[str, Transform] = {t.name: t for t in TRANSFORMS}
@@ -275,13 +313,86 @@ def resolve(metric: str, df: pd.DataFrame) -> pd.Series | None:
         column = metric[: -len(LEN_SUFFIX)]
         if column not in df.columns:
             return None
-        return df[column].map(lambda v: float("nan") if v is None else float(len(v)))
+        # Anything but a sequence is a missing list. In the runtime frame that is
+        # NaN, not None (a row whose module the comparator skipped), and
+        # `len(nan)` raised — which `_attach_tags` swallows by dropping every tag.
+        return df[column].map(
+            lambda v: float(len(v)) if isinstance(v, (list, tuple, np.ndarray)) else float("nan")
+        )
     tx = BY_METRIC.get(metric)
     if tx is not None:
         return tx.fn(df) if tx.available(set(df.columns)) else None
     if metric in df.columns:
-        return pd.to_numeric(df[metric], errors="coerce")
+        values = pd.to_numeric(df[metric], errors="coerce")
+        shared = f"{metric[: -len(RATIO_SUFFIX)]}{SHARED_SUFFIX}"
+        if metric.endswith(RATIO_SUFFIX) and shared in df.columns:
+            # Not-evaluable rather than inverted: see RATIO_SUFFIX.
+            values = values.where(pd.to_numeric(df[shared], errors="coerce") > 0)
+        return values
     return None
+
+
+CHANGED_SUFFIX = "_changed"
+
+
+def _missing(value: object) -> bool:
+    return value is None or (isinstance(value, float) and pd.isna(value))
+
+
+def changed_state(metric: str, df: pd.DataFrame) -> pd.Series | None:
+    """Tri-state ``cmp_<module>_<field>_changed``, reading a one-sided None as a change.
+
+    The comparator emits ``None`` whenever exactly one side is missing
+    (compare/comparator.py ``_categorical_changes``), on the theory that the
+    module may have failed on one pane. For a categorical *call* that is usually
+    wrong: SignalP reports no cleavage site because the protein has no signal
+    peptide, so canonical ``None`` / isoform ``"CS pos: 23-24"`` is a signal
+    peptide gained, not an unknown. On cheeseman50 the cleavage-site tag fired on
+    0 of 48 evaluable rows while the prediction tag fired on the 2 isoforms that
+    gained one.
+
+    This re-derives the flag from the ``_canonical`` / ``_isoform`` columns the
+    comparator writes beside it:
+
+    - When the module's own ``<tool>_prediction`` pair is present, it says whether
+      the predictor ran on each side. Ran on both: ``None`` is "absent", so one
+      side present is ``True`` and neither is ``False``. Did not run on a side:
+      not-evaluable.
+    - Without that pair, ``True`` when exactly one side is present, not-evaluable
+      when both are missing.
+
+    Returns None when the frame lacks the value columns, so the caller can fall
+    back to the comparator's flag.
+    """
+    if not metric.endswith(CHANGED_SUFFIX):
+        return None
+    base = metric[: -len(CHANGED_SUFFIX)]
+    can_col, iso_col = f"{base}_canonical", f"{base}_isoform"
+    if can_col not in df.columns or iso_col not in df.columns:
+        return None
+    parts = base.split("_", 2)
+    ran_cols = None
+    if len(parts) == 3:
+        ran_base = f"{parts[0]}_{parts[1]}_{parts[2].split('_', 1)[0]}_prediction"
+        if f"{ran_base}_canonical" in df.columns and f"{ran_base}_isoform" in df.columns:
+            ran_cols = (f"{ran_base}_canonical", f"{ran_base}_isoform")
+
+    out: list[bool | None] = []
+    for i in range(len(df)):
+        can, iso = df[can_col].iloc[i], df[iso_col].iloc[i]
+        can_absent, iso_absent = _missing(can), _missing(iso)
+        if ran_cols is not None:
+            if _missing(df[ran_cols[0]].iloc[i]) or _missing(df[ran_cols[1]].iloc[i]):
+                out.append(None)
+                continue
+        elif can_absent and iso_absent:
+            out.append(None)
+            continue
+        if can_absent or iso_absent:
+            out.append(can_absent != iso_absent)
+        else:
+            out.append(bool(can != iso))
+    return pd.Series(out, index=df.index, dtype="object")
 
 
 def resolvable(metric: str, columns: set[str]) -> bool:
@@ -324,6 +435,7 @@ __all__: list[str] = [
     "BY_NAME",
     "BY_METRIC",
     "resolve",
+    "changed_state",
     "available",
     "required_list_columns",
 ]

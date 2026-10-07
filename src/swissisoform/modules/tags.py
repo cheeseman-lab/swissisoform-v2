@@ -30,6 +30,10 @@ so the object graph and the frame cannot drift:
     Flat string. A struct's *fields* change with the vocabulary, so two parquets
     built under different registry versions have different schemas; this is what
     lets a merge detect that instead of silently unioning two vocabularies.
+``isoform_tags_registry_sha256``
+    Flat string, :attr:`TagRegistry.sha256`. The name says which vocabulary; the
+    hash says which build of it, so a version rebuilt in place (cutoffs moved,
+    fields unchanged) is still detectable.
 """
 
 from __future__ import annotations
@@ -51,6 +55,7 @@ logger = logging.getLogger(__name__)
 STATES_COLUMN = "isoform_tags_states"
 CITATIONS_COLUMN = "isoform_tags_citations"
 VERSION_COLUMN = "isoform_tags_registry_version"
+SHA256_COLUMN = "isoform_tags_registry_sha256"
 
 
 class TagModule:
@@ -64,7 +69,7 @@ class TagModule:
     """
 
     MODULE_NAME: str = "tags"
-    OUTPUT_COLUMNS: list[str] = [STATES_COLUMN, CITATIONS_COLUMN, VERSION_COLUMN]
+    OUTPUT_COLUMNS: list[str] = [STATES_COLUMN, CITATIONS_COLUMN, VERSION_COLUMN, SHA256_COLUMN]
     SCOPE: str = "C"
 
     def __init__(self, registry: TagRegistry, config: PipelineConfig | None = None) -> None:
@@ -84,7 +89,7 @@ class TagModule:
         df: pd.DataFrame,
         sites: list[TranslationInitiationSite],
     ) -> pd.DataFrame:
-        """Return *df* with the three tag columns appended.
+        """Return *df* with the tag columns appended.
 
         Also writes ``site.isoform_annotations["tags"]`` for each site, so code
         working from ``Gene`` objects sees the same values the parquet carries.
@@ -103,6 +108,12 @@ class TagModule:
                 self._registry.version,
             )
             return df
+        if self._registry.provisional:
+            logger.warning(
+                "Tags: registry %s is provisional — %s",
+                self._registry.version,
+                self._registry.provisional,
+            )
         states, citations = tag_eval.fire(df, sites, self._registry, self._scoring)
         state_rows, citation_rows = tag_eval.to_structs(states, citations)
 
@@ -110,12 +121,15 @@ class TagModule:
         out[STATES_COLUMN] = state_rows
         out[CITATIONS_COLUMN] = citation_rows
         out[VERSION_COLUMN] = self._registry.version
+        sha = self._registry.sha256
+        out[SHA256_COLUMN] = sha
 
         for site, state, citation in zip(sites, state_rows, citation_rows, strict=False):
             site.isoform_annotations[self.MODULE_NAME] = {
                 "states": state,
                 "citations": citation,
                 "registry_version": self._registry.version,
+                "registry_sha256": sha,
             }
 
         fired = sum(1 for row in state_rows for v in row.values() if v is True)
@@ -176,6 +190,7 @@ def schema_overrides(df: pd.DataFrame) -> dict[str, pa.DataType]:
 
 __all__ = [
     "CITATIONS_COLUMN",
+    "SHA256_COLUMN",
     "STATES_COLUMN",
     "VERSION_COLUMN",
     "TagModule",

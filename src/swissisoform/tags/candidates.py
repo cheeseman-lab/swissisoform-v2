@@ -543,6 +543,11 @@ def evaluate(df: pd.DataFrame, cands: Iterable[Candidate]) -> dict[str, np.ndarr
             raw = df[cand.metric] if cand.metric in df.columns else None
             if raw is None:
                 continue
+            # Same reading the evaluator fires with, so the sweep's rate is the
+            # runtime rate.
+            changed = metrics.changed_state(cand.metric, df)
+            if changed is not None:
+                raw = changed
             fired = raw.map({True: 1, False: 0}).to_numpy(dtype="float64", na_value=np.nan)
             state = np.where(np.isnan(fired), -1.0, fired)
             state = np.where(~orf.isin(cand.valid_for).to_numpy(), -1.0, state)
@@ -606,10 +611,18 @@ class Funnel:
 
 
 def _catalog_flag(by_feature: dict[str, pd.Series], metric: str, key: str) -> Any:
-    """Catalog field for a metric, resolving a magnitude back to its signed column."""
+    """Catalog field for a metric, resolving a magnitude back to its signed column.
+
+    A synthesized ``<col>__len`` reads the catalog's ``n_<col>`` row, which is
+    where the catalog records that a count column already carries the length —
+    ``cmp_motifs_hits_in_diff_region__len`` equals ``cmp_motifs_n_hits_in_diff_region``
+    on every full_catalog row, and the sweep should cut the real column.
+    """
     row = by_feature.get(metric)
     if row is None and metric.startswith(metrics.ABS_PREFIX):
         row = by_feature.get(metric[len(metrics.ABS_PREFIX):])
+    if row is None and metric.endswith(metrics.LEN_SUFFIX):
+        row = by_feature.get(f"n_{metric[: -len(metrics.LEN_SUFFIX)]}")
     return None if row is None else row.get(key)
 
 
@@ -641,6 +654,17 @@ def apply_filters(
             if lo is None or hi is None or lo == hi:
                 funnel.drop("constant")
                 continue
+            # A region ratio over a denominator that goes negative is not
+            # monotone in "unique > shared" (metrics.RATIO_SUFFIX); its signed
+            # `tx:<prop>_unique_minus_shared` twin carries the claim instead.
+            if cand.metric.endswith(metrics.RATIO_SUFFIX):
+                shared = dist.summary(
+                    f"{cand.metric[: -len(metrics.RATIO_SUFFIX)]}{metrics.SHARED_SUFFIX}",
+                    STRATUM_ALL,
+                )
+                if shared is not None and (shared.get("min") or 0.0) < 0:
+                    funnel.drop("ratio over a sign-crossing denominator")
+                    continue
         # A tag belongs to a category. Metrics the catalog cannot assign a CDLMPS
         # letter to are coordinates and identity fields (`position`, `orf_exons`),
         # which cannot be any category's checkbox.

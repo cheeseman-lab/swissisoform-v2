@@ -12,10 +12,18 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from swissisoform.contract import NO_CANONICAL_BASELINE_ORFS
 from swissisoform.distributions import SEPARATE_ORF_TYPES
+from swissisoform.metrics import SIGNED_REGION_PROPERTIES
 
 PAIRED_ORF_TYPES: tuple[str, ...] = ("extended", "truncated")
 ALL_ORF_TYPES: tuple[str, ...] = PAIRED_ORF_TYPES + SEPARATE_ORF_TYPES
+# ORF types whose unique region was canonical coding sequence — the only ones a
+# unique-region constraint signal measures anything on. Derived from the same
+# constant M1's scorer gates on, so the tag layer and the criterion cannot drift.
+CANONICAL_BASELINE_ORF_TYPES: tuple[str, ...] = tuple(
+    t for t in ALL_ORF_TYPES if t not in {o.value for o in NO_CANONICAL_BASELINE_ORFS}
+)
 
 
 # ---------------------------------------------------------------------------
@@ -183,20 +191,19 @@ CRITERION_LABELS: dict[str, str] = {
     "S3_sae": "Interpretable features shift",
 }
 
-# Criteria whose cutoff comes from the frozen distribution rather than from
-# `ScoringConfig`, whatever `--cutoffs` says. Per-criterion because the flag is
-# global: `--cutoffs distribution` would recalibrate all sixteen.
+# Criteria whose registry cutoff comes from the frozen distribution rather than
+# from `ScoringConfig`, whatever `--cutoffs` says. Per-criterion because the flag
+# is global: `--cutoffs distribution` would recalibrate all sixteen.
 #
-# S3 is here and S2 is not, measured on full_catalog (6,462 isoforms) rather
-# than on the cheeseman50 coreset, which over-represents high-SAE-delta
-# isoforms by construction. S2's three branches sit at p88-p89 and fire
-# 11.8-12.9% each, rolling up to 20.2% — mid-band, and the sweep would move all
-# three to p60 (~4x looser, 56.9% roll-up). Neither number is discovered: both
-# are magnitudes, which carry no anchor by design, and no histogram break was
-# found, so the cascade falls through to a bare percentile that *sets* the fire
-# rate. Given that, the existing S2 numbers are kept and only S3 moves
-# (10.0 -> 10.96, 46.1% -> 40.0%).
-SWEPT_CUTOFF_CRITERIA: frozenset[str] = frozenset({"S3_sae"})
+# Empty. v3 put S3 here (s3_top_delta_min 10.0 -> 11.376, a bare p60 on the
+# truncated stratum of the pre-rerun catalog), and firing at it gave the same
+# parquet two S3 answers: `isoform_scoring_criteria.S3_sae` and the S3 tag
+# disagreed on 7 of 50 cheeseman50 rows. Derived tags now score at the scorer's
+# own config regardless (`evaluate.fire`), so a swept number here is only ever a
+# proposal; the builder records the distribution's cut in the row's note.
+# Moving S3 is a change to `ScoringConfig.s3_top_delta_min`, made once against
+# the post-rerun population.
+SWEPT_CUTOFF_CRITERIA: frozenset[str] = frozenset()
 
 # The column the scorer's own per-criterion verdict lands in, once `load_run`
 # flattens the `isoform_scoring_criteria` struct. Reading a criterion here — as
@@ -226,6 +233,7 @@ def seeds_for_criterion(criterion_id: str) -> tuple[CriterionSeed, ...]:
 ANCHOR_RULES: tuple[tuple[re.Pattern[str], float, str], ...] = (
     (re.compile(r"(_ratio|_enrichment)$"), 1.0, "ratio null hypothesis"),
     (re.compile(r"_delta(_max)?$"), 0.0, "no change"),
+    (re.compile(r"_unique_minus_shared$"), 0.0, "regions do not differ"),
     (re.compile(r"phylop"), 0.0, "neutral evolution"),
 )
 
@@ -258,7 +266,6 @@ def anchor_for(metric: str) -> tuple[float, str] | None:
 # fill rate is a fact about the pipeline.
 VALIDITY_OVERRIDES: dict[str, tuple[str, ...]] = {
     # No shared region ⇒ no denominator, no retained core to compare.
-    "isoform_variant_intersection_gnomad_depletion_ratio": PAIRED_ORF_TYPES,
     "isoform_variant_intersection_disease_enrichment_ratio": PAIRED_ORF_TYPES,
     "isoform_structure_rmsd_shared": PAIRED_ORF_TYPES,
     "isoform_structure_shared_region_len": PAIRED_ORF_TYPES,
@@ -268,10 +275,29 @@ VALIDITY_OVERRIDES: dict[str, tuple[str, ...]] = {
     "isoform_conservation_phastcons_shared_region_mean": PAIRED_ORF_TYPES,
     "tx:min_shared_plddt": PAIRED_ORF_TYPES,
     "tx:sae_top_delta": PAIRED_ORF_TYPES,
-    # The unique region of an extension was never coding, so neither germline
-    # signal measures protein constraint there (see category-pass.txt).
-    "isoform_plm_vep_constraint_enrichment": ("truncated",),
+    **{f"tx:{p}_unique_minus_shared": PAIRED_ORF_TYPES for p in SIGNED_REGION_PROPERTIES},
+    # The unique region of an extension (or of a separate ORF) was never coding,
+    # so no germline-constraint signal measures protein constraint there — M1's
+    # NO_CANONICAL_BASELINE_ORFS gate (see category-pass.txt).
+    **{
+        m: CANONICAL_BASELINE_ORF_TYPES
+        for m in (
+            "isoform_plm_vep_constraint_enrichment",
+            "isoform_plm_vep_constraint_delta",
+            "isoform_plm_vep_n_constrained_positions_unique",
+            "isoform_variant_intersection_gnomad_depletion_ratio",
+        )
+    },
 }
+
+
+def declared_validity(metric: str) -> tuple[str, ...] | None:
+    """The hand-declared ORF types *metric* is defined for, or None if undeclared.
+
+    The evaluator enforces this at firing time as well, so a registry frozen
+    before an override was added still cannot fire where the metric is undefined.
+    """
+    return VALIDITY_OVERRIDES.get(metric)
 
 
 def validity_for(metric: str, null_pattern: str | None) -> tuple[str, ...]:
@@ -413,13 +439,18 @@ TAG_LABELS: dict[tuple[str, str], str] = {
     ("isoform_structure_ptm_canonical", ">="): "Confident canonical fold",
     # ── S, structural characteristics ──────────────────────────────────
     ("cmp_interproscan_n_real_domains_changed_in_diff_region", ">="): "Domain gained or lost",
-    ("cmp_motifs_hits_in_diff_region__len", ">="): "Motifs in unique region",
+    ("cmp_motifs_n_hits_in_diff_region", ">="): "Motifs in unique region",
     ("tx:sae_top_delta", ">="): "Interpretable features shift",
     ("abs:isoform_sae_top_gained_delta_max", ">="): "Strong feature gained",
     ("tx:abs_gravy_delta", ">="): "Hydropathy shifts",
     ("tx:abs_fraction_charged_delta", ">="): "Charge shifts",
     ("tx:abs_disorder_delta", ">="): "Disorder shifts",
-    ("cmp_biophysics_gravy_ratio", ">="): "Unique region hydrophobic",
+    ("tx:gravy_unique_minus_shared", ">="): "Unique region more hydrophobic",
+    ("tx:gravy_unique_minus_shared", "<"): "Unique region more hydrophilic",
+    ("tx:disorder_unique_minus_shared", ">="): "Unique region more disordered",
+    ("tx:disorder_unique_minus_shared", "<"): "Unique region more ordered",
+    ("tx:instability_index_unique_minus_shared", ">="): "Unique region less stable",
+    ("tx:instability_index_unique_minus_shared", "<"): "Unique region more stable",
     ("cmp_biophysics_aromaticity_ratio", ">="): "Unique region aromatic",
     ("cmp_biophysics_pipi_propensity_ratio", ">="): "Unique region pi-pi prone",
     ("cmp_biophysics_mean_window_entropy_ratio", ">="): "Unique region high entropy",
@@ -428,11 +459,9 @@ TAG_LABELS: dict[tuple[str, str], str] = {
     ("cmp_biophysics_length_ratio", ">="): "Long unique region",
     ("cmp_biophysics_aa_diversity_ratio", ">="): "Unique region varied",
     # Re-derived from the *_enriched booleans: same claim, distribution cutoff.
-    ("cmp_biophysics_disorder_ratio", ">="): "Unique region disordered",
     ("cmp_biophysics_fraction_disorder_promoting_ratio", ">="): "Disorder-promoting residues",
     ("cmp_biophysics_fraction_charged_ratio", ">="): "Unique region charged",
     ("cmp_biophysics_pI_ratio", ">="): "Unique region more basic",
-    ("cmp_biophysics_instability_index_ratio", ">="): "Unique region unstable",
     ("cmp_biophysics_llps_score_ratio", ">="): "Phase-separation prone",
     ("cmp_biophysics_prionlike_fraction_ratio", ">="): "Prion-like unique region",
     ("cmp_biophysics_fraction_lcr_ratio", ">="): "Low-complexity unique region",

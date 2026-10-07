@@ -244,6 +244,37 @@ def test_unknown_campaign_exits_two(campaign: Path) -> None:
     assert report is None
 
 
+def test_tag_registry_rebuilt_between_shards_is_fatal(campaign: Path) -> None:
+    """Same version name, different content hash: the cutoffs differ across shards."""
+    for k, genes in SHARDS.items():
+        sha = ("b" if k == 2 else "a") * 64
+        write_shard(
+            campaign,
+            k,
+            genes,
+            fingerprint_of=k,
+            statuses={
+                merge.TAG_VERSION_COLUMN: ["v3"] * len(genes),
+                merge.TAG_SHA256_COLUMN: [sha] * len(genes),
+            },
+        )
+    code, _ = run(campaign)
+    assert code == 1
+    assert not (campaign / CAMPAIGN / "all_paired.parquet").exists()
+
+
+def test_one_tag_registry_build_merges(campaign: Path) -> None:
+    write_all(
+        campaign,
+        statuses={
+            merge.TAG_VERSION_COLUMN: ["v3", "v3"],
+            merge.TAG_SHA256_COLUMN: ["a" * 64] * 2,
+        },
+    )
+    code, _ = run(campaign)
+    assert code == 0
+
+
 def test_manifest_from_another_campaign_is_refused(campaign: Path) -> None:
     manifest = campaign / CAMPAIGN / "split_manifest.txt"
     manifest.write_text(manifest.read_text().replace(f"campaign\t{CAMPAIGN}", "campaign\tother"))
