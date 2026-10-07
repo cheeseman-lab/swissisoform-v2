@@ -15,6 +15,8 @@ from swissisoform.config import PipelineConfig, ScoringConfig
 from swissisoform.models import ORFType, TranslationInitiationSite
 from swissisoform.modules.tags import (
     CITATIONS_COLUMN,
+    LABELS_COLUMN,
+    SHA256_COLUMN,
     STATES_COLUMN,
     VERSION_COLUMN,
     TagModule,
@@ -121,6 +123,25 @@ class TestRegistry:
     def test_empty_overrides_is_an_empty_dict(self):
         assert _registry(_row()).get("t").cutoff_overrides == {}
 
+    def test_content_hash_tracks_definitions_not_the_name(self):
+        """A version rebuilt in place with a moved cutoff must not look identical."""
+        a = _registry(_row(cutoff=1.0), version="v3")
+        assert a.sha256 == _registry(_row(cutoff=1.0), version="v9").sha256
+        assert a.sha256 != _registry(_row(cutoff=1.5), version="v3").sha256
+        assert len(a.sha256) == 64
+
+    def test_v3_is_marked_provisional(self):
+        assert "re-freeze" in _registry(_row(), version="v3").provisional
+        assert _registry(_row(), version="vtest").provisional == ""
+
+    def test_one_distributions_version_default_everywhere(self):
+        """The sweep, the builder and the reader must default to the same version."""
+        from swissisoform import distributions as dist_mod
+        from swissisoform.setup import tags as build_mod
+
+        assert build_mod.DEFAULT_DIST_VERSION == dist_mod.DEFAULT_VERSION
+        assert dist_mod.DEFAULT_VERSION in dist_mod.PROVISIONAL_VERSIONS
+
 
 # ---------------------------------------------------------------------------
 # effective_scoring
@@ -202,6 +223,81 @@ class TestFire:
         # A tag that did not apply cites nothing, even though the column has a value.
         assert pd.isna(citations["paired"].iloc[1])
 
+    def test_declared_validity_overrides_a_stale_registry(self):
+        """A unique-region constraint count is undefined where M1 is: off the canonical frame."""
+        metric = "isoform_plm_vep_n_constrained_positions_unique"
+        reg = _registry(_row(tag_id="nc", metric=metric, cutoff=0.5, valid_for=ALL_ORF))
+        df = _frame(["extended", "truncated", "uorf"], **{metric: [11.0, 3.0, 4.0]})
+        states, citations = tag_eval.fire(df, [], reg)
+        assert pd.isna(states["nc"].iloc[0])
+        assert bool(states["nc"].iloc[1]) is True
+        assert pd.isna(states["nc"].iloc[2])
+        assert pd.isna(citations["nc"].iloc[0])
+
+    def test_constraint_validity_tracks_the_m1_gate(self):
+        from swissisoform.contract import NO_CANONICAL_BASELINE_ORFS
+        from swissisoform.tags import seeds
+
+        gated = {o.value for o in NO_CANONICAL_BASELINE_ORFS}
+        allowed = seeds.declared_validity("isoform_plm_vep_n_constrained_positions_unique")
+        assert allowed == ("truncated",)
+        assert not gated & set(allowed)
+
+    def test_label_direction_follows_orf_type(self):
+        tag = _registry(_row(label="Constrained residues gained")).get("t")
+        assert tag.label_for("truncated") == "Constrained residues lost"
+        assert tag.label_for("extended") == "Constrained residues gained"
+        both = _registry(_row(label="Domain gained or lost")).get("t")
+        assert both.label_for("truncated") == "Domain gained or lost"
+
+    def test_a_truncation_reads_the_unique_region_as_lost(self):
+        def label(text: str, orf_type: str, metric: str = "m") -> str:
+            return _registry(_row(label=text, metric=metric)).get("t").label_for(orf_type)
+
+        assert label("Unique region more basic", "truncated") == "Lost region more basic"
+        assert label("Long unique region", "truncated") == "Long lost region"
+        assert label("Motifs in unique region", "truncated") == "Motifs in lost region"
+        assert label("Unique region under selection", "truncated") == (
+            "Lost region under selection"
+        )
+        # An extension adds the region; a separate ORF is wholly unique.
+        assert label("Unique region more basic", "extended") == "Unique region more basic"
+        assert label("Unique region more basic", "uorf") == "Unique region more basic"
+        assert label("Constrained residues gained", "uorf") == "Constrained residues gained"
+        assert label("Domain gained or lost", "truncated") == "Domain gained or lost"
+        assert label("Basic unique region", "truncated") == "Basic lost region"
+
+    def test_an_sae_feature_gained_is_not_a_region_lost(self):
+        """SAE's "gained" is a feature the isoform gained, not the region's direction."""
+        tag = _registry(
+            _row(label="Strong feature gained", metric="abs:isoform_sae_top_gained_delta_max")
+        ).get("t")
+        assert tag.label_for("truncated") == "Strong feature gained"
+
+    def test_a_missing_orf_type_takes_the_pooled_cutoff(self):
+        """NA in a string orf_type column must not crash the per-row resolution."""
+        from swissisoform.distributions import row_cutoffs
+
+        orf = pd.Series(["extended", None, "uorf", "truncated"], dtype="string")
+        got = row_cutoffs(orf, {"extended": 1.0, "separate": 3.0}, 0.5)
+        assert list(got) == [1.0, 0.5, 3.0, 0.5]
+
+    def test_per_stratum_cutoff(self):
+        """One checkbox, one meaning per ORF type: the row's stratum picks the cutoff."""
+        row = _row(tag_id="hi", metric="m", cutoff=5.0)
+        frame = pd.DataFrame([row], columns=list(reg_mod.REGISTRY_COLUMNS))
+        frame["cutoff_by_stratum"] = json.dumps({"extended": 1.0, "separate": 3.0})
+        reg = reg_mod.from_frame("v", frame, {})
+        assert "by stratum" in reg.get("hi").test
+        df = _frame(["extended", "truncated", "uorf", "uorf"], m=[2.0, 2.0, 2.0, 4.0])
+        states, _ = tag_eval.fire(df, [], reg)
+        # extended cuts at 1.0, truncated falls back to 5.0, uorf rolls up to separate.
+        assert [bool(v) for v in states["hi"]] == [True, False, False, True]
+
+    def test_registry_without_the_optional_column_still_loads(self):
+        assert "cutoff_by_stratum" not in reg_mod.REGISTRY_COLUMNS
+        assert _registry(_row()).get("t").cutoff_by_stratum == {}
+
     def test_empty_valid_for_means_everywhere(self):
         reg = _registry(_row(tag_id="any", metric="m", cutoff=0.0, valid_for=""))
         df = _frame(["uorf"], m=[5.0])
@@ -217,6 +313,28 @@ class TestFire:
         assert pd.isna(states["b"].iloc[2])
         # A boolean has no number behind it.
         assert citations["b"].isna().all()
+
+    def test_a_changed_flag_is_read_as_the_comparator_wrote_it(self):
+        """The comparator decides gained/lost vs not-run; the tag does not re-derive it.
+
+        A None flag stays not-evaluable even beside one-sided value columns, which
+        the evaluator used to reinterpret (``metrics.changed_state``, now removed).
+        """
+        base = "cmp_signalp_signalp_cleavage_site"
+        reg = _registry(
+            _row(tag_id="cs", kind=reg_mod.KIND_BOOL, metric=f"{base}_changed", cutoff=None)
+        )
+        df = _frame(
+            ["extended"] * 3,
+            **{
+                f"{base}_changed": [True, False, None],
+                f"{base}_canonical": [None, None, None],
+                f"{base}_isoform": ["CS pos: 23-24", None, "CS pos: 4"],
+            },
+        )
+        states, _ = tag_eval.fire(df, [], reg)
+        got = [None if pd.isna(v) else bool(v) for v in states["cs"]]
+        assert got == [True, False, None]
 
     def test_missing_column_yields_an_all_null_column_not_a_missing_one(self):
         """The struct's fields must depend on the registry, not on the run."""
@@ -299,25 +417,60 @@ class TestDerived:
         states, _ = tag_eval.fire(df, [_site()], reg)
         assert states["l1"].isna().all()
 
-    def test_derived_tag_sees_the_registry_cutoff(self):
-        """The gate stays; only the number moves."""
+    def test_derived_tag_scores_at_the_scoring_config_not_the_registry(self, caplog):
+        """A derived tag equals its criterion: a registry override is reported, not applied.
+
+        v3 swept S3 to 11.376 while the scorer used 10.0, so the same parquet
+        carried two S3 answers on 7 of 50 cheeseman50 rows.
+        """
+        site = _site()
+        site.isoform_annotations["sae"] = {
+            "status": "ok",
+            "top_gained_delta_max": 10.5,
+            "top_lost_delta_max": -2.0,
+        }
+        df = _frame(["truncated"], m=[1.0])
+        reg = _registry(
+            _row(
+                tag_id="s3",
+                category="S",
+                kind=reg_mod.KIND_DERIVED,
+                criterion_id="S3_sae",
+                metric="",
+                cutoff=None,
+                cutoff_source="distribution",
+                cutoff_overrides=json.dumps({"s3_top_delta_min": 11.37578}),
+            )
+        )
+        cfg = ScoringConfig()
+        criterion = derived_mod.score_criterion("S3_sae", site, cfg).value
+        with caplog.at_level("WARNING"):
+            states, _ = tag_eval.fire(df, [site], reg, cfg)
+        assert criterion is True
+        assert bool(states["s3"].iloc[0]) is criterion
+        assert "s3_top_delta_min" in caplog.text
+
+    def test_derived_tag_follows_a_non_default_scoring_config(self):
+        """Whatever config the scorer ran at, the tag runs at the same one."""
         site = _site()
         site.isoform_annotations["conservation_frame"] = {
             "summary": {"status": "ok"},
             "primate_mean_pident": 0.6,
         }
         df = _frame(["truncated"], m=[1.0])
-        row = dict(
-            tag_id="c1",
-            kind=reg_mod.KIND_DERIVED,
-            criterion_id="C1_primate_conservation",
-            metric="",
-            cutoff=None,
+        reg = _registry(
+            _row(
+                tag_id="c1",
+                kind=reg_mod.KIND_DERIVED,
+                criterion_id="C1_primate_conservation",
+                metric="",
+                cutoff=None,
+                cutoff_overrides=json.dumps({"c1_pident_min": 0.8}),
+            )
         )
-        strict = _registry(_row(**row, cutoff_overrides=json.dumps({"c1_pident_min": 0.8})))
-        loose = _registry(_row(**row, cutoff_overrides=json.dumps({"c1_pident_min": 0.5})))
-        assert bool(tag_eval.fire(df, [site], strict)[0]["c1"].iloc[0]) is False
-        assert bool(tag_eval.fire(df, [site], loose)[0]["c1"].iloc[0]) is True
+        loose = ScoringConfig(c1_pident_min=0.5)
+        assert bool(tag_eval.fire(df, [site], reg, loose)[0]["c1"].iloc[0]) is True
+        assert bool(tag_eval.fire(df, [site], reg)[0]["c1"].iloc[0]) is False
 
     def test_unknown_criterion_is_a_build_error_not_a_null(self):
         with pytest.raises(KeyError):
@@ -338,12 +491,28 @@ class TestModule:
         out = TagModule(reg, PipelineConfig()).annotate_frame(df, sites)
 
         assert list(out[VERSION_COLUMN]) == ["v7", "v7"]
+        assert list(out[SHA256_COLUMN]) == [reg.sha256, reg.sha256]
         assert out[STATES_COLUMN].iloc[0] == {"hi": False}
         assert out[STATES_COLUMN].iloc[1] == {"hi": True}
         assert out[CITATIONS_COLUMN].iloc[1] == {"hi": 3.0}
         # The object graph carries the same values as the frame.
         assert sites[1].isoform_annotations["tags"]["states"] == {"hi": True}
         assert sites[1].isoform_annotations["tags"]["registry_version"] == "v7"
+
+    def test_labels_read_for_each_rows_orf_type(self):
+        """The resolved label travels in the parquet and on the site object."""
+        reg = _registry(_row(tag_id="hi", metric="m", cutoff=2.0, label="Unique region more basic"))
+        df = _frame(["extended", "truncated", "uorf"], m=[1.0, 3.0, 3.0])
+        sites = [_site("a"), _site("b"), _site("c")]
+
+        out = TagModule(reg).annotate_frame(df, sites)
+
+        assert list(out[LABELS_COLUMN]) == [
+            {"hi": "Unique region more basic"},
+            {"hi": "Lost region more basic"},
+            {"hi": "Unique region more basic"},
+        ]
+        assert sites[1].isoform_annotations["tags"]["labels"] == {"hi": "Lost region more basic"}
 
     def test_input_frame_not_mutated(self):
         reg = _registry(_row(tag_id="hi", metric="m", cutoff=2.0))
@@ -378,6 +547,7 @@ class TestParquetRoundTrip:
         back = pd.read_parquet(path)
         assert back[STATES_COLUMN].iloc[0] == {"hi": True}
         assert back[STATES_COLUMN].iloc[1] == {"hi": None}
+        assert back[LABELS_COLUMN].iloc[0] == {"hi": "A tag"}
 
 
 # ---------------------------------------------------------------------------
@@ -446,6 +616,16 @@ class TestSchemaOverrides:
 
         df = pd.DataFrame({VERSION_COLUMN: ["v_absent"]})
         assert schema_overrides(df) == {}
+
+    def test_the_labels_struct_is_declared_as_strings(self, monkeypatch):
+        import pyarrow as pa
+
+        from swissisoform.modules import tags as tags_mod
+
+        reg = _registry(_row(tag_id="hi", metric="m", cutoff=2.0))
+        monkeypatch.setattr(tags_mod, "load_registry", lambda _v: reg)
+        types = tags_mod.schema_overrides(pd.DataFrame({VERSION_COLUMN: ["vtest"]}))
+        assert types[LABELS_COLUMN] == pa.struct([pa.field("hi", pa.string())])
 
     def test_no_tag_columns_means_no_overrides(self):
         from swissisoform.modules.tags import schema_overrides

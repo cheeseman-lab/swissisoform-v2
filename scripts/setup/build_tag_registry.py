@@ -15,9 +15,13 @@ Build ``--cutoffs config`` first. It cuts the criterion tags at their live
 criterion tags must reproduce ``isoform_scoring_criteria`` row for row before any
 cutoff is allowed to move.
 
+v1 and v2 are historical: rebuilding either name today writes today's vocabulary
+under it. Name a new version (v4, ...) for a new build.
+
 Usage:
-    python scripts/setup/build_tag_registry.py --version v1 --cutoffs config
-    python scripts/setup/build_tag_registry.py --version v2 --cutoffs distribution
+    python scripts/setup/build_tag_registry.py --version v4 --cutoffs config
+    python scripts/setup/build_tag_registry.py --version v4 --dist-version v4 \
+        --cutoffs distribution
 """
 
 from __future__ import annotations

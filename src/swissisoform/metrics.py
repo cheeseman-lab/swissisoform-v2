@@ -13,9 +13,6 @@ their distributions, and the tag layer resolves them at firing time. A quantity
 computed one way for its cutoff and another way for its test would silently
 mis-fire, so :func:`resolve` is the single point both go through.
 
-Lifted from ``figures/scoring_cutoffs/plot_cutoff_distributions.py:63-138``, whose
-``SERIES`` registry remains the reference for how each criterion is plotted.
-
 Metric names are prefixed ``tx:`` so a derived quantity is never mistaken for a
 column that exists in the parquet.
 """
@@ -25,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
+import numpy as np
 import pandas as pd
 
 from swissisoform.config import CELL_LINES
@@ -44,6 +42,22 @@ ABS_PREFIX = "abs:"
 # named it; both sides read this constant so the two cannot drift.
 LEN_SUFFIX = "__len"
 
+# Unique-vs-shared region ratios (`cmp_biophysics_<prop>_ratio`). ``ratio >= c``
+# only means "unique exceeds shared" when the shared denominator is positive: for
+# a property that crosses zero (GRAVY, Top-IDP disorder, instability index) a
+# negative denominator flips the inequality, so unique -0.6 / shared -0.3 reads
+# 2.0 — "more hydrophobic" for a region that is more hydrophilic. The comparator
+# already refuses ``enriched`` in that case (compare/paired.py); :func:`resolve`
+# applies the same guard to the ratio itself.
+RATIO_SUFFIX = "_ratio"
+SHARED_SUFFIX = "_shared"
+UNIQUE_SUFFIX = "_unique"
+
+# Properties whose region ratio is not sign-safe, carried instead as the signed
+# difference ``unique - shared`` (`tx:<prop>_unique_minus_shared`). Zero is then
+# a real null and the sign is the direction.
+SIGNED_REGION_PROPERTIES: tuple[str, ...] = ("gravy", "disorder", "instability_index")
+
 # Cell lines the expression columns are emitted for, in report order.
 SAMPLES = CELL_LINES
 
@@ -56,6 +70,19 @@ def _num(name: str) -> Callable[[pd.DataFrame], pd.Series]:
 def _abs_num(name: str) -> Callable[[pd.DataFrame], pd.Series]:
     """Read one numeric column as a magnitude (S2 scores |delta|)."""
     return lambda df: pd.to_numeric(df[name], errors="coerce").abs()
+
+
+def _region_difference(prop: str) -> Callable[[pd.DataFrame], pd.Series]:
+    """``unique - shared`` for one biophysical property, NaN where either is missing."""
+
+    def fn(df: pd.DataFrame) -> pd.Series:
+        stem = f"cmp_biophysics_{prop}"
+        pair = df.reindex(columns=[f"{stem}{UNIQUE_SUFFIX}", f"{stem}{SHARED_SUFFIX}"]).apply(
+            pd.to_numeric, errors="coerce"
+        )
+        return pair.iloc[:, 0] - pair.iloc[:, 1]
+
+    return fn
 
 
 def n_cell_lines(df: pd.DataFrame) -> pd.Series:
@@ -233,6 +260,14 @@ TRANSFORMS: tuple[Transform, ...] = (
         "abs_disorder_delta", _abs_num("cmp_biophysics_disorder_delta"), "S",
         "|disorder delta|", ("cmp_biophysics_disorder_delta",),
     ),
+    *(
+        Transform(
+            f"{prop}_unique_minus_shared", _region_difference(prop), "S",
+            f"{prop} (unique region minus shared region)",
+            (f"cmp_biophysics_{prop}{UNIQUE_SUFFIX}", f"cmp_biophysics_{prop}{SHARED_SUFFIX}"),
+        )
+        for prop in SIGNED_REGION_PROPERTIES
+    ),
 )
 
 BY_NAME: dict[str, Transform] = {t.name: t for t in TRANSFORMS}
@@ -278,12 +313,22 @@ def resolve(metric: str, df: pd.DataFrame) -> pd.Series | None:
         column = metric[: -len(LEN_SUFFIX)]
         if column not in df.columns:
             return None
-        return df[column].map(lambda v: float("nan") if v is None else float(len(v)))
+        # Anything but a sequence is a missing list. In the runtime frame that is
+        # NaN, not None (a row whose module the comparator skipped), and
+        # `len(nan)` raised — which `_attach_tags` swallows by dropping every tag.
+        return df[column].map(
+            lambda v: float(len(v)) if isinstance(v, (list, tuple, np.ndarray)) else float("nan")
+        )
     tx = BY_METRIC.get(metric)
     if tx is not None:
         return tx.fn(df) if tx.available(set(df.columns)) else None
     if metric in df.columns:
-        return pd.to_numeric(df[metric], errors="coerce")
+        values = pd.to_numeric(df[metric], errors="coerce")
+        shared = f"{metric[: -len(RATIO_SUFFIX)]}{SHARED_SUFFIX}"
+        if metric.endswith(RATIO_SUFFIX) and shared in df.columns:
+            # Not-evaluable rather than inverted: see RATIO_SUFFIX.
+            values = values.where(pd.to_numeric(df[shared], errors="coerce") > 0)
+        return values
     return None
 
 

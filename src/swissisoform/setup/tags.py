@@ -28,10 +28,12 @@ Two cutoff sources, one flag:
 The flag is global, so a criterion that should be swept while the rest stay
 pinned names itself in ``seeds.SWEPT_CUTOFF_CRITERIA`` instead.
 
-Either way a criterion enters as a ``derived`` tag that runs its own scorer, with
-the cutoff handed to it through ``cutoff_overrides``. Only the numbers move; the
-gates the scorer applies around them do not. Swept tags have no ``ScoringConfig``
-equivalent and carry their distribution cutoff under both flags.
+Either way a criterion enters as a ``derived`` tag that runs its own scorer. Its
+cutoffs are recorded in ``cutoff_overrides``, but the evaluator scores derived
+tags at the run's ``ScoringConfig`` and only *reports* an override that differs —
+so a derived tag always equals its criterion, and a distribution build is a
+proposal for moving ``ScoringConfig``, not a second answer. Swept tags have no
+``ScoringConfig`` equivalent and carry their distribution cutoff under both flags.
 
 Driven by the thin CLI ``scripts/setup/build_tag_registry.py``.
 """
@@ -41,6 +43,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -59,16 +62,18 @@ from swissisoform.tags.registry import (
     KIND_DERIVED,
     KIND_LLM,
     KIND_THRESHOLD,
+    OPTIONAL_COLUMNS,
     REGISTRY_COLUMNS,
     REGISTRY_FILE,
     SIDECAR_FILE,
+    _overrides,
     axis_for,
     from_frame,
 )
 
 DEFAULT_CATALOG = ROOT / "figures" / "clustering_dims" / "feature_space" / "feature_catalog.csv"
 DEFAULT_CANDIDATES = ROOT / "figures" / "tag_vocab" / "tag_candidates.csv"
-DEFAULT_DIST_VERSION = "v3"
+DEFAULT_DIST_VERSION = dist_mod.DEFAULT_VERSION
 DEFAULT_RUN = "full_catalog"
 
 # The sweep's `kind` vocabulary is narrower than the registry's — it has no notion
@@ -84,9 +89,6 @@ REJECT_DECISIONS = frozenset({"remove", "drop"})
 
 class TagBuildError(RuntimeError):
     """Raised when the candidate table and the sweep cannot be reconciled."""
-
-
-
 
 
 
@@ -160,7 +162,7 @@ def sweep(
     funnel = cand_mod.Funnel()
     proposed = cand_mod.propose(catalog, dist, columns)
     kept = cand_mod.apply_filters(proposed, dist, by_feature, funnel)
-    return [cand_mod.choose_cutoff(c, dist, band) for c in kept]
+    return [cand_mod.cut_candidate(c, dist, band) for c in kept]
 
 
 def _warn_if_truncating(criterion_id: str, field: str, value: float, cutoffs: str) -> None:
@@ -249,6 +251,20 @@ def criterion_rows(
                     "distribution" if swept else cutoffs,
                 )
                 overrides[seed.config_field] = float(value)
+            # Kept as an annotation when the config number wins, so the reviewer
+            # still sees where the distribution would have cut.
+            if (
+                not swept
+                and cand is not None
+                and cand.cutoff is not None
+                and value is not None
+                and float(cand.cutoff) != float(value)
+            ):
+                pct = f", p{cand.cutoff_pctile:g}" if cand.cutoff_pctile is not None else ""
+                notes.append(
+                    f"Distribution cut {seed.config_field}={cand.cutoff:.6g} "
+                    f"({cand.cutoff_source}{pct}); not applied."
+                )
         # A citation needs one number. An either-or criterion has no single one,
         # so it gets none rather than an arbitrary branch's.
         metrics_ = [s.metric for s in branches if s.metric]
@@ -287,7 +303,11 @@ def candidate_row(cand: cand_mod.Candidate, label: str) -> dict[str, Any]:
 
     Swept tags have no ``ScoringConfig`` equivalent, so their cutoff is the
     distribution's under either ``--cutoffs`` mode; only the criterion tags differ.
+    A tag cut per ORF-type stratum carries those cutoffs as ``cutoff_by_stratum``
+    beside the pooled ``cutoff``, which stays the fallback, and its note records
+    how each stratum was cut.
     """
+    note = "; ".join(n for n in (cand.note, cand_mod.stratum_note(cand)) if n)
     return {
         "tag_id": cand.tag_id,
         "category": cand.category,
@@ -304,7 +324,8 @@ def candidate_row(cand: cand_mod.Candidate, label: str) -> dict[str, Any]:
         "criterion_id": cand.criterion_id,
         "source": cand.source,
         "blocked": cand.blocked,
-        "note": cand.note,
+        "note": note,
+        "cutoff_by_stratum": cand_mod.stratum_json(cand),
     }
 
 
@@ -369,6 +390,48 @@ def _check_scorer_names() -> None:
         )
 
 
+def _check_reviewed_strata(
+    candidates_csv: Path,
+    labels: dict[str, str],
+    by_id: dict[str, cand_mod.Candidate],
+    dist_version: str,
+) -> None:
+    """Refuse to freeze per-stratum cutoffs the reviewer never saw.
+
+    The registry takes its cutoffs from a fresh sweep, and the reviewed table only
+    contributes ``decision`` and labels — so a table swept before per-stratum
+    cutoffs existed (no ``cutoff_by_stratum`` column) or against other
+    distributions would let the build freeze cutoffs whose fire rates were never
+    in front of the reviewer. Every accepted swept tag's per-stratum cutoffs must
+    match the table's.
+    """
+    table = pd.read_csv(candidates_csv)
+    if "cutoff_by_stratum" in table.columns:
+        reviewed = {
+            str(r["tag_id"]): _overrides(r["cutoff_by_stratum"]) for _, r in table.iterrows()
+        }
+    else:
+        reviewed = {}
+    stale: list[str] = []
+    for tid in labels:
+        cand = by_id[tid]
+        if cand.kind != "code" or cand.source == "criterion":
+            continue
+        want, have = cand.cutoff_by_stratum, reviewed.get(tid, {})
+        same = set(want) == set(have) and all(
+            math.isclose(want[k], have[k], rel_tol=1e-9, abs_tol=1e-12) for k in want
+        )
+        if not same:
+            stale.append(tid)
+    if stale:
+        raise TagBuildError(
+            f"{len(stale)} accepted tag(s) carry per-stratum cutoffs that differ from "
+            f"{candidates_csv.name} ({', '.join(stale[:6])}). The table was swept "
+            "before per-stratum cutoffs or against other distributions; re-run "
+            f"`propose_candidates.py --version {dist_version}` and review it first."
+        )
+
+
 def build(
     *,
     catalog_csv: Path,
@@ -391,6 +454,7 @@ def build(
             f"{len(missing)} accepted tag(s) no longer proposed by the sweep — the "
             f"candidate table and the code have diverged: {', '.join(missing[:6])}"
         )
+    _check_reviewed_strata(candidates_csv, labels, by_id, dist_version)
 
     # A criterion candidate governs — it is what the reviewer marks and what the
     # Jaccard filter weighs — but it does not become the registry row. That row
@@ -402,7 +466,10 @@ def build(
         candidate_row(by_id[tid], labels[tid]) for tid in labels if by_id[tid].source != "criterion"
     ]
     rows.extend(criterion_rows(by_id, cutoffs=cutoffs, labels=labels))
-    frame = pd.DataFrame(rows, columns=list(REGISTRY_COLUMNS))
+    # Swept tags carry their per-stratum cutoffs (choose_cutoffs_by_stratum);
+    # criterion rows have none, since a derived tag fires at the scorer's config.
+    frame = pd.DataFrame(rows, columns=list(REGISTRY_COLUMNS) + list(OPTIONAL_COLUMNS))
+    frame["cutoff_by_stratum"] = frame["cutoff_by_stratum"].fillna("")
     frame = frame.sort_values(["category", "kind", "tag_id"], kind="stable").reset_index(drop=True)
     _check_metrics_resolve(frame, columns)
 
@@ -433,6 +500,7 @@ def write_sidecar(
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "cutoff_source": cutoffs,
         "distributions_version": dist_version,
+        "provisional": dist_mod.PROVISIONAL_VERSIONS.get(dist_version, ""),
         "source_run_for_columns": source_run,
         "candidates_csv": rel_to_root(candidates_csv),
         "candidates_csv_sha256": sha256_file(candidates_csv),
@@ -445,8 +513,14 @@ def write_sidecar(
             "yet rejected), not a selection.",
             "--cutoffs config only moves the criterion tags; swept tags have no "
             "ScoringConfig equivalent and keep their distribution cutoff either way.",
-            "Derived tags call their criterion's scorer, so their value equals the "
-            "criterion's by construction and no cutoff of theirs lives here.",
+            "A swept tag cut by an anchor or a break also carries cutoff_by_stratum: "
+            "the same cascade per ORF-type stratum (extended, truncated, separate; "
+            f"n >= {dist_mod.MIN_STRATUM_N}), kept only where it finds an anchor or a "
+            "break. A row's stratum without an entry falls back to the pooled cutoff.",
+            "Derived tags call their criterion's scorer at the run's ScoringConfig, "
+            "so their value equals the criterion's by construction. cutoff_overrides "
+            "records the numbers this build proposes; the evaluator reports a "
+            "difference but does not apply it.",
             "LLM tags carry no state from code. A consumer must render them as "
             "unanswered, never as off.",
         ],

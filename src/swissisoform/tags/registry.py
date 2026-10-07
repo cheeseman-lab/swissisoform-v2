@@ -22,15 +22,14 @@ Four kinds of tag, which is the whole taxonomy:
 ``bool``
     An existing boolean column, read as tri-state.
 ``derived``
-    Runs a scored criterion's own function (see :mod:`swissisoform.tags.derived`),
-    with that criterion's cutoffs taken from ``cutoff_overrides``. This is how all
+    Runs a scored criterion's own function (see :mod:`swissisoform.tags.derived`)
+    at the run's ``ScoringConfig``, so it equals the criterion. ``cutoff_overrides``
+    records the cutoffs the build proposed; they are reported, not applied. This is how all
     sixteen CDLMPS criteria enter the vocabulary, because a bare ``metric ⋈
     cutoff`` demonstrably cannot reproduce them — measured on cheeseman50, 5 of 13
     disagreed with the scorer, every one of them a gate the threshold form drops
     (a fold status of ``too_long`` with the pLDDT column still populated; a
-    criterion undefined for separate ORFs; an either-or over two inputs). Carrying
-    the cutoffs separately is what lets a calibrated registry move a criterion's
-    number *without* also discarding the gates around it.
+    criterion undefined for separate ORFs; an either-or over two inputs).
 ``llm``
     A judgment call for the M/P tool loop. Never fired by code; carried here so
     the vocabulary is complete and so a consumer can render it as *unanswered*
@@ -39,8 +38,10 @@ Four kinds of tag, which is the whole taxonomy:
 
 from __future__ import annotations
 
+import hashlib
 import json
-from dataclasses import dataclass
+import re
+from dataclasses import asdict, dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -52,9 +53,9 @@ REF_DIR = ROOT / "data" / "reference" / "tags"
 # v3 is the current vocabulary: v2's 44 tags plus S2_biophysics and S3_sae,
 # readmitted after the judge study showed their absence was what the tags arm
 # was being marked down for — 85% of its losses in Structural Characteristics
-# cite the biophysical or SAE evidence those two carry. S3's cutoff is swept
-# from the frozen distribution (`seeds.SWEPT_CUTOFF_CRITERIA`); S2 keeps its
-# config numbers, which measure well on the genome-wide population.
+# cite the biophysical or SAE evidence those two carry. The on-disk v3 carries a
+# swept S3 cutoff (11.376) in `cutoff_overrides`; the evaluator reports it and
+# fires S3 at the scoring config, like every derived tag.
 #
 # v3 also fixes a dead tag: `metrics.resolve` could not read a `<col>__len`
 # metric, so v2's `cmp_motifs_hits_in_diff_region__len` was null on every row of
@@ -66,6 +67,18 @@ REF_DIR = ROOT / "data" / "reference" / "tags"
 # vocabulary under the v1 name — so the on-disk v1 is a historical artifact, not
 # a rebuildable one.
 DEFAULT_VERSION = "v3"
+# v3 is cut from the provisional v3 distributions (see
+# `distributions.PROVISIONAL_VERSIONS`); rebuild it after the re-freeze.
+PROVISIONAL_VERSIONS: dict[str, str] = {
+    "v3": (
+        "cut from the provisional v3 distributions (Aug-12 full_catalog); "
+        "rebuild after the next genome-wide run and distributions re-freeze"
+    ),
+}
+
+# How a label names the unique region; a truncation reads it as the lost region
+# (``Tag.label_for``).
+_UNIQUE_REGION = re.compile(r"\b[Uu]nique region\b")
 
 REGISTRY_FILE = "registry.parquet"
 SIDECAR_FILE = "_setup.json"
@@ -99,6 +112,34 @@ REGISTRY_COLUMNS: tuple[str, ...] = (
     "blocked",
     "note",
 )
+
+# Columns a registry may carry but need not: absent from versions built before
+# they existed, so `from_frame` reads them with a default instead of refusing.
+#
+# ``cutoff_by_stratum`` is JSON ``{stratum: cutoff}`` for a threshold tag whose
+# number should differ by ORF type — a stratum is an ``orf_type`` or the
+# ``separate`` roll-up (``distributions.stratum_for``). A row's own ``orf_type``
+# wins over its roll-up, and a stratum with no entry falls back to ``cutoff``.
+# One pooled cutoff makes `length_ratio_hi` fire on 0.2% of extensions and 28.5%
+# of truncations; this is the format that lets a build fix that.
+OPTIONAL_COLUMNS: tuple[str, ...] = ("cutoff_by_stratum",)
+
+
+def threshold_test(
+    metric: str, direction: str, cutoff: float | None, by_stratum: dict[str, float]
+) -> str:
+    """One-line statement of a threshold test, per-stratum cutoffs included.
+
+    Shared by :attr:`Tag.test` and the sweep's ``Candidate.test``, so the
+    candidate table and the registry describe a cutoff the same way.
+    """
+    if by_stratum:
+        per = ", ".join(f"{k} {v:.6g}" for k, v in sorted(by_stratum.items()))
+        rest = "" if cutoff is None else f"; else {cutoff:.6g}"
+        return f"{metric} {direction} by stratum ({per}{rest})"
+    if cutoff is None:
+        return f"{metric} {direction} (no cutoff)"
+    return f"{metric} {direction} {cutoff:.6g}"
 
 
 class TagRegistryError(RuntimeError):
@@ -136,11 +177,39 @@ class Tag:
     source: str
     blocked: str
     note: str
+    cutoff_by_stratum: dict[str, float] = field(default_factory=dict)
 
     @property
     def code_fired(self) -> bool:
         """Whether the evaluator produces a state for this tag."""
         return self.kind in CODE_FIRED_KINDS and not self.blocked
+
+    def label_for(self, orf_type: str | None) -> str:
+        """The label as it reads for one isoform.
+
+        A tag about the unique region describes sequence the isoform *adds* on an
+        extension and sequence it *lost* on a truncation — the canonical stretch
+        ahead of the truncated start (``diff_region`` is canonical-space there).
+        The label table is written for the extension reading, so for a
+        truncation:
+
+        - "unique region" reads "lost region" ("Unique region more basic" →
+          "Lost region more basic", "Long unique region" → "Long lost region");
+        - a trailing " gained" reads " lost" ("Constrained residues gained" →
+          "Constrained residues lost").
+
+        Separate ORFs are wholly unique and keep the label as written. SAE tags
+        are left alone: their "gained" is a feature the isoform gained, compared
+        across both proteins, not something about the region.
+        """
+        if orf_type != "truncated" or "_sae_" in self.metric:
+            return self.label
+        label = _UNIQUE_REGION.sub(
+            lambda m: "Lost region" if m.group(0)[0] == "U" else "lost region", self.label
+        )
+        if label.endswith(" gained"):
+            label = label[: -len(" gained")] + " lost"
+        return label
 
     @property
     def test(self) -> str:
@@ -151,9 +220,7 @@ class Tag:
             return f"derived predicate for {self.criterion_id}"
         if self.kind == KIND_BOOL:
             return f"{self.metric} is true"
-        if self.cutoff is None:
-            return f"{self.metric} {self.direction} (no cutoff)"
-        return f"{self.metric} {self.direction} {self.cutoff:.6g}"
+        return threshold_test(self.metric, self.direction, self.cutoff, self.cutoff_by_stratum)
 
 
 @dataclass(frozen=True)
@@ -163,6 +230,24 @@ class TagRegistry:
     version: str
     tags: tuple[Tag, ...]
     provenance: dict[str, Any]
+
+    @property
+    def sha256(self) -> str:
+        """Content hash of the tag definitions — what fires, not when it was built.
+
+        A version name alone cannot tell two builds apart (v3 was rebuilt in place
+        once, 44 -> 46 tags), so every parquet stamps this beside the name. Hashed
+        over the parsed :class:`Tag` fields rather than the parquet bytes, so it
+        is stable across pyarrow versions and changes exactly when a label,
+        metric, direction, cutoff or validity does.
+        """
+        payload = json.dumps([asdict(t) for t in self.tags], sort_keys=True, default=str)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    @property
+    def provisional(self) -> str:
+        """Why this version must be rebuilt, or ``""`` for a settled one."""
+        return PROVISIONAL_VERSIONS.get(self.version, "")
 
     def __len__(self) -> int:
         """Number of tags, code-fired or not."""
@@ -254,6 +339,7 @@ def from_frame(version: str, frame: pd.DataFrame, provenance: dict[str, Any]) ->
             source=_str(row["source"]),
             blocked=_str(row["blocked"]),
             note=_str(row["note"]),
+            cutoff_by_stratum=_overrides(row.get("cutoff_by_stratum")),
         )
         for _, row in frame.iterrows()
     )
@@ -296,10 +382,12 @@ def load(version: str = DEFAULT_VERSION, root: Path | None = None) -> TagRegistr
 __all__ = [
     "CODE_FIRED_KINDS",
     "DEFAULT_VERSION",
+    "PROVISIONAL_VERSIONS",
     "KIND_BOOL",
     "KIND_DERIVED",
     "KIND_LLM",
     "KIND_THRESHOLD",
+    "OPTIONAL_COLUMNS",
     "REGISTRY_COLUMNS",
     "REGISTRY_FILE",
     "SIDECAR_FILE",

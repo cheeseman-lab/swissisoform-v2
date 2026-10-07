@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from swissisoform.compare.comparator import (
+    _PREDICTORS,
     Comparator,
+    _categorical_changes,
     _hits_overlapping,
     compare_genes,
 )
@@ -145,6 +147,128 @@ class TestScalarDeltas:
         assert cmp["flag_changed"] is True
         assert cmp["flag_canonical"] is False
         assert cmp["flag_isoform"] is True
+
+
+SIGNALP = _PREDICTORS["signalp"]
+
+
+class TestOneSidedCategorical:
+    """A missing value is "ran, found nothing" or "did not run", and they differ."""
+
+    @staticmethod
+    def _signalp(prediction: str | None, site: str | None) -> dict:
+        return {"signalp_prediction": prediction, "signalp_cleavage_site": site}
+
+    def test_value_on_one_side_with_both_runs_is_a_change(self):
+        """No signal peptide on the canonical, one on the isoform: a gain."""
+        out = _categorical_changes(
+            self._signalp("OTHER", None), self._signalp("SP", "CS pos: 23-24"), SIGNALP
+        )
+        assert out["signalp_cleavage_site_changed"] is True
+
+    def test_value_lost_with_both_runs_is_a_change(self):
+        out = _categorical_changes(
+            self._signalp("SP", "CS pos: 20-21"), self._signalp("OTHER", None), SIGNALP
+        )
+        assert out["signalp_cleavage_site_changed"] is True
+
+    def test_no_value_on_either_side_with_both_runs_is_no_change(self):
+        out = _categorical_changes(
+            self._signalp("OTHER", None), self._signalp("OTHER", None), SIGNALP
+        )
+        assert out["signalp_cleavage_site_changed"] is False
+
+    def test_a_side_that_did_not_run_is_unknown(self):
+        """The predictor missed the canonical (no cache): nothing is known there."""
+        out = _categorical_changes(
+            self._signalp(None, None), self._signalp("SP", "CS pos: 4"), SIGNALP
+        )
+        assert out["signalp_cleavage_site_changed"] is None
+        assert out["signalp_prediction_changed"] is None
+
+    def test_both_values_present_compare_by_value(self):
+        same = _categorical_changes(
+            self._signalp("SP", "CS pos: 9"), self._signalp("SP", "CS pos: 9"), SIGNALP
+        )
+        moved = _categorical_changes(
+            self._signalp("SP", "CS pos: 9"), self._signalp("SP", "CS pos: 4"), SIGNALP
+        )
+        assert same["signalp_cleavage_site_changed"] is False
+        assert moved["signalp_cleavage_site_changed"] is True
+
+    def test_nan_counts_as_absent(self):
+        """DeepLoc's signals column reads back as NaN, not None, when empty."""
+        out = _categorical_changes(
+            {"deeploc_prediction": "Cytoplasm", "deeploc_signals": float("nan")},
+            {"deeploc_prediction": "Nucleus", "deeploc_signals": "Nuclear localization signal"},
+            _PREDICTORS["localization"],
+        )
+        assert out["deeploc_signals_changed"] is True
+
+    def test_a_field_without_a_run_indicator_stays_unknown_when_one_sided(self):
+        out = _categorical_changes({"label": None}, {"label": "x"})
+        assert out["label_changed"] is None
+        both = _categorical_changes({"label": None}, {"label": None})
+        assert both["label_changed"] is False
+
+    def test_a_declared_module_flags_only_its_categorical_fields(self):
+        """Human TargetP never reports cTP: a probability None on both sides is no category."""
+        gene = _make_gene(
+            "MAA",
+            tis_sites=[
+                _make_site(
+                    orf_type=ORFType.EXTENDED,
+                    isoform_protein="MKMAA",
+                    diff_region=DifferentialRegion(
+                        isoform_start=0, isoform_end=2, sequence="MK",
+                        confidence="tail_verified",
+                    ),
+                    isoform_annotations={
+                        "targetp": {
+                            "targetp_prediction": "noTP", "targetp_ctp_prob": None,
+                            "targetp_cleavage_site": None,
+                        }
+                    },
+                )
+            ],
+            canonical_annotations={
+                "targetp": {
+                    "targetp_prediction": "noTP", "targetp_ctp_prob": None,
+                    "targetp_cleavage_site": None,
+                }
+            },
+        )
+        Comparator().compare([gene])
+        cmp = gene.tis_sites[0].comparison["targetp"]
+        assert "targetp_ctp_prob_changed" not in cmp
+        assert cmp["targetp_prediction_changed"] is False
+        assert cmp["targetp_cleavage_site_changed"] is False
+
+    def test_an_undeclared_module_has_no_ran_check(self):
+        """Only declared predictors read a missing value as absent."""
+        out = _categorical_changes(
+            {"tool_prediction": "x", "tool_site": None}, {"tool_prediction": "x", "tool_site": "y"}
+        )
+        assert out["tool_site_changed"] is None
+
+    def test_an_undeclared_field_numeric_on_either_side_is_a_scalar(self):
+        """No ``_changed`` for a numeric field: the missing ``_delta`` says unknown.
+
+        Flagging it would add a mostly-null column per numeric field, varying by
+        shard, to every undeclared module (structure, plm, conservation).
+        """
+        assert "gravy_changed" not in _categorical_changes({"gravy": 0.42}, {"gravy": None})
+        assert "gravy_changed" not in _categorical_changes({"gravy": None}, {"gravy": 0.42})
+
+    def test_a_predictor_missing_on_the_isoform_is_unknown_not_absent(self):
+        """Every declared field is flagged even when the isoform dict lacks it."""
+        out = _categorical_changes(self._signalp("SP", "CS pos: 4"), {}, SIGNALP)
+        assert out["signalp_cleavage_site_changed"] is None
+        assert out["signalp_prediction_changed"] is None
+
+    def test_every_predictor_declares_a_ran_field_among_its_calls(self):
+        for name, pred in _PREDICTORS.items():
+            assert pred.ran in pred.fields, name
 
 
 # ---------------------------------------------------------------------------

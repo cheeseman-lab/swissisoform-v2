@@ -39,6 +39,7 @@ from flask import (
 from markupsafe import Markup, escape
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+from swissisoform.clinical.significance import is_pathogenic
 from swissisoform.site.evidence import (
     CRITERIA_METRIC_LABELS,
     format_metric,
@@ -1152,7 +1153,7 @@ def _classify_interproscan_hits(ips_hits: Any) -> dict[str, list[dict[str, Any]]
 
 
 def _pathogenic(sig: Any) -> bool:
-    return str(sig or "").lower().startswith(("pathogenic", "likely"))
+    return is_pathogenic(sig)
 
 
 def _union_intervals(interval_lists: list[list[tuple[int, int]]]) -> list[tuple[int, int]]:

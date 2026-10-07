@@ -248,8 +248,9 @@ def scan(
     deadline = time.monotonic() + max_seconds if max_seconds else None
 
     for line_no, line in iter_data_lines(path):
-        # Checked per line, not per allele: at millions of records a clock read
-        # per allele is measurable, and one line of overshoot costs nothing.
+        # Checked per line here, and per allele below: a single record can carry up
+        # to MAX_ALTS_PER_RECORD alleles, each classified against every ORF it
+        # overlaps, so one line is not a bounded unit of work on its own.
         if max_records and counts.lines >= max_records:
             counts.stopped = "records"
             break
@@ -258,6 +259,9 @@ def scan(
             break
         counts.lines += 1
         for parsed in parse_line(line):
+            if deadline is not None and time.monotonic() > deadline:
+                counts.stopped = "time"
+                break
             if isinstance(parsed, Rejection):
                 counts.reject(parsed.reason)
                 continue
