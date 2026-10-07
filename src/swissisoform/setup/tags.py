@@ -160,7 +160,8 @@ def sweep(
     funnel = cand_mod.Funnel()
     proposed = cand_mod.propose(catalog, dist, columns)
     kept = cand_mod.apply_filters(proposed, dist, by_feature, funnel)
-    return [cand_mod.choose_cutoff(c, dist, band) for c in kept]
+    cut = [cand_mod.choose_cutoff(c, dist, band) for c in kept]
+    return [cand_mod.choose_cutoffs_by_stratum(c, dist, band) for c in cut]
 
 
 def _warn_if_truncating(criterion_id: str, field: str, value: float, cutoffs: str) -> None:
@@ -301,7 +302,11 @@ def candidate_row(cand: cand_mod.Candidate, label: str) -> dict[str, Any]:
 
     Swept tags have no ``ScoringConfig`` equivalent, so their cutoff is the
     distribution's under either ``--cutoffs`` mode; only the criterion tags differ.
+    A tag cut per ORF-type stratum carries those cutoffs as ``cutoff_by_stratum``
+    beside the pooled ``cutoff``, which stays the fallback, and its note records
+    how each stratum was cut.
     """
+    note = "; ".join(n for n in (cand.note, cand_mod.stratum_note(cand)) if n)
     return {
         "tag_id": cand.tag_id,
         "category": cand.category,
@@ -318,7 +323,8 @@ def candidate_row(cand: cand_mod.Candidate, label: str) -> dict[str, Any]:
         "criterion_id": cand.criterion_id,
         "source": cand.source,
         "blocked": cand.blocked,
-        "note": cand.note,
+        "note": note,
+        "cutoff_by_stratum": cand_mod.stratum_json(cand),
     }
 
 
@@ -416,9 +422,8 @@ def build(
         candidate_row(by_id[tid], labels[tid]) for tid in labels if by_id[tid].source != "criterion"
     ]
     rows.extend(criterion_rows(by_id, cutoffs=cutoffs, labels=labels))
-    # Every cutoff is still a single pooled number: choose_cutoff cuts one
-    # stratum per tag. The column is written so the format exists; filling it
-    # is a per-stratum sweep, which is a calibration decision.
+    # Swept tags carry their per-stratum cutoffs (choose_cutoffs_by_stratum);
+    # criterion rows have none, since a derived tag fires at the scorer's config.
     frame = pd.DataFrame(rows, columns=list(REGISTRY_COLUMNS) + list(OPTIONAL_COLUMNS))
     frame["cutoff_by_stratum"] = frame["cutoff_by_stratum"].fillna("")
     frame = frame.sort_values(["category", "kind", "tag_id"], kind="stable").reset_index(drop=True)
@@ -464,6 +469,10 @@ def write_sidecar(
             "yet rejected), not a selection.",
             "--cutoffs config only moves the criterion tags; swept tags have no "
             "ScoringConfig equivalent and keep their distribution cutoff either way.",
+            "A swept tag cut by an anchor or a break also carries cutoff_by_stratum: "
+            "the same cascade per ORF-type stratum (extended, truncated, separate; "
+            f"n >= {dist_mod.MIN_STRATUM_N}), kept only where it finds an anchor or a "
+            "break. A row's stratum without an entry falls back to the pooled cutoff.",
             "Derived tags call their criterion's scorer at the run's ScoringConfig, "
             "so their value equals the criterion's by construction. cutoff_overrides "
             "records the numbers this build proposes; the evaluator reports a "

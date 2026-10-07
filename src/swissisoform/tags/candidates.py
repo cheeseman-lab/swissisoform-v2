@@ -19,6 +19,7 @@ Three things are deliberately separated:
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -33,6 +34,8 @@ from swissisoform.distributions import (
     STRATUM_ALL,
     STRATUM_SEPARATE,
     Distributions,
+    row_cutoffs,
+    stratum_for,
 )
 from swissisoform.tags import seeds
 
@@ -93,7 +96,10 @@ class Candidate:
             not-evaluable by declaration.
         source: Which stream proposed it.
         cutoff / cutoff_source / cutoff_pctile / break_depth: filled by
-            :func:`choose_cutoff`.
+            :func:`choose_cutoff`, on the one stratum the tag is mostly about.
+        cutoff_by_stratum / cutoff_source_by_stratum: filled by
+            :func:`choose_cutoffs_by_stratum` — the same cascade run per ORF-type
+            stratum. ``cutoff`` stays the fallback for a stratum with no entry.
         blocked: Non-empty when the candidate cannot be proposed, carrying why.
     """
 
@@ -114,6 +120,8 @@ class Candidate:
     break_depth: float | None = None
     current_cutoff: float | None = None
     extra: dict[str, Any] = field(default_factory=dict)
+    cutoff_by_stratum: dict[str, float] = field(default_factory=dict)
+    cutoff_source_by_stratum: dict[str, str] = field(default_factory=dict)
 
     @property
     def differential(self) -> bool:
@@ -127,6 +135,10 @@ class Candidate:
             return f"judged by the {self.category} tool loop"
         if self.kind == "bool":
             return f"{self.metric} is true"
+        if self.cutoff_by_stratum:
+            per = ", ".join(f"{k} {v:.6g}" for k, v in sorted(self.cutoff_by_stratum.items()))
+            rest = "" if self.cutoff is None else f"; else {self.cutoff:.6g}"
+            return f"{self.metric} {self.direction} by stratum ({per}{rest})"
         if self.cutoff is None:
             return f"{self.metric} {self.direction} (no cutoff)"
         return f"{self.metric} {self.direction} {self.cutoff:.6g}"
@@ -432,7 +444,61 @@ def choose_cutoff(
     """
     if cand.kind != "code" or cand.blocked:
         return cand
-    stratum = _scoring_stratum(cand, dist)
+    cut = _cut_on(cand, dist, _scoring_stratum(cand, dist), band)
+    return cand if cut is None else replace(cand, **cut)
+
+
+def choose_cutoffs_by_stratum(
+    cand: Candidate, dist: Distributions, band: tuple[float, float] = DEFAULT_BAND
+) -> Candidate:
+    """Run :func:`choose_cutoff`'s cascade once per ORF-type stratum.
+
+    One pooled cutoff means a different thing per ORF type: on full_catalog
+    `length_ratio_hi` fires on 0.2% of extensions and 28.5% of truncations. Each
+    stratum in :data:`STRATA_REPORTED` the tag is valid for, and that clears
+    ``MIN_STRATUM_N``, gets its own cut from the same cascade, read off that
+    stratum's frozen grid and histogram. The pooled ``cutoff`` is kept as the
+    fallback for a stratum with no entry (``distributions.row_cutoffs``).
+
+    A stratum only gets an entry for an anchor or a break. Where the cascade falls
+    through to a bare percentile the metric is unimodal *in that stratum*, so the
+    cut would be arbitrary — the same reason ``build_table`` drops a
+    percentile-only tag — and two metrics the sweep should see as redundant would
+    differ only by where that arbitrary line fell. That stratum keeps the pooled
+    cutoff instead.
+
+    Only for a tag whose pooled cutoff is an anchor or a break — a boundary that
+    was *found*. A tag the sweep kept on a bare percentile (the ``enriched``
+    exemption) keeps its one number: cutting it per stratum would only set each
+    type's fire rate to the same percentile, and whether those become range
+    filters is a separate decision.
+    """
+    if cand.kind != "code" or cand.blocked or cand.cutoff_source not in ("anchor", "break"):
+        return cand
+    strata = sorted({stratum_for(o) for o in cand.valid_for} & set(STRATA_REPORTED))
+    by: dict[str, float] = {}
+    source: dict[str, str] = {}
+    for stratum in strata:
+        summary = dist.summary(cand.metric, stratum)
+        if not summary or int(summary["n"]) < MIN_STRATUM_N:
+            continue
+        cut = _cut_on(cand, dist, stratum, band)
+        if cut is None or cut["cutoff_source"] not in ("anchor", "break"):
+            continue
+        by[stratum] = float(cut["cutoff"])
+        source[stratum] = str(cut["cutoff_source"])
+    return replace(cand, cutoff_by_stratum=by, cutoff_source_by_stratum=source)
+
+
+def _cut_on(
+    cand: Candidate, dist: Distributions, stratum: str, band: tuple[float, float]
+) -> dict[str, Any] | None:
+    """The anchor → break → percentile cascade on one stratum.
+
+    Returns the :class:`Candidate` fields to set (``cutoff``, ``cutoff_source``,
+    ``cutoff_pctile`` and, per source, ``break_depth`` / ``extra``), or None when
+    no in-band cut exists there.
+    """
     lo, hi = band
 
     anchor = seeds.anchor_for(cand.metric)
@@ -442,11 +508,12 @@ def choose_cutoff(
         at = dist.percentile(cand.metric, value, stratum)
         centred = at is not None and ANCHOR_DEAD_ZONE[0] <= at <= ANCHOR_DEAD_ZONE[1]
         if rate is not None and lo <= rate <= hi and not centred:
-            return replace(
-                cand, cutoff=value, cutoff_source="anchor",
-                cutoff_pctile=dist.percentile(cand.metric, value, stratum),
-                extra={**cand.extra, "anchor_reason": reason},
-            )
+            return {
+                "cutoff": value,
+                "cutoff_source": "anchor",
+                "cutoff_pctile": at,
+                "extra": {**cand.extra, "anchor_reason": reason},
+            }
 
     hist = dist.histogram(cand.metric, stratum)
     if hist is not None:
@@ -455,10 +522,12 @@ def choose_cutoff(
             value, prominence = found
             rate = _rate_from_grid(dist, cand.metric, value, cand.direction, stratum)
             if rate is not None and lo <= rate <= hi:
-                return replace(
-                    cand, cutoff=value, cutoff_source="break", break_depth=prominence,
-                    cutoff_pctile=dist.percentile(cand.metric, value, stratum),
-                )
+                return {
+                    "cutoff": value,
+                    "cutoff_source": "break",
+                    "break_depth": prominence,
+                    "cutoff_pctile": dist.percentile(cand.metric, value, stratum),
+                }
 
     # Percentile fallback: the one landing nearest the middle of the band.
     target = (lo + hi) / 2
@@ -470,14 +539,14 @@ def choose_cutoff(
         if best is None or abs(rate - target) < abs(best[0] - target):
             best = (rate, pct)
     if best is None:
-        return cand
+        return None
     try:
         value = dist.value_at(cand.metric, best[1], stratum)
     except Exception:
-        return cand
+        return None
     if value is None:
-        return cand
-    return replace(cand, cutoff=value, cutoff_source="percentile", cutoff_pctile=float(best[1]))
+        return None
+    return {"cutoff": value, "cutoff_source": "percentile", "cutoff_pctile": float(best[1])}
 
 
 def _scoring_stratum(cand: Candidate, dist: Distributions) -> str:
@@ -505,7 +574,7 @@ def _scoring_stratum(cand: Candidate, dist: Distributions) -> str:
 
 def _threshold_state(
     values: pd.Series,
-    cutoff: float,
+    cutoff: float | np.ndarray,
     direction: str,
     valid_for: Iterable[str],
     orf: pd.Series,
@@ -515,11 +584,14 @@ def _threshold_state(
     The single arithmetic for "did this threshold fire", shared by the sweep's
     proposed cutoff and by ``_current_fire``'s shipped one — the two used to
     carry the same six lines and differ only in which cutoff they read.
+    *cutoff* is one number or one per row (``distributions.row_cutoffs``); a row
+    whose cutoff is NaN is not-evaluable.
     """
     arr = pd.to_numeric(values, errors="coerce").to_numpy(dtype="float64")
+    cut = np.broadcast_to(np.asarray(cutoff, dtype="float64"), arr.shape)
     with np.errstate(invalid="ignore"):
-        hit = arr >= cutoff if direction == ">=" else arr < cutoff
-    fired = np.where(np.isnan(arr), np.nan, hit.astype("float64"))
+        hit = arr >= cut if direction == ">=" else arr < cut
+    fired = np.where(np.isnan(arr) | np.isnan(cut), np.nan, hit.astype("float64"))
     state = np.where(np.isnan(fired), -1.0, fired)
     state = np.where(~orf.isin(tuple(valid_for)).to_numpy(), -1.0, state)
     return state.astype("int8")
@@ -548,11 +620,12 @@ def evaluate(df: pd.DataFrame, cands: Iterable[Candidate]) -> dict[str, np.ndarr
             state = np.where(~orf.isin(cand.valid_for).to_numpy(), -1.0, state)
             out[cand.tag_id] = state.astype("int8")
             continue
-        if values is None or cand.cutoff is None:
+        if values is None or (cand.cutoff is None and not cand.cutoff_by_stratum):
             continue
-        out[cand.tag_id] = _threshold_state(
-            values, cand.cutoff, cand.direction, cand.valid_for, orf
-        )
+        # Resolved per row exactly as the evaluator fires it, so the table's
+        # fire rates are the runtime ones.
+        cut = row_cutoffs(df["orf_type"], cand.cutoff_by_stratum, cand.cutoff)
+        out[cand.tag_id] = _threshold_state(values, cut, cand.direction, cand.valid_for, orf)
     return out
 
 
@@ -721,6 +794,7 @@ def build_table(
     funnel.proposed = len(cands)
     cands = apply_filters(cands, dist, by_feature, funnel)
     cands = [choose_cutoff(c, dist, band) for c in cands]
+    cands = [choose_cutoffs_by_stratum(c, dist, band) for c in cands]
 
     # Criterion branches exist only to carry a swept cutoff into the registry
     # (`--cutoffs distribution`), and choose_cutoff has just given them one.
@@ -818,6 +892,7 @@ def build_table(
             "criterion_id": cand.criterion_id,
             "differential_hint": cand.differential,
             "cutoff": cand.cutoff,
+            "cutoff_by_stratum": stratum_json(cand),
             "current_cutoff": cand.current_cutoff,
             "current_fire_pct": _current_fire(df, cand),
             "cutoff_source": cand.cutoff_source,
@@ -853,6 +928,24 @@ def build_table(
             ["category", "max_jaccard", "tag_id"], ascending=[True, True, True]
         ).reset_index(drop=True)
     return table, funnel
+
+
+def stratum_json(cand: Candidate) -> str:
+    """``cutoff_by_stratum`` as the registry stores it: JSON, or ``""`` when empty."""
+    if not cand.cutoff_by_stratum:
+        return ""
+    return json.dumps({k: cand.cutoff_by_stratum[k] for k in sorted(cand.cutoff_by_stratum)})
+
+
+def stratum_note(cand: Candidate) -> str:
+    """How each stratum was cut, for the registry row's note."""
+    if not cand.cutoff_by_stratum:
+        return ""
+    parts = [
+        f"{k} {cand.cutoff_by_stratum[k]:.6g} ({cand.cutoff_source_by_stratum.get(k, '?')})"
+        for k in sorted(cand.cutoff_by_stratum)
+    ]
+    return "per-stratum: " + ", ".join(parts)
 
 
 def _one_direction_per_metric(
@@ -915,8 +1008,8 @@ SUPERSEDED = "[superseded] not in the current sweep's output. "
 # out: the row is kept for its decision and its note, and leaving last sweep's
 # fire rate or Jaccard beside it reads as this sweep's reason for dropping it.
 MEASURED_COLUMNS = (
-    "cutoff", "current_cutoff", "current_fire_pct", "cutoff_source", "cutoff_pctile",
-    "break_depth", "fire_pct", "not_evaluable_pct", "fire_pct_extended",
+    "cutoff", "cutoff_by_stratum", "current_cutoff", "current_fire_pct", "cutoff_source",
+    "cutoff_pctile", "break_depth", "fire_pct", "not_evaluable_pct", "fire_pct_extended",
     "not_evaluable_pct_extended", "fire_pct_truncated", "not_evaluable_pct_truncated",
     "fire_pct_separate", "not_evaluable_pct_separate", "max_jaccard", "nearest_tag",
     "examples_on", "examples_off",

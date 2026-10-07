@@ -35,7 +35,7 @@ import pandas as pd
 
 from swissisoform import metrics
 from swissisoform.config import ScoringConfig
-from swissisoform.distributions import stratum_for
+from swissisoform.distributions import row_cutoffs
 from swissisoform.models import TranslationInitiationSite
 from swissisoform.tags import derived as derived_tags
 from swissisoform.tags import seeds
@@ -81,14 +81,7 @@ def _validity_mask(df: pd.DataFrame, tag: Tag) -> np.ndarray:
 
 def _cutoffs(df: pd.DataFrame, tag: Tag) -> np.ndarray:
     """Per-row cutoff: the row's ``orf_type``, then its stratum, then ``tag.cutoff``."""
-    default = np.nan if tag.cutoff is None else float(tag.cutoff)
-    if not tag.cutoff_by_stratum:
-        return np.full(len(df), default)
-    by = tag.cutoff_by_stratum
-    return np.array(
-        [by.get(str(o), by.get(stratum_for(o), default)) for o in df["orf_type"]],
-        dtype="float64",
-    )
+    return row_cutoffs(df["orf_type"], tag.cutoff_by_stratum, tag.cutoff)
 
 
 def _threshold_state(df: pd.DataFrame, tag: Tag) -> tuple[pd.Series, pd.Series] | None:
