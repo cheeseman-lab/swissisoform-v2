@@ -16,6 +16,14 @@ from swissisoform.coords import normalize_chrom
 SV_BREAKEND = "sv_breakend"
 UNSUPPORTED_ALT = "unsupported_alt"
 MALFORMED = "malformed"
+TOO_MANY_ALTS = "too_many_alts"
+
+#: Ceiling on ALT alleles in one record. Every ALT is classified against every ORF
+#: the position overlaps, so a single line carrying tens of thousands of indel ALTs
+#: is a worker-sized job the per-line wall-clock check never gets to interrupt. Real
+#: multi-allelic sites carry a handful; a joint-called gnomAD site rarely exceeds a
+#: few hundred.
+MAX_ALTS_PER_RECORD = 1_000
 
 #: Characters that mark a symbolic / structural ALT: GRIDSS breakends
 #: (``[19:531848[T``), symbolic alleles (``<DEL>``, ``<DUP>``). These are not
@@ -111,8 +119,17 @@ def parse_line(line: str) -> list[VariantSpec | Rejection]:
     chrom = normalize_chrom(chrom_raw)
     variant_id = "" if id_raw.strip() == "." else id_raw.strip()
 
+    alt_tokens = alt_raw.split(",")
+    if len(alt_tokens) > MAX_ALTS_PER_RECORD:
+        return [
+            Rejection(
+                TOO_MANY_ALTS,
+                f"{len(alt_tokens)} ALT alleles, over the {MAX_ALTS_PER_RECORD} per-record cap",
+            )
+        ]
+
     out: list[VariantSpec | Rejection] = []
-    for alt_token in alt_raw.split(","):
+    for alt_token in alt_tokens:
         alt = alt_token.strip().upper()
         if not alt or alt == ".":
             out.append(Rejection(UNSUPPORTED_ALT, "empty or missing ALT"))
