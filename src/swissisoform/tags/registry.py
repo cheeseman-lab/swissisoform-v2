@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -74,6 +75,10 @@ PROVISIONAL_VERSIONS: dict[str, str] = {
         "rebuild after the next genome-wide run and distributions re-freeze"
     ),
 }
+
+# How a label names the unique region; a truncation reads it as the lost region
+# (``Tag.label_for``).
+_UNIQUE_REGION = re.compile(r"\b[Uu]nique region\b")
 
 REGISTRY_FILE = "registry.parquet"
 SIDECAR_FILE = "_setup.json"
@@ -118,6 +123,23 @@ REGISTRY_COLUMNS: tuple[str, ...] = (
 # One pooled cutoff makes `length_ratio_hi` fire on 0.2% of extensions and 28.5%
 # of truncations; this is the format that lets a build fix that.
 OPTIONAL_COLUMNS: tuple[str, ...] = ("cutoff_by_stratum",)
+
+
+def threshold_test(
+    metric: str, direction: str, cutoff: float | None, by_stratum: dict[str, float]
+) -> str:
+    """One-line statement of a threshold test, per-stratum cutoffs included.
+
+    Shared by :attr:`Tag.test` and the sweep's ``Candidate.test``, so the
+    candidate table and the registry describe a cutoff the same way.
+    """
+    if by_stratum:
+        per = ", ".join(f"{k} {v:.6g}" for k, v in sorted(by_stratum.items()))
+        rest = "" if cutoff is None else f"; else {cutoff:.6g}"
+        return f"{metric} {direction} by stratum ({per}{rest})"
+    if cutoff is None:
+        return f"{metric} {direction} (no cutoff)"
+    return f"{metric} {direction} {cutoff:.6g}"
 
 
 class TagRegistryError(RuntimeError):
@@ -165,13 +187,29 @@ class Tag:
     def label_for(self, orf_type: str | None) -> str:
         """The label as it reads for one isoform.
 
-        A truncation's unique region is the canonical stretch the isoform *lost*,
-        so a label claiming something was gained there reads backwards. The
-        direction comes from the ORF type, not from the label table.
+        A tag about the unique region describes sequence the isoform *adds* on an
+        extension and sequence it *lost* on a truncation — the canonical stretch
+        ahead of the truncated start (``diff_region`` is canonical-space there).
+        The label table is written for the extension reading, so for a
+        truncation:
+
+        - "unique region" reads "lost region" ("Unique region more basic" →
+          "Lost region more basic", "Long unique region" → "Long lost region");
+        - a trailing " gained" reads " lost" ("Constrained residues gained" →
+          "Constrained residues lost").
+
+        Separate ORFs are wholly unique and keep the label as written. SAE tags
+        are left alone: their "gained" is a feature the isoform gained, compared
+        across both proteins, not something about the region.
         """
-        if orf_type == "truncated" and self.label.endswith(" gained"):
-            return self.label[: -len(" gained")] + " lost"
-        return self.label
+        if orf_type != "truncated" or "_sae_" in self.metric:
+            return self.label
+        label = _UNIQUE_REGION.sub(
+            lambda m: "Lost region" if m.group(0)[0] == "U" else "lost region", self.label
+        )
+        if label.endswith(" gained"):
+            label = label[: -len(" gained")] + " lost"
+        return label
 
     @property
     def test(self) -> str:
@@ -182,13 +220,7 @@ class Tag:
             return f"derived predicate for {self.criterion_id}"
         if self.kind == KIND_BOOL:
             return f"{self.metric} is true"
-        if self.cutoff_by_stratum:
-            per = ", ".join(f"{k} {v:.6g}" for k, v in sorted(self.cutoff_by_stratum.items()))
-            rest = "" if self.cutoff is None else f"; else {self.cutoff:.6g}"
-            return f"{self.metric} {self.direction} by stratum ({per}{rest})"
-        if self.cutoff is None:
-            return f"{self.metric} {self.direction} (no cutoff)"
-        return f"{self.metric} {self.direction} {self.cutoff:.6g}"
+        return threshold_test(self.metric, self.direction, self.cutoff, self.cutoff_by_stratum)
 
 
 @dataclass(frozen=True)

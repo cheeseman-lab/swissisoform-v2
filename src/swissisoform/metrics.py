@@ -332,69 +332,6 @@ def resolve(metric: str, df: pd.DataFrame) -> pd.Series | None:
     return None
 
 
-CHANGED_SUFFIX = "_changed"
-
-
-def _missing(value: object) -> bool:
-    return value is None or (isinstance(value, float) and pd.isna(value))
-
-
-def changed_state(metric: str, df: pd.DataFrame) -> pd.Series | None:
-    """Tri-state ``cmp_<module>_<field>_changed``, reading a one-sided None as a change.
-
-    The comparator emits ``None`` whenever exactly one side is missing
-    (compare/comparator.py ``_categorical_changes``), on the theory that the
-    module may have failed on one pane. For a categorical *call* that is usually
-    wrong: SignalP reports no cleavage site because the protein has no signal
-    peptide, so canonical ``None`` / isoform ``"CS pos: 23-24"`` is a signal
-    peptide gained, not an unknown. On cheeseman50 the cleavage-site tag fired on
-    0 of 48 evaluable rows while the prediction tag fired on the 2 isoforms that
-    gained one.
-
-    This re-derives the flag from the ``_canonical`` / ``_isoform`` columns the
-    comparator writes beside it:
-
-    - When the module's own ``<tool>_prediction`` pair is present, it says whether
-      the predictor ran on each side. Ran on both: ``None`` is "absent", so one
-      side present is ``True`` and neither is ``False``. Did not run on a side:
-      not-evaluable.
-    - Without that pair, ``True`` when exactly one side is present, not-evaluable
-      when both are missing.
-
-    Returns None when the frame lacks the value columns, so the caller can fall
-    back to the comparator's flag.
-    """
-    if not metric.endswith(CHANGED_SUFFIX):
-        return None
-    base = metric[: -len(CHANGED_SUFFIX)]
-    can_col, iso_col = f"{base}_canonical", f"{base}_isoform"
-    if can_col not in df.columns or iso_col not in df.columns:
-        return None
-    parts = base.split("_", 2)
-    ran_cols = None
-    if len(parts) == 3:
-        ran_base = f"{parts[0]}_{parts[1]}_{parts[2].split('_', 1)[0]}_prediction"
-        if f"{ran_base}_canonical" in df.columns and f"{ran_base}_isoform" in df.columns:
-            ran_cols = (f"{ran_base}_canonical", f"{ran_base}_isoform")
-
-    out: list[bool | None] = []
-    for i in range(len(df)):
-        can, iso = df[can_col].iloc[i], df[iso_col].iloc[i]
-        can_absent, iso_absent = _missing(can), _missing(iso)
-        if ran_cols is not None:
-            if _missing(df[ran_cols[0]].iloc[i]) or _missing(df[ran_cols[1]].iloc[i]):
-                out.append(None)
-                continue
-        elif can_absent and iso_absent:
-            out.append(None)
-            continue
-        if can_absent or iso_absent:
-            out.append(can_absent != iso_absent)
-        else:
-            out.append(bool(can != iso))
-    return pd.Series(out, index=df.index, dtype="object")
-
-
 def resolvable(metric: str, columns: set[str]) -> bool:
     """Whether :func:`resolve` could produce values for *metric* from *columns*.
 
@@ -435,7 +372,6 @@ __all__: list[str] = [
     "BY_NAME",
     "BY_METRIC",
     "resolve",
-    "changed_state",
     "available",
     "required_list_columns",
 ]
