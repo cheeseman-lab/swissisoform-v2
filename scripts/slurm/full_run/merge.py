@@ -58,6 +58,7 @@ NEEDS_REFILL = ("stale", "missing", "unreadable")
 
 
 TAG_VERSION_COLUMN = "isoform_tags_registry_version"
+TAG_SHA256_COLUMN = "isoform_tags_registry_sha256"
 
 
 def read_manifest(path: Path) -> dict[str, str]:
@@ -252,6 +253,19 @@ def merge_campaign(
                 "under a single --tag-registry."
             )
             return 1, report
+        # Same name, different build: a version rebuilt in place between shards
+        # keeps its struct fields, so only the content hash can tell.
+        if TAG_SHA256_COLUMN in df.columns:
+            hashes = sorted(set(df[TAG_SHA256_COLUMN].dropna().astype(str)))
+            if len(hashes) > 1:
+                print(
+                    f"ERROR: shards carry tag registry {', '.join(versions)} under "
+                    f"{len(hashes)} different content hashes "
+                    f"({', '.join(h[:12] for h in hashes)}). The version was rebuilt "
+                    "between shards, so their cutoffs differ. Re-run the campaign "
+                    "against one build."
+                )
+                return 1, report
         if n_untagged:
             print(
                 f"ERROR: {n_untagged} of {len(df)} rows carry no tag-registry version "

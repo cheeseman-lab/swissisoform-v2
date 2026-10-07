@@ -357,6 +357,35 @@ def test_transform_resolve_matches_a_raw_column_read():
     assert metrics.resolve("nope", df) is None
 
 
+def test_list_length_is_nan_for_a_missing_list_not_a_crash():
+    """The runtime frame holds NaN for a skipped module; len(nan) used to raise."""
+    df = pd.DataFrame({"cmp_x_hits": [[1, 2], None, float("nan"), np.array([3])]})
+    got = metrics.resolve("cmp_x_hits__len", df)
+    assert got.iloc[0] == 2.0 and got.iloc[3] == 1.0
+    assert got.iloc[1:3].isna().all()
+
+
+def test_list_length_with_a_count_twin_is_dropped_as_a_duplicate():
+    """``<col>__len`` defers to the catalog's real count column when one exists."""
+    catalog = pd.DataFrame(
+        [
+            {"feature": "cmp_motifs_n_hits_in_diff_region", "duplicate_of": None},
+            {
+                "feature": "n_cmp_motifs_hits_in_diff_region",
+                "duplicate_of": "cmp_motifs_n_hits_in_diff_region",
+            },
+        ]
+    )
+    by_feature = C._catalog_index(catalog)
+    assert (
+        C._catalog_flag(by_feature, "cmp_motifs_hits_in_diff_region__len", "duplicate_of")
+        == "cmp_motifs_n_hits_in_diff_region"
+    )
+    assert pd.isna(
+        C._catalog_flag(by_feature, "cmp_motifs_n_hits_in_diff_region", "duplicate_of")
+    )
+
+
 def test_anchor_rules_do_not_fire_on_percent_identity():
     """1.0 is a ceiling for identity, not a null hypothesis — no anchor."""
     assert seeds.anchor_for("isoform_conservation_frame_primate_mean_pident") is None
@@ -369,3 +398,203 @@ def test_paired_only_metrics_declare_paired_validity():
     assert seeds.validity_for("isoform_structure_rmsd_shared", None) == seeds.PAIRED_ORF_TYPES
     assert set(seeds.validity_for("some_other_metric", None)) == set(seeds.ALL_ORF_TYPES)
     assert seeds.validity_for("x", "absent_for_separate_orfs") == seeds.PAIRED_ORF_TYPES
+
+
+# ── Sign-safe region comparisons ──────────────────────────────────────────
+
+
+def test_region_ratio_is_not_evaluable_over_a_non_positive_denominator():
+    """unique -0.6 / shared -0.3 is 2.0, but the unique region is the more hydrophilic."""
+    df = pd.DataFrame(
+        {
+            "cmp_biophysics_gravy_unique": [-0.6, 0.4, -0.2],
+            "cmp_biophysics_gravy_shared": [-0.3, 0.2, 0.5],
+            "cmp_biophysics_gravy_ratio": [2.0, 2.0, -0.4],
+        }
+    )
+    ratio = metrics.resolve("cmp_biophysics_gravy_ratio", df)
+    assert pd.isna(ratio.iloc[0])
+    assert list(ratio.iloc[1:]) == [2.0, -0.4]
+    diff = metrics.resolve("tx:gravy_unique_minus_shared", df)
+    assert np.allclose(diff, [-0.3, 0.2, -0.7])
+
+
+def test_unique_minus_shared_anchors_at_zero_and_is_paired_only():
+    assert seeds.anchor_for("tx:gravy_unique_minus_shared")[0] == 0.0
+    assert seeds.validity_for("tx:disorder_unique_minus_shared", None) == seeds.PAIRED_ORF_TYPES
+    assert seeds.label_for("tx:gravy_unique_minus_shared", ">=") == "Unique region more hydrophobic"
+
+
+class _StubDist:
+    """Just enough of :class:`Distributions` for ``apply_filters``."""
+
+    def __init__(self, mins: dict[str, float]) -> None:
+        self._mins = mins
+
+    def summary(self, metric: str, stratum: str = "all") -> dict | None:
+        if metric not in self._mins:
+            return None
+        return {"n": 500, "fill_rate": 1.0, "min": self._mins[metric], "max": 9.0}
+
+
+def test_sweep_drops_a_ratio_whose_denominator_crosses_zero():
+    def cand(metric: str) -> C.Candidate:
+        return C.Candidate(
+            tag_id=C._slug(f"{metric}_hi"), category="S", label=metric, metric=metric,
+            kind="code", direction=">=", valid_for=seeds.PAIRED_ORF_TYPES, source="sweep",
+        )
+
+    dist = _StubDist(
+        {
+            "cmp_biophysics_gravy_ratio": -5.0,
+            "cmp_biophysics_gravy_shared": -2.8,
+            "cmp_biophysics_pI_ratio": 0.2,
+            "cmp_biophysics_pI_shared": 2.5,
+        }
+    )
+    funnel = C.Funnel()
+    kept = C.apply_filters(
+        [cand("cmp_biophysics_gravy_ratio"), cand("cmp_biophysics_pI_ratio")], dist, {}, funnel
+    )
+    assert [c.metric for c in kept] == ["cmp_biophysics_pI_ratio"]
+    assert funnel.dropped == {"ratio over a sign-crossing denominator": 1}
+
+
+# ── Per-stratum cutoffs ───────────────────────────────────────────────────
+
+
+def _stratified_frame() -> pd.DataFrame:
+    """One metric whose second mode sits in a different place per ORF type.
+
+    Truncations split 0 / 10, extensions 0 / 4, so a single pooled cut cannot be
+    right for both. The 20 uORF rows are bimodal too, but fall under
+    ``MIN_STRATUM_N`` and so must not get a cutoff of their own.
+    """
+    rng = np.random.default_rng(1)
+
+    def modes(n: int, high: float, frac: float) -> np.ndarray:
+        k = int(n * frac)
+        return np.r_[rng.normal(0, 0.3, n - k), rng.normal(high, 0.3, k)]
+
+    orf = ["truncated"] * 300 + ["extended"] * 300 + ["uorf"] * 20
+    return pd.DataFrame(
+        {
+            "orf_type": orf,
+            "gene_name": [f"G{i}" for i in range(len(orf))],
+            "tis_id": [f"t{i}" for i in range(len(orf))],
+            "cmp_shift_score": np.r_[modes(300, 10, 0.3), modes(300, 4, 0.4), modes(20, 7, 0.5)],
+        }
+    )
+
+
+@pytest.fixture
+def stratified(tmp_path):
+    df = _stratified_frame()
+    parquet = tmp_path / "all_paired.parquet"
+    pq.write_table(pa.Table.from_pandas(df, preserve_index=False), parquet)
+    catalog = pd.DataFrame(
+        [
+            {
+                "feature": "cmp_shift_score", "module": "test", "pane": "cmp", "category": "S",
+                "dtype": "float", "scored": False, "include_in_plot": True,
+                "exclude_reason": None, "duplicate_of": None, "null_pattern": None,
+            }
+        ]
+    )
+    catalog_csv = tmp_path / "feature_catalog.csv"
+    catalog.to_csv(catalog_csv, index=False)
+    out = tmp_path / "data" / "reference" / "distributions" / "v1"
+    build_mod.build([parquet], catalog_csv, out, source_label="synthetic")
+    dist_mod.load.cache_clear()
+    return df, dist_mod.load("v1", root=tmp_path)
+
+
+def _shift_candidate(**kw) -> C.Candidate:
+    return C.Candidate(
+        tag_id="cmp_shift_score_hi", category="S", label="Shift", metric="cmp_shift_score",
+        kind="code", direction=">=", valid_for=seeds.ALL_ORF_TYPES, source="sweep", **kw,
+    )
+
+
+def test_each_stratum_is_cut_on_its_own_break(stratified):
+    df, dist = stratified
+    cand = C.choose_cutoffs_by_stratum(C.choose_cutoff(_shift_candidate(), dist), dist)
+    assert cand.cutoff_source in ("anchor", "break")
+    by = cand.cutoff_by_stratum
+    assert set(by) == {"extended", "truncated"}
+    assert 0.5 < by["extended"] < 3.5
+    assert 0.5 < by["truncated"] < 9.5 and by["truncated"] > by["extended"]
+    assert set(cand.cutoff_source_by_stratum.values()) <= {"anchor", "break"}
+
+
+def test_a_stratum_under_the_floor_gets_no_cutoff(stratified):
+    """20 uORFs: the ``separate`` roll-up falls back to the pooled cutoff."""
+    _, dist = stratified
+    cand = C.choose_cutoffs_by_stratum(C.choose_cutoff(_shift_candidate(), dist), dist)
+    assert "separate" not in cand.cutoff_by_stratum and "uorf" not in cand.cutoff_by_stratum
+
+
+def test_a_percentile_cut_tag_keeps_one_cutoff(stratified):
+    """The enriched exemption: a bare percentile is not re-cut per stratum."""
+    _, dist = stratified
+    pooled = _shift_candidate(cutoff=1.0, cutoff_source="percentile", cutoff_pctile=60.0)
+    assert C.choose_cutoffs_by_stratum(pooled, dist).cutoff_by_stratum == {}
+
+
+def test_the_table_fires_each_row_at_its_strata_cutoff(stratified):
+    """The sweep measures with the cutoff the evaluator will fire with."""
+    df, dist = stratified
+    cand = _shift_candidate(cutoff=100.0, cutoff_by_stratum={"extended": 2.0, "truncated": 5.0})
+    state = C.evaluate(df, [cand])[cand.tag_id]
+    is_ext = (df["orf_type"] == "extended").to_numpy()
+    is_trunc = (df["orf_type"] == "truncated").to_numpy()
+    assert state[is_ext].mean() == pytest.approx(0.4, abs=0.02)
+    assert state[is_trunc].mean() == pytest.approx(0.3, abs=0.02)
+    # uORFs have no entry, so they fall back to the pooled 100.0 and never fire.
+    assert state[~(is_ext | is_trunc)].max() == 0
+
+
+def test_the_registry_row_carries_the_strata_cutoffs():
+    import json
+
+    from swissisoform.setup import tags as setup_tags
+    from swissisoform.tags.registry import _overrides
+
+    cand = _shift_candidate(
+        cutoff=2.0, cutoff_source="break",
+        cutoff_by_stratum={"truncated": 5.0, "extended": 2.0},
+        cutoff_source_by_stratum={"truncated": "break", "extended": "break"},
+    )
+    row = setup_tags.candidate_row(cand, "Shift")
+    assert json.loads(row["cutoff_by_stratum"]) == {"extended": 2.0, "truncated": 5.0}
+    assert _overrides(row["cutoff_by_stratum"]) == {"extended": 2.0, "truncated": 5.0}
+    assert "per-stratum: extended 2 (break), truncated 5 (break)" in row["note"]
+    assert setup_tags.candidate_row(_shift_candidate(), "")["cutoff_by_stratum"] == ""
+
+
+def test_the_build_refuses_per_stratum_cutoffs_the_reviewer_never_saw(tmp_path):
+    """A table swept before per-stratum cutoffs cannot license freezing them."""
+    import json
+
+    from swissisoform.setup import tags as setup_tags
+
+    cand = _shift_candidate(
+        cutoff=2.0, cutoff_source="break", cutoff_by_stratum={"extended": 2.0, "truncated": 5.0}
+    )
+    old = tmp_path / "old.csv"
+    pd.DataFrame([{"tag_id": cand.tag_id, "decision": "", "proposed_label": "Shift"}]).to_csv(
+        old, index=False
+    )
+    with pytest.raises(setup_tags.TagBuildError, match="propose_candidates"):
+        setup_tags._check_reviewed_strata(old, {cand.tag_id: "Shift"}, {cand.tag_id: cand}, "v9")
+
+    reviewed = tmp_path / "reviewed.csv"
+    pd.DataFrame(
+        [
+            {
+                "tag_id": cand.tag_id, "decision": "", "proposed_label": "Shift",
+                "cutoff_by_stratum": json.dumps({"extended": 2.0, "truncated": 5.0}),
+            }
+        ]
+    ).to_csv(reviewed, index=False)
+    setup_tags._check_reviewed_strata(reviewed, {cand.tag_id: "Shift"}, {cand.tag_id: cand}, "v9")

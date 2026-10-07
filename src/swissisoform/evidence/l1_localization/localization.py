@@ -229,6 +229,13 @@ class LocalizationModule:
         "localization_deeploc_top_prob",
         *(f"localization_{k}" for k in _DEEPLOC_COMPARTMENTS.values()),
     ]
+    # Read by the comparator; see compare/comparator.py `_Predictor`.
+    CATEGORICAL_FIELDS: tuple[str, ...] = (
+        "deeploc_prediction",
+        "deeploc_signals",
+        "deeploc_membrane",
+    )
+    RAN_FIELD: str = "deeploc_prediction"
     SCOPE: str = "C"
 
     def __init__(
