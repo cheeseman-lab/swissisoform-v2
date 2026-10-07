@@ -160,8 +160,7 @@ def sweep(
     funnel = cand_mod.Funnel()
     proposed = cand_mod.propose(catalog, dist, columns)
     kept = cand_mod.apply_filters(proposed, dist, by_feature, funnel)
-    cut = [cand_mod.choose_cutoff(c, dist, band) for c in kept]
-    return [cand_mod.choose_cutoffs_by_stratum(c, dist, band) for c in cut]
+    return [cand_mod.cut_candidate(c, dist, band) for c in kept]
 
 
 def _warn_if_truncating(criterion_id: str, field: str, value: float, cutoffs: str) -> None:

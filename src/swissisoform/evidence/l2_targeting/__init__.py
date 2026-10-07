@@ -25,10 +25,11 @@ def score(
     """L2: targeting change — SignalP/TargetP disagree on canonical vs. isoform.
 
     Reads from ``site.comparison['signalp']`` / ``site.comparison['targetp']``
-    written by the comparator (Scope A).  Returns ``None`` when neither
-    module has produced a comparison (precompute not run), ``False`` when
-    both ran but neither reports a category change, ``True`` when either
-    does.
+    written by the comparator (Scope A). ``True`` when either reports a
+    category change; ``False`` only when both were evaluated and neither did;
+    ``None`` when either could not be evaluated (no comparison, or every flag
+    ``None``) and the other flags nothing — a gain on the unassessed side is
+    still possible, so that is not a confident "no".
     """
     sp_cmp = site.comparison.get("signalp")
     tp_cmp = site.comparison.get("targetp")
@@ -48,6 +49,13 @@ def score(
     if sp_state is None and tp_state is None:
         return CriterionResult(
             "L2_targeting_change", None, "signalp/targetp comparisons not available"
+        )
+    if sp_state is not True and tp_state is not True and (sp_state is None or tp_state is None):
+        # One predictor saw no change, the other could not be assessed. A gain on
+        # the unassessed side is still possible, so this is not a confident "no".
+        missing = "signalp" if sp_state is None else "targetp"
+        return CriterionResult(
+            "L2_targeting_change", None, f"no change flagged, but {missing} not evaluable"
         )
     if sp_state is True or tp_state is True:
         hits = []

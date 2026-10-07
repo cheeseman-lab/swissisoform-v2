@@ -204,6 +204,39 @@ class TestOneSidedCategorical:
         both = _categorical_changes({"label": None}, {"label": None})
         assert both["label_changed"] is False
 
+    def test_a_declared_module_flags_only_its_categorical_fields(self):
+        """Human TargetP never reports cTP: a probability None on both sides is no category."""
+        gene = _make_gene(
+            "MAA",
+            tis_sites=[
+                _make_site(
+                    orf_type=ORFType.EXTENDED,
+                    isoform_protein="MKMAA",
+                    diff_region=DifferentialRegion(
+                        isoform_start=0, isoform_end=2, sequence="MK",
+                        confidence="tail_verified",
+                    ),
+                    isoform_annotations={
+                        "targetp": {
+                            "targetp_prediction": "noTP", "targetp_ctp_prob": None,
+                            "targetp_cleavage_site": None,
+                        }
+                    },
+                )
+            ],
+            canonical_annotations={
+                "targetp": {
+                    "targetp_prediction": "noTP", "targetp_ctp_prob": None,
+                    "targetp_cleavage_site": None,
+                }
+            },
+        )
+        Comparator().compare([gene])
+        cmp = gene.tis_sites[0].comparison["targetp"]
+        assert "targetp_ctp_prob_changed" not in cmp
+        assert cmp["targetp_prediction_changed"] is False
+        assert cmp["targetp_cleavage_site_changed"] is False
+
     def test_a_numeric_field_missing_on_one_side_is_not_a_category(self):
         """A probability that is None on the isoform must not become ``_changed``."""
         out = _categorical_changes(

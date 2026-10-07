@@ -125,6 +125,23 @@ REGISTRY_COLUMNS: tuple[str, ...] = (
 OPTIONAL_COLUMNS: tuple[str, ...] = ("cutoff_by_stratum",)
 
 
+def threshold_test(
+    metric: str, direction: str, cutoff: float | None, by_stratum: dict[str, float]
+) -> str:
+    """One-line statement of a threshold test, per-stratum cutoffs included.
+
+    Shared by :attr:`Tag.test` and the sweep's ``Candidate.test``, so the
+    candidate table and the registry describe a cutoff the same way.
+    """
+    if by_stratum:
+        per = ", ".join(f"{k} {v:.6g}" for k, v in sorted(by_stratum.items()))
+        rest = "" if cutoff is None else f"; else {cutoff:.6g}"
+        return f"{metric} {direction} by stratum ({per}{rest})"
+    if cutoff is None:
+        return f"{metric} {direction} (no cutoff)"
+    return f"{metric} {direction} {cutoff:.6g}"
+
+
 class TagRegistryError(RuntimeError):
     """Raised when a registry version is missing or unreadable."""
 
@@ -203,13 +220,7 @@ class Tag:
             return f"derived predicate for {self.criterion_id}"
         if self.kind == KIND_BOOL:
             return f"{self.metric} is true"
-        if self.cutoff_by_stratum:
-            per = ", ".join(f"{k} {v:.6g}" for k, v in sorted(self.cutoff_by_stratum.items()))
-            rest = "" if self.cutoff is None else f"; else {self.cutoff:.6g}"
-            return f"{self.metric} {self.direction} by stratum ({per}{rest})"
-        if self.cutoff is None:
-            return f"{self.metric} {self.direction} (no cutoff)"
-        return f"{self.metric} {self.direction} {self.cutoff:.6g}"
+        return threshold_test(self.metric, self.direction, self.cutoff, self.cutoff_by_stratum)
 
 
 @dataclass(frozen=True)

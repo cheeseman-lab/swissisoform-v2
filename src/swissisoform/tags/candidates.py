@@ -38,6 +38,7 @@ from swissisoform.distributions import (
     stratum_for,
 )
 from swissisoform.tags import seeds
+from swissisoform.tags.registry import threshold_test
 
 # Issue #30's usefulness band: a tag firing on <10% is a curiosity, one firing on
 # >60% does not partition the corpus. Out-of-band candidates are dropped.
@@ -135,13 +136,7 @@ class Candidate:
             return f"judged by the {self.category} tool loop"
         if self.kind == "bool":
             return f"{self.metric} is true"
-        if self.cutoff_by_stratum:
-            per = ", ".join(f"{k} {v:.6g}" for k, v in sorted(self.cutoff_by_stratum.items()))
-            rest = "" if self.cutoff is None else f"; else {self.cutoff:.6g}"
-            return f"{self.metric} {self.direction} by stratum ({per}{rest})"
-        if self.cutoff is None:
-            return f"{self.metric} {self.direction} (no cutoff)"
-        return f"{self.metric} {self.direction} {self.cutoff:.6g}"
+        return threshold_test(self.metric, self.direction, self.cutoff, self.cutoff_by_stratum)
 
 
 # ---------------------------------------------------------------------------
@@ -446,6 +441,18 @@ def choose_cutoff(
         return cand
     cut = _cut_on(cand, dist, _scoring_stratum(cand, dist), band)
     return cand if cut is None else replace(cand, **cut)
+
+
+def cut_candidate(
+    cand: Candidate, dist: Distributions, band: tuple[float, float] = DEFAULT_BAND
+) -> Candidate:
+    """All of a candidate's cutoffs: pooled (:func:`choose_cutoff`), then per stratum.
+
+    The one entry point for both the review table (:func:`build_table`) and the
+    registry builder (``setup.tags.sweep``), so the cutoffs a registry freezes are
+    the ones whose fire rates the reviewer approved.
+    """
+    return choose_cutoffs_by_stratum(choose_cutoff(cand, dist, band), dist, band)
 
 
 def choose_cutoffs_by_stratum(
@@ -793,8 +800,7 @@ def build_table(
     cands = propose(catalog, dist, set(df.columns))
     funnel.proposed = len(cands)
     cands = apply_filters(cands, dist, by_feature, funnel)
-    cands = [choose_cutoff(c, dist, band) for c in cands]
-    cands = [choose_cutoffs_by_stratum(c, dist, band) for c in cands]
+    cands = [cut_candidate(c, dist, band) for c in cands]
 
     # Criterion branches exist only to carry a swept cutoff into the registry
     # (`--cutoffs distribution`), and choose_cutoff has just given them one.

@@ -36,6 +36,9 @@ import math
 from typing import Any
 
 from swissisoform.compare.paired import PairedComparison
+from swissisoform.evidence.l1_localization.localization import LocalizationModule
+from swissisoform.evidence.l2_targeting.signalp import SignalPModule
+from swissisoform.evidence.l2_targeting.targetp import TargetPModule
 from swissisoform.models import Gene, ORFType, TranslationInitiationSite
 
 try:
@@ -139,6 +142,15 @@ def _scalar_deltas(canonical: dict[str, Any], isoform: dict[str, Any]) -> dict[s
     return deltas
 
 
+# Modules that declare which of their fields are categorical calls. For these the
+# comparator flags exactly those fields; every other module is judged field by
+# field from the values themselves.
+_CATEGORICAL_FIELDS: dict[str, frozenset[str]] = {
+    mod.MODULE_NAME: frozenset(mod.CATEGORICAL_FIELDS)
+    for mod in (LocalizationModule, SignalPModule, TargetPModule)
+}
+
+
 def _ran_key(key: str) -> str:
     """The field that says whether *key*'s predictor ran: ``<tool>_prediction``.
 
@@ -151,7 +163,11 @@ def _ran_key(key: str) -> str:
     return f"{key.split('_', 1)[0]}_prediction"
 
 
-def _categorical_changes(canonical: dict[str, Any], isoform: dict[str, Any]) -> dict[str, Any]:
+def _categorical_changes(
+    canonical: dict[str, Any],
+    isoform: dict[str, Any],
+    fields: frozenset[str] | None = None,
+) -> dict[str, Any]:
     """Emit a change flag for every categorical (non-numeric, non-list) field.
 
     Every shared categorical key produces ``{key}_changed`` plus
@@ -172,13 +188,18 @@ def _categorical_changes(canonical: dict[str, Any], isoform: dict[str, Any]) -> 
     A field with no ran key cannot tell "absent" from "did not run", so one
     missing side stays ``None`` and two stay ``False``.
 
-    A field numeric on *either* side is a scalar for :func:`_scalar_deltas`, not a
-    category. Checking only the isoform side let a probability that was ``None``
-    on the isoform pass as a category (``targetp_ctp_prob_changed``).
+    Which fields are categories: *fields* when the module declares them
+    (``CATEGORICAL_FIELDS``, via ``_CATEGORICAL_FIELDS``) — a probability that is
+    ``None`` on both sides would otherwise read as a category, and human TargetP
+    never reports cTP. Without a declaration, a field numeric on *either* side is
+    a scalar for :func:`_scalar_deltas`; checking only the isoform side let a
+    probability that was ``None`` there pass as a category.
     """
     changes: dict[str, Any] = {}
     for key, iso_val in isoform.items():
         if key in _POSITIONAL_KEYS or isinstance(iso_val, (list, dict)):
+            continue
+        if fields is not None and key not in fields:
             continue
         can_val = canonical.get(key)
         if _is_numeric(iso_val) or _is_numeric(can_val):
@@ -311,7 +332,9 @@ class Comparator:
         result: dict[str, Any] = {}
 
         result.update(_scalar_deltas(canonical, isoform))
-        result.update(_categorical_changes(canonical, isoform))
+        result.update(
+            _categorical_changes(canonical, isoform, _CATEGORICAL_FIELDS.get(module_name))
+        )
 
         # Positional subsetting: filter to diff region coords.
         hits = isoform.get("hits")

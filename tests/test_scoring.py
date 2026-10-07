@@ -511,6 +511,15 @@ class TestF4TargetingChange:
         res = _l2_targeting_change(site, ScoringConfig())
         assert res.value is False
 
+    def test_one_predictor_unassessed_is_not_a_confident_no(self):
+        """SignalP missed a side; TargetP saw no change. A gain is still possible."""
+        site = _site()
+        site.comparison["signalp"] = {"signalp_cleavage_site_changed": None}
+        site.comparison["targetp"] = {"targetp_prediction_changed": False}
+        res = _l2_targeting_change(site, ScoringConfig())
+        assert res.value is None
+        assert "signalp" in res.reason
+
     def test_every_flag_unknown_is_not_evaluable(self):
         site = _site()
         site.comparison["signalp"] = {"signalp_prediction_changed": None}
