@@ -43,12 +43,18 @@ from swissisoform import runner
 from swissisoform.references import (
     ALL_CELL_LINES,
     ALL_GENE_MODULES,
+    ALL_POST_MODULES,
     ALL_PROTEIN_MODULES,
     ALL_SITE_MODULES,
     PRESETS,
     ROOT,
 )
-from swissisoform.runner import RunSpec, load_isoform_picks, restrict_to_isoforms
+from swissisoform.runner import (
+    TAG_REGISTRY_DEFAULT,
+    RunSpec,
+    load_isoform_picks,
+    restrict_to_isoforms,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -110,6 +116,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--rebuild-combined", action="store_true",
         help="Force rebuild of the cached all_samples_combined.parquet",
+    )
+
+    p.add_argument(
+        "--tag-registry", default=TAG_REGISTRY_DEFAULT,
+        help="Frozen tag-registry version to fire (data/reference/tags/<version>/). "
+             "Tags are additive: if the version is not built, the run still produces "
+             "every other column and warns (default: %(default)s)",
     )
 
     # Source-transcript resolution (cascade → collapse to one mRNA per TIS).
@@ -247,7 +260,10 @@ def main(argv: list[str] | None = None) -> int:
     skip = {m.strip() for m in args.skip_modules.split(",") if m.strip()}
     if args.no_gpu:
         skip |= {"plm_vep", "structure"}
-    known_modules = set(ALL_PROTEIN_MODULES) | set(ALL_SITE_MODULES) | set(ALL_GENE_MODULES)
+    known_modules = (
+        set(ALL_PROTEIN_MODULES) | set(ALL_SITE_MODULES)
+        | set(ALL_GENE_MODULES) | set(ALL_POST_MODULES)
+    )
     unknown = skip - known_modules
     if unknown:
         logger.error("Unknown module(s) in --skip-modules: %s", sorted(unknown))
@@ -323,6 +339,7 @@ def main(argv: list[str] | None = None) -> int:
         window_upstream=args.window_upstream,
         window_downstream=args.window_downstream,
         drop_unsupported_tis=args.drop_unsupported_tis,
+        tag_registry_version=args.tag_registry,
     )
     return runner.run(spec)
 

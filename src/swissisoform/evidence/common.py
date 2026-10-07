@@ -56,6 +56,45 @@ def _status_ok(ann: dict[str, Any] | None) -> bool:
     return summary.get("status", "ok") == "ok"
 
 
+# A predictor that is not part of this run, as opposed to one that ran and could
+# not be assessed. See :func:`predictor_change_state`.
+NOT_IN_RUN = object()
+
+
+def predictor_change_state(cmp: dict[str, Any] | None, ran_field: str) -> object:
+    """Reduce one predictor's comparison to a single change state.
+
+    Shared by L1 (DeepLoc) and L2 (SignalP, TargetP). Returns:
+
+    - ``True`` when any ``*_changed`` flag is ``True``;
+    - ``None`` when every flag is ``None``: the predictor ran but missed a side,
+      so a gain there is still possible;
+    - ``False`` otherwise (at least one flag evaluated, none changed);
+    - :data:`NOT_IN_RUN` when the predictor is not part of this run — no
+      comparison at all (``--skip``), or *ran_field* empty on **both** sides (it
+      is wired in but produced nothing: not installed, or its precompute failed,
+      which only logs a warning). Treating that as unassessed would turn every
+      other predictor's confident "no" into "unknown".
+    """
+    if not isinstance(cmp, dict):
+        return NOT_IN_RUN
+    flags = [v for k, v in cmp.items() if k.endswith("_changed")]
+    if not flags:
+        return NOT_IN_RUN
+    ran_cols = (f"{ran_field}_canonical", f"{ran_field}_isoform")
+    if all(c in cmp for c in ran_cols) and all(_missing(cmp[c]) for c in ran_cols):
+        return NOT_IN_RUN
+    if any(v is True for v in flags):
+        return True
+    if all(v is None for v in flags):
+        return None
+    return False
+
+
+def _missing(value: Any) -> bool:
+    return value is None or (isinstance(value, float) and value != value)
+
+
 def _score(results: list[CriterionResult]) -> tuple[int, int]:
     """Return ``(true_count, evaluable_count)`` over a list of criterion results."""
     evaluable = [r for r in results if r.value is not None]

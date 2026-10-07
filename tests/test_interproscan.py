@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from swissisoform.evidence.s1_domains.interproscan import InterProScanModule, _protein_hash
+from swissisoform.evidence.s1_domains.interproscan import InterProScanModule, protein_hash
 
 
 class TestInterProScanModule:
@@ -11,7 +11,7 @@ class TestInterProScanModule:
     def test_annotate_found(self, config):
         seq = "MKLLVVAAAGGSPQPQNNVPDSILKKLMV" * 5
         predictions = {
-            _protein_hash(seq): {
+            protein_hash(seq): {
                 "hits": [
                     {
                         "name": "PF12345",
@@ -65,7 +65,7 @@ class TestInterProScanModule:
     def test_stop_codon_strip_stable_hash(self, config):
         seq = "MKLLA"
         predictions = {
-            _protein_hash(seq): {
+            protein_hash(seq): {
                 "hits": [],
                 "summary": {"n_hits": 0, "n_databases": 0, "n_interpro": 0},
             },

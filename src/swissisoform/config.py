@@ -8,6 +8,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Cell lines the pipeline can carry, in report order. Defined here because
+# `config` is the leaf every other module can already import — `metrics`,
+# `references` and `site.evidence` all build `expr_{sample}_*` column names
+# from it, and adding a cell line used to be a six-site edit.
+CELL_LINES: tuple[str, ...] = ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen")
+
 
 @dataclass
 class FilterConfig:
@@ -344,9 +350,7 @@ class PipelineConfig:
         clinical: Clinical variant analysis configuration.
     """
 
-    cell_lines: list[str] = field(
-        default_factory=lambda: ["HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"]
-    )
+    cell_lines: list[str] = field(default_factory=lambda: list(CELL_LINES))
     data_dir: Path = Path("data/reference")
     genome_fasta: Path | None = None
     gtf_path: Path | None = None

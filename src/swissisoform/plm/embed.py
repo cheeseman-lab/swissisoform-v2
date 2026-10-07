@@ -30,10 +30,11 @@ a backward-compatible alias.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from pathlib import Path
 from typing import Any
+
+from swissisoform.hashing import protein_hash
 
 logger = logging.getLogger(__name__)
 
@@ -133,10 +134,6 @@ def aa_column(aa: str | None) -> int | None:
     return AA_TO_COL.get(aa.upper())
 
 
-def protein_hash(protein: str) -> str:
-    """Stable hash of a protein sequence (stop codon stripped, uppercased)."""
-    seq = protein.rstrip("*").upper()
-    return hashlib.sha1(seq.encode("ascii"), usedforsecurity=False).hexdigest()
 
 
 def _cache_path(cache_dir: Path, h: str) -> Path:
@@ -196,7 +193,12 @@ def _save_cache(
     np.savez_compressed(_cache_path(cache_dir, h), **payload)
 
 
-def _append_manifest(cache_dir: Path, h: str, seq: str) -> None:
+def append_manifest(cache_dir: Path, h: str, value: object) -> None:
+    r"""Record ``<hash>\t<value>`` once, for reading a cache back by hand.
+
+    ``value`` is the sequence for the embedding cache and the length for the
+    SAE cache; the append-once logic is the same either way.
+    """
     cache_dir.mkdir(parents=True, exist_ok=True)
     manifest = cache_dir / "manifest.tsv"
     if manifest.exists():
@@ -205,7 +207,7 @@ def _append_manifest(cache_dir: Path, h: str, seq: str) -> None:
         if h in seen:
             return
     with open(manifest, "a") as fh:
-        fh.write(f"{h}\t{seq}\n")
+        fh.write(f"{h}\t{value}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -514,7 +516,7 @@ def precompute_plm(
                     embedding=payload.get("embedding"),
                     embedding_sae=payload.get("embedding_sae"),
                 )
-                _append_manifest(cache_dir, h, seq)
+                append_manifest(cache_dir, h, seq)
                 result[h] = payload
 
     if not skip_missing:

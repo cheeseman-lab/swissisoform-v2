@@ -32,7 +32,7 @@ def _cif_for(seq: str | None, backend: str = DEFAULT_BACKEND) -> Path | None:
     """Locate the cached model.cif for a protein sequence, or None."""
     if not seq:
         return None
-    cif = cache_path(DEFAULT_CACHE_DIR, backend, protein_hash(seq.rstrip("*").upper())) / "model.cif"
+    cif = cache_path(DEFAULT_CACHE_DIR, backend, protein_hash(seq)) / "model.cif"
     return cif if cif.exists() else None
 
 

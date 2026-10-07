@@ -33,9 +33,13 @@ from __future__ import annotations
 
 import logging
 import math
+from dataclasses import dataclass
 from typing import Any
 
 from swissisoform.compare.paired import PairedComparison
+from swissisoform.evidence.l1_localization.localization import LocalizationModule
+from swissisoform.evidence.l2_targeting.signalp import SignalPModule
+from swissisoform.evidence.l2_targeting.targetp import TargetPModule
 from swissisoform.models import Gene, ORFType, TranslationInitiationSite
 
 try:
@@ -139,36 +143,104 @@ def _scalar_deltas(canonical: dict[str, Any], isoform: dict[str, Any]) -> dict[s
     return deltas
 
 
-def _categorical_changes(canonical: dict[str, Any], isoform: dict[str, Any]) -> dict[str, Any]:
-    """Emit a change flag for every categorical (non-numeric, non-list) field.
+@dataclass(frozen=True)
+class _Predictor:
+    """What a predictor module declares about its categorical calls.
 
-    Every shared categorical key produces ``{key}_changed`` (bool) plus
-    ``{key}_canonical`` / ``{key}_isoform`` values — so downstream
-    consumers always see the comparison, not just the rows where values
-    diverged.
+    ``fields`` are the calls the comparator flags (``CATEGORICAL_FIELDS``); every
+    other field of the module is a scalar, even a probability that is ``None`` on
+    both sides — human TargetP never reports cTP, so reading fields off the
+    values let ``targetp_ctp_prob_changed`` through on every row. ``ran`` is the
+    field the module always fills when its predictor ran and leaves ``None`` on a
+    hash miss (``RAN_FIELD``): SignalP's prediction defaults to ``"OTHER"``,
+    TargetP's to ``"noTP"``.
+    """
+
+    fields: frozenset[str]
+    ran: str
+
+
+# The predictor modules, keyed by MODULE_NAME. Declared on each module rather
+# than read off field names, so a renamed or unprefixed field cannot silently
+# lose its ran-check.
+_PREDICTORS: dict[str, _Predictor] = {
+    mod.MODULE_NAME: _Predictor(frozenset(mod.CATEGORICAL_FIELDS), mod.RAN_FIELD)
+    for mod in (LocalizationModule, SignalPModule, TargetPModule)
+}
+
+
+def _categorical_changes(
+    canonical: dict[str, Any],
+    isoform: dict[str, Any],
+    predictor: _Predictor | None = None,
+) -> dict[str, Any]:
+    """Emit a change flag for every categorical field of one module.
+
+    Every flagged key produces ``{key}_changed`` plus ``{key}_canonical`` /
+    ``{key}_isoform`` values — so downstream consumers always see the
+    comparison, not just the rows where values diverged.
+
+    **A predictor module** (*predictor* given, see :class:`_Predictor`) has its
+    declared fields flagged and nothing else, and a missing value means one of
+    two things, which the ran field tells apart:
+
+    - **ran on both sides, value on one** — ``True``. SignalP reports no
+      cleavage site because the protein has no signal peptide, so canonical
+      ``None`` / isoform ``"CS pos: 23-24"`` is a signal peptide gained, not an
+      unknown. Reading it as unknown hid every such gain from L1/L2 and the tags.
+    - **ran on both sides, value on neither** — ``False``.
+    - **did not run on a side** — ``None``: nothing is known about that side.
+
+    **Any other module** declares nothing, so a field is judged from its values.
+    A field numeric on *either* side is a scalar for :func:`_scalar_deltas`, not a
+    category — flagging a numeric field whose other side is missing would add a
+    mostly-null ``_changed`` column per field, varying by shard, for an unknown
+    the missing ``_delta`` already reports. Otherwise one missing side is ``None``
+    (a real change cannot be told from a failed pane) and two are ``False``.
     """
     changes: dict[str, Any] = {}
-    for key, iso_val in isoform.items():
-        if key in _POSITIONAL_KEYS or _is_numeric(iso_val):
-            continue
-        if isinstance(iso_val, (list, dict)):
-            continue
-        can_val = canonical.get(key)
-        iso_missing = _is_missing(iso_val)
-        can_missing = _is_missing(can_val)
-        if iso_missing and can_missing:
-            # Both uncomputable (NaN/NaN, None/None) — ``nan != nan`` would
-            # manufacture a spurious change, so report "no change".
-            changed: bool | None = False
-        elif iso_missing or can_missing:
-            # Exactly one side uncomputable — can't tell whether the feature
-            # genuinely changed or the module failed on one pane.
-            changed = None
-        else:
-            changed = iso_val != can_val
+
+    def emit(key: str, can_val: Any, iso_val: Any, changed: bool | None) -> None:
         changes[f"{key}_changed"] = changed
         changes[f"{key}_canonical"] = can_val
         changes[f"{key}_isoform"] = iso_val
+
+    if predictor is not None:
+        # Every declared field, whether or not the isoform dict carries it: a
+        # module that produced nothing for the isoform is unknown there, not
+        # absent from the comparison.
+        ran_on_both = not (
+            _is_missing(isoform.get(predictor.ran)) or _is_missing(canonical.get(predictor.ran))
+        )
+        for key in sorted(predictor.fields):
+            can_val, iso_val = canonical.get(key), isoform.get(key)
+            iso_missing, can_missing = _is_missing(iso_val), _is_missing(can_val)
+            if not ran_on_both:
+                changed: bool | None = None
+            elif iso_missing or can_missing:
+                # Both ran: a value on exactly one side is a gain or a loss.
+                changed = iso_missing != can_missing
+            else:
+                changed = iso_val != can_val
+            emit(key, can_val, iso_val, changed)
+        return changes
+
+    for key, iso_val in isoform.items():
+        if key in _POSITIONAL_KEYS or isinstance(iso_val, (list, dict)):
+            continue
+        can_val = canonical.get(key)
+        if _is_numeric(iso_val) or _is_numeric(can_val):
+            continue
+        iso_missing, can_missing = _is_missing(iso_val), _is_missing(can_val)
+        if iso_missing and can_missing:
+            # Both uncomputable (NaN/NaN, None/None) — ``nan != nan`` would
+            # manufacture a spurious change, so report "no change".
+            changed = False
+        elif iso_missing or can_missing:
+            changed = None
+        else:
+            changed = iso_val != can_val
+        emit(key, can_val, iso_val, changed)
     return changes
 
 
@@ -272,7 +344,7 @@ class Comparator:
         result: dict[str, Any] = {}
 
         result.update(_scalar_deltas(canonical, isoform))
-        result.update(_categorical_changes(canonical, isoform))
+        result.update(_categorical_changes(canonical, isoform, _PREDICTORS.get(module_name)))
 
         # Positional subsetting: filter to diff region coords.
         hits = isoform.get("hits")

@@ -29,15 +29,12 @@ from pathlib import Path
 from typing import Any
 
 from swissisoform.config import PipelineConfig
+from swissisoform.hashing import protein_hash
 from swissisoform.models import TranslationInitiationSite
 
 logger = logging.getLogger(__name__)
 
 
-def _protein_hash(protein: str) -> str:
-    """Stable hash of a protein sequence (stop codon stripped, uppercased)."""
-    seq = protein.rstrip("*").upper()
-    return hashlib.sha1(seq.encode("ascii"), usedforsecurity=False).hexdigest()
 
 
 # Member databases that report disorder / coiled-coil / signal-peptide /
@@ -306,7 +303,7 @@ def precompute_interproscan(
     for _label, seq in proteins.items():
         if not seq:
             continue
-        h = _protein_hash(seq)
+        h = protein_hash(seq)
         hash_to_seq.setdefault(h, seq.rstrip("*").upper().replace("*", ""))
 
     if not hash_to_seq:
@@ -506,7 +503,7 @@ class InterProScanModule:
           hash isn't in the predictions dict. Scoring (S1) should
           return ``None`` rather than ``False``.
         """
-        h = _protein_hash(protein)
+        h = protein_hash(protein)
         pred = self.predictions.get(h)
         if pred is None:
             return {

@@ -24,8 +24,9 @@ already attached to a TIS, then aggregates over the isoform-unique region:
    (0-1 score + class) by genomic ``(chrom, pos, ref, alt)``. Canonical-frame
    only: a precomputed canonical-transcript table has no entry for a position
    outside the canonical CDS, so it is absent by construction over an
-   extension's or separate ORF's unique region, and is excluded from the
-   damaging flag there.
+   extension's or separate ORF's unique region. The lookup is not made there:
+   its any-transcript fallback would otherwise return another transcript's (or
+   another gene's) canonical-frame score for a residue of a different protein.
 
 Runs as a SiteModule **after** ``ClinicalModule`` and
 ``VariantIntersectionModule`` so it can read the genomic-membership flags
@@ -50,6 +51,7 @@ from typing import Any
 
 from swissisoform.clinical.alphamissense import PATHOGENIC_CLASS, AlphaMissenseLookup
 from swissisoform.config import PipelineConfig, ScoringConfig
+from swissisoform.contract import NO_CANONICAL_BASELINE_ORFS
 from swissisoform.models import TranslationInitiationSite
 from swissisoform.plm.embed import DEFAULT_CACHE_DIR, aa_column, load_cache, protein_hash
 
@@ -340,8 +342,22 @@ class VariantEffectModule:
             if plm["plm_delta_llr"] is not None:
                 n_scored_plm += 1
 
+            # Frame for this hit. An extension/uORF/altORF variant in the
+            # isoform-unique region acts in *isoform* coordinates (it maps to
+            # isoform_protein_pos); everything else — shared region, the lost
+            # N-terminus of a truncation, or any unmapped variant — acts in the
+            # canonical frame. Mirrors _score_hit_plm's frame choice (A2).
+            use_isoform_frame = (
+                hit.get("isoform_protein_pos") is not None and in_unique is True
+            )
+            # AlphaMissense is canonical-frame: never applicable in a unique region
+            # that was not canonical coding sequence, mapped or not (A3).
+            am_applies = not use_isoform_frame and not (
+                in_unique is True and site.orf_type in NO_CANONICAL_BASELINE_ORFS
+            )
+
             am_rec = None
-            if am is not None:
+            if am is not None and am_applies:
                 am_rec = am.lookup(
                     hit.get("chrom", ""),
                     hit.get("genomic_pos") if isinstance(hit.get("genomic_pos"), int) else 0,
@@ -357,28 +373,15 @@ class VariantEffectModule:
                 tagged_hit["am_pathogenicity"] = None
                 tagged_hit["am_class"] = None
 
-            # Frame for this hit. An extension/uORF/altORF variant in the
-            # isoform-unique region acts in *isoform* coordinates (it maps to
-            # isoform_protein_pos); everything else — shared region, the lost
-            # N-terminus of a truncation, or any unmapped variant — acts in the
-            # canonical frame. Mirrors _score_hit_plm's frame choice (A2).
-            use_isoform_frame = (
-                hit.get("isoform_protein_pos") is not None and in_unique is True
-            )
             consequence = (
                 hit.get("isoform_consequence") if use_isoform_frame else hit.get("consequence")
             )
             consequence = consequence or hit.get("consequence") or hit.get("isoform_consequence")
             is_lof = bool(consequence) and str(consequence) in LOF_CONSEQUENCES
 
-            # AlphaMissense is canonical-frame, missense-only — it is meaningless
-            # on an extension-unique (isoform-frame) variant, so it must not drive
-            # the damaging flag there (A3). PLM ΔLLR is already frame-aware.
-            am_damaging = (
-                am_rec is not None
-                and am_rec["am_class"] == PATHOGENIC_CLASS
-                and not use_isoform_frame
-            )
+            # am_rec is None wherever AlphaMissense does not apply (see above).
+            # PLM ΔLLR is already frame-aware.
+            am_damaging = am_rec is not None and am_rec["am_class"] == PATHOGENIC_CLASS
             plm_damaging = (
                 plm["plm_delta_llr"] is not None
                 and plm["plm_delta_llr"] <= self.llr_damaging_threshold
@@ -419,7 +422,7 @@ class VariantEffectModule:
                     b["lof"] += 1
                 if plm["plm_delta_llr"] is not None:
                     b["deltas"].append(plm["plm_delta_llr"])
-                if am_rec is not None and not use_isoform_frame:
+                if am_rec is not None:
                     b["am_path"].append(am_rec["am_pathogenicity"])
                     if am_rec["am_class"] == PATHOGENIC_CLASS:
                         b["n_am_path"] += 1

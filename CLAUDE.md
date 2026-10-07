@@ -86,6 +86,7 @@ Shortcuts removed and made honest:
 | Assembly | `assembly.py` | DataFrame → Gene objects: canonical selection, ORF type mapping, DifferentialRegion via sequence comparison |
 | Pipeline | `pipeline.py` | `AnnotationPipeline` wiring — runs ProteinModules on canonical + isoform, SiteModules per TIS, GeneModules per gene |
 | Comparator | `compare/paired.py` | Shared canonical-vs-isoform delta logic (needs positional subset extension) |
+| Tag layer | `tags/registry.py`, `tags/evaluate.py`, `tags/derived.py`, `setup/tags.py`, `modules/tags.py` | Frozen tag vocabulary + cutoffs → tri-state `isoform_tags_*` columns, **additive beside** `isoform_scoring_*` |
 
 ### What's Built — Modules
 
@@ -128,7 +129,7 @@ All 9 modules implemented. Data model supports symmetric canonical/isoform annot
 | 4i. P3 secondary structure | `structure/sse.py` — P-SEA assignment off the cached CIFs (`annotate_sse`), collapsed into helix/strand elements with per-type length floors (`MIN_LENGTH = {helix: 5, strand: 3}`) and a per-element `plddt_mean`. `StructureModule` emits ONE whole-protein scan, `structure_sse_all_elements`, each element tagged `region=unique/shared/spans` against the differential bounds. `evidence/p3_secondary_structure/` scores True when the `unique`/`spans` subset holds an element ≥ `p3_min_sse_length` (6) whose own pLDDT clears `p3_min_sse_plddt` (0.70) — both required, so a geometrically clean helix through a disordered stretch is not a finding. Symmetric across ORF types, opposite narrative: an extension GAINS the element, a truncation LOSES one (read off the canonical, per `diff_space`). | **Done (2026-08-04)** |
 | 7. VEP stub | AlphaMissense precompute+lookup returning None until data exists. (InterProScan shipped as **S1**; Chai-1 moot — the pipeline folds with ESMFold2.) | Pending |
 | 4g. PLM VEP (ESM-2 LLR) | `PLMVEPModule` (SiteModule) + `swissisoform.plm.embed` cache (`<hash>.npz`, on-disk). Masked-marginal LLR per residue, unique vs shared region enrichment using `diff_region` coords (canonical-space for truncations, isoform-space otherwise). Precompute via `scripts/slurm/run_plm_embed.sbatch` (ESM-2 650M, A6000). InterPLM SAE feature path stubbed (cache stashes layer-18 embeddings) — feature module is a follow-up. | **Done (2026-04-28)** |
-| 4h. ESM-C SAE features (Part 3 of ESM migration) | Top-K sparse-autoencoder interpretability on the ESM-C residual stream — default now 6B layer-60 (`biohub/ESMC-6B-sae-layer60-k64-codebook16384`); 600M layer-27 (`biohub/ESMC-600M-sae-k64-codebook16384`) also supported. `embed.py` caches `embedding_sae` at the SAE-target layer for the chosen size; `plm/sae.py` encodes it to sparse `(L,64)` features in `data/cache/sae_esmc/<SIZE>/`; `plm/sae_module.py` `SAEFeatureModule` (SiteModule) ranks features differentially active in the isoform-unique vs shared region (`diff_region`-based, like PLM VEP); `plm/atlas.py` caches the ESM-Atlas term dictionary (`data/reference/sae_atlas/`; it describes the 6B-layer60 SAE — the pipeline's default — so feature #N IS that dictionary's #N and the labels are **aligned/correct**. It is only a placeholder for non-6B sizes (e.g. 600M layer-27), whose indices are not Atlas-aligned; `atlas_provenance(model_size)` stamps that caveat automatically). `scripts/export/sae_top_terms.py` writes a whole-protein top-5-terms CSV. | **Productionized (2026-06-23): the SAE encode now rides the embed GPU job — `run_plm_embed.sbatch` runs `python -m swissisoform.plm.sae` after the embed, so a fresh `run.sbatch` lands `sae_esmc/` automatically (skip with `--skip-modules sae` → `SWISSISO_SKIP_SAE=1`). `SAEFeatureModule` is wired into the annotate stage (`runner.py`), and `sae_module`/`export_sae_comparison.py` emit the 4 counts + top-30 `sae_feature_changes.parquet`; `all_paired.parquet` carries the `isoform_sae_*` columns. `scripts/export/sae_top_terms.py` remains a standalone manual diagnostic (whole-protein top-5 terms); the redundant `_sae_step1.sbatch` harness and `_verify_sae_layer.py` were retired. Scored as **S3** (`evidence/s3_sae/`) with its own website card.** |
+| 4h. ESM-C SAE features (Part 3 of ESM migration) | Top-K sparse-autoencoder interpretability on the ESM-C residual stream — default now 6B layer-60 (`biohub/ESMC-6B-sae-layer60-k64-codebook16384`); 600M layer-27 (`biohub/ESMC-600M-sae-k64-codebook16384`) also supported. `embed.py` caches `embedding_sae` at the SAE-target layer for the chosen size; `plm/sae.py` encodes it to sparse `(L,64)` features in `data/cache/sae_esmc/<SIZE>/`; `plm/sae_module.py` `SAEFeatureModule` (SiteModule) ranks features differentially active in the isoform-unique vs shared region (`diff_region`-based, like PLM VEP); `plm/atlas.py` caches the ESM-Atlas term dictionary (`data/reference/sae_atlas/`; it describes the 6B-layer60 SAE — the pipeline's default — so feature #N IS that dictionary's #N and the labels are **aligned/correct**. It is only a placeholder for non-6B sizes (e.g. 600M layer-27), whose indices are not Atlas-aligned; `atlas_provenance(model_size)` stamps that caveat automatically). | **Productionized (2026-06-23): the SAE encode now rides the embed GPU job — `run_plm_embed.sbatch` runs `python -m swissisoform.plm.sae` after the embed, so a fresh `run.sbatch` lands `sae_esmc/` automatically (skip with `--skip-modules sae` → `SWISSISO_SKIP_SAE=1`). `SAEFeatureModule` is wired into the annotate stage (`runner.py`), and `sae_module`/`export_sae_comparison.py` emit the 4 counts + top-30 `sae_feature_changes.parquet`; `all_paired.parquet` carries the `isoform_sae_*` columns. The redundant `_sae_step1.sbatch` harness, `_verify_sae_layer.py` and the `sae_top_terms.py` whole-protein diagnostic were retired. Scored as **S3** (`evidence/s3_sae/`) with its own website card.** |
 | 8. Full end-to-end | All modules on real data, all 6 cell lines | Pending |
 
 ### Canonical validation set — cheeseman13
@@ -265,6 +266,105 @@ any of them, so nothing user-facing moved and the parquet schema is unchanged.
 criterion, `EXISTENCE_CRITERIA` (C+D) / `FUNCTIONAL_CRITERIA` (L+M+P+S), and the
 six `isoform_scoring_{existence,functional}_{score,evaluable,high_confidence}`
 columns. Existence-vs-functional is the two-score framing the site renders.
+
+### Tag layer (2026-09-03) — additive, beside the criteria
+
+Issue #30's per-category tags, wired into the pipeline **without touching
+`EvidenceScoringModule`**. Both axes now travel in the same parquet and each
+consumer picks; retiring either is a later, separate decision.
+
+| column | type | contents |
+|---|---|---|
+| `isoform_tags_states` | `struct<52 x bool>` | `True` / `False` / **null = not-evaluable** |
+| `isoform_tags_citations` | `struct<52 x double>` | the one number each tag rests on |
+| `isoform_tags_registry_version` | `string` | which frozen vocabulary fired |
+
+**The registry is provisioned reference data**, `data/reference/tags/<version>/`,
+built by `python scripts/setup/build_tag_registry.py --version v1 --cutoffs config`
+(mirrors `setup/distributions.py`: same `--version` / `--force` /
+refuse-to-clobber discipline and `_setup.json` provenance). It re-runs the sweep's
+own `propose → apply_filters → choose_cutoff` against distributions `v3` and keeps
+the rows `figures/tag_vocab/tag_candidates.csv` does not mark `remove` — nothing is
+recovered by parsing the CSV's `test` string.
+
+**`v3` is current and the default** — 46 tags, 42 code-fired, 16 derived. It is
+v2 plus `S2_biophysics` and `S3_sae`, readmitted after the judge study showed
+their absence was what the tags arm was being marked down for: of the 812
+Structural Characteristics pairs it lost under v2, 84.9% of the judge's own
+reasoning cites the whole-protein biophysical shift S2 carries and 81.5% the SAE
+shift S3 carries. Readmitting them moved S from **−1.05/−1.14 to +0.49/+0.82**.
+
+The two take their cutoffs from different places, deliberately. **S2 keeps its
+`ScoringConfig` numbers** — measured on `full_catalog` its three branches sit at
+p88–p89 and roll up to a 20.2% fire rate, mid-band and not measurably broken,
+where the sweep would have put all three at p60 on a bare percentile that *sets*
+the rate rather than discovering it. **S3 takes the swept cutoff**
+(`s3_top_delta_min` 10.0 → 11.37578), via `seeds.SWEPT_CUTOFF_CRITERIA`, which
+makes the cutoff source per-criterion instead of a global `--cutoffs` flag. Both
+are immune from Jaccard elimination, as ordinary criterion candidates.
+
+v3 also fixes a dead tag. `metrics.resolve` had no branch for the `<col>__len`
+metrics the profiler synthesizes, so v2's `cmp_motifs_hits_in_diff_region__len`
+resolved to None on every row of every run — 1 of 40 code-fired tags was dead,
+with one WARNING as the only symptom.
+`setup.tags._check_metrics_resolve` now refuses at build time to freeze a
+threshold tag whose metric no run can resolve.
+
+`v2` (same 44 tags, 39 live) is the faithful record of what the judged runs
+actually fired. `v1` (56/52/16) predates the review pass and is a *historical
+artifact*: it was built from an 89-row table, and rebuilding `--version v1`
+against today's 103-row table would emit the reviewed contents under the v1
+name. v2 dropped the eight tags that assert absence or ask an absolute question,
+plus S2/S3, whose thresholds were never calibrated — v3 brings those two back
+and `UNCALIBRATED_CRITERIA` is gone.
+
+**Four kinds, and only one of them is code.** Adding a tag is adding a row:
+
+| kind | n in v1 | what it is |
+|---|---|---|
+| `threshold` | 30 | `metric ⋈ cutoff` via `metrics.resolve` |
+| `derived` | 16 | runs the criterion's own `evidence/<crit>/score` fn |
+| `bool` | 6 | an existing boolean column, tri-stated |
+| `llm` | 4 | M/P tool-loop judgment; never fired by code |
+
+**Why all sixteen criteria are `derived`, not thresholds.** Measured on
+cheeseman50, the threshold form disagreed with the scorer on **5 of the 13**
+criteria the sweep can express, every time by dropping a gate: P1 reads a populated
+`plddt_diffregion_mean` on a protein whose fold status is `too_long` (scorer:
+not-evaluable, threshold: `False`); M1 is undefined for separate ORFs; M2/P2 gate
+on their own status fields; M1/S2 are either-or roll-ups over two and three inputs.
+Turning "could not evaluate" into "evidence absent" is the exact failure #30 exists
+to remove. A `derived` tag calls the scorer, so it equals the criterion **by
+construction** — and its cutoffs still come from the registry, as
+`cutoff_overrides` (`{ScoringConfig field: value}`) folded into the config the
+scorer is handed. Only the numbers move; the gates stay. Multi-threshold criteria
+override only their headline cutoff — P2's `p2_min_shared_len` / `p2_plddt_min` and
+P3's `p3_min_sse_plddt` are gates, not cutoffs, and stay at their config values.
+
+`--cutoffs config` reproduces today's scoring exactly (verified:
+`effective_scoring(v1, ScoringConfig()) == ScoringConfig()`, and
+`scripts/tags/check_tag_parity.py` shows every derived tag agreeing row-for-row
+— 16/16 under v1, 14/14 under v2, which carries no S2/S3 tag);
+`--cutoffs distribution` cuts where the frozen distribution put each criterion.
+Build the config one first — a calibration finding must never be confusable with a
+wiring bug. **Two distribution cutoffs are not usable as-is**: swept percentiles on
+counting thresholds land between integers, putting `min_cell_lines` at 1.12 and
+`massspec_unique_peptides_min` at 0.07 (i.e. "at least zero peptides"). The builder
+warns; D1/D3 need their cutoffs chosen on the integers.
+
+*Side-effect worth knowing:* M1's `blocked` ESM-C branch disappears under this
+design. It was blocked because the frozen `full_catalog` distribution carries the
+stale `constraint_enrichment` column — but a derived M1 asks the scorer, which
+reads `constraint_delta` from the run in front of it. No cutoff is derived from the
+stale column, so nothing is blocked.
+
+**Runs last, over the finished frame** (`runner.annotate` → `_attach_tags`), because
+a threshold's cutoff was derived from a named parquet column and evaluating it
+against a rebuilt one is how the two silently disagree. Derived tags additionally
+need the TIS objects, aligned by row order. Skippable with `--skip-modules tags`
+(`ALL_POST_MODULES`); `--tag-registry <version>` selects the vocabulary. **A missing
+registry warns and emits nothing rather than failing the run** — the layer is
+additive, so a fresh clone that has not built one still produces every other column.
 
 ## Documentation
 
@@ -519,3 +619,29 @@ pytest tests/test_biophysics.py -v
 - Type annotations required
 - Tests: `pytest` with synthetic fixtures in `conftest.py`
 - Module names are single words (no underscores) to avoid Parquet column prefix ambiguity
+
+### No generated `*.md` reports
+
+**Export and build scripts write data, never a prose `report.md` / `summary.md`
+companion.** Print the summary to stdout if a human wants it at run time; the
+artifact on disk is the CSV/TSV/parquet.
+
+A generated markdown file is a second copy of numbers that already live in the
+data file, and it goes stale the moment the data file is edited by hand — which
+is routine here, since `tag_candidates.csv` carries a human `decision` column.
+Two artifacts then give two answers to the same question and nothing says which
+is current. Removed on this basis: `tag_review.md` (`tags/candidates.py`) and
+`feature_catalog_summary.md` (`export_feature_catalog.py`).
+
+This does not cover **hand-written** docs (`docs/architecture/`, `docs/plans/`,
+this file) or machine-readable provenance sidecars (`_setup.json`,
+`merge_report.tsv`) — those are the right way to record the same facts.
+
+### Reuse before you add
+
+Before writing a helper, grep for one that already exists and import it. A
+second copy of `_sha256` or a path resolver is not free: the copies drift, and a
+fix lands in one of them. Shared spellings and magic strings belong in one
+module that both sides import — `metrics.LEN_SUFFIX` is the worked example,
+after the profiler and the runtime disagreed about `__len` and silently shipped
+a tag that could never fire.

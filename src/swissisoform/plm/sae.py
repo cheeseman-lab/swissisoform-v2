@@ -33,6 +33,7 @@ from typing import Any
 
 from swissisoform.plm.embed import (
     DEFAULT_MODEL_SIZE,
+    append_manifest,
     load_cache,
     protein_hash,
     sae_layer_for,
@@ -104,18 +105,6 @@ def _save_sae_cache(
         val=np.asarray(val, dtype=np.float16),
         recon_loss=np.asarray(recon_loss, dtype=np.float32),
     )
-
-
-def _append_manifest(cache_dir: Path, h: str, length: int) -> None:
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    manifest = cache_dir / "manifest.tsv"
-    if manifest.exists():
-        with open(manifest) as fh:
-            seen = {line.split("\t", 1)[0] for line in fh if line.strip()}
-        if h in seen:
-            return
-    with open(manifest, "a") as fh:
-        fh.write(f"{h}\t{length}\n")
 
 
 def _load_sae_layer(repo: str, layer_idx: int, device: str) -> Any:
@@ -257,7 +246,7 @@ def precompute_sae(
                 h, cache_dir,
                 idx=feats["idx"], val=feats["val"], recon_loss=feats["recon_loss"],
             )
-            _append_manifest(cache_dir, h, int(feats["idx"].shape[0]))
+            append_manifest(cache_dir, h, int(feats["idx"].shape[0]))
             result[h] = feats
     elif missing:
         logger.info("precompute_sae: %d/%d missing (inline=False)", len(missing), len(hash_to_seq))

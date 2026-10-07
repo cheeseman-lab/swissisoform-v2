@@ -40,7 +40,7 @@ CLINICAL_SUMMARY_TYPE = pa.struct([
 CLINICAL_SUMMARY_COLUMNS = ("canonical_clinical_summary", "isoform_clinical_summary")
 
 
-def paired_schema(df: pd.DataFrame) -> pa.Schema:
+def paired_schema(df: pd.DataFrame, overrides: dict[str, pa.DataType] | None = None) -> pa.Schema:
     """Arrow schema for a paired frame, with the unstable columns declared.
 
     Inference is per-frame, so it cannot be relied on for a sharded run: two
@@ -50,15 +50,22 @@ def paired_schema(df: pd.DataFrame) -> pa.Schema:
 
     Args:
         df: The paired frame about to be written.
+        overrides: Extra ``{column: type}`` pins, for columns whose type is known
+            from a declaration rather than from the data. The tag structs are the
+            live case: a shard where one tag happens to be null on every row would
+            infer that field as ``null`` and disagree with every other shard.
 
     Returns:
-        The inferred schema with :data:`CLINICAL_SUMMARY_COLUMNS` overridden.
+        The inferred schema with :data:`CLINICAL_SUMMARY_COLUMNS` and *overrides*
+        applied.
     """
     schema = pa.Table.from_pandas(df, preserve_index=False).schema
-    for name in CLINICAL_SUMMARY_COLUMNS:
+    pins: dict[str, pa.DataType] = {n: CLINICAL_SUMMARY_TYPE for n in CLINICAL_SUMMARY_COLUMNS}
+    pins.update(overrides or {})
+    for name, dtype in pins.items():
         idx = schema.get_field_index(name)
         if idx >= 0:
-            schema = schema.set(idx, pa.field(name, CLINICAL_SUMMARY_TYPE))
+            schema = schema.set(idx, pa.field(name, dtype))
     return schema
 
 

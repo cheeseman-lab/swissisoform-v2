@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from swissisoform.clinical.significance import is_pathogenic
+
 _CANON_COLOR = "#64748b"  # slate
 _ISO_COLOR = "#1f77b4"  # blue
 _EXT_FILL = "#2ca02c"  # green (added region)
@@ -227,7 +229,7 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                     f"{c} · {'unique' if v.get('in_unique') else 'shared'} region"
                 )
                 continue
-            is_path = "pathogenic" in (v.get("significance") or "").lower()
+            is_path = is_pathogenic(v.get("significance"))
             in_unique = bool(v.get("in_unique"))
             xs.append(v["pos"])
             cols.append("#d62728" if is_path else CONSEQ_COLOR.get(c, "#94a3b8"))

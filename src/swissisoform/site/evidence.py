@@ -21,7 +21,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from swissisoform.config import SCORING_SIDECAR, ScoringConfig
+from swissisoform.clinical.significance import clinsig_family, is_pathogenic
+from swissisoform.config import CELL_LINES, SCORING_SIDECAR, ScoringConfig
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +102,6 @@ def p3_min_sse_plddt() -> float:
     """Minimum per-element mean pLDDT for P3, from the active config."""
     return _ACTIVE_SCORING.p3_min_sse_plddt
 
-PATHOGENIC_CLINSIG_TOKENS = ("pathogenic", "likely_pathogenic", "likely pathogenic")
 
 # Sentinel headline_col for criteria whose headline is computed, not a column.
 _START_SITE_USAGE = "__start_site_usage__"
@@ -152,7 +152,7 @@ _ISO_CANON_HEADLINES = {
     ),
 }
 
-_INITIATION_EFFICIENCY_SAMPLES = ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen")
+_INITIATION_EFFICIENCY_SAMPLES = CELL_LINES
 
 
 def _is_missing(value: Any) -> bool:
@@ -210,42 +210,9 @@ def _scalar_or_none(row: pd.Series, key: str) -> Any:
 
 # ── Clinical-significance normalisation ───────────────────────────────────
 #
-# ``clinical_significance`` is a ClinVar-only free-text field: gnomAD and COSMIC
-# rows carry no value at all, and ClinVar spells the same call several ways
-# ("Pathogenic", "Pathogenic/Likely pathogenic", "Likely pathogenic"). Anything
-# selecting on it must match by family rather than by equality, or it silently
-# undercounts. Both helpers below live here so the LLM tool readers
-# (``swissisoform.site.tools``) and the hit-truncation sort agree on what
-# "pathogenic" means.
-
-CLINSIG_FAMILIES = ("pathogenic", "benign", "uncertain", "conflicting", "none")
-
-
-def clinsig_family(value: Any) -> str:
-    """Bucket a ClinVar ``clinical_significance`` string into a coarse family.
-
-    Families are the ones a caller actually filters on:
-    ``pathogenic`` (Pathogenic + Pathogenic/Likely pathogenic + Likely
-    pathogenic), ``benign`` (Benign + Benign/Likely benign + Likely benign),
-    ``uncertain``, ``conflicting``, and ``none`` for an absent value (every
-    gnomAD/COSMIC row, plus ClinVar rows with no assertion).
-
-    ``conflicting`` is tested first because "Conflicting classifications of
-    pathogenicity" contains the substring "pathogenic" and would otherwise be
-    counted as a pathogenic call.
-    """
-    sig = str(value or "").strip().lower()
-    if not sig or sig == "nan" or sig == "none":
-        return "none"
-    if "conflicting" in sig:
-        return "conflicting"
-    if "pathogenic" in sig:
-        return "pathogenic"
-    if "uncertain" in sig:
-        return "uncertain"
-    if "benign" in sig:
-        return "benign"
-    return "none"
+# ``clinsig_family`` is defined once in ``swissisoform.clinical.significance``
+# (re-exported here for the LLM tool readers and the site); the hit-truncation
+# sort below builds on it so every reader agrees on what "pathogenic" means.
 
 
 def clinsig_rank(hit: dict[str, Any]) -> int:
@@ -254,25 +221,21 @@ def clinsig_rank(hit: dict[str, Any]) -> int:
     Finer-grained than :func:`clinsig_family` because the sort separates a firm
     Pathogenic call from a Likely pathogenic one. Used by
     :func:`slice_criterion` to decide which hits survive the ``MAX_HITS`` cap.
-
-    Note: a "Conflicting classifications of pathogenicity" value ranks 0 here
-    (it contains "pathogenic" and not "likely"), which is more generous than
-    :func:`clinsig_family`, where it is its own family. Kept as-is so the
-    existing truncation order is unchanged; it only affects which hits appear in
-    a capped view, never a count.
+    A "Conflicting classifications of pathogenicity" call is not pathogenic
+    here either: it ranks with the other/unknown calls.
     """
-    sig = str(hit.get("clinical_significance") or "").lower()
-    if "pathogenic" in sig and "likely" not in sig:
-        return 0  # Pathogenic
-    if "likely_pathogenic" in sig or "likely pathogenic" in sig:
-        return 1
+    raw = hit.get("clinical_significance")
+    family = clinsig_family(raw)
+    sig = str(raw or "").lower()
+    if family == "pathogenic":
+        return 1 if "likely" in sig else 0
     if hit.get("effect_damaging") is True:
         return 2
-    if "uncertain" in sig:
+    if family == "uncertain":
         return 4
-    if "benign" in sig:
+    if family == "benign":
         return 5
-    return 3  # other / unknown
+    return 3  # other / unknown / conflicting
 
 
 def _diff_space_from_orf_type(orf_type: Any) -> str | None:
@@ -373,8 +336,7 @@ def _build_pathogenic_in_unique(row: pd.Series) -> list[dict[str, Any]]:
         sig = h.get("clinical_significance")
         if sig is None:
             continue
-        sig_l = str(sig).lower()
-        if not any(tok in sig_l for tok in PATHOGENIC_CLINSIG_TOKENS):
+        if not is_pathogenic(sig):
             continue
         out.append(
             {
@@ -985,7 +947,11 @@ CRITERIA: dict[str, dict[str, Any]] = {
             "(2) ESM-C constraint_delta POSITIVE means the model predicts the "
             "unique region's residues better than the shared core, i.e. finds "
             "them more conserved (it is mean logP(wt) unique minus shared; higher "
-            "logP(wt) = better predicted = more conserved). This measures "
+            "logP(wt) = better predicted = more conserved). Despite their names, "
+            "mean_llr_unique_region / mean_llr_shared_region are those two mean "
+            "logP(wt) values, NOT substitution ΔLLRs: unlike plm_delta_llr in the "
+            "variant tools, where more negative means more disruptive, a higher "
+            "(less negative) mean_llr means more conserved. This measures "
             "tolerance/constraint, not damaging-variant burden. "
             "The two are either-or evidence with OPPOSITE directionality (gnomAD "
             "low = constrained, ESM-C delta high = constrained); either alone "
@@ -1725,7 +1691,7 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
 }
 
 # D1/D2 — per-cell-line expression columns (generated programmatically)
-for _sample in ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen"):
+for _sample in CELL_LINES:
     _display = _sample.replace("_", " ")
     CRITERIA_METRIC_LABELS[f"expr_{_sample}_initiation_efficiency"] = {
         "label": f"{_display}: initiation efficiency",
