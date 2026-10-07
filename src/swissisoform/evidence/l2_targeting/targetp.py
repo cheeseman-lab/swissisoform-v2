@@ -211,10 +211,9 @@ class TargetPModule:
         "targetp_ctp_prob",
         "targetp_cleavage_site",
     ]
-    # The fields that are calls, not scores. The comparator flags only these: a
-    # probability is a scalar even when it is None on both sides (human TargetP
-    # never reports cTP), and would otherwise become a `_changed` category.
+    # Read by the comparator; see compare/comparator.py `_Predictor`.
     CATEGORICAL_FIELDS: tuple[str, ...] = ("targetp_prediction", "targetp_cleavage_site")
+    RAN_FIELD: str = "targetp_prediction"
     SCOPE: str = "C"
 
     def __init__(

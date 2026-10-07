@@ -104,13 +104,17 @@ def row_cutoffs(
     not-evaluable.
     """
     fallback = np.nan if default is None else float(default)
-    orfs = list(orf_types)
+    orfs = pd.Series(list(orf_types), dtype="object")
     if not by_stratum:
         return np.full(len(orfs), fallback)
-    return np.array(
-        [by_stratum.get(str(o), by_stratum.get(stratum_for(o), fallback)) for o in orfs],
-        dtype="float64",
-    )
+    # Resolved once per distinct ORF type, not once per row. A missing orf_type
+    # (NA in a string column) belongs to no stratum and takes the pooled cutoff;
+    # passing it to stratum_for would raise on NA's ambiguous truth value.
+    resolved = {
+        o: by_stratum.get(str(o), by_stratum.get(stratum_for(o), fallback))
+        for o in orfs.dropna().unique()
+    }
+    return orfs.map(resolved).astype("float64").fillna(fallback).to_numpy()
 
 def _none_if_nan(value: Any) -> Any:
     """Map a non-finite float to None, leaving everything else untouched."""

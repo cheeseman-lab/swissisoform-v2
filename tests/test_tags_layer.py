@@ -273,6 +273,14 @@ class TestFire:
         ).get("t")
         assert tag.label_for("truncated") == "Strong feature gained"
 
+    def test_a_missing_orf_type_takes_the_pooled_cutoff(self):
+        """NA in a string orf_type column must not crash the per-row resolution."""
+        from swissisoform.distributions import row_cutoffs
+
+        orf = pd.Series(["extended", None, "uorf", "truncated"], dtype="string")
+        got = row_cutoffs(orf, {"extended": 1.0, "separate": 3.0}, 0.5)
+        assert list(got) == [1.0, 0.5, 3.0, 0.5]
+
     def test_per_stratum_cutoff(self):
         """One checkbox, one meaning per ORF type: the row's stratum picks the cutoff."""
         row = _row(tag_id="hi", metric="m", cutoff=5.0)

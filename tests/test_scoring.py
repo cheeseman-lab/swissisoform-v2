@@ -520,6 +520,12 @@ class TestF4TargetingChange:
         assert res.value is None
         assert "signalp" in res.reason
 
+    def test_a_skipped_predictor_does_not_block_a_confident_no(self):
+        """TargetP not run at all (--skip): SignalP's unchanged flags give False."""
+        site = _site()
+        site.comparison["signalp"] = {"signalp_prediction_changed": False}
+        assert _l2_targeting_change(site, ScoringConfig()).value is False
+
     def test_every_flag_unknown_is_not_evaluable(self):
         site = _site()
         site.comparison["signalp"] = {"signalp_prediction_changed": None}
@@ -528,12 +534,13 @@ class TestF4TargetingChange:
 
     def test_a_gained_cleavage_site_is_a_change(self):
         """End to end through the comparator: canonical has no signal peptide."""
-        from swissisoform.compare.comparator import _categorical_changes
+        from swissisoform.compare.comparator import _PREDICTORS, _categorical_changes
 
         site = _site()
         site.comparison["signalp"] = _categorical_changes(
             {"signalp_prediction": "OTHER", "signalp_cleavage_site": None},
             {"signalp_prediction": "OTHER", "signalp_cleavage_site": "CS pos: 23-24"},
+            _PREDICTORS["signalp"],
         )
         assert _l2_targeting_change(site, ScoringConfig()).value is True
 

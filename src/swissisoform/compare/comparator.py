@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import math
+from dataclasses import dataclass
 from typing import Any
 
 from swissisoform.compare.paired import PairedComparison
@@ -142,41 +143,46 @@ def _scalar_deltas(canonical: dict[str, Any], isoform: dict[str, Any]) -> dict[s
     return deltas
 
 
-# Modules that declare which of their fields are categorical calls. For these the
-# comparator flags exactly those fields; every other module is judged field by
-# field from the values themselves.
-_CATEGORICAL_FIELDS: dict[str, frozenset[str]] = {
-    mod.MODULE_NAME: frozenset(mod.CATEGORICAL_FIELDS)
+@dataclass(frozen=True)
+class _Predictor:
+    """What a predictor module declares about its categorical calls.
+
+    ``fields`` are the calls the comparator flags (``CATEGORICAL_FIELDS``); every
+    other field of the module is a scalar, even a probability that is ``None`` on
+    both sides — human TargetP never reports cTP, so reading fields off the
+    values let ``targetp_ctp_prob_changed`` through on every row. ``ran`` is the
+    field the module always fills when its predictor ran and leaves ``None`` on a
+    hash miss (``RAN_FIELD``): SignalP's prediction defaults to ``"OTHER"``,
+    TargetP's to ``"noTP"``.
+    """
+
+    fields: frozenset[str]
+    ran: str
+
+
+# The predictor modules, keyed by MODULE_NAME. Declared on each module rather
+# than read off field names, so a renamed or unprefixed field cannot silently
+# lose its ran-check.
+_PREDICTORS: dict[str, _Predictor] = {
+    mod.MODULE_NAME: _Predictor(frozenset(mod.CATEGORICAL_FIELDS), mod.RAN_FIELD)
     for mod in (LocalizationModule, SignalPModule, TargetPModule)
 }
-
-
-def _ran_key(key: str) -> str:
-    """The field that says whether *key*'s predictor ran: ``<tool>_prediction``.
-
-    The predictor modules (localization's DeepLoc, SignalP, TargetP) prefix every
-    field with the tool name and always fill ``<tool>_prediction`` when they ran
-    — SignalP defaults it to ``"OTHER"``, TargetP to ``"noTP"`` — and leave it
-    ``None`` on a hash miss. So ``signalp_cleavage_site`` is judged by
-    ``signalp_prediction``, and a prediction field is its own ran key.
-    """
-    return f"{key.split('_', 1)[0]}_prediction"
 
 
 def _categorical_changes(
     canonical: dict[str, Any],
     isoform: dict[str, Any],
-    fields: frozenset[str] | None = None,
+    predictor: _Predictor | None = None,
 ) -> dict[str, Any]:
-    """Emit a change flag for every categorical (non-numeric, non-list) field.
+    """Emit a change flag for every categorical field of one module.
 
-    Every shared categorical key produces ``{key}_changed`` plus
-    ``{key}_canonical`` / ``{key}_isoform`` values — so downstream
-    consumers always see the comparison, not just the rows where values
-    diverged.
+    Every flagged key produces ``{key}_changed`` plus ``{key}_canonical`` /
+    ``{key}_isoform`` values — so downstream consumers always see the
+    comparison, not just the rows where values diverged.
 
-    A missing value means two different things, and the flag keeps them apart
-    wherever the module says whether its predictor ran (:func:`_ran_key`):
+    **A predictor module** (*predictor* given, see :class:`_Predictor`) has its
+    declared fields flagged and nothing else, and a missing value means one of
+    two things, which the ran field tells apart:
 
     - **ran on both sides, value on one** — ``True``. SignalP reports no
       cleavage site because the protein has no signal peptide, so canonical
@@ -185,30 +191,27 @@ def _categorical_changes(
     - **ran on both sides, value on neither** — ``False``.
     - **did not run on a side** — ``None``: nothing is known about that side.
 
-    A field with no ran key cannot tell "absent" from "did not run", so one
-    missing side stays ``None`` and two stay ``False``.
-
-    Which fields are categories: *fields* when the module declares them
-    (``CATEGORICAL_FIELDS``, via ``_CATEGORICAL_FIELDS``) — a probability that is
-    ``None`` on both sides would otherwise read as a category, and human TargetP
-    never reports cTP. Without a declaration, a field numeric on *either* side is
-    a scalar for :func:`_scalar_deltas`; checking only the isoform side let a
-    probability that was ``None`` there pass as a category.
+    **Any other module** declares nothing, so a field is judged from its values.
+    One numeric on both sides is a scalar for :func:`_scalar_deltas`. Otherwise
+    one missing side is ``None`` (a real change cannot be told from a failed
+    pane) and two are ``False`` — including a field numeric on one side and
+    missing on the other, so a pane that failed reads as unknown rather than
+    leaving the field out of the comparison altogether.
     """
     changes: dict[str, Any] = {}
     for key, iso_val in isoform.items():
         if key in _POSITIONAL_KEYS or isinstance(iso_val, (list, dict)):
             continue
-        if fields is not None and key not in fields:
-            continue
         can_val = canonical.get(key)
-        if _is_numeric(iso_val) or _is_numeric(can_val):
+        if predictor is not None and key not in predictor.fields:
+            continue
+        if predictor is None and _is_numeric(iso_val) and _is_numeric(can_val):
             continue
         iso_missing = _is_missing(iso_val)
         can_missing = _is_missing(can_val)
-        ran = _ran_key(key)
         changed: bool | None
-        if ran in isoform or ran in canonical:
+        if predictor is not None:
+            ran = predictor.ran
             if _is_missing(isoform.get(ran)) or _is_missing(canonical.get(ran)):
                 changed = None
             elif iso_missing or can_missing:
@@ -221,8 +224,6 @@ def _categorical_changes(
             # manufacture a spurious change, so report "no change".
             changed = False
         elif iso_missing or can_missing:
-            # Exactly one side uncomputable, and nothing says whether the
-            # module ran there — can't tell a real change from a failed pane.
             changed = None
         else:
             changed = iso_val != can_val
@@ -333,7 +334,7 @@ class Comparator:
 
         result.update(_scalar_deltas(canonical, isoform))
         result.update(
-            _categorical_changes(canonical, isoform, _CATEGORICAL_FIELDS.get(module_name))
+            _categorical_changes(canonical, isoform, _PREDICTORS.get(module_name))
         )
 
         # Positional subsetting: filter to diff region coords.

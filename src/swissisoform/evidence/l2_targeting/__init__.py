@@ -19,6 +19,23 @@ __all__ = [
 ]
 
 
+# A predictor with no comparison emitted at all: not part of this run.
+_ABSENT = object()
+
+
+def _state(cmp: dict[str, Any] | None) -> object:
+    """One predictor's state: True/False, None (ran but unassessed), or _ABSENT."""
+    if not isinstance(cmp, dict):
+        return _ABSENT
+    flags = [cmp.get(k) for k in cmp if k.endswith("_changed")]
+    if not flags:
+        return _ABSENT
+    if all(v is None for v in flags):
+        # It ran, but missed a side (every flag unknown).
+        return None
+    return any(v is True for v in flags)
+
+
 def score(
     site: TranslationInitiationSite, cfg: ScoringConfig  # noqa: ARG001
 ) -> CriterionResult:
@@ -27,41 +44,30 @@ def score(
     Reads from ``site.comparison['signalp']`` / ``site.comparison['targetp']``
     written by the comparator (Scope A). ``True`` when either reports a
     category change; ``False`` only when both were evaluated and neither did;
-    ``None`` when either could not be evaluated (no comparison, or every flag
-    ``None``) and the other flags nothing — a gain on the unassessed side is
-    still possible, so that is not a confident "no".
+    ``None`` when a predictor that is part of the run could not be evaluated
+    (every flag ``None``: it missed a side) and the other flags nothing — a gain
+    on the unassessed side is still possible, so that is not a confident "no".
+    A predictor with no comparison at all was not part of the run (``--skip``,
+    or no precompute) and is left out rather than counted as unassessed, so a
+    run without TargetP still gives a confident ``False`` from SignalP alone.
     """
-    sp_cmp = site.comparison.get("signalp")
-    tp_cmp = site.comparison.get("targetp")
-
-    def _any_changed(cmp: dict[str, Any] | None) -> bool | None:
-        if not isinstance(cmp, dict):
-            return None
-        flags = [cmp.get(k) for k in cmp if k.endswith("_changed")]
-        if not flags or all(v is None for v in flags):
-            # No flag, or none evaluable (the predictor did not run on a side).
-            return None
-        return any(v is True for v in flags)
-
-    sp_state = _any_changed(sp_cmp)
-    tp_state = _any_changed(tp_cmp)
-
-    if sp_state is None and tp_state is None:
+    states = {
+        "signalp": _state(site.comparison.get("signalp")),
+        "targetp": _state(site.comparison.get("targetp")),
+    }
+    present = {name: v for name, v in states.items() if v is not _ABSENT}
+    if not present:
         return CriterionResult(
             "L2_targeting_change", None, "signalp/targetp comparisons not available"
         )
-    if sp_state is not True and tp_state is not True and (sp_state is None or tp_state is None):
-        # One predictor saw no change, the other could not be assessed. A gain on
-        # the unassessed side is still possible, so this is not a confident "no".
-        missing = "signalp" if sp_state is None else "targetp"
-        return CriterionResult(
-            "L2_targeting_change", None, f"no change flagged, but {missing} not evaluable"
-        )
-    if sp_state is True or tp_state is True:
-        hits = []
-        if sp_state is True:
-            hits.append("signalp")
-        if tp_state is True:
-            hits.append("targetp")
+    hits = [name for name, v in present.items() if v is True]
+    if hits:
         return CriterionResult("L2_targeting_change", True, f"changed in: {','.join(hits)}")
+    unassessed = [name for name, v in present.items() if v is None]
+    if unassessed:
+        return CriterionResult(
+            "L2_targeting_change",
+            None,
+            f"no change flagged, but {','.join(unassessed)} not evaluable",
+        )
     return CriterionResult("L2_targeting_change", False, "no targeting change flagged")
