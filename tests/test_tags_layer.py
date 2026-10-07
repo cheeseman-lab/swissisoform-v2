@@ -15,6 +15,7 @@ from swissisoform.config import PipelineConfig, ScoringConfig
 from swissisoform.models import ORFType, TranslationInitiationSite
 from swissisoform.modules.tags import (
     CITATIONS_COLUMN,
+    LABELS_COLUMN,
     SHA256_COLUMN,
     STATES_COLUMN,
     VERSION_COLUMN,
@@ -498,6 +499,21 @@ class TestModule:
         assert sites[1].isoform_annotations["tags"]["states"] == {"hi": True}
         assert sites[1].isoform_annotations["tags"]["registry_version"] == "v7"
 
+    def test_labels_read_for_each_rows_orf_type(self):
+        """The resolved label travels in the parquet and on the site object."""
+        reg = _registry(_row(tag_id="hi", metric="m", cutoff=2.0, label="Unique region more basic"))
+        df = _frame(["extended", "truncated", "uorf"], m=[1.0, 3.0, 3.0])
+        sites = [_site("a"), _site("b"), _site("c")]
+
+        out = TagModule(reg).annotate_frame(df, sites)
+
+        assert list(out[LABELS_COLUMN]) == [
+            {"hi": "Unique region more basic"},
+            {"hi": "Lost region more basic"},
+            {"hi": "Unique region more basic"},
+        ]
+        assert sites[1].isoform_annotations["tags"]["labels"] == {"hi": "Lost region more basic"}
+
     def test_input_frame_not_mutated(self):
         reg = _registry(_row(tag_id="hi", metric="m", cutoff=2.0))
         df = _frame(["extended"], m=[3.0])
@@ -531,6 +547,7 @@ class TestParquetRoundTrip:
         back = pd.read_parquet(path)
         assert back[STATES_COLUMN].iloc[0] == {"hi": True}
         assert back[STATES_COLUMN].iloc[1] == {"hi": None}
+        assert back[LABELS_COLUMN].iloc[0] == {"hi": "A tag"}
 
 
 # ---------------------------------------------------------------------------
@@ -599,6 +616,16 @@ class TestSchemaOverrides:
 
         df = pd.DataFrame({VERSION_COLUMN: ["v_absent"]})
         assert schema_overrides(df) == {}
+
+    def test_the_labels_struct_is_declared_as_strings(self, monkeypatch):
+        import pyarrow as pa
+
+        from swissisoform.modules import tags as tags_mod
+
+        reg = _registry(_row(tag_id="hi", metric="m", cutoff=2.0))
+        monkeypatch.setattr(tags_mod, "load_registry", lambda _v: reg)
+        types = tags_mod.schema_overrides(pd.DataFrame({VERSION_COLUMN: ["vtest"]}))
+        assert types[LABELS_COLUMN] == pa.struct([pa.field("hi", pa.string())])
 
     def test_no_tag_columns_means_no_overrides(self):
         from swissisoform.modules.tags import schema_overrides
