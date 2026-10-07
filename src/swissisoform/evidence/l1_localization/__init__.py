@@ -37,7 +37,14 @@ def score(
     changed_keys = [k for k in cmp if k.endswith("_changed") and cmp.get(k) is True]
     if not changed_keys:
         # Distinguish "comparator ran, no change" from "no comparator data"
-        if any(k.endswith("_changed") for k in cmp):
+        flags = [cmp[k] for k in cmp if k.endswith("_changed")]
+        if flags and all(v is None for v in flags):
+            # Every flag is unknown (DeepLoc did not run on a side): nothing was
+            # evaluated, so this is not a confident "unchanged".
+            return CriterionResult(
+                "L1_localization_change", None, "no localization flag evaluable"
+            )
+        if flags:
             return CriterionResult(
                 "L1_localization_change",
                 False,

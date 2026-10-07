@@ -36,10 +36,11 @@ def score(
     def _any_changed(cmp: dict[str, Any] | None) -> bool | None:
         if not isinstance(cmp, dict):
             return None
-        changed = [k for k in cmp if k.endswith("_changed")]
-        if not changed:
+        flags = [cmp.get(k) for k in cmp if k.endswith("_changed")]
+        if not flags or all(v is None for v in flags):
+            # No flag, or none evaluable (the predictor did not run on a side).
             return None
-        return any(cmp.get(k) is True for k in changed)
+        return any(v is True for v in flags)
 
     sp_state = _any_changed(sp_cmp)
     tp_state = _any_changed(tp_cmp)

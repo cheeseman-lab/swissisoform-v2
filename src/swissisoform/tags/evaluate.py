@@ -113,12 +113,9 @@ def _bool_state(df: pd.DataFrame, tag: Tag) -> tuple[pd.Series, pd.Series] | Non
     """
     if tag.metric not in df.columns:
         return None
-    # A categorical change flag is re-derived so a one-sided None reads as
-    # gained/lost rather than unknown (see metrics.changed_state).
-    raw = metrics.changed_state(tag.metric, df)
-    if raw is None:
-        raw = df[tag.metric]
-    state = raw.astype("object").map(
+    # The comparator already tells "ran, found nothing" from "did not run"
+    # (compare/comparator.py ``_categorical_changes``), so the flag is read as-is.
+    state = df[tag.metric].astype("object").map(
         lambda v: pd.NA if v is None or (isinstance(v, float) and pd.isna(v)) else bool(v)
     )
     return (

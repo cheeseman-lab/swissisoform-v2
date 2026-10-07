@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from swissisoform.compare.comparator import (
     Comparator,
+    _categorical_changes,
     _hits_overlapping,
     compare_genes,
 )
@@ -145,6 +146,72 @@ class TestScalarDeltas:
         assert cmp["flag_changed"] is True
         assert cmp["flag_canonical"] is False
         assert cmp["flag_isoform"] is True
+
+
+class TestOneSidedCategorical:
+    """A missing value is "ran, found nothing" or "did not run", and they differ."""
+
+    @staticmethod
+    def _signalp(prediction: str | None, site: str | None) -> dict:
+        return {"signalp_prediction": prediction, "signalp_cleavage_site": site}
+
+    def test_value_on_one_side_with_both_runs_is_a_change(self):
+        """No signal peptide on the canonical, one on the isoform: a gain."""
+        out = _categorical_changes(
+            self._signalp("OTHER", None), self._signalp("SP", "CS pos: 23-24")
+        )
+        assert out["signalp_cleavage_site_changed"] is True
+
+    def test_value_lost_with_both_runs_is_a_change(self):
+        out = _categorical_changes(
+            self._signalp("SP", "CS pos: 20-21"), self._signalp("OTHER", None)
+        )
+        assert out["signalp_cleavage_site_changed"] is True
+
+    def test_no_value_on_either_side_with_both_runs_is_no_change(self):
+        out = _categorical_changes(self._signalp("OTHER", None), self._signalp("OTHER", None))
+        assert out["signalp_cleavage_site_changed"] is False
+
+    def test_a_side_that_did_not_run_is_unknown(self):
+        """The predictor missed the canonical (no cache): nothing is known there."""
+        out = _categorical_changes(
+            self._signalp(None, None), self._signalp("SP", "CS pos: 4")
+        )
+        assert out["signalp_cleavage_site_changed"] is None
+        assert out["signalp_prediction_changed"] is None
+
+    def test_both_values_present_compare_by_value(self):
+        same = _categorical_changes(
+            self._signalp("SP", "CS pos: 9"), self._signalp("SP", "CS pos: 9")
+        )
+        moved = _categorical_changes(
+            self._signalp("SP", "CS pos: 9"), self._signalp("SP", "CS pos: 4")
+        )
+        assert same["signalp_cleavage_site_changed"] is False
+        assert moved["signalp_cleavage_site_changed"] is True
+
+    def test_nan_counts_as_absent(self):
+        """DeepLoc's signals column reads back as NaN, not None, when empty."""
+        out = _categorical_changes(
+            {"deeploc_prediction": "Cytoplasm", "deeploc_signals": float("nan")},
+            {"deeploc_prediction": "Nucleus", "deeploc_signals": "Nuclear localization signal"},
+        )
+        assert out["deeploc_signals_changed"] is True
+
+    def test_a_field_without_a_run_indicator_stays_unknown_when_one_sided(self):
+        out = _categorical_changes({"label": None}, {"label": "x"})
+        assert out["label_changed"] is None
+        both = _categorical_changes({"label": None}, {"label": None})
+        assert both["label_changed"] is False
+
+    def test_a_numeric_field_missing_on_one_side_is_not_a_category(self):
+        """A probability that is None on the isoform must not become ``_changed``."""
+        out = _categorical_changes(
+            {"targetp_prediction": "noTP", "targetp_ctp_prob": 0.01},
+            {"targetp_prediction": "noTP", "targetp_ctp_prob": None},
+        )
+        assert "targetp_ctp_prob_changed" not in out
+        assert out["targetp_prediction_changed"] is False
 
 
 # ---------------------------------------------------------------------------

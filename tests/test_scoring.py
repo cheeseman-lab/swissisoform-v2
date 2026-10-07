@@ -424,6 +424,23 @@ class TestF2LocalizationChange:
         res = _l1_localization_change(_site(), ScoringConfig())
         assert res.value is None
 
+    def test_every_flag_unknown_is_not_evaluable(self):
+        """DeepLoc did not run on a side: no flag was evaluated, so not a "no"."""
+        site = _site()
+        site.comparison["localization"] = {
+            "deeploc_prediction_changed": None,
+            "deeploc_signals_changed": None,
+        }
+        assert _l1_localization_change(site, ScoringConfig()).value is None
+
+    def test_a_known_no_beside_an_unknown_is_false(self):
+        site = _site()
+        site.comparison["localization"] = {
+            "deeploc_prediction_changed": False,
+            "deeploc_signals_changed": None,
+        }
+        assert _l1_localization_change(site, ScoringConfig()).value is False
+
 
 class TestF3DomainChange:
     def test_no_ips_data(self):
@@ -493,6 +510,23 @@ class TestF4TargetingChange:
         site.comparison["targetp"] = {"targetp_prediction_changed": False}
         res = _l2_targeting_change(site, ScoringConfig())
         assert res.value is False
+
+    def test_every_flag_unknown_is_not_evaluable(self):
+        site = _site()
+        site.comparison["signalp"] = {"signalp_prediction_changed": None}
+        site.comparison["targetp"] = {"targetp_prediction_changed": None}
+        assert _l2_targeting_change(site, ScoringConfig()).value is None
+
+    def test_a_gained_cleavage_site_is_a_change(self):
+        """End to end through the comparator: canonical has no signal peptide."""
+        from swissisoform.compare.comparator import _categorical_changes
+
+        site = _site()
+        site.comparison["signalp"] = _categorical_changes(
+            {"signalp_prediction": "OTHER", "signalp_cleavage_site": None},
+            {"signalp_prediction": "OTHER", "signalp_cleavage_site": "CS pos: 23-24"},
+        )
+        assert _l2_targeting_change(site, ScoringConfig()).value is True
 
 
 class TestF5GermlineToleranceConstraint:

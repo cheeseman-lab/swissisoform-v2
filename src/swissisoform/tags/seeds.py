@@ -408,7 +408,6 @@ TAG_LABELS: dict[tuple[str, str], str] = {
     ("cmp_signalp_signalp_cleavage_site_changed", "bool"): "Signal cleavage site moves",
     ("cmp_targetp_targetp_prediction_changed", "bool"): "Targeting changes",
     ("cmp_targetp_targetp_cleavage_site_changed", "bool"): "Transit peptide site moves",
-    ("cmp_targetp_targetp_ctp_prob_changed", "bool"): "Chloroplast transit changes",
     ("isoform_localization_deeploc_prob_nucleus", ">="): "Predicted nuclear",
     ("isoform_localization_deeploc_prob_cytoplasm", "<"): "Predicted non-cytoplasmic",
     ("isoform_localization_deeploc_top_prob", ">="): "Confident localization call",

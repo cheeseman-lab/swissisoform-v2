@@ -139,30 +139,69 @@ def _scalar_deltas(canonical: dict[str, Any], isoform: dict[str, Any]) -> dict[s
     return deltas
 
 
+def _ran_key(key: str) -> str:
+    """The field that says whether *key*'s predictor ran: ``<tool>_prediction``.
+
+    The predictor modules (localization's DeepLoc, SignalP, TargetP) prefix every
+    field with the tool name and always fill ``<tool>_prediction`` when they ran
+    — SignalP defaults it to ``"OTHER"``, TargetP to ``"noTP"`` — and leave it
+    ``None`` on a hash miss. So ``signalp_cleavage_site`` is judged by
+    ``signalp_prediction``, and a prediction field is its own ran key.
+    """
+    return f"{key.split('_', 1)[0]}_prediction"
+
+
 def _categorical_changes(canonical: dict[str, Any], isoform: dict[str, Any]) -> dict[str, Any]:
     """Emit a change flag for every categorical (non-numeric, non-list) field.
 
-    Every shared categorical key produces ``{key}_changed`` (bool) plus
+    Every shared categorical key produces ``{key}_changed`` plus
     ``{key}_canonical`` / ``{key}_isoform`` values — so downstream
     consumers always see the comparison, not just the rows where values
     diverged.
+
+    A missing value means two different things, and the flag keeps them apart
+    wherever the module says whether its predictor ran (:func:`_ran_key`):
+
+    - **ran on both sides, value on one** — ``True``. SignalP reports no
+      cleavage site because the protein has no signal peptide, so canonical
+      ``None`` / isoform ``"CS pos: 23-24"`` is a signal peptide gained, not an
+      unknown. Reading it as unknown hid every such gain from L1/L2 and the tags.
+    - **ran on both sides, value on neither** — ``False``.
+    - **did not run on a side** — ``None``: nothing is known about that side.
+
+    A field with no ran key cannot tell "absent" from "did not run", so one
+    missing side stays ``None`` and two stay ``False``.
+
+    A field numeric on *either* side is a scalar for :func:`_scalar_deltas`, not a
+    category. Checking only the isoform side let a probability that was ``None``
+    on the isoform pass as a category (``targetp_ctp_prob_changed``).
     """
     changes: dict[str, Any] = {}
     for key, iso_val in isoform.items():
-        if key in _POSITIONAL_KEYS or _is_numeric(iso_val):
-            continue
-        if isinstance(iso_val, (list, dict)):
+        if key in _POSITIONAL_KEYS or isinstance(iso_val, (list, dict)):
             continue
         can_val = canonical.get(key)
+        if _is_numeric(iso_val) or _is_numeric(can_val):
+            continue
         iso_missing = _is_missing(iso_val)
         can_missing = _is_missing(can_val)
-        if iso_missing and can_missing:
+        ran = _ran_key(key)
+        changed: bool | None
+        if ran in isoform or ran in canonical:
+            if _is_missing(isoform.get(ran)) or _is_missing(canonical.get(ran)):
+                changed = None
+            elif iso_missing or can_missing:
+                # Both ran: a value on exactly one side is a gain or a loss.
+                changed = iso_missing != can_missing
+            else:
+                changed = iso_val != can_val
+        elif iso_missing and can_missing:
             # Both uncomputable (NaN/NaN, None/None) — ``nan != nan`` would
             # manufacture a spurious change, so report "no change".
-            changed: bool | None = False
+            changed = False
         elif iso_missing or can_missing:
-            # Exactly one side uncomputable — can't tell whether the feature
-            # genuinely changed or the module failed on one pane.
+            # Exactly one side uncomputable, and nothing says whether the
+            # module ran there — can't tell a real change from a failed pane.
             changed = None
         else:
             changed = iso_val != can_val
