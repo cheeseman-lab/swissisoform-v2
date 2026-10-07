@@ -353,16 +353,19 @@ class TestSpanClassification:
         so the first translated changed base is offset 1, in codon **0**. Anchoring
         on the padding base would report codon 1, and advancing past it would move
         further the wrong way still.
+
+        The two deleted bases are the T and G of the ATG, so the call is
+        ``start_lost`` — which is what makes the numbering load-bearing.
         """
         out = self.classify(112, "TCA", "T", strand="-")
-        assert out["consequence"] == "frameshift_variant"
+        assert out["consequence"] == "start_lost"
         assert out["protein_pos"] == 0
         assert out["aa_ref"] == "M"
 
     def test_minus_strand_inframe_deletion_names_the_residue(self):
-        """Deletes offsets 2,1,0 — the whole initiator codon."""
+        """Deletes offsets 2,1,0 — the whole initiator codon, so the start is gone."""
         out = self.classify(112, "TCAT", "T", strand="-")
-        assert out["consequence"] == "inframe_deletion"
+        assert out["consequence"] == "start_lost"
         assert out["protein_pos"] == 0
         assert (out["aa_ref"], out["aa_alt"]) == ("M", "")
 
@@ -384,13 +387,14 @@ class TestSpanClassification:
     def test_a_substitution_spanning_an_intron_is_not_translated(self):
         """Splicing intronic bases into the codons would invent a result.
 
-        Reported as ``intronic`` — part of the span genuinely is. ``mnv`` names the
-        variant *class* (``spec._classify``) and has no business in this field; it
-        sat here only as a placeholder while the multi-codon walk was unimplemented.
+        No residues are named, but the class is not ``intronic`` either: genomic 107
+        is the donor's +1 base, so the exon is no longer spliced as annotated.
+        ``mnv`` names the variant *class* (``spec._classify``) and has no business
+        in this field.
         """
         two_exons = [(100, 106), (200, 208)]  # offsets 0-5, then 6-14
         out = self.classify(105, "CAC", "TGA", exons=two_exons)
-        assert out["consequence"] == "intronic"
+        assert out["consequence"] == "splice_donor_variant"
         assert out["aa_ref"] is None
         # The anchor itself is coding, so its residue stands.
         assert out["protein_pos"] == 1
@@ -434,3 +438,160 @@ class TestSpanClassification:
             "TF",
             1,
         )
+
+    # -- indels whose VCF padding base is not coding ---------------------
+
+    # Two exons: genomic 101..106 are offsets 0-5 (ATG ACA), 201..209 are 6-14
+    # (CGT GAG AAA). Genomic 200 is the last intronic base before exon 2.
+    TWO_EXONS = [(100, 106), (200, 209)]
+
+    def test_a_deletion_padded_by_an_intronic_base_is_still_coding(self):
+        """The padding base is intronic; the two bases it deletes are coding.
+
+        POS alone maps nowhere, and reading it first called this frameshift
+        ``intronic`` — the GNB1 p.Gly306fs shape (chr1:1789052 CCT>C, whose POS is
+        the last intronic base before the exon).
+        """
+        out = self.classify(200, "ACG", "A", exons=self.TWO_EXONS)
+        assert out["consequence"] == "frameshift_variant"
+        assert out["protein_pos"] == 2
+        assert out["aa_ref"] == "R"
+
+    def test_an_inframe_deletion_padded_by_an_intronic_base_names_its_residue(self):
+        out = self.classify(200, "ACGT", "A", exons=self.TWO_EXONS)
+        assert out["consequence"] == "inframe_deletion"
+        assert (out["protein_pos"], out["aa_ref"]) == (2, "R")
+
+    def test_a_minus_strand_deletion_padded_by_an_intronic_base_is_still_coding(self):
+        """On the minus strand the padding sits at the low end, past the exon's 3′ edge.
+
+        In mRNA order the minus strand walks 209..201 (offsets 0-8) first; genomic 200
+        is intronic and pads the deletion of 201-202, which are offsets 8 and 7 — the
+        GT of codon 2 (CGT), written AC on the plus strand.
+        """
+        out = self.classify(200, "AAC", "A", strand="-", exons=self.TWO_EXONS)
+        assert out["consequence"] == "frameshift_variant"
+        assert (out["protein_pos"], out["aa_ref"]) == (2, "R")
+
+    def test_deleting_the_atg_with_padding_upstream_of_the_orf_is_start_lost(self):
+        """p.Met1del: the padding base is 5′UTR, every deleted base is the start."""
+        out = self.classify(100, "CATG", "C")
+        assert out["consequence"] == "start_lost"
+        assert (out["protein_pos"], out["aa_ref"]) == (0, "M")
+
+    def test_an_insertion_splitting_the_atg_is_start_lost(self):
+        out = self.classify(101, "A", "AC")
+        assert out["consequence"] == "start_lost"
+        assert "frameshift" in out["note"]
+
+    def test_an_insertion_after_the_atg_leaves_the_start_alone(self):
+        out = self.classify(103, "G", "GCCC")
+        assert out["consequence"] == "inframe_insertion"
+        assert out["protein_pos"] == 1
+
+    def test_an_insertion_at_an_exon_edge_adds_no_coding_bases(self):
+        """Between the intron's last base and the exon's first: not a coding insertion."""
+        out = self.classify(200, "A", "AT", exons=self.TWO_EXONS)
+        assert out["consequence"] == "intronic"
+
+    def test_an_insertion_with_two_padding_bases_is_placed_after_both(self):
+        """``REF=AT ALT=ATCCC`` inserts after 102 (between the T and G), not after POS.
+
+        Reading the neighbours off POS put it between the A and the T instead. Either
+        way the ATG is split, so the equality with the single-padded record is the
+        assertion that carries the fix.
+        """
+        out = self.classify(101, "AT", "ATCCC")
+        single = self.classify(102, "T", "TCCC")
+        assert out == single
+        assert out["consequence"] == "start_lost"
+
+    # -- spans that leave the coding sequence: where they leave decides ---
+
+    def test_a_deletion_from_the_5utr_into_the_atg_is_start_lost(self):
+        """``c.-3_3del``: three UTR bases and the whole ATG.
+
+        The span is partly non-coding, and a length delta of -6 read as
+        ``inframe_deletion`` — outside ``LOF_CONSEQUENCES`` — for a variant that
+        removes the initiator outright.
+        """
+        out = self.classify(97, "CCCCATG", "C")
+        assert out["consequence"] == "start_lost"
+        assert (out["protein_pos"], out["aa_ref"]) == (0, "M")
+
+    def test_a_deletion_from_the_5utr_into_part_of_the_atg_is_start_lost(self):
+        out = self.classify(98, "CCCAT", "C")
+        assert out["consequence"] == "start_lost"
+        assert out["protein_pos"] == 0
+
+    def test_a_minus_strand_deletion_from_the_5utr_into_the_atg_is_start_lost(self):
+        """On the minus strand the 5'UTR is above the ORF: 113-115 are the ATG."""
+        out = self.classify(112, "TCATCC", "T", strand="-")
+        assert out["consequence"] == "start_lost"
+        assert (out["protein_pos"], out["aa_ref"]) == (0, "M")
+
+    def test_a_deletion_across_an_acceptor_is_a_splice_variant(self):
+        """The intron's AG plus exon 2's first base: delta -3, but only 1 coding base.
+
+        Read off the REF/ALT delta this was ``inframe_deletion`` — counting intronic
+        bases as if they were coding, and missing that the acceptor is gone.
+        """
+        out = self.classify(198, "AAGC", "A", exons=self.TWO_EXONS)
+        assert out["consequence"] == "splice_acceptor_variant"
+        assert out["protein_pos"] == 2
+        assert (out["aa_ref"], out["aa_alt"]) == (None, None)
+
+    def test_a_splice_call_does_not_depend_on_the_coding_delta(self):
+        """Two intronic + two coding bases: a frameshift by delta, still the acceptor."""
+        out = self.classify(198, "AAGCG", "A", exons=self.TWO_EXONS)
+        assert out["consequence"] == "splice_acceptor_variant"
+
+    def test_a_deletion_across_a_donor_is_a_splice_variant(self):
+        """Exon 1's last two bases (offsets 4-5) and the intron's first."""
+        out = self.classify(104, "ACGT", "A", exons=self.TWO_EXONS)
+        assert out["consequence"] == "splice_donor_variant"
+        assert out["protein_pos"] == 1
+
+    def test_the_splice_side_follows_the_strand(self):
+        """The same genomic deletion is the donor on the minus strand.
+
+        Minus-strand mRNA reads 209..201 then 106..101, so the intron below 201 comes
+        *after* that exon in mRNA order: its edge is a donor, not an acceptor.
+        """
+        out = self.classify(198, "AAGC", "A", strand="-", exons=self.TWO_EXONS)
+        assert out["consequence"] == "splice_donor_variant"
+
+    def test_a_deletion_running_out_of_the_3_end_keeps_its_length_class(self):
+        """Neither a splice site nor the start: the length-delta answer stands."""
+        out = self.classify(113, "AAAGG", "A")
+        assert out["consequence"] == "frameshift_variant"
+        assert "leaves the ORF" in out["note"]
+
+    # -- an insertion before the stop codon, which the ORF excludes ------
+
+    def test_an_insertion_before_the_stop_codon_is_coding(self):
+        """``c.15_16insT``: after the last sense base, before the (excluded) stop.
+
+        Only one neighbour is in the ORF, because the ORF stops at its last sense
+        base — but the inserted base still shifts the frame through the stop.
+        """
+        out = self.classify(115, "A", "AT")
+        assert out["consequence"] == "frameshift_variant"
+        assert out["protein_pos"] == 5
+        assert out["validated"]
+
+    def test_an_inframe_insertion_before_the_stop_codon_is_coding(self):
+        out = self.classify(115, "A", "ATTT")
+        assert out["consequence"] == "inframe_insertion"
+        assert out["protein_pos"] == 5
+
+    def test_a_minus_strand_insertion_before_the_stop_codon_is_coding(self):
+        """On the minus strand the stop sits below the ORF: between 100 and 101."""
+        out = self.classify(100, "C", "CT", strand="-")
+        assert out["consequence"] == "frameshift_variant"
+        assert out["protein_pos"] == 5
+
+    def test_an_insertion_before_the_start_codon_adds_no_coding_bases(self):
+        """The 5' end has no excluded codon: an insertion there is in the UTR."""
+        assert self.classify(100, "C", "CT")["consequence"] == "intronic"
+        assert self.classify(115, "A", "AT", strand="-")["consequence"] == "intronic"

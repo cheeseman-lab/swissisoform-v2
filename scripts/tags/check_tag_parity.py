@@ -8,11 +8,11 @@ disagreement is a wiring bug — a tag pointed at the wrong criterion, or a
 ``valid_for`` blanking rows the scorer could evaluate — and never a calibration
 finding.
 
-Run it with a ``--cutoffs config`` registry, where the tag layer is meant to
-reproduce ``EvidenceScoringModule`` exactly. Under a ``--cutoffs distribution``
-registry the criterion cutoffs have deliberately moved, so disagreement is the
-*point*; ``--expect-diff`` says so and reports the movement per criterion instead
-of failing on it.
+Derived tags score at the run's ``ScoringConfig`` whatever the registry's
+``cutoff_overrides`` say, so on a parquet fired by current code this must pass
+for every registry version. A parquet fired before that change carries derived
+tags scored at the registry's numbers (v3: S3 at 11.376, 7 of 50 cheeseman50
+rows differ); ``--expect-diff`` reports that movement instead of failing on it.
 
 Usage:
     python scripts/tags/check_tag_parity.py --run cheeseman50

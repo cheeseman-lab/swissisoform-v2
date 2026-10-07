@@ -159,13 +159,13 @@ class TestCompareStructuresShared:
 
     def test_initiator_met_truncation_drops_leading_M(self, monkeypatch, cif_paths):
         # Near-cognate truncation: iso = installed-M + canonical[k:]. The leading
-        # M is isoform-unique (a start-codon substitution); the shared suffix
-        # iso[1:] == canonical[k:] is byte-identical. Suffix-alignment must drop
-        # the M and superpose iso[1:] onto canonical[k:] → RMSD ~0. A prefix
-        # slice would pair off-by-one and give a large RMSD.
+        # M substitutes canonical[k - 1] (the shared region opens on it); the rest,
+        # iso[1:] == canonical[k:], is byte-identical. The pairing must drop the
+        # substituted junction and superpose iso[1:] onto canonical[k:] → RMSD ~0.
         rng = np.random.default_rng(8)
         can = rng.normal(size=(15, 3)) * 5.0
-        k = 4  # diff_canonical_end = len(can) - (len(iso) - 1) = 15 - 11 = 4
+        k = 4
+        diff_end = k - 1  # diff_canonical_end = len(can) - len(iso) = 15 - 12 = 3
         m_coord = rng.normal(size=(1, 3)) * 5.0  # installed Met, arbitrary position
         iso = np.vstack([m_coord, can[k:]])  # iso = M + canonical[k:]  (12 residues)
         can_seq = "ACDEFGHIKLMNPQR"
@@ -176,7 +176,7 @@ class TestCompareStructuresShared:
             cif_paths[0],
             cif_paths[1],
             diff_canonical_start=0,
-            diff_canonical_end=k,
+            diff_canonical_end=diff_end,
             orf_type="truncated",
             diff_region_confidence="initiator_met",  # verified tier
         )

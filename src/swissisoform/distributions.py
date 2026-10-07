@@ -33,7 +33,20 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
 REF_DIR = ROOT / "data" / "reference" / "distributions"
-DEFAULT_VERSION = "v1"
+# The one current distributions version. Every reader and builder takes its
+# default from here (the sweep, the registry builder, build_distributions), so a
+# default run cannot cut one table against v2 and the registry against v3.
+#
+# v3 is PROVISIONAL: frozen from full_catalog (Aug 12-13), which predates the M1
+# sign flip and extension gate (2a48f89) and the #24/#29/#32 merges. Re-freeze it,
+# and the tag registry cut from it, after the next genome-wide run.
+DEFAULT_VERSION = "v3"
+PROVISIONAL_VERSIONS: dict[str, str] = {
+    "v3": (
+        "frozen from the Aug-12 full_catalog, before 2a48f89 and PRs #24/#29/#32; "
+        "re-freeze after the next genome-wide run"
+    ),
+}
 
 # 101-point grid: one quantile per whole percentile, so percentile rank resolves
 # to 1 point. Denormalised p01/p05/... columns are read off this same grid.
@@ -76,6 +89,29 @@ def stratum_for(orf_type: Any) -> str:
     if orf_type in SEPARATE_ORF_TYPES:
         return STRATUM_SEPARATE
     return str(orf_type) if orf_type is not None else STRATUM_ALL
+
+
+def row_cutoffs(orf_types: Any, by_stratum: dict[str, float], default: float | None) -> np.ndarray:
+    """Per-row cutoff: the row's ``orf_type``, then its :func:`stratum_for`, then *default*.
+
+    The one resolution rule for a threshold tag that carries a cutoff per stratum,
+    shared by the evaluator that fires the registry and the sweep that measures
+    the candidate table, so a tag's swept fire rate is its runtime one. A row with
+    no cutoff from any of the three reads NaN, which both callers treat as
+    not-evaluable.
+    """
+    fallback = np.nan if default is None else float(default)
+    orfs = pd.Series(list(orf_types), dtype="object")
+    if not by_stratum:
+        return np.full(len(orfs), fallback)
+    # Resolved once per distinct ORF type, not once per row. A missing orf_type
+    # (NA in a string column) belongs to no stratum and takes the pooled cutoff;
+    # passing it to stratum_for would raise on NA's ambiguous truth value.
+    resolved = {
+        o: by_stratum.get(str(o), by_stratum.get(stratum_for(o), fallback))
+        for o in orfs.dropna().unique()
+    }
+    return orfs.map(resolved).astype("float64").fillna(fallback).to_numpy()
 
 
 def _none_if_nan(value: Any) -> Any:

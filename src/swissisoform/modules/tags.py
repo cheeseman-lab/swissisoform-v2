@@ -1,7 +1,7 @@
 """Tag annotation — fire a frozen registry over a finished run.
 
 Additive by design. ``EvidenceScoringModule`` is untouched and keeps emitting its
-nine ``isoform_scoring_*`` columns; this adds three more beside them, so both the
+nine ``isoform_scoring_*`` columns; this adds its own beside them, so both the
 criterion axis and the tag axis travel in the same parquet and every consumer
 picks the one it wants. Retiring either is a later, separate decision.
 
@@ -26,10 +26,21 @@ so the object graph and the frame cannot drift:
 ``isoform_tags_citations``
     ``struct<n x double>`` — the single number each fired tag rests on. Null for
     boolean and derived tags, which have no one number behind them.
+``isoform_tags_labels``
+    ``struct<n x string>`` — each tag's label as it reads for this isoform,
+    :meth:`Tag.label_for` of its ``orf_type``. A truncation's unique region is
+    the canonical stretch it *lost*, so "Unique region more basic" reads "Lost
+    region more basic" there. Resolved here, once, so every consumer (the LLM
+    grounding, the site, exports) shows the same wording instead of each
+    re-deriving it from ``orf_type``.
 ``isoform_tags_registry_version``
     Flat string. A struct's *fields* change with the vocabulary, so two parquets
     built under different registry versions have different schemas; this is what
     lets a merge detect that instead of silently unioning two vocabularies.
+``isoform_tags_registry_sha256``
+    Flat string, :attr:`TagRegistry.sha256`. The name says which vocabulary; the
+    hash says which build of it, so a version rebuilt in place (cutoffs moved,
+    fields unchanged) is still detectable.
 """
 
 from __future__ import annotations
@@ -50,7 +61,9 @@ logger = logging.getLogger(__name__)
 
 STATES_COLUMN = "isoform_tags_states"
 CITATIONS_COLUMN = "isoform_tags_citations"
+LABELS_COLUMN = "isoform_tags_labels"
 VERSION_COLUMN = "isoform_tags_registry_version"
+SHA256_COLUMN = "isoform_tags_registry_sha256"
 
 
 class TagModule:
@@ -64,7 +77,13 @@ class TagModule:
     """
 
     MODULE_NAME: str = "tags"
-    OUTPUT_COLUMNS: list[str] = [STATES_COLUMN, CITATIONS_COLUMN, VERSION_COLUMN]
+    OUTPUT_COLUMNS: list[str] = [
+        STATES_COLUMN,
+        CITATIONS_COLUMN,
+        LABELS_COLUMN,
+        VERSION_COLUMN,
+        SHA256_COLUMN,
+    ]
     SCOPE: str = "C"
 
     def __init__(self, registry: TagRegistry, config: PipelineConfig | None = None) -> None:
@@ -84,7 +103,7 @@ class TagModule:
         df: pd.DataFrame,
         sites: list[TranslationInitiationSite],
     ) -> pd.DataFrame:
-        """Return *df* with the three tag columns appended.
+        """Return *df* with the tag columns appended.
 
         Also writes ``site.isoform_annotations["tags"]`` for each site, so code
         working from ``Gene`` objects sees the same values the parquet carries.
@@ -103,19 +122,34 @@ class TagModule:
                 self._registry.version,
             )
             return df
+        if self._registry.provisional:
+            logger.warning(
+                "Tags: registry %s is provisional — %s",
+                self._registry.version,
+                self._registry.provisional,
+            )
         states, citations = tag_eval.fire(df, sites, self._registry, self._scoring)
         state_rows, citation_rows = tag_eval.to_structs(states, citations)
+
+        label_rows = self._labels(df)
 
         out = df.copy()
         out[STATES_COLUMN] = state_rows
         out[CITATIONS_COLUMN] = citation_rows
+        out[LABELS_COLUMN] = label_rows
         out[VERSION_COLUMN] = self._registry.version
+        sha = self._registry.sha256
+        out[SHA256_COLUMN] = sha
 
-        for site, state, citation in zip(sites, state_rows, citation_rows, strict=False):
+        for site, state, citation, labels in zip(
+            sites, state_rows, citation_rows, label_rows, strict=False
+        ):
             site.isoform_annotations[self.MODULE_NAME] = {
                 "states": state,
                 "citations": citation,
+                "labels": labels,
                 "registry_version": self._registry.version,
+                "registry_sha256": sha,
             }
 
         fired = sum(1 for row in state_rows for v in row.values() if v is True)
@@ -130,6 +164,22 @@ class TagModule:
             evaluable,
         )
         return out
+
+    def _labels(self, df: pd.DataFrame) -> list[dict[str, str]]:
+        """Per row, ``{tag_id: label}`` read for that row's ``orf_type``.
+
+        One field per code-fired tag, the same fields as the state struct. Built
+        once per distinct ORF type: the label depends on nothing else.
+        """
+        tags = self._registry.code_fired()
+        by_orf: dict[Any, dict[str, str]] = {}
+        rows: list[dict[str, str]] = []
+        for orf in df["orf_type"]:
+            key = None if pd.isna(orf) else str(orf)
+            if key not in by_orf:
+                by_orf[key] = {t.tag_id: t.label_for(key) for t in tags}
+            rows.append(by_orf[key])
+        return rows
 
     def summary(self, df: pd.DataFrame) -> dict[str, Any]:
         """Per-tag fire and not-evaluable counts, for logging or a spot check."""
@@ -171,11 +221,14 @@ def schema_overrides(df: pd.DataFrame) -> dict[str, pa.DataType]:
     return {
         STATES_COLUMN: pa.struct([pa.field(n, pa.bool_()) for n in names]),
         CITATIONS_COLUMN: pa.struct([pa.field(n, pa.float64()) for n in names]),
+        LABELS_COLUMN: pa.struct([pa.field(n, pa.string()) for n in names]),
     }
 
 
 __all__ = [
     "CITATIONS_COLUMN",
+    "LABELS_COLUMN",
+    "SHA256_COLUMN",
     "STATES_COLUMN",
     "VERSION_COLUMN",
     "TagModule",

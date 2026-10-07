@@ -172,7 +172,6 @@ SCORED_LEVERS: dict[str, list[str]] = {
         "cmp_signalp_signalp_prediction_changed",
         "cmp_signalp_signalp_cleavage_site_changed",
         "cmp_targetp_targetp_prediction_changed",
-        "cmp_targetp_targetp_ctp_prob_changed",
         "cmp_targetp_targetp_cleavage_site_changed",
     ],
     "M1_pathogenic_variant_enrichment": [
