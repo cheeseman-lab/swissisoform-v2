@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from swissisoform.config import ScoringConfig
-from swissisoform.evidence.common import CriterionResult
+from swissisoform.evidence.common import NOT_IN_RUN, CriterionResult, predictor_change_state
 from swissisoform.evidence.l1_localization.localization import (
     LocalizationModule,
     precompute_deeploc,
@@ -29,30 +29,20 @@ def score(
     functionally meaningful even without a top-compartment flip.
     """
     cmp = site.comparison.get("localization")
-    if not isinstance(cmp, dict):
+    state = predictor_change_state(cmp, LocalizationModule.RAN_FIELD)
+    if state is NOT_IN_RUN:
+        return CriterionResult("L1_localization_change", None, "localization comparison missing")
+    if state is None:
+        # DeepLoc ran but missed a side: nothing was evaluated, so this is not a
+        # confident "unchanged".
+        return CriterionResult("L1_localization_change", None, "no localization flag evaluable")
+    if state is False:
         return CriterionResult(
-            "L1_localization_change", None, "localization comparison missing"
+            "L1_localization_change",
+            False,
+            "localization features unchanged (prediction/signals/membrane)",
         )
-    # The comparator emits ``{field}_changed`` keys for categorical shifts.
     changed_keys = [k for k in cmp if k.endswith("_changed") and cmp.get(k) is True]
-    if not changed_keys:
-        # Distinguish "comparator ran, no change" from "no comparator data"
-        flags = [cmp[k] for k in cmp if k.endswith("_changed")]
-        if flags and all(v is None for v in flags):
-            # Every flag is unknown (DeepLoc did not run on a side): nothing was
-            # evaluated, so this is not a confident "unchanged".
-            return CriterionResult(
-                "L1_localization_change", None, "no localization flag evaluable"
-            )
-        if flags:
-            return CriterionResult(
-                "L1_localization_change",
-                False,
-                "localization features unchanged (prediction/signals/membrane)",
-            )
-        return CriterionResult(
-            "L1_localization_change", None, "no *_changed fields emitted"
-        )
     return CriterionResult(
         "L1_localization_change",
         True,

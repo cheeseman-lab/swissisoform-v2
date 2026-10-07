@@ -570,3 +570,31 @@ def test_the_registry_row_carries_the_strata_cutoffs():
     assert _overrides(row["cutoff_by_stratum"]) == {"extended": 2.0, "truncated": 5.0}
     assert "per-stratum: extended 2 (break), truncated 5 (break)" in row["note"]
     assert setup_tags.candidate_row(_shift_candidate(), "")["cutoff_by_stratum"] == ""
+
+
+def test_the_build_refuses_per_stratum_cutoffs_the_reviewer_never_saw(tmp_path):
+    """A table swept before per-stratum cutoffs cannot license freezing them."""
+    import json
+
+    from swissisoform.setup import tags as setup_tags
+
+    cand = _shift_candidate(
+        cutoff=2.0, cutoff_source="break", cutoff_by_stratum={"extended": 2.0, "truncated": 5.0}
+    )
+    old = tmp_path / "old.csv"
+    pd.DataFrame([{"tag_id": cand.tag_id, "decision": "", "proposed_label": "Shift"}]).to_csv(
+        old, index=False
+    )
+    with pytest.raises(setup_tags.TagBuildError, match="propose_candidates"):
+        setup_tags._check_reviewed_strata(old, {cand.tag_id: "Shift"}, {cand.tag_id: cand}, "v9")
+
+    reviewed = tmp_path / "reviewed.csv"
+    pd.DataFrame(
+        [
+            {
+                "tag_id": cand.tag_id, "decision": "", "proposed_label": "Shift",
+                "cutoff_by_stratum": json.dumps({"extended": 2.0, "truncated": 5.0}),
+            }
+        ]
+    ).to_csv(reviewed, index=False)
+    setup_tags._check_reviewed_strata(reviewed, {cand.tag_id: "Shift"}, {cand.tag_id: cand}, "v9")

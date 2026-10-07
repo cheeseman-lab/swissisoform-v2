@@ -482,6 +482,10 @@ def choose_cutoffs_by_stratum(
     """
     if cand.kind != "code" or cand.blocked or cand.cutoff_source not in ("anchor", "break"):
         return cand
+    if cand.source == "criterion_branch":
+        # A branch only carries its pooled cutoff into a criterion's overrides;
+        # nothing reads a per-stratum one.
+        return cand
     strata = sorted({stratum_for(o) for o in cand.valid_for} & set(STRATA_REPORTED))
     by: dict[str, float] = {}
     source: dict[str, str] = {}
@@ -631,7 +635,11 @@ def evaluate(df: pd.DataFrame, cands: Iterable[Candidate]) -> dict[str, np.ndarr
             continue
         # Resolved per row exactly as the evaluator fires it, so the table's
         # fire rates are the runtime ones.
-        cut = row_cutoffs(df["orf_type"], cand.cutoff_by_stratum, cand.cutoff)
+        cut = (
+            row_cutoffs(df["orf_type"], cand.cutoff_by_stratum, cand.cutoff)
+            if cand.cutoff_by_stratum
+            else cand.cutoff
+        )
         out[cand.tag_id] = _threshold_state(values, cut, cand.direction, cand.valid_for, orf)
     return out
 

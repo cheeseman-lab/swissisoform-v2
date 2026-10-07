@@ -43,6 +43,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -65,6 +66,7 @@ from swissisoform.tags.registry import (
     REGISTRY_COLUMNS,
     REGISTRY_FILE,
     SIDECAR_FILE,
+    _overrides,
     axis_for,
     from_frame,
 )
@@ -388,6 +390,48 @@ def _check_scorer_names() -> None:
         )
 
 
+def _check_reviewed_strata(
+    candidates_csv: Path,
+    labels: dict[str, str],
+    by_id: dict[str, cand_mod.Candidate],
+    dist_version: str,
+) -> None:
+    """Refuse to freeze per-stratum cutoffs the reviewer never saw.
+
+    The registry takes its cutoffs from a fresh sweep, and the reviewed table only
+    contributes ``decision`` and labels — so a table swept before per-stratum
+    cutoffs existed (no ``cutoff_by_stratum`` column) or against other
+    distributions would let the build freeze cutoffs whose fire rates were never
+    in front of the reviewer. Every accepted swept tag's per-stratum cutoffs must
+    match the table's.
+    """
+    table = pd.read_csv(candidates_csv)
+    if "cutoff_by_stratum" in table.columns:
+        reviewed = {
+            str(r["tag_id"]): _overrides(r["cutoff_by_stratum"]) for _, r in table.iterrows()
+        }
+    else:
+        reviewed = {}
+    stale: list[str] = []
+    for tid in labels:
+        cand = by_id[tid]
+        if cand.kind != "code" or cand.source == "criterion":
+            continue
+        want, have = cand.cutoff_by_stratum, reviewed.get(tid, {})
+        same = set(want) == set(have) and all(
+            math.isclose(want[k], have[k], rel_tol=1e-9, abs_tol=1e-12) for k in want
+        )
+        if not same:
+            stale.append(tid)
+    if stale:
+        raise TagBuildError(
+            f"{len(stale)} accepted tag(s) carry per-stratum cutoffs that differ from "
+            f"{candidates_csv.name} ({', '.join(stale[:6])}). The table was swept "
+            "before per-stratum cutoffs or against other distributions; re-run "
+            f"`propose_candidates.py --version {dist_version}` and review it first."
+        )
+
+
 def build(
     *,
     catalog_csv: Path,
@@ -410,6 +454,7 @@ def build(
             f"{len(missing)} accepted tag(s) no longer proposed by the sweep — the "
             f"candidate table and the code have diverged: {', '.join(missing[:6])}"
         )
+    _check_reviewed_strata(candidates_csv, labels, by_id, dist_version)
 
     # A criterion candidate governs — it is what the reviewer marks and what the
     # Jaccard filter weighs — but it does not become the registry row. That row

@@ -91,10 +91,7 @@ def stratum_for(orf_type: Any) -> str:
     return str(orf_type) if orf_type is not None else STRATUM_ALL
 
 
-
-def row_cutoffs(
-    orf_types: Any, by_stratum: dict[str, float], default: float | None
-) -> np.ndarray:
+def row_cutoffs(orf_types: Any, by_stratum: dict[str, float], default: float | None) -> np.ndarray:
     """Per-row cutoff: the row's ``orf_type``, then its :func:`stratum_for`, then *default*.
 
     The one resolution rule for a threshold tag that carries a cutoff per stratum,
@@ -115,6 +112,7 @@ def row_cutoffs(
         for o in orfs.dropna().unique()
     }
     return orfs.map(resolved).astype("float64").fillna(fallback).to_numpy()
+
 
 def _none_if_nan(value: Any) -> Any:
     """Map a non-finite float to None, leaving everything else untouched."""

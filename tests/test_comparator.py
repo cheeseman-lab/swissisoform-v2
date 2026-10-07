@@ -251,13 +251,20 @@ class TestOneSidedCategorical:
         )
         assert out["tool_site_changed"] is None
 
-    def test_an_undeclared_field_numeric_on_one_side_reads_as_unknown(self):
-        """A pane that failed (isoform None) marks the field unknown, not absent."""
-        out = _categorical_changes({"gravy": 0.42}, {"gravy": None})
-        assert out["gravy_changed"] is None
-        assert (out["gravy_canonical"], out["gravy_isoform"]) == (0.42, None)
-        # Numeric on both sides is a scalar: a delta, not a flag.
-        assert "gravy_changed" not in _categorical_changes({"gravy": 0.4}, {"gravy": 0.5})
+    def test_an_undeclared_field_numeric_on_either_side_is_a_scalar(self):
+        """No ``_changed`` for a numeric field: the missing ``_delta`` says unknown.
+
+        Flagging it would add a mostly-null column per numeric field, varying by
+        shard, to every undeclared module (structure, plm, conservation).
+        """
+        assert "gravy_changed" not in _categorical_changes({"gravy": 0.42}, {"gravy": None})
+        assert "gravy_changed" not in _categorical_changes({"gravy": None}, {"gravy": 0.42})
+
+    def test_a_predictor_missing_on_the_isoform_is_unknown_not_absent(self):
+        """Every declared field is flagged even when the isoform dict lacks it."""
+        out = _categorical_changes(self._signalp("SP", "CS pos: 4"), {}, SIGNALP)
+        assert out["signalp_cleavage_site_changed"] is None
+        assert out["signalp_prediction_changed"] is None
 
     def test_every_predictor_declares_a_ran_field_among_its_calls(self):
         for name, pred in _PREDICTORS.items():

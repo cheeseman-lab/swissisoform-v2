@@ -526,6 +526,16 @@ class TestF4TargetingChange:
         site.comparison["signalp"] = {"signalp_prediction_changed": False}
         assert _l2_targeting_change(site, ScoringConfig()).value is False
 
+    def test_a_predictor_that_produced_nothing_is_not_part_of_the_run(self):
+        """TargetP wired in but empty on both sides (not installed): SignalP decides."""
+        from swissisoform.compare.comparator import _PREDICTORS, _categorical_changes
+
+        empty = {"targetp_prediction": None, "targetp_cleavage_site": None}
+        site = _site()
+        site.comparison["signalp"] = {"signalp_prediction_changed": False}
+        site.comparison["targetp"] = _categorical_changes(empty, empty, _PREDICTORS["targetp"])
+        assert _l2_targeting_change(site, ScoringConfig()).value is False
+
     def test_every_flag_unknown_is_not_evaluable(self):
         site = _site()
         site.comparison["signalp"] = {"signalp_prediction_changed": None}

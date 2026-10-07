@@ -192,34 +192,47 @@ def _categorical_changes(
     - **did not run on a side** — ``None``: nothing is known about that side.
 
     **Any other module** declares nothing, so a field is judged from its values.
-    One numeric on both sides is a scalar for :func:`_scalar_deltas`. Otherwise
-    one missing side is ``None`` (a real change cannot be told from a failed
-    pane) and two are ``False`` — including a field numeric on one side and
-    missing on the other, so a pane that failed reads as unknown rather than
-    leaving the field out of the comparison altogether.
+    A field numeric on *either* side is a scalar for :func:`_scalar_deltas`, not a
+    category — flagging a numeric field whose other side is missing would add a
+    mostly-null ``_changed`` column per field, varying by shard, for an unknown
+    the missing ``_delta`` already reports. Otherwise one missing side is ``None``
+    (a real change cannot be told from a failed pane) and two are ``False``.
     """
     changes: dict[str, Any] = {}
-    for key, iso_val in isoform.items():
-        if key in _POSITIONAL_KEYS or isinstance(iso_val, (list, dict)):
-            continue
-        can_val = canonical.get(key)
-        if predictor is not None and key not in predictor.fields:
-            continue
-        if predictor is None and _is_numeric(iso_val) and _is_numeric(can_val):
-            continue
-        iso_missing = _is_missing(iso_val)
-        can_missing = _is_missing(can_val)
-        changed: bool | None
-        if predictor is not None:
-            ran = predictor.ran
-            if _is_missing(isoform.get(ran)) or _is_missing(canonical.get(ran)):
-                changed = None
+
+    def emit(key: str, can_val: Any, iso_val: Any, changed: bool | None) -> None:
+        changes[f"{key}_changed"] = changed
+        changes[f"{key}_canonical"] = can_val
+        changes[f"{key}_isoform"] = iso_val
+
+    if predictor is not None:
+        # Every declared field, whether or not the isoform dict carries it: a
+        # module that produced nothing for the isoform is unknown there, not
+        # absent from the comparison.
+        ran_on_both = not (
+            _is_missing(isoform.get(predictor.ran)) or _is_missing(canonical.get(predictor.ran))
+        )
+        for key in sorted(predictor.fields):
+            can_val, iso_val = canonical.get(key), isoform.get(key)
+            iso_missing, can_missing = _is_missing(iso_val), _is_missing(can_val)
+            if not ran_on_both:
+                changed: bool | None = None
             elif iso_missing or can_missing:
                 # Both ran: a value on exactly one side is a gain or a loss.
                 changed = iso_missing != can_missing
             else:
                 changed = iso_val != can_val
-        elif iso_missing and can_missing:
+            emit(key, can_val, iso_val, changed)
+        return changes
+
+    for key, iso_val in isoform.items():
+        if key in _POSITIONAL_KEYS or isinstance(iso_val, (list, dict)):
+            continue
+        can_val = canonical.get(key)
+        if _is_numeric(iso_val) or _is_numeric(can_val):
+            continue
+        iso_missing, can_missing = _is_missing(iso_val), _is_missing(can_val)
+        if iso_missing and can_missing:
             # Both uncomputable (NaN/NaN, None/None) — ``nan != nan`` would
             # manufacture a spurious change, so report "no change".
             changed = False
@@ -227,9 +240,7 @@ def _categorical_changes(
             changed = None
         else:
             changed = iso_val != can_val
-        changes[f"{key}_changed"] = changed
-        changes[f"{key}_canonical"] = can_val
-        changes[f"{key}_isoform"] = iso_val
+        emit(key, can_val, iso_val, changed)
     return changes
 
 
@@ -333,9 +344,7 @@ class Comparator:
         result: dict[str, Any] = {}
 
         result.update(_scalar_deltas(canonical, isoform))
-        result.update(
-            _categorical_changes(canonical, isoform, _PREDICTORS.get(module_name))
-        )
+        result.update(_categorical_changes(canonical, isoform, _PREDICTORS.get(module_name)))
 
         # Positional subsetting: filter to diff region coords.
         hits = isoform.get("hits")
