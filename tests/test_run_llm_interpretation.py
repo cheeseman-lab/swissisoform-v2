@@ -2691,6 +2691,13 @@ def test_an_abbreviation_is_not_a_sentence_end(mod):
     assert out["reasoning"] == "The isoform is conserved. […]"
 
 
+def test_a_sentence_ending_on_a_letter_or_no_is_still_a_sentence_end(mod):
+    """Only abbreviations are skipped: "isoform B." and "is no." end real sentences."""
+    assert mod._sentence_ends("It is longer than isoform B. Then more") == [28]
+    assert mod._sentence_ends("Is it conserved? The answer is no. Then more") == [16, 34]
+    assert mod._sentence_ends("Signals agree, e.g. phyloP, vs. the canonical. More") == [46]
+
+
 def test_a_salvaged_read_ships_only_the_schema_fields(mod):
     """A habitual "verdict" must not reach categories.json, where it overrides the criteria."""
     schema = {"properties": {"reasoning": {"type": "string"}, "evidence_used": {}}}

@@ -1805,10 +1805,12 @@ def _strip_verdict_markup(payload: dict[str, Any]) -> dict[str, Any]:
 # ``reasoning_truncated: True`` so the cut is machine-visible, not just visible.
 _TRUNCATION_MARK = " […]"
 _SENTENCE_END = re.compile(r"[.!?][\"')\]]*(?=\s|$)")
-# A period that ends an abbreviation or a lone initial, not a sentence. Matched
-# against the text up to and including the period.
+# A period that ends an abbreviation, not a sentence. Matched against the text up
+# to and including the period. Deliberately no "lone letter" or "no" rule: those
+# end real sentences ("…than isoform B.", "…the answer is no."), and the inner
+# period of "e.g." is followed by a letter, so _SENTENCE_END never matches it.
 _NOT_A_SENTENCE_END = re.compile(
-    r"(?:\b(?:e\.g|i\.e|vs|approx|etc|cf|al|fig|figs|ca|resp|no|ref|refs)|\b[A-Za-z])\.$",
+    r"\b(?:e\.g|i\.e|vs|approx|etc|cf|al|fig|figs|ca|resp|ref|refs)\.$",
     re.IGNORECASE,
 )
 
@@ -1823,9 +1825,9 @@ def _reasoning_limit(schema: dict[str, Any] | None) -> int | None:
 def _sentence_ends(text: str) -> list[int]:
     """Offsets just past each sentence end in *text*, abbreviations excluded.
 
-    A period after ``e.g``, ``i.e``, ``vs``, ``approx`` and the like, or after a
-    lone initial, does not end a sentence: cutting there leaves a broken
-    fragment ("… e.g. […]") stored as the read.
+    A period after ``e.g``, ``i.e``, ``vs``, ``approx`` and the like does not end
+    a sentence: cutting there leaves a broken fragment ("… e.g. […]") stored as
+    the read.
     """
     return [
         m.end()
