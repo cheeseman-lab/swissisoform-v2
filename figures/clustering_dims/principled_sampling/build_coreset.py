@@ -35,7 +35,9 @@ Outputs (alongside this script):
   - coreset_provenance.json      source parquet(s) + sha256, catalog/anchors sha256,
                                  code commit, command — the panel's identity
   - coreset_selection.png        the picks on the all-ORF map  (written, untracked)
-  - coreset_selection_report.md  the written read-out           (written, untracked)
+
+The read-out (composition, picks, coordinates) is printed to stdout, not written
+beside them: it restates numbers already in the CSVs and the provenance sidecar.
 
 Nothing is written if verification fails.
 
@@ -492,13 +494,16 @@ def plot_coreset(
     plt.close(fig)
 
 
-def write_report(
+def report_text(
     results: dict[str, fs.MFAResult],
     picks: pd.DataFrame,
     final: pd.DataFrame,
-    path: Path,
 ) -> str:
-    """Write the markdown read-out and return it."""
+    """The read-out, for stdout.
+
+    Not written to disk: a generated report restates the CSVs and goes stale the
+    moment one of them is edited (CLAUDE.md, "No generated *.md reports").
+    """
     pool = results["all-ORF"].matrix.meta
     comp = (
         pd.DataFrame(
@@ -567,9 +572,7 @@ def write_report(
         "```",
         "",
     ]
-    text = "\n".join(lines)
-    path.write_text(text)
-    return text
+    return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -598,8 +601,8 @@ def main(argv: list[str] | None = None) -> None:
     (HERE / "coreset_provenance.json").write_text(json.dumps(prov, indent=2) + "\n")
     plot_coreset(results["all-ORF"], picks, anchors, HERE / "coreset_selection.png")
     print()
-    print(write_report(results, picks, final, HERE / "coreset_selection_report.md"))
-    print(f"\nwrote coreset_selection.csv, coreset_50.csv, provenance, figure and report to {HERE}")
+    print(report_text(results, picks, final))
+    print(f"\nwrote coreset_selection.csv, coreset_50.csv, provenance and figure to {HERE}")
 
 
 if __name__ == "__main__":
