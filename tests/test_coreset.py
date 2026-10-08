@@ -104,6 +104,27 @@ def test_anchors_are_pinned_by_tis_id_not_gene(anchors):
     assert not set(picks["gene_name"]) & set(anchors["gene_name"])
 
 
+def test_a_rare_isoform_of_an_anchor_gene_is_never_picked(anchors):
+    """By tis_id the anchor gene's *other* rare isoform stays in the pool.
+
+    Placed at the far end of PC1 it is exactly what rare_type_fill picks first,
+    and since that gene is already claimed the build used to abort.
+    """
+    pool = _pool(anchors)
+    extra = {"gene_name": "CBX1", "tis_id": "chr17:9:-:CTG:ENSTUORF", "orf_type": "uorf"}
+    pool = pd.concat([pool, pd.DataFrame([extra])], ignore_index=True)
+    results = _results(pool)
+    row = int(np.flatnonzero(pool["tis_id"] == extra["tis_id"])[0])
+    results["all-ORF"].scores[row, 0] = 1e6  # the uORF stratum's PC1 maximum
+
+    picks, final = bc.build_coreset(results, anchors)
+
+    assert extra["tis_id"] not in set(picks["tis_id"])
+    # No pick lands on an anchor gene, and no two picks share a gene.
+    assert not set(picks["gene_name"]) & set(anchors["gene_name"])
+    assert picks["gene_name"].is_unique
+
+
 def test_a_missing_anchor_stops_the_build(anchors):
     pool = _pool(anchors)
     pool = pool[pool["tis_id"] != anchors["tis_id"].iloc[0]]
