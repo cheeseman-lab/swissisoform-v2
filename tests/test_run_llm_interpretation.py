@@ -1889,7 +1889,8 @@ def test_reused_output_keeps_its_old_run_id_and_the_capture_says_so(
 
 
 def _verdict_says(text: str):
-    return lambda *a, **kw: json.dumps({"verdict": "neutral", "reasoning": text})
+    # A category read: improve_prompts' schema has no verdict, and forbids extra keys.
+    return lambda *a, **kw: json.dumps({"reasoning": text})
 
 
 def test_only_category_reruns_one_category_and_keeps_the_rest_s_provenance(
@@ -1979,7 +1980,7 @@ def test_single_shot_overlong_reasoning_is_re_asked_once(
         mod._record_usage(None)
         retry = "Your previous response was rejected" in prompt.user
         text = "short and sharp" if retry else "x" * 1600
-        return json.dumps({"verdict": "neutral", "reasoning": text})
+        return json.dumps({"reasoning": text})
 
     monkeypatch.setattr(mod, "call_llm", fake)
     out_dir = tmp_path / "out"
