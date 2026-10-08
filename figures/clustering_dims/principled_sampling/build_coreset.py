@@ -50,7 +50,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -361,26 +360,6 @@ def verify(
 # ---------------------------------------------------------------------------
 
 
-def _code_provenance() -> dict:
-    """``{commit, dirty}`` for this checkout; ``None``s when it cannot be read."""
-
-    def vcs(*cmd: str) -> str | None:
-        try:
-            done = subprocess.run(
-                ["git", "-C", str(ROOT), *cmd], capture_output=True, text=True, timeout=10
-            )
-        except (OSError, subprocess.SubprocessError):
-            return None
-        return done.stdout if done.returncode == 0 else None
-
-    commit = vcs("rev-parse", "HEAD")
-    status = vcs("status", "--porcelain", "--untracked-files=no")
-    return {
-        "commit": commit.strip() if commit else None,
-        "dirty": bool(status.strip()) if status is not None else None,
-    }
-
-
 def provenance(
     files: list[Path], results: dict[str, fs.MFAResult], final: pd.DataFrame, argv: list[str]
 ) -> dict:
@@ -390,13 +369,13 @@ def provenance(
     rebuild against a different parquet or catalog is indistinguishable from it.
     """
     sys.path.insert(0, str(ROOT / "src"))
-    from swissisoform.setup._common import rel_to_root, sha256_file
+    from swissisoform.setup._common import code_provenance, rel_to_root, sha256_file
 
     return {
         "artifact": "cheeseman50 coreset",
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "command": " ".join(["build_coreset.py", *argv]),
-        "code": _code_provenance(),
+        "code": code_provenance(),
         "source_parquet": [
             {"path": rel_to_root(p.resolve()), "sha256": sha256_file(p)} for p in files
         ],
