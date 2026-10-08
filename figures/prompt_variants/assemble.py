@@ -110,17 +110,15 @@ ID_FREE: dict[str, str] = {
         "content at all, and many others merely describe the feature's own activation "
         "pattern or restate sequence composition the biophysics already covers. Never "
         "name, quote or interpret an SAE feature label in the reasoning, and never let a "
-        "label move the verdict — cite the activation-shift magnitude, not the labels. "
+        "label move the read — cite the activation-shift magnitude, not the labels. "
         "Never invent biology the inputs do not state."
     ),
-    "machinery": (
-        "Cite the measurement, not a judgement about it. Never report that a value "
-        "cleared, exceeded, met or fell short of a standard, however you phrase it: "
-        '"well above the level treated as notable" and "comfortably in range" are the '
-        "same move, and naming no number does not make it one. State what was measured "
-        'and what it came to, and let the size speak for itself — "the strongest '
-        'shared-feature activation shifts by 13.7".'
-    ),
+    # One sentence: the tempering paragraph that follows this block in every arm
+    # already carries the "never report that a value cleared a standard" rule and
+    # its 13.7 example. Repeating them here gave raw/dist the rule twice and the
+    # criteria/tags arms once — a second difference between arms beside the
+    # grounding under test.
+    "machinery": "Cite the measurement, not a judgement about it.",
     "id_examples": (
         '- Name each measurement by what it measures ("primate amino-acid identity", '
         '"the unique-peptide mass-spec check", "whole-protein hydropathy/charge/disorder '

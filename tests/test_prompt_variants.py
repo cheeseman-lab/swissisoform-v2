@@ -476,3 +476,17 @@ class TestVerdictIsGone:
                 if "verdict" in line and "emit_verdict" not in line
             ]
             assert not leftovers, f"{name} still asks for a verdict: {leftovers}"
+
+
+def test_raw_and_dist_state_the_threshold_rule_once_like_every_arm():
+    """The id-free machinery block must not repeat the always-kept tempering paragraph."""
+    from pathlib import Path
+
+    base = (
+        Path(__file__).resolve().parents[1] / "scripts" / "site" / "prompts" / "category-pass.txt"
+    ).read_text()
+    arms = ("criteria", "tags", "raw", "dist")
+    rendered = {g: A.render(base, grounding=g, hints=True) for g in arms}
+    counts = {g: t.count("Never report that a value cleared") for g, t in rendered.items()}
+    assert set(counts.values()) == {1}, counts
+    assert all("move the verdict" not in t for t in rendered.values())
