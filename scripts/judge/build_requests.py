@@ -110,6 +110,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def _registry_sha(version: str) -> str | None:
+    """Content hash of the tag registry the reference will be built from, if it loads."""
+    from swissisoform.tags.registry import TagRegistryError
+    from swissisoform.tags.registry import load as load_registry
+
+    try:
+        return load_registry(version).sha256
+    except TagRegistryError:
+        return None
+
+
 def _reference_provenance(corpus: Corpus, args: argparse.Namespace) -> dict:
     """Read each arm's recorded runs and decide the reference's versions from them.
 
@@ -121,7 +132,11 @@ def _reference_provenance(corpus: Corpus, args: argparse.Namespace) -> dict:
     sources = PV.source_fingerprint(ROOT / "data" / "output" / args.corpus)
     arm_runs = {arm: PV.effective_runs(arm_dir(arm, args.corpus)) for arm in corpus.arms}
     resolved, problems = PV.reconcile(
-        arm_runs, sources, tag_version=args.tag_version, dist_version=args.dist_version
+        arm_runs,
+        sources,
+        tag_version=args.tag_version,
+        dist_version=args.dist_version,
+        registry_sha=_registry_sha,
     )
     if problems and not args.allow_provenance_mismatch:
         listed = "\n  ".join(problems[:20])
@@ -135,6 +150,7 @@ def _reference_provenance(corpus: Corpus, args: argparse.Namespace) -> dict:
         logger.warning("provenance (allowed by override): %s", problem)
     return {
         **resolved,
+        "corpus": args.corpus,
         "tag_version": resolved["tag_version"] or grounding.DEFAULT_TAG_VERSION,
         "dist_version": resolved["dist_version"] or grounding.DEFAULT_DIST_VERSION,
         "sources": sources,
@@ -265,14 +281,14 @@ def main(argv: list[str] | None = None) -> int:
                         )
                     text_a = corpus.get(first, slug, unit).text
                     text_b = corpus.get(second, slug, unit).text
-                    tool_blind = unit in TOOL_UNITS and not (
-                        digests.get(first) and digests.get(second)
+                    shown_a, shown_b, tool_blind = _shown_pair(
+                        text_a, text_b, digests.get(first), digests.get(second), unit
                     )
                     prompt = PR.chat(
                         PR.relative_prompt(
                             instruction=instruction,
-                            response_a=_with_tools(text_a, digests.get(first)),
-                            response_b=_with_tools(text_b, digests.get(second)),
+                            response_a=shown_a,
+                            response_b=shown_b,
                             rubric=RB.pairwise().criterion,
                         )
                     )
@@ -288,8 +304,8 @@ def main(argv: list[str] | None = None) -> int:
                             order=order,
                             sha_a=PV.text_sha(text_a),
                             sha_b=PV.text_sha(text_b),
-                            len_a=len(text_a),
-                            len_b=len(text_b),
+                            len_a=len(shown_a),
+                            len_b=len(shown_b),
                             tool_blind=tool_blind,
                         )
                     )
@@ -304,11 +320,29 @@ def main(argv: list[str] | None = None) -> int:
     return 1 if at_risk else 0
 
 
+def _shown_pair(
+    text_a: str, text_b: str, digest_a: str | None, digest_b: str | None, unit: str
+) -> tuple[str, str, bool]:
+    """``(shown_a, shown_b, tool_blind)``: what the judge reads for one pair.
+
+    Tool results go to both sides or to neither. With only one side's digest the
+    two answers would be judged on unequal evidence, and the pair would still feed
+    the fit, biased toward whichever arm left a trace; so the pair is shown bare
+    and flagged ``tool_blind``, like a pair where neither arm has one.
+    """
+    tool_blind = unit in TOOL_UNITS and not (digest_a and digest_b)
+    if tool_blind:
+        digest_a = digest_b = None
+    return _with_tools(text_a, digest_a), _with_tools(text_b, digest_b), tool_blind
+
+
 def _with_tools(text: str, digest: str | None) -> str:
     """A response followed by its run's tool results, when there are any.
 
-    ``sha_*`` and ``len_*`` stay those of the response alone: the digest is
-    evidence shown beside it, not something the arm wrote.
+    ``sha_*`` stays that of the response alone: the digest is evidence shown
+    beside it, not something the arm wrote, and staleness is about the arm's
+    text. ``len_*`` is the length of what the judge reads, response and digest
+    together, since that is what the length covariate has to describe.
     """
     return f"{text}\n\n{digest}" if digest else text
 

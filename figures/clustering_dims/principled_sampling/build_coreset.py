@@ -35,7 +35,9 @@ Outputs (alongside this script):
   - coreset_provenance.json      source parquet(s) + sha256, catalog/anchors sha256,
                                  code commit, command — the panel's identity
   - coreset_selection.png        the picks on the all-ORF map  (written, untracked)
-  - coreset_selection_report.md  the written read-out           (written, untracked)
+
+The read-out (composition, picks, coordinates) is printed to stdout, not written
+beside them: it restates numbers already in the CSVs and the provenance sidecar.
 
 Nothing is written if verification fails.
 
@@ -48,7 +50,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -260,7 +261,12 @@ def build_coreset(
     is_anchor = np.isin(tis, list(anchor_ids))
     rare: list[dict] = []
     for orf_type in RARE_TYPES:
-        stratum = np.flatnonzero((orf == orf_type) & ~is_anchor)
+        # Anchors are pinned by tis_id, but a gene is still taken once: drop every
+        # isoform of a claimed gene (the anchor genes, then each rare pick's), or
+        # rare_type_fill — which does not consult `claimed` — can pick one and
+        # abort the build below.
+        taken = np.isin(genes, list(claimed))
+        stratum = np.flatnonzero((orf == orf_type) & ~is_anchor & ~taken)
         for p in rare_type_fill(all_orf.scores, stratum):
             gene = genes[p["row_index"]]
             if gene in claimed:
@@ -354,26 +360,6 @@ def verify(
 # ---------------------------------------------------------------------------
 
 
-def _code_provenance() -> dict:
-    """``{commit, dirty}`` for this checkout; ``None``s when it cannot be read."""
-
-    def vcs(*cmd: str) -> str | None:
-        try:
-            done = subprocess.run(
-                ["git", "-C", str(ROOT), *cmd], capture_output=True, text=True, timeout=10
-            )
-        except (OSError, subprocess.SubprocessError):
-            return None
-        return done.stdout if done.returncode == 0 else None
-
-    commit = vcs("rev-parse", "HEAD")
-    status = vcs("status", "--porcelain", "--untracked-files=no")
-    return {
-        "commit": commit.strip() if commit else None,
-        "dirty": bool(status.strip()) if status is not None else None,
-    }
-
-
 def provenance(
     files: list[Path], results: dict[str, fs.MFAResult], final: pd.DataFrame, argv: list[str]
 ) -> dict:
@@ -383,13 +369,13 @@ def provenance(
     rebuild against a different parquet or catalog is indistinguishable from it.
     """
     sys.path.insert(0, str(ROOT / "src"))
-    from swissisoform.setup._common import rel_to_root, sha256_file
+    from swissisoform.setup._common import code_provenance, rel_to_root, sha256_file
 
     return {
         "artifact": "cheeseman50 coreset",
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "command": " ".join(["build_coreset.py", *argv]),
-        "code": _code_provenance(),
+        "code": code_provenance(),
         "source_parquet": [
             {"path": rel_to_root(p.resolve()), "sha256": sha256_file(p)} for p in files
         ],
@@ -487,13 +473,16 @@ def plot_coreset(
     plt.close(fig)
 
 
-def write_report(
+def report_text(
     results: dict[str, fs.MFAResult],
     picks: pd.DataFrame,
     final: pd.DataFrame,
-    path: Path,
 ) -> str:
-    """Write the markdown read-out and return it."""
+    """The read-out, for stdout.
+
+    Not written to disk: a generated report restates the CSVs and goes stale the
+    moment one of them is edited (CLAUDE.md, "No generated *.md reports").
+    """
     pool = results["all-ORF"].matrix.meta
     comp = (
         pd.DataFrame(
@@ -562,9 +551,7 @@ def write_report(
         "```",
         "",
     ]
-    text = "\n".join(lines)
-    path.write_text(text)
-    return text
+    return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -593,8 +580,8 @@ def main(argv: list[str] | None = None) -> None:
     (HERE / "coreset_provenance.json").write_text(json.dumps(prov, indent=2) + "\n")
     plot_coreset(results["all-ORF"], picks, anchors, HERE / "coreset_selection.png")
     print()
-    print(write_report(results, picks, final, HERE / "coreset_selection_report.md"))
-    print(f"\nwrote coreset_selection.csv, coreset_50.csv, provenance, figure and report to {HERE}")
+    print(report_text(results, picks, final))
+    print(f"\nwrote coreset_selection.csv, coreset_50.csv, provenance and figure to {HERE}")
 
 
 if __name__ == "__main__":

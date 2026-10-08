@@ -15,6 +15,7 @@ from swissisoform.config import PipelineConfig, ScoringConfig
 from swissisoform.models import ORFType, TranslationInitiationSite
 from swissisoform.modules.tags import (
     CITATIONS_COLUMN,
+    LABELS_COLUMN,
     SHA256_COLUMN,
     STATES_COLUMN,
     VERSION_COLUMN,
@@ -249,6 +250,38 @@ class TestFire:
         both = _registry(_row(label="Domain gained or lost")).get("t")
         assert both.label_for("truncated") == "Domain gained or lost"
 
+    def test_a_truncation_reads_the_unique_region_as_lost(self):
+        def label(text: str, orf_type: str, metric: str = "m") -> str:
+            return _registry(_row(label=text, metric=metric)).get("t").label_for(orf_type)
+
+        assert label("Unique region more basic", "truncated") == "Lost region more basic"
+        assert label("Long unique region", "truncated") == "Long lost region"
+        assert label("Motifs in unique region", "truncated") == "Motifs in lost region"
+        assert label("Unique region under selection", "truncated") == (
+            "Lost region under selection"
+        )
+        # An extension adds the region; a separate ORF is wholly unique.
+        assert label("Unique region more basic", "extended") == "Unique region more basic"
+        assert label("Unique region more basic", "uorf") == "Unique region more basic"
+        assert label("Constrained residues gained", "uorf") == "Constrained residues gained"
+        assert label("Domain gained or lost", "truncated") == "Domain gained or lost"
+        assert label("Basic unique region", "truncated") == "Basic lost region"
+
+    def test_an_sae_feature_gained_is_not_a_region_lost(self):
+        """SAE's "gained" is a feature the isoform gained, not the region's direction."""
+        tag = _registry(
+            _row(label="Strong feature gained", metric="abs:isoform_sae_top_gained_delta_max")
+        ).get("t")
+        assert tag.label_for("truncated") == "Strong feature gained"
+
+    def test_a_missing_orf_type_takes_the_pooled_cutoff(self):
+        """NA in a string orf_type column must not crash the per-row resolution."""
+        from swissisoform.distributions import row_cutoffs
+
+        orf = pd.Series(["extended", None, "uorf", "truncated"], dtype="string")
+        got = row_cutoffs(orf, {"extended": 1.0, "separate": 3.0}, 0.5)
+        assert list(got) == [1.0, 0.5, 3.0, 0.5]
+
     def test_per_stratum_cutoff(self):
         """One checkbox, one meaning per ORF type: the row's stratum picks the cutoff."""
         row = _row(tag_id="hi", metric="m", cutoff=5.0)
@@ -281,47 +314,27 @@ class TestFire:
         # A boolean has no number behind it.
         assert citations["b"].isna().all()
 
-    def test_one_sided_none_on_a_changed_flag_is_a_change(self):
-        """No signal peptide on one side and a cleavage site on the other is a gain.
+    def test_a_changed_flag_is_read_as_the_comparator_wrote_it(self):
+        """The comparator decides gained/lost vs not-run; the tag does not re-derive it.
 
-        Rows: gained, lost, both absent with the predictor run on both, both
-        present and equal, and the predictor not run on one side.
+        A None flag stays not-evaluable even beside one-sided value columns, which
+        the evaluator used to reinterpret (``metrics.changed_state``, now removed).
         """
         base = "cmp_signalp_signalp_cleavage_site"
         reg = _registry(
             _row(tag_id="cs", kind=reg_mod.KIND_BOOL, metric=f"{base}_changed", cutoff=None)
         )
         df = _frame(
-            ["extended"] * 5,
+            ["extended"] * 3,
             **{
-                f"{base}_changed": [None, None, False, False, None],
-                f"{base}_canonical": [None, "CS pos: 20-21", None, "CS pos: 9", None],
-                f"{base}_isoform": ["CS pos: 23-24", None, None, "CS pos: 9", "CS pos: 4"],
-                "cmp_signalp_signalp_prediction_canonical": ["OTHER", "SP", "OTHER", "SP", None],
-                "cmp_signalp_signalp_prediction_isoform": ["SP", "OTHER", "OTHER", "SP", "SP"],
+                f"{base}_changed": [True, False, None],
+                f"{base}_canonical": [None, None, None],
+                f"{base}_isoform": ["CS pos: 23-24", None, "CS pos: 4"],
             },
         )
         states, _ = tag_eval.fire(df, [], reg)
         got = [None if pd.isna(v) else bool(v) for v in states["cs"]]
-        assert got == [True, True, False, False, None]
-
-    def test_changed_flag_without_a_run_indicator(self):
-        """Without the prediction pair, only both-missing is not-evaluable."""
-        base = "cmp_localization_deeploc_signals"
-        reg = _registry(
-            _row(tag_id="sig", kind=reg_mod.KIND_BOOL, metric=f"{base}_changed", cutoff=None)
-        )
-        df = _frame(
-            ["truncated"] * 3,
-            **{
-                f"{base}_changed": [None, False, False],
-                f"{base}_canonical": ["Nuclear localization signal", None, "NES"],
-                f"{base}_isoform": [None, None, "NES"],
-            },
-        )
-        states, _ = tag_eval.fire(df, [], reg)
-        got = [None if pd.isna(v) else bool(v) for v in states["sig"]]
-        assert got == [True, None, False]
+        assert got == [True, False, None]
 
     def test_missing_column_yields_an_all_null_column_not_a_missing_one(self):
         """The struct's fields must depend on the registry, not on the run."""
@@ -486,6 +499,21 @@ class TestModule:
         assert sites[1].isoform_annotations["tags"]["states"] == {"hi": True}
         assert sites[1].isoform_annotations["tags"]["registry_version"] == "v7"
 
+    def test_labels_read_for_each_rows_orf_type(self):
+        """The resolved label travels in the parquet and on the site object."""
+        reg = _registry(_row(tag_id="hi", metric="m", cutoff=2.0, label="Unique region more basic"))
+        df = _frame(["extended", "truncated", "uorf"], m=[1.0, 3.0, 3.0])
+        sites = [_site("a"), _site("b"), _site("c")]
+
+        out = TagModule(reg).annotate_frame(df, sites)
+
+        assert list(out[LABELS_COLUMN]) == [
+            {"hi": "Unique region more basic"},
+            {"hi": "Lost region more basic"},
+            {"hi": "Unique region more basic"},
+        ]
+        assert sites[1].isoform_annotations["tags"]["labels"] == {"hi": "Lost region more basic"}
+
     def test_input_frame_not_mutated(self):
         reg = _registry(_row(tag_id="hi", metric="m", cutoff=2.0))
         df = _frame(["extended"], m=[3.0])
@@ -519,6 +547,7 @@ class TestParquetRoundTrip:
         back = pd.read_parquet(path)
         assert back[STATES_COLUMN].iloc[0] == {"hi": True}
         assert back[STATES_COLUMN].iloc[1] == {"hi": None}
+        assert back[LABELS_COLUMN].iloc[0] == {"hi": "A tag"}
 
 
 # ---------------------------------------------------------------------------
@@ -587,6 +616,16 @@ class TestSchemaOverrides:
 
         df = pd.DataFrame({VERSION_COLUMN: ["v_absent"]})
         assert schema_overrides(df) == {}
+
+    def test_the_labels_struct_is_declared_as_strings(self, monkeypatch):
+        import pyarrow as pa
+
+        from swissisoform.modules import tags as tags_mod
+
+        reg = _registry(_row(tag_id="hi", metric="m", cutoff=2.0))
+        monkeypatch.setattr(tags_mod, "load_registry", lambda _v: reg)
+        types = tags_mod.schema_overrides(pd.DataFrame({VERSION_COLUMN: ["vtest"]}))
+        assert types[LABELS_COLUMN] == pa.struct([pa.field("hi", pa.string())])
 
     def test_no_tag_columns_means_no_overrides(self):
         from swissisoform.modules.tags import schema_overrides

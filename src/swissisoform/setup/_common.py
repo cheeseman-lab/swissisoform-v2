@@ -11,6 +11,7 @@ noticing that two sidecars now mean slightly different things.
 from __future__ import annotations
 
 import hashlib
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -44,6 +45,32 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: fh.read(_CHUNK), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def code_provenance(root: Path = ROOT) -> dict[str, str | bool | None]:
+    """``{commit, dirty}`` for the checkout at *root*; ``None``s when it cannot be read.
+
+    ``dirty`` counts tracked changes only: an untracked scratch file does not
+    change what ran, an edited prompt or module does. Shared by every artifact
+    that stamps the code it was built with (the LLM run stamps, the coreset
+    sidecar), so two stamps cannot disagree about what "dirty" means.
+    """
+
+    def vcs(*cmd: str) -> str | None:
+        try:
+            done = subprocess.run(
+                ["git", "-C", str(root), *cmd], capture_output=True, text=True, timeout=10
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return done.stdout if done.returncode == 0 else None
+
+    commit = vcs("rev-parse", "HEAD")
+    status = vcs("status", "--porcelain", "--untracked-files=no")
+    return {
+        "commit": commit.strip() if commit else None,
+        "dirty": bool(status.strip()) if status is not None else None,
+    }
 
 
 def resolve_parquet(run: str | None, parquet: Path | None) -> tuple[list[Path], str]:

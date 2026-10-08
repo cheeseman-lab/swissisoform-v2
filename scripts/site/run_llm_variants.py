@@ -203,6 +203,9 @@ def _record_provenance(
     """
     if args.dry_run or not llm._RUN_ID:
         return
+    # The registry's content hash beside its name: a version rebuilt in place
+    # keeps the name, and only the hash shows the arms ran on a different build.
+    registry_sha = reg_mod.load(args.tag_registry).sha256 if variant.grounding == "tags" else None
     provenance.record_arm_run(
         out_dir,
         {
@@ -212,6 +215,7 @@ def _record_provenance(
             "hints": variant.hints,
             "pass": pass_name,
             "tag_registry": args.tag_registry,
+            "tag_registry_sha256": registry_sha,
             "dist_version": args.dist_version,
             "only_category": args.only_category or [],
             "gene": args.gene,

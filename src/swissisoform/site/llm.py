@@ -27,7 +27,6 @@ import json
 import os
 import re
 import secrets
-import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -499,32 +498,10 @@ def _begin_run(dry_run: bool) -> str:
     _RUN_ID = f"{_utc_now().strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(3)}"
     _RUN_MODE = "dry_run" if dry_run else "live"
     _RUN_PROVENANCE.clear()
-    _RUN_PROVENANCE["code"] = _code_provenance()
+    from swissisoform.setup._common import code_provenance
+
+    _RUN_PROVENANCE["code"] = code_provenance()
     return _RUN_ID
-
-
-def _code_provenance() -> dict[str, Any]:
-    """``{commit, dirty}`` for the checkout this module runs from; ``None``s if unknown.
-
-    ``dirty`` counts tracked changes only: an untracked scratch file does not
-    change what ran, an edited prompt or module does.
-    """
-
-    def vcs(*cmd: str) -> str | None:
-        try:
-            done = subprocess.run(
-                ["git", "-C", str(ROOT), *cmd], capture_output=True, text=True, timeout=10
-            )
-        except (OSError, subprocess.SubprocessError):
-            return None
-        return done.stdout if done.returncode == 0 else None
-
-    commit = vcs("rev-parse", "HEAD")
-    status = vcs("status", "--porcelain", "--untracked-files=no")
-    return {
-        "commit": commit.strip() if commit else None,
-        "dirty": bool(status.strip()) if status is not None else None,
-    }
 
 
 def _source_provenance(records_dir: Path) -> dict[str, Any]:

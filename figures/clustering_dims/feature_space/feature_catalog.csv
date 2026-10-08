@@ -212,7 +212,6 @@ cmp_targetp_targetp_cleavage_site_canonical,targetp,cmp,L,module_map,,False,str,
 cmp_targetp_targetp_cleavage_site_changed,targetp,cmp,L,evidence_cols,L2_targeting_change,True,bool,0.861,2,False,binary,binary_0_1,-,Transit-peptide cleavage site changes,,,,
 cmp_targetp_targetp_cleavage_site_isoform,targetp,cmp,L,module_map,,False,str,0.0754,424,False,categorical,-,-,,,,,
 cmp_targetp_targetp_ctp_prob_canonical,targetp,cmp,L,module_map,,False,null,0.0,0,False,all_null,-,-,,,,,
-cmp_targetp_targetp_ctp_prob_changed,targetp,cmp,L,evidence_cols,L2_targeting_change,True,bool,1.0,1,False,binary,binary_0_1,-,,,,,
 cmp_targetp_targetp_ctp_prob_isoform,targetp,cmp,L,module_map,,False,null,0.0,0,False,all_null,-,-,,,,,
 cmp_targetp_targetp_mtp_prob_delta,targetp,cmp,L,evidence_cols,L2_targeting_change,False,float,1.0,4830,True,,numeric,signed_log,Δ TargetP mitochondrial-transit prob,,,,1.0
 cmp_targetp_targetp_prediction_canonical,targetp,cmp,L,evidence_cols,L2_targeting_change,False,str,1.0,3,False,categorical,one_hot,-,Canonical TargetP prediction,,,,

@@ -895,12 +895,15 @@ class TestArmProvenance:
             PV.record_arm_run(out, run)
         return out
 
+    REG_SHA = "a" * 64
+
     def _run(self, run_id, grounding, **kw):
         return {
             "run_id": run_id,
             "pass": "category",
             "grounding": grounding,
             "tag_registry": "v3",
+            "tag_registry_sha256": self.REG_SHA if grounding == "tags" else None,
             "dist_version": "v3",
             "sources": dict(self.SOURCES),
             **kw,
@@ -969,6 +972,61 @@ class TestArmProvenance:
         out = self._arm(tmp_path, "raw_hint", stamps=["legacy"])
         _, problems = PV.reconcile({"raw_hint": PV.effective_runs(out)}, self.SOURCES)
         assert len(problems) == 1 and "no provenance record" in problems[0]
+
+    def test_a_partial_rerun_keeps_the_carried_categories_runs_in_view(self, tmp_path):
+        """--only-category S under v3 must not hide that C/D/L/M/P ran on v2."""
+        out = self._arm(
+            tmp_path,
+            "tags_hint",
+            self._run("full", "tags", tag_registry="v2", tag_registry_sha256="b" * 64),
+            self._run("only_s", "tags"),
+            stamps=[],
+        )
+        iso = out / "iso0"
+        iso.mkdir(parents=True)
+        (iso / "categories.meta.json").write_text(
+            json.dumps(
+                {
+                    "run_id": "only_s",
+                    "category_runs": {"C": {"run_id": "full"}, "S": {"run_id": "only_s"}},
+                }
+            )
+        )
+        runs, unrecorded = PV.effective_runs(out)
+        assert sorted(r["run_id"] for r in runs) == ["full", "only_s"]
+        assert unrecorded == set()
+        _, problems = PV.reconcile({"tags_hint": (runs, unrecorded)}, self.SOURCES)
+        assert any("tag registry" in p for p in problems)
+
+    def test_a_registry_rebuilt_in_place_is_refused(self, tmp_path):
+        """Same name, different build: the name check passes, the hash does not."""
+        arm_runs = {
+            "tags_hint": PV.effective_runs(self._arm(tmp_path, "tags_hint", self._run("t", "tags")))
+        }
+        _, ok = PV.reconcile(arm_runs, self.SOURCES, registry_sha=lambda v: self.REG_SHA)
+        assert ok == []
+        _, problems = PV.reconcile(arm_runs, self.SOURCES, registry_sha=lambda v: "c" * 64)
+        assert len(problems) == 1 and "rebuilt since the tags arms ran" in problems[0]
+
+    def test_tags_arms_on_two_builds_of_one_version_are_refused(self, tmp_path):
+        arm_runs = {
+            "tags_hint": PV.effective_runs(
+                self._arm(tmp_path, "tags_hint", self._run("a", "tags"))
+            ),
+            "tags_nohint": PV.effective_runs(
+                self._arm(
+                    tmp_path, "tags_nohint", self._run("b", "tags", tag_registry_sha256="d" * 64)
+                )
+            ),
+        }
+        _, problems = PV.reconcile(arm_runs, self.SOURCES)
+        assert any("different builds" in p for p in problems)
+
+    def test_a_tags_run_without_a_registry_hash_is_refused(self, tmp_path):
+        old = self._run("legacy", "tags", tag_registry_sha256=None)
+        arm_runs = {"tags_hint": PV.effective_runs(self._arm(tmp_path, "tags_hint", old))}
+        _, problems = PV.reconcile(arm_runs, self.SOURCES)
+        assert any("no tag-registry content hash" in p for p in problems)
 
     def test_records_digest_tracks_content(self, tmp_path):
         (tmp_path / "A.json").write_text("{}")
@@ -1274,3 +1332,99 @@ class TestQuantize:
 
         with pytest.raises(Q.QuantizeError, match="shorter than one block"):
             Q.chunk_prompts(["tiny"], FakeTok(), seq_len=512)
+
+
+def _script(name):
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "judge" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"_judge_{name}", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestPairShownToTheJudge:
+    """Tool results go to both answers or neither, and the length is of what is read."""
+
+    def test_one_sided_tool_results_are_dropped_from_both(self):
+        br = _script("build_requests")
+        a, b, blind = br._shown_pair("answer A", "answer B", "TOOLS", None, "M")
+        assert (a, b, blind) == ("answer A", "answer B", True)
+
+    def test_both_sides_get_their_tool_results(self):
+        br = _script("build_requests")
+        a, b, blind = br._shown_pair("A", "B", "TA", "TB", "P")
+        assert (a, b, blind) == ("A\n\nTA", "B\n\nTB", False)
+
+    def test_non_tool_units_are_never_tool_blind(self):
+        br = _script("build_requests")
+        assert br._shown_pair("A", "B", None, None, "C") == ("A", "B", False)
+
+
+def test_stale_check_reads_the_corpus_the_build_recorded(tmp_path, monkeypatch):
+    """--dir pointing at another corpus's work dir must not be checked against --corpus."""
+    import argparse
+
+    an = _script("analyze")
+    (tmp_path / "requests_meta.json").write_text(
+        json.dumps({"build_id": "b1", "provenance": {"corpus": "cheeseman13", "problems": []}})
+    )
+    (tmp_path / PV.INDEX_NAME).write_text(
+        json.dumps(
+            {
+                "id": "r1",
+                "slug": "s",
+                "unit": "C",
+                "arm_a": "x",
+                "arm_b": "y",
+                "sha_a": "1",
+                "sha_b": "2",
+            }
+        )
+        + "\n"
+    )
+    seen = {}
+    monkeypatch.setattr(
+        an, "_stale_on_disk", lambda index, name: seen.setdefault("name", name) and {}
+    )
+    rows = [{"id": "r1", "build_id": "b1", "sha_a": "1", "sha_b": "2"}]
+    an._provenance(
+        tmp_path, rows, argparse.Namespace(corpus="cheeseman50", allow_provenance_mismatch=False)
+    )
+    assert seen["name"] == "cheeseman13"
+
+
+class TestAnalyzeReport:
+    """The printed report runs after analysis.json is written; a None must not end it."""
+
+    def test_missing_rates_print_as_na(self, capsys):
+        from types import SimpleNamespace
+
+        an = _script("analyze")
+        delta = {"point": 0.1, "lo": 0.0, "hi": 0.2}
+        an._print(
+            checks={},
+            per_unit_fit={},
+            pooled_fit=SimpleNamespace(strengths={}),
+            position={"C": {"slot_a_win_rate": None, "delta": delta}},
+            per_unit_bt={},
+            per_unit_len={},
+            length={"C": {"n": 4, "beta": delta, "longer_wins_rate": None, "by_quartile": []}},
+        )
+        out = capsys.readouterr().out
+        assert "slot A wins    n/a" in out
+        assert "longer wins    n/a (top quartile n/a)" in out
+
+    def test_resolution_floor_is_the_rounded_interval_plus_half_width(self):
+        an = _script("analyze")
+        rep = W.Interval(point=0.123456, lo=-0.2, hi=0.44444)
+        out = an._resolution_floor({"C": {REPLICATE: rep}, "D": {}}, {REPLICATE: rep})
+        expected = {
+            "point": 0.1235,
+            "lo": -0.2,
+            "hi": 0.4444,
+            "half_width": round(rep.half_width, 4),
+        }
+        assert out == {"C": expected, "pooled": expected}

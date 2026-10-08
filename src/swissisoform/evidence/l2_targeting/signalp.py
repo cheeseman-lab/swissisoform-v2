@@ -218,6 +218,9 @@ class SignalPModule:
         "signalp_probability",
         "signalp_cleavage_site",
     ]
+    # Read by the comparator; see compare/comparator.py `_Predictor`.
+    CATEGORICAL_FIELDS: tuple[str, ...] = ("signalp_prediction", "signalp_cleavage_site")
+    RAN_FIELD: str = "signalp_prediction"
     SCOPE: str = "C"
 
     def __init__(
