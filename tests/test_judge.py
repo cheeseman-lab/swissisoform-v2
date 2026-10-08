@@ -8,6 +8,7 @@ clustering, a rubric that cannot fail a bad answer.
 from __future__ import annotations
 
 import json
+import math
 import random
 
 import pytest
@@ -15,9 +16,11 @@ import pytest
 from swissisoform.judge import ARMS, BASELINE, REPLICATE, UNITS
 from swissisoform.judge import checks as K
 from swissisoform.judge import prompts as PR
+from swissisoform.judge import provenance as PV
 from swissisoform.judge import quantize as Q
 from swissisoform.judge import reference as RF
 from swissisoform.judge import rubrics as RB
+from swissisoform.judge import serve as SV
 from swissisoform.judge import weigh as W
 from swissisoform.judge.weigh import Comparison
 
@@ -639,6 +642,460 @@ class TestBradleyTerryArmSet:
         assert fit[BASELINE] == pytest.approx(0.0)
 
 
+def _simulate_calls(
+    truth: dict[str, float], *, delta: float, n_slugs: int, seed: int, unit: str = "C"
+) -> list[W.Call]:
+    """Both presentation orders of every pair, drawn from a known position-aware BT."""
+    rng = random.Random(seed)
+    arms = list(truth)
+    out = []
+    for slug in (f"iso{i}" for i in range(n_slugs)):
+        for i, a in enumerate(arms):
+            for b in arms[i + 1 :]:
+                for first, second in ((a, b), (b, a)):
+                    eta = truth[first] - truth[second] + delta
+                    won = rng.random() < 1 / (1 + math.exp(-eta))
+                    out.append(W.Call(slug=slug, unit=unit, arm_a=first, arm_b=second, a_won=won))
+    return out
+
+
+class TestOrderAwareFit:
+    """The slot-A advantage is fitted, not filtered.
+
+    Slot A won 68-76% of calls on the real corpus, and the consistent-only fit
+    rested on the ~46% of pairs that happened to agree.
+    """
+
+    TRUTH = {BASELINE: 0.0, "raw_hint": 0.5, "tags_hint": -0.4, REPLICATE: 0.0}
+
+    def test_position_and_arm_effects_are_recovered(self):
+        calls = _simulate_calls(self.TRUTH, delta=1.0, n_slugs=400, seed=3)
+        fit = W.fit_bradley_terry(calls)
+        assert fit.position == pytest.approx(1.0, abs=0.1)
+        for arm, value in self.TRUTH.items():
+            assert fit.strengths[arm] == pytest.approx(value, abs=0.1), arm
+
+    def test_no_position_bias_gives_delta_near_zero(self):
+        calls = _simulate_calls(self.TRUTH, delta=0.0, n_slugs=400, seed=5)
+        assert W.fit_bradley_terry(calls).position == pytest.approx(0.0, abs=0.08)
+
+    def test_the_baseline_is_pinned(self):
+        calls = _simulate_calls(self.TRUTH, delta=0.7, n_slugs=50, seed=9)
+        assert W.fit_bradley_terry(calls).strengths[BASELINE] == 0.0
+
+    def test_a_sweep_stays_finite(self):
+        calls = [
+            W.Call(slug=f"i{i}", unit="C", arm_a=a, arm_b=b, a_won=a == "raw_hint")
+            for i in range(50)
+            for a, b in (("raw_hint", BASELINE), (BASELINE, "raw_hint"))
+        ]
+        value = W.fit_bradley_terry(calls).strengths["raw_hint"]
+        assert 1.0 < value < 100.0
+
+    def test_empty_is_empty(self):
+        assert W.fit_bradley_terry([]).strengths == {}
+
+    def test_bootstrap_gives_the_position_effect_an_interval(self):
+        calls = _simulate_calls(self.TRUTH, delta=1.0, n_slugs=60, seed=13)
+        fit = W.cluster_bootstrap_fit(calls, n=50)
+        assert fit.position is not None and fit.position.excludes_zero
+        assert fit.position.lo < fit.position.point < fit.position.hi
+        assert set(fit.strengths) == set(self.TRUTH)
+
+    def test_calls_from_forward_keeps_both_orders_and_skips_unparsed(self):
+        forward = {
+            ("s", "C", "a", "b"): "a",
+            ("s", "C", "b", "a"): "b",  # slot A both times: inconsistent, still a call
+            ("s", "D", "a", "b"): None,
+        }
+        calls = W.calls_from_forward(forward)
+        assert len(calls) == 2 and all(c.a_won for c in calls)
+        assert W.slot_a_rate(calls) == 1.0
+
+    def test_inconsistent_drops_are_counted_per_arm_and_by_slot(self):
+        forward = {
+            ("s", "C", "a", "b"): "a",
+            ("s", "C", "b", "a"): "b",  # slot A won both: position
+            ("s", "C", "a", "c"): "a",
+            ("s", "C", "c", "a"): "a",  # consistent
+        }
+        _, checks = W.resolve_orders(forward)
+        c = checks["C"]
+        assert c.inconsistent == 1 and c.inconsistent_slot_a == 1
+        assert c.inconsistent_by_arm == {"a": 1, "b": 1}
+        assert c.consistent_by_arm == {"a": 1, "c": 1}
+
+
+class TestLengthAdjustedFit:
+    """A length covariate separates "longer" from "better".
+
+    In v3 the longer response won 68.9% of order-consistent pairs, and a
+    log-length term took the pooled tags lead from +0.56/+0.60 to ~0.
+    """
+
+    TRUTH = {BASELINE: 0.0, "raw_hint": 0.3, "tags_hint": 0.0, "dist_hint": -0.2}
+    MEAN_CHARS = {BASELINE: 900, "raw_hint": 1000, "tags_hint": 1400, "dist_hint": 1100}
+
+    def _calls(self, *, beta: float, delta: float = 0.8, n_slugs: int = 400, seed: int = 21):
+        rng = random.Random(seed)
+        arms = list(self.TRUTH)
+        out = []
+        for slug in (f"iso{i}" for i in range(n_slugs)):
+            chars = {a: int(self.MEAN_CHARS[a] * math.exp(rng.gauss(0, 0.25))) for a in arms}
+            for i, a in enumerate(arms):
+                for b in arms[i + 1 :]:
+                    for x, y in ((a, b), (b, a)):
+                        eta = (
+                            self.TRUTH[x]
+                            - self.TRUTH[y]
+                            + delta
+                            + beta * math.log(chars[x] / chars[y])
+                        )
+                        won = rng.random() < 1 / (1 + math.exp(-eta))
+                        out.append(
+                            W.Call(
+                                slug=slug,
+                                unit="C",
+                                arm_a=x,
+                                arm_b=y,
+                                a_won=won,
+                                len_a=chars[x],
+                                len_b=chars[y],
+                            )
+                        )
+        return out
+
+    def test_length_position_and_arms_are_recovered(self):
+        fit = W.fit_bradley_terry(self._calls(beta=2.0), length=True)
+        assert fit.length == pytest.approx(2.0, abs=0.25)
+        assert fit.position == pytest.approx(0.8, abs=0.1)
+        for arm, value in self.TRUTH.items():
+            assert fit.strengths[arm] == pytest.approx(value, abs=0.12), arm
+
+    def test_without_the_covariate_the_long_arm_is_inflated(self):
+        """The bias the covariate exists to remove: tags is truly 0 but longest."""
+        fit = W.fit_bradley_terry(self._calls(beta=2.0))
+        assert fit.strengths["tags_hint"] > 0.4
+
+    def test_no_length_preference_gives_beta_near_zero(self):
+        fit = W.fit_bradley_terry(self._calls(beta=0.0, seed=4), length=True)
+        assert fit.length == pytest.approx(0.0, abs=0.25)
+        assert fit.strengths["tags_hint"] == pytest.approx(0.0, abs=0.12)
+
+    def test_calls_without_lengths_are_left_out_of_the_length_fit(self):
+        calls = self._calls(beta=1.0, n_slugs=30)
+        unknown = [W.Call(slug="x", unit="C", arm_a=BASELINE, arm_b="raw_hint", a_won=True)]
+        fit = W.fit_bradley_terry(calls + unknown, length=True)
+        assert fit.n_calls == len(calls)
+
+    def test_bootstrap_gives_beta_an_interval(self):
+        fit = W.cluster_bootstrap_fit(self._calls(beta=2.0, n_slugs=60), length=True, n=40)
+        assert fit.length is not None and fit.length.excludes_zero
+
+    def test_length_preference_diagnostic(self):
+        calls = [
+            W.Call(slug="s", unit="C", arm_a="a", arm_b="b", a_won=True, len_a=200, len_b=100),
+            W.Call(slug="s", unit="C", arm_a="b", arm_b="a", a_won=False, len_a=100, len_b=200),
+            W.Call(slug="s", unit="C", arm_a="a", arm_b="c", a_won=False, len_a=110, len_b=100),
+            W.Call(slug="s", unit="C", arm_a="c", arm_b="d", a_won=True, len_a=100, len_b=100),
+        ]
+        out = W.length_preference(calls)
+        assert out["n"] == 3  # equal lengths carry no information
+        assert out["longer_wins_rate"] == pytest.approx(2 / 3, abs=1e-3)
+        assert out["by_quartile"][-1]["longer_wins_rate"] == 1.0
+
+    def test_calls_from_forward_attaches_lengths(self):
+        forward = {("s", "C", "a", "b"): "a"}
+        (call,) = W.calls_from_forward(forward, {("s", "C", "a", "b"): (300, 100)})
+        assert call.log_length_ratio == pytest.approx(math.log(3))
+
+
+class TestJudgedTextProvenance:
+    """Results name the exact text they judged, so a mixed or stale file is caught.
+
+    The v3 fit mixed 14,700 carried-over v2 rows with 10,500 fresh ones, and its
+    judged outputs had been regenerated on disk before anyone read it.
+    """
+
+    def test_build_digest_ignores_order_but_not_content(self):
+        pairs = [("r1", "prompt one"), ("r2", "prompt two")]
+        assert PV.build_digest(pairs) == PV.build_digest(reversed(pairs))
+        assert PV.build_digest(pairs) != PV.build_digest([("r1", "prompt one"), ("r2", "x")])
+
+    def test_check_results_counts_every_failure_kind(self):
+        index = {
+            "a": {"id": "a", "sha_a": "1", "sha_b": "2"},
+            "b": {"id": "b", "sha_a": "3", "sha_b": "4"},
+            "c": {"id": "c", "sha_a": "5", "sha_b": "6"},
+        }
+        rows = [
+            {"id": "a", "build_id": "B", "sha_a": "1", "sha_b": "2"},  # fine
+            {"id": "b", "sha_a": "3", "sha_b": "4"},  # pre-provenance row
+            {"id": "c", "build_id": "B", "sha_a": "5", "sha_b": "X"},  # different text
+            {"id": "z", "build_id": "B"},  # not in this build
+        ]
+        assert PV.check_results(rows, index, "B") == {
+            "n_results": 4,
+            "not_in_requests": 1,
+            "other_build": 1,
+            "sha_mismatch": 1,
+        }
+
+    def test_stale_on_disk_names_the_regenerated_arm(self):
+        index = [
+            {"slug": "s", "unit": "C", "arm_a": "x", "arm_b": "y", "sha_a": "hx", "sha_b": "hy"},
+            {"slug": "s", "unit": "C", "arm_a": "y", "arm_b": "x", "sha_a": "hy", "sha_b": "hx"},
+        ]
+        current = {("x", "s", "C"): "hx", ("y", "s", "C"): "regenerated"}
+        out = PV.stale_on_disk(index, current)
+        assert out == {"n_judged": 2, "n_stale": 1, "stale_by_arm": {"y": 1}}
+
+    def test_resume_counts_only_the_current_build(self, tmp_path):
+        path = tmp_path / "results.jsonl"
+        path.write_text(
+            "\n".join(
+                json.dumps(r)
+                for r in (
+                    {"id": "r1", "build_id": "old"},
+                    {"id": "r2", "build_id": "new"},
+                    {"id": "r3"},
+                )
+            )
+            + "\n{truncated",
+            encoding="utf-8",
+        )
+        assert SV.completed_ids(path) == {"r1", "r2", "r3"}
+        assert SV.completed_ids(path, "new") == {"r2"}
+        assert SV.foreign_results(path, "new") == 2
+
+    def test_result_carries_the_request_fingerprint(self):
+        """Old request files without the fields still load."""
+        req = SV.Request(id="r", slug="s", unit="C", rubric="pw", prompt="p")
+        assert req.build_id == "" and req.sha_a == "" and req.len_a == 0
+        assert {"build_id", "sha_a", "sha_b"} <= set(SV.Result.__dataclass_fields__)
+
+
+class TestArmProvenance:
+    """The shared reference carries the inputs the arms ran on, or the build refuses.
+
+    Every v3 reference carried tag registry v1 while the tags arms ran on v2/v3,
+    so a cutoff those arms were shown read as fabricated in 22-25% of outputs.
+    """
+
+    SOURCES = {"records": "r1", "all_paired": "p1", "variants_long": "v1"}
+
+    @staticmethod
+    def _arm(tmp_path, arm, *runs, stamps=None):
+        out = tmp_path / arm
+        for i, run_id in enumerate(stamps if stamps is not None else [r["run_id"] for r in runs]):
+            iso = out / f"iso{i}"
+            iso.mkdir(parents=True)
+            (iso / "categories.meta.json").write_text(json.dumps({"run_id": run_id}))
+        for run in runs:
+            PV.record_arm_run(out, run)
+        return out
+
+    REG_SHA = "a" * 64
+
+    def _run(self, run_id, grounding, **kw):
+        return {
+            "run_id": run_id,
+            "pass": "category",
+            "grounding": grounding,
+            "tag_registry": "v3",
+            "tag_registry_sha256": self.REG_SHA if grounding == "tags" else None,
+            "dist_version": "v3",
+            "sources": dict(self.SOURCES),
+            **kw,
+        }
+
+    def test_record_appends_rather_than_overwrites(self, tmp_path):
+        self._arm(tmp_path, "tags_hint", self._run("a", "tags"), self._run("b", "tags"))
+        data = json.loads((tmp_path / "tags_hint" / PV.ARM_PROVENANCE).read_text())
+        assert [r["run_id"] for r in data["runs"]] == ["a", "b"]
+
+    def test_effective_runs_are_the_ones_still_on_disk(self, tmp_path):
+        out = self._arm(
+            tmp_path,
+            "tags_hint",
+            self._run("old", "tags", tag_registry="v1"),
+            self._run("new", "tags"),
+            stamps=["new", "new", "manual"],
+        )
+        runs, unrecorded = PV.effective_runs(out)
+        assert [r["run_id"] for r in runs] == ["new"]
+        assert unrecorded == {"manual"}
+
+    def test_reference_takes_the_tags_arms_registry(self, tmp_path):
+        arm_runs = {
+            "tags_hint": PV.effective_runs(
+                self._arm(tmp_path, "tags_hint", self._run("t1", "tags"))
+            ),
+            "criteria_hint": PV.effective_runs(
+                self._arm(tmp_path, "criteria_hint", self._run("c1", "criteria", tag_registry="v1"))
+            ),
+        }
+        resolved, problems = PV.reconcile(arm_runs, self.SOURCES)
+        assert problems == []
+        assert resolved["tag_version"] == "v3"  # criteria's registry is irrelevant
+        assert resolved["per_arm"]["tags_hint"]["run_ids"] == ["t1"]
+
+    def test_disagreeing_tags_arms_are_refused(self, tmp_path):
+        arm_runs = {
+            "tags_hint": PV.effective_runs(
+                self._arm(tmp_path, "tags_hint", self._run("t1", "tags", tag_registry="v2"))
+            ),
+            "tags_nohint": PV.effective_runs(
+                self._arm(tmp_path, "tags_nohint", self._run("t2", "tags"))
+            ),
+        }
+        _, problems = PV.reconcile(arm_runs, self.SOURCES)
+        assert any("tag registry" in p for p in problems)
+
+    def test_explicit_version_must_match_the_arms(self, tmp_path):
+        arm_runs = {
+            "tags_hint": PV.effective_runs(self._arm(tmp_path, "tags_hint", self._run("t", "tags")))
+        }
+        resolved, problems = PV.reconcile(arm_runs, self.SOURCES, tag_version="v1")
+        assert resolved["tag_version"] == "v1"
+        assert any("'v1' requested" in p for p in problems)
+
+    def test_different_source_data_is_refused(self, tmp_path):
+        stale = self._run("d", "dist", sources={**self.SOURCES, "all_paired": "older"})
+        arm_runs = {"dist_hint": PV.effective_runs(self._arm(tmp_path, "dist_hint", stale))}
+        _, problems = PV.reconcile(arm_runs, self.SOURCES)
+        assert problems == [
+            "dist_hint: run d used a different all_paired than the reference is built from"
+        ]
+
+    def test_unrecorded_outputs_are_refused(self, tmp_path):
+        out = self._arm(tmp_path, "raw_hint", stamps=["legacy"])
+        _, problems = PV.reconcile({"raw_hint": PV.effective_runs(out)}, self.SOURCES)
+        assert len(problems) == 1 and "no provenance record" in problems[0]
+
+    def test_a_partial_rerun_keeps_the_carried_categories_runs_in_view(self, tmp_path):
+        """--only-category S under v3 must not hide that C/D/L/M/P ran on v2."""
+        out = self._arm(
+            tmp_path,
+            "tags_hint",
+            self._run("full", "tags", tag_registry="v2", tag_registry_sha256="b" * 64),
+            self._run("only_s", "tags"),
+            stamps=[],
+        )
+        iso = out / "iso0"
+        iso.mkdir(parents=True)
+        (iso / "categories.meta.json").write_text(
+            json.dumps(
+                {
+                    "run_id": "only_s",
+                    "category_runs": {"C": {"run_id": "full"}, "S": {"run_id": "only_s"}},
+                }
+            )
+        )
+        runs, unrecorded = PV.effective_runs(out)
+        assert sorted(r["run_id"] for r in runs) == ["full", "only_s"]
+        assert unrecorded == set()
+        _, problems = PV.reconcile({"tags_hint": (runs, unrecorded)}, self.SOURCES)
+        assert any("tag registry" in p for p in problems)
+
+    def test_a_registry_rebuilt_in_place_is_refused(self, tmp_path):
+        """Same name, different build: the name check passes, the hash does not."""
+        arm_runs = {
+            "tags_hint": PV.effective_runs(self._arm(tmp_path, "tags_hint", self._run("t", "tags")))
+        }
+        _, ok = PV.reconcile(arm_runs, self.SOURCES, registry_sha=lambda v: self.REG_SHA)
+        assert ok == []
+        _, problems = PV.reconcile(arm_runs, self.SOURCES, registry_sha=lambda v: "c" * 64)
+        assert len(problems) == 1 and "rebuilt since the tags arms ran" in problems[0]
+
+    def test_tags_arms_on_two_builds_of_one_version_are_refused(self, tmp_path):
+        arm_runs = {
+            "tags_hint": PV.effective_runs(
+                self._arm(tmp_path, "tags_hint", self._run("a", "tags"))
+            ),
+            "tags_nohint": PV.effective_runs(
+                self._arm(
+                    tmp_path, "tags_nohint", self._run("b", "tags", tag_registry_sha256="d" * 64)
+                )
+            ),
+        }
+        _, problems = PV.reconcile(arm_runs, self.SOURCES)
+        assert any("different builds" in p for p in problems)
+
+    def test_a_tags_run_without_a_registry_hash_is_refused(self, tmp_path):
+        old = self._run("legacy", "tags", tag_registry_sha256=None)
+        arm_runs = {"tags_hint": PV.effective_runs(self._arm(tmp_path, "tags_hint", old))}
+        _, problems = PV.reconcile(arm_runs, self.SOURCES)
+        assert any("no tag-registry content hash" in p for p in problems)
+
+    def test_records_digest_tracks_content(self, tmp_path):
+        (tmp_path / "A.json").write_text("{}")
+        first = PV.records_digest(tmp_path)
+        (tmp_path / "A.json").write_text('{"x": 1}')
+        assert PV.records_digest(tmp_path) != first
+        assert PV.records_digest(tmp_path / "missing") is None
+
+
+class TestToolResults:
+    """M/P arms read through tools; the judge sees that data or the output says it did not."""
+
+    TRACE = {
+        "turns": [
+            {
+                "tool_results": [
+                    {
+                        "name": "query_variants",
+                        "input": {"region": "unique"},
+                        "result": {"rows": [{"pos": i, "hgvsp": f"p.X{i}Y"} for i in range(200)]},
+                    },
+                    {"name": "emit_verdict", "rejected": "too early"},
+                ]
+            },
+            {"tool_results": [{"name": "variant_effect_stats", "input": {}, "result": {"n": 7}}]},
+        ]
+    }
+
+    def test_renders_each_data_call_within_budget(self):
+        out = RF.render_tool_results(self.TRACE, 1_500)
+        assert out.startswith(RF.TOOL_RESULTS_HEADER)
+        assert 'query_variants({"region": "unique"})' in out
+        assert 'variant_effect_stats({}) -> {"n": 7}' in out
+        assert "chars cut" in out  # the 200-row table was cut, not the small call
+        assert "emit_verdict" not in out  # a rejected verdict is not evidence
+        assert len(out) < 1_500 + 200
+
+    def test_calls_past_the_budget_are_counted(self):
+        trace = {
+            "turns": [
+                {"tool_results": [{"name": f"t{i}", "input": {}, "result": "x" * 300}]}
+                for i in range(20)
+            ]
+        }
+        out = RF.render_tool_results(trace, 1_000)
+        assert "further tool call(s) not shown" in out
+
+    def test_no_trace_is_none_so_the_call_is_marked_tool_blind(self):
+        assert RF.render_tool_results(None, 1_000) is None
+
+    def test_corpus_loads_traces_for_tool_units_only(self, tmp_path, monkeypatch):
+        from swissisoform.judge import corpus as CO
+
+        monkeypatch.setattr(CO, "ROOT", tmp_path)
+        iso = tmp_path / "data" / "output" / "c_criteria_hint" / "llm" / "iso1"
+        iso.mkdir(parents=True)
+        cats = {name: {"reasoning": name} for name in ("Mutation Landscape", "Conservation")}
+        (iso / "categories.json").write_text(json.dumps(cats))
+        (iso / "M_trace.json").write_text(json.dumps(self.TRACE))
+        (iso / "C_trace.json").write_text(json.dumps(self.TRACE))
+        corpus = CO.load_corpus("c", arms=(BASELINE,))
+        assert corpus.get(BASELINE, "iso1", "M").trace == self.TRACE
+        assert corpus.get(BASELINE, "iso1", "C").trace is None
+
+    def test_requests_default_to_not_tool_blind(self):
+        """Old request files lack the flag; analyze.py treats a missing index as blind."""
+        assert SV.Request(id="r", slug="s", unit="M", rubric="pw", prompt="p").tool_blind is False
+
+
 class TestConstants:
     def test_seven_units_six_categories_plus_synthesis(self):
         assert len(UNITS) == 7
@@ -875,3 +1332,99 @@ class TestQuantize:
 
         with pytest.raises(Q.QuantizeError, match="shorter than one block"):
             Q.chunk_prompts(["tiny"], FakeTok(), seq_len=512)
+
+
+def _script(name):
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "judge" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"_judge_{name}", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestPairShownToTheJudge:
+    """Tool results go to both answers or neither, and the length is of what is read."""
+
+    def test_one_sided_tool_results_are_dropped_from_both(self):
+        br = _script("build_requests")
+        a, b, blind = br._shown_pair("answer A", "answer B", "TOOLS", None, "M")
+        assert (a, b, blind) == ("answer A", "answer B", True)
+
+    def test_both_sides_get_their_tool_results(self):
+        br = _script("build_requests")
+        a, b, blind = br._shown_pair("A", "B", "TA", "TB", "P")
+        assert (a, b, blind) == ("A\n\nTA", "B\n\nTB", False)
+
+    def test_non_tool_units_are_never_tool_blind(self):
+        br = _script("build_requests")
+        assert br._shown_pair("A", "B", None, None, "C") == ("A", "B", False)
+
+
+def test_stale_check_reads_the_corpus_the_build_recorded(tmp_path, monkeypatch):
+    """--dir pointing at another corpus's work dir must not be checked against --corpus."""
+    import argparse
+
+    an = _script("analyze")
+    (tmp_path / "requests_meta.json").write_text(
+        json.dumps({"build_id": "b1", "provenance": {"corpus": "cheeseman13", "problems": []}})
+    )
+    (tmp_path / PV.INDEX_NAME).write_text(
+        json.dumps(
+            {
+                "id": "r1",
+                "slug": "s",
+                "unit": "C",
+                "arm_a": "x",
+                "arm_b": "y",
+                "sha_a": "1",
+                "sha_b": "2",
+            }
+        )
+        + "\n"
+    )
+    seen = {}
+    monkeypatch.setattr(
+        an, "_stale_on_disk", lambda index, name: seen.setdefault("name", name) and {}
+    )
+    rows = [{"id": "r1", "build_id": "b1", "sha_a": "1", "sha_b": "2"}]
+    an._provenance(
+        tmp_path, rows, argparse.Namespace(corpus="cheeseman50", allow_provenance_mismatch=False)
+    )
+    assert seen["name"] == "cheeseman13"
+
+
+class TestAnalyzeReport:
+    """The printed report runs after analysis.json is written; a None must not end it."""
+
+    def test_missing_rates_print_as_na(self, capsys):
+        from types import SimpleNamespace
+
+        an = _script("analyze")
+        delta = {"point": 0.1, "lo": 0.0, "hi": 0.2}
+        an._print(
+            checks={},
+            per_unit_fit={},
+            pooled_fit=SimpleNamespace(strengths={}),
+            position={"C": {"slot_a_win_rate": None, "delta": delta}},
+            per_unit_bt={},
+            per_unit_len={},
+            length={"C": {"n": 4, "beta": delta, "longer_wins_rate": None, "by_quartile": []}},
+        )
+        out = capsys.readouterr().out
+        assert "slot A wins    n/a" in out
+        assert "longer wins    n/a (top quartile n/a)" in out
+
+    def test_resolution_floor_is_the_rounded_interval_plus_half_width(self):
+        an = _script("analyze")
+        rep = W.Interval(point=0.123456, lo=-0.2, hi=0.44444)
+        out = an._resolution_floor({"C": {REPLICATE: rep}, "D": {}}, {REPLICATE: rep})
+        expected = {
+            "point": 0.1235,
+            "lo": -0.2,
+            "hi": 0.4444,
+            "half_width": round(rep.half_width, 4),
+        }
+        assert out == {"C": expected, "pooled": expected}

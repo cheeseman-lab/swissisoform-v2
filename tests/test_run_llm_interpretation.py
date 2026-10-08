@@ -1888,6 +1888,143 @@ def test_reused_output_keeps_its_old_run_id_and_the_capture_says_so(
     assert "left over from earlier runs" in captured.err
 
 
+def _verdict_says(text: str):
+    return lambda *a, **kw: json.dumps({"verdict": "neutral", "reasoning": text})
+
+
+def test_only_category_reruns_one_category_and_keeps_the_rest_s_provenance(
+    mod, monkeypatch, tmp_path, category_records, variants_long, only_m, capture_dir, capsys
+):
+    """A partial rerun must not stamp the carried-forward categories as its own."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    monkeypatch.setattr(mod, "call_llm", _verdict_says("first"))
+    monkeypatch.setattr(
+        mod, "_try_import_anthropic", lambda: _fake_anthropic(_emit_verdict_script(), [])
+    )
+    out_dir = tmp_path / "out"
+    argv = _live_capture_args(category_records, out_dir, variants_long, capture_dir)
+    assert mod.main(argv) == 0
+    iso_dir = out_dir / mod._tis_slug(TIS_ID)
+    first = json.loads((iso_dir / "categories.meta.json").read_text())
+
+    # No --force: naming a category is the request to regenerate it.
+    monkeypatch.setattr(mod, "call_llm", _verdict_says("second"))
+    capsys.readouterr()
+    assert mod.main([*argv, "--only-category", "C"]) == 0
+    captured = capsys.readouterr()
+
+    c_name = mod._selected_categories(["C"])[0]["name"]
+    d_name = mod._selected_categories(["D"])[0]["name"]
+    results = json.loads((iso_dir / "categories.json").read_text())
+    assert results[c_name]["reasoning"] == "second"
+    assert results[d_name]["reasoning"] == "first"
+    assert len(results) == 6
+
+    stamp = json.loads((iso_dir / "categories.meta.json").read_text())
+    assert stamp["run_id"] != first["run_id"]
+    assert stamp["regenerated"] == [c_name]
+    assert stamp["category_runs"][c_name]["run_id"] == stamp["run_id"]
+    assert stamp["category_runs"][d_name]["run_id"] == first["run_id"]
+    assert "carrying categories from an earlier run" in captured.err
+
+    # The index is merged, not truncated to the one prompt this run wrote.
+    index = json.loads((capture_dir / "index_category.json").read_text())
+    assert len(index) == 6
+    by_rel = {e["rel"]: e["run_id"] for e in index}
+    c_rel = f"category/{mod._tis_slug(TIS_ID)}/C.txt"
+    assert by_rel[c_rel] == stamp["run_id"]
+    assert {r for rel, r in by_rel.items() if rel != c_rel} == {first["run_id"]}
+
+
+def test_every_output_is_stamped_with_code_source_and_arm_provenance(
+    mod, monkeypatch, tmp_path, category_records, variants_long, only_m, capture_dir
+):
+    """Same commit, same corpus and same arm must be checkable from the files."""
+    import hashlib
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    monkeypatch.setattr(mod, "call_llm", _verdict_says("x"))
+    monkeypatch.setattr(
+        mod, "_try_import_anthropic", lambda: _fake_anthropic(_emit_verdict_script(), [])
+    )
+    parquet = category_records.parent / "all_paired.parquet"
+    parquet.write_bytes(b"not really a parquet")
+    out_dir = tmp_path / "out"
+    argv = _live_capture_args(category_records, out_dir, variants_long, capture_dir)
+    assert mod.main(argv, run_meta={"arm": "tags_hint", "grounding": "tags"}) == 0
+
+    stamp = json.loads((out_dir / mod._tis_slug(TIS_ID) / "categories.meta.json").read_text())
+    assert len(stamp["code"]["commit"]) == 40 and isinstance(stamp["code"]["dirty"], bool)
+    expected = hashlib.sha256(b"not really a parquet").hexdigest()
+    assert stamp["source"]["source_parquet_sha256"] == expected
+    assert stamp["run_meta"] == {"arm": "tags_hint", "grounding": "tags"}
+    assert all(r["code"] == stamp["code"] for r in stamp["category_runs"].values())
+    usage = json.loads((out_dir / "_usage_category.json").read_text())
+    assert usage["code"] == stamp["code"] and usage["run_meta"]["arm"] == "tags_hint"
+    fields, _, _ = _split_capture(
+        (capture_dir / "category" / mod._tis_slug(TIS_ID) / "C.txt").read_text(encoding="utf-8")
+    )
+    assert fields["code_commit"].startswith(stamp["code"]["commit"])
+
+
+def test_single_shot_overlong_reasoning_is_re_asked_once(
+    mod, monkeypatch, tmp_path, category_records, capsys
+):
+    """maxLength is ignored by the decoder, so it is enforced after the fact."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    sent: list = []
+
+    def fake(prompt, **kw):
+        sent.append(prompt.user)
+        mod._record_usage(None)
+        retry = "Your previous response was rejected" in prompt.user
+        text = "short and sharp" if retry else "x" * 1600
+        return json.dumps({"verdict": "neutral", "reasoning": text})
+
+    monkeypatch.setattr(mod, "call_llm", fake)
+    out_dir = tmp_path / "out"
+    assert mod.main(_category_run_args(category_records, out_dir, ["--no-tools"])) == 0
+    results = json.loads((out_dir / mod._tis_slug(TIS_ID) / "categories.json").read_text())
+    assert {v["reasoning"] for v in results.values()} == {"short and sharp"}
+    assert len(sent) == 12  # six categories, each asked twice
+    assert "maxLength" in sent[1] or "too long" in sent[1] or "1500" in sent[1]
+    usage = json.loads((out_dir / "_usage_category.json").read_text())
+    assert usage["total"]["calls"] == 12
+
+
+def test_single_shot_still_overlong_after_retry_is_an_error_not_a_verdict(
+    mod, monkeypatch, tmp_path, category_records
+):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    monkeypatch.setattr(mod, "call_llm", _verdict_says("x" * 1600))
+    out_dir = tmp_path / "out"
+    assert mod.main(_category_run_args(category_records, out_dir, ["--no-tools"])) == 1
+    iso_dir = out_dir / mod._tis_slug(TIS_ID)
+    assert not (iso_dir / "categories.json").exists()
+    partial = json.loads((iso_dir / "categories.partial.json").read_text())
+    assert all("after one retry" in v["error"] for v in partial.values())
+
+
+def test_only_category_skips_an_isoform_with_nothing_to_merge_into(
+    mod, monkeypatch, tmp_path, category_records, variants_long, only_m, capsys
+):
+    """A one-category categories.json would pass the existence check forever."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key-for-test")
+    monkeypatch.setattr(mod, "call_llm", _verdict_says("x"))
+    out_dir = tmp_path / "out"
+    argv = _category_run_args(
+        category_records, out_dir, ["--variants-long", str(variants_long), "--only-category", "C"]
+    )
+    assert mod.main(argv) == 0
+    assert not (out_dir / mod._tis_slug(TIS_ID) / "categories.json").exists()
+    assert "needs an existing categories.json" in capsys.readouterr().err
+
+
+def test_only_category_rejects_an_unknown_letter(mod, tmp_path, category_records):
+    with pytest.raises(SystemExit):
+        mod.main(_category_run_args(category_records, tmp_path / "out", ["--only-category", "Q"]))
+
+
 def test_dry_run_capture_says_it_describes_no_output(
     mod, monkeypatch, tmp_path, category_records, variants_long, only_m, capture_dir, capsys
 ):

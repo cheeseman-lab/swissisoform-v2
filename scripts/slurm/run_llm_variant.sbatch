@@ -71,8 +71,16 @@ printf '[%s] arm=%s done in %ds (%dm%02ds)\n' \
 # The usage report is where the real cost lands — print it so the log carries it.
 # Which _usage_*.json exist depends on --pass (category writes two, synthesis one),
 # so glob rather than naming them.
+# Under the corpus the run actually used: --corpus is forwardable.
+CORPUS=cheeseman50
+prev=""
+for a in "$@"; do
+    [[ "$prev" == "--corpus" ]] && CORPUS="$a"
+    [[ "$a" == --corpus=* ]] && CORPUS="${a#--corpus=}"
+    prev="$a"
+done
 shopt -s nullglob
-for usage in "data/output/cheeseman50_${ARM}/llm"/_usage_*.json; do
+for usage in "data/output/${CORPUS}_${ARM}/llm"/_usage_*.json; do
     python - "$usage" <<'USAGE'
 import json, os, sys
 d = json.load(open(sys.argv[1]))["total"]

@@ -18,6 +18,7 @@ import pytest
 from swissisoform import distributions as dist_mod
 from swissisoform.site import evidence as ev
 from swissisoform.site import grounding as gr
+from swissisoform.site import llm
 from swissisoform.tags import registry as reg_mod
 
 CATEGORY_C = {"letter": "C", "name": "Conservation", "members": []}
@@ -202,6 +203,50 @@ class TestRaw:
         )
         assert "isoform_hits" not in body["evidence"]
         assert body["hits_note"]["n_rows"]["isoform_hits"] == 99
+
+    def test_identical_hit_lists_are_sent_once(self):
+        """On an extension the diff-region hit list is the isoform list, row for row."""
+        cat = _catalog(
+            [
+                {"feature": "isoform_massspec_hits", "category": "D", "dtype": "list"},
+                {
+                    "feature": "cmp_massspec_hits_in_diff_region",
+                    "category": "D",
+                    "pane": "cmp",
+                    "dtype": "list",
+                },
+            ]
+        )
+        hits = [
+            {"peptide": "MAGTMGK", "validated": True},
+            {"peptide": "DATAATR", "validated": False},
+        ]
+        raw = {"isoform_massspec_hits": hits, "cmp_massspec_hits_in_diff_region": list(hits)}
+        ev_d = self._build(cat)(_record(raw), {"letter": "D", "name": "Detection"})["evidence"]
+        assert ev_d["isoform_massspec_hits"] == hits
+        assert ev_d["cmp_massspec_hits_in_diff_region"] == {
+            "same_rows_as": "isoform_massspec_hits",
+            "n_rows": 2,
+        }
+
+    def test_different_hit_lists_are_both_sent(self):
+        cat = _catalog(
+            [
+                {"feature": "isoform_massspec_hits", "category": "D", "dtype": "list"},
+                {
+                    "feature": "cmp_massspec_hits_in_diff_region",
+                    "category": "D",
+                    "pane": "cmp",
+                    "dtype": "list",
+                },
+            ]
+        )
+        raw = {
+            "isoform_massspec_hits": [{"p": 1}, {"p": 2}],
+            "cmp_massspec_hits_in_diff_region": [],
+        }
+        ev_d = self._build(cat)(_record(raw), {"letter": "D", "name": "Detection"})["evidence"]
+        assert ev_d["cmp_massspec_hits_in_diff_region"] == []
 
     def test_missing_column_is_skipped_not_nulled(self):
         cat = _catalog([{"feature": "isoform_absent"}])
@@ -453,6 +498,112 @@ class TestDist:
         )
         assert body["fields"] == {}
 
+    def test_categorical_calls_ride_alongside_the_percentiles(self):
+        """The DeepLoc call and its changed flag are the L finding, not context."""
+        cat = _catalog(
+            [
+                {
+                    "feature": "isoform_localization_deeploc_prediction",
+                    "category": "L",
+                    "dtype": "str",
+                    "exclude_reason": "categorical",
+                },
+                {
+                    "feature": "cmp_localization_deeploc_prediction_changed",
+                    "category": "L",
+                    "pane": "cmp",
+                    "dtype": "bool",
+                    "exclude_reason": "binary",
+                },
+                {
+                    "feature": "isoform_conservation_summary.phylop_status",
+                    "category": "L",
+                    "dtype": "str",
+                    "exclude_reason": "status_string",
+                },
+                {
+                    "feature": "isoform_structure_isoform_hash",
+                    "category": "L",
+                    "dtype": "str",
+                    "exclude_reason": "identifier",
+                },
+                {
+                    "feature": "isoform_conservation_summary.phylop_bigwig",
+                    "category": "L",
+                    "dtype": "str",
+                    "exclude_reason": "status_string",
+                },
+                {
+                    "feature": "cmp_biophysics_gravy_enriched",
+                    "category": "L",
+                    "pane": "cmp",
+                    "dtype": "bool",
+                    "exclude_reason": "binary",
+                },
+            ]
+        )
+        calls = gr.categorical_category_columns(cat)["L"]
+        assert calls == [
+            "isoform_localization_deeploc_prediction",
+            "cmp_localization_deeploc_prediction_changed",
+            "isoform_conservation_summary.phylop_status",
+        ]
+        dist = _dist([{"metric": "isoform_a", "stratum": "extended", "n": 200}])
+        raw = {
+            "isoform_a": 1.0,
+            "isoform_localization_deeploc_prediction": "Nucleus",
+            "cmp_localization_deeploc_prediction_changed": False,
+            "isoform_conservation_summary": {"phylop_status": "ok"},
+        }
+        body = gr._dist_body({"L": ["isoform_a"]}, dist, {"L": calls})(
+            _record(raw), {"letter": "L", "name": "Localization"}
+        )
+        assert body["calls"] == {
+            "isoform_localization_deeploc_prediction": "Nucleus",
+            "cmp_localization_deeploc_prediction_changed": False,
+            "isoform_conservation_summary.phylop_status": "ok",
+        }
+        assert "pctile" in body["fields"]["isoform_a"]
+
+    def test_feature_index_is_a_call_not_a_ranked_metric(self):
+        cat = _catalog(
+            [
+                {
+                    "feature": "isoform_sae_top_gained_feature_index",
+                    "category": "S",
+                    "dtype": "int",
+                },
+                {"feature": "isoform_sae_n_features", "category": "S", "dtype": "int"},
+            ]
+        )
+        dist = _dist(
+            [
+                {"metric": m, "stratum": dist_mod.STRATUM_ALL, "n": 200}
+                for m in ("isoform_sae_top_gained_feature_index", "isoform_sae_n_features")
+            ]
+        )
+        assert gr.numeric_category_columns(cat, dist)["S"] == ["isoform_sae_n_features"]
+        assert gr.categorical_category_columns(cat)["S"] == ["isoform_sae_top_gained_feature_index"]
+
+    def test_p_values_are_flagged_lower_is_stronger(self):
+        metrics = [
+            "isoform_massspec_summary.min_pvalue",
+            "tis_pvalue",
+            "fisher_qvalue",
+            "isoform_a",
+        ]
+        dist = _dist([{"metric": m, "stratum": "extended", "n": 200} for m in metrics])
+        raw = {
+            "isoform_massspec_summary": {"min_pvalue": 0.001},
+            "tis_pvalue": 0.2,
+            "fisher_qvalue": 0.05,
+            "isoform_a": 3.0,
+        }
+        fields = gr._dist_body({"D": metrics}, dist)(_record(raw), CATEGORY_C | {"letter": "D"})[
+            "fields"
+        ]
+        assert {m for m, f in fields.items() if f.get("lower_is_stronger")} == set(metrics[:3])
+
     def test_reference_population_is_declared(self):
         """A percentile against full_catalog is not a percentile against this corpus."""
         dist = _dist([{"metric": "isoform_a", "stratum": "extended", "n": 200}])
@@ -535,6 +686,163 @@ class TestVerdictExtras:
         assert T.EMIT_VERDICT == ST.EMIT_VERDICT
 
 
+class TestCatalogNamesResolve:
+    """Dotted struct leaves and ``n_*`` counts must reach raw and dist.
+
+    The catalog names columns the way the flattened parquet reads, but ``_raw``
+    keeps structs nested — so a flat-key fixture passes while D's whole
+    mass-spec summary is silently dropped. These records are shaped like the
+    real cheeseman50 ones (CBX1 chr17:48076878, a validated truncation).
+    """
+
+    RAW = {
+        "isoform_massspec_summary": {
+            "total_peptides": 2,
+            "unique_peptides": 1,
+            "validated_peptides": 1.0,
+            "pepquery_run": True,
+            "best_hyperscore": 45.87,
+            "min_pvalue": 0.0002,
+            "total_psms": 1.0,
+        },
+        "isoform_massspec_hits": [
+            {"peptide": "MGFSDEDNTWEPEENLDCPDLIAEFLQSQK", "validated": True},
+            {"peptide": "MEKVLDR", "validated": False},
+        ],
+        "isoform_conservation_summary": {
+            "phylop_status": "ok",
+            "region_status": "ok",
+            "unique_region_nt": 126,
+            "shared_region_nt": 429,
+        },
+        "isoform_clinical_summary": {
+            "total_variants": 2054,
+            # A parquet map column serialises as key/value pairs.
+            "by_consequence": [["missense_variant", 173], ["stop_gained", 13]],
+        },
+    }
+    D_COLS = [
+        "isoform_massspec_summary.best_hyperscore",
+        "isoform_massspec_summary.min_pvalue",
+        "isoform_massspec_summary.validated_peptides",
+        "isoform_massspec_summary.total_peptides",
+        "isoform_massspec_summary.total_psms",
+        "n_isoform_massspec_hits",
+    ]
+    C_COLS = [
+        "isoform_conservation_summary.phylop_status",
+        "isoform_conservation_summary.region_status",
+        "isoform_conservation_summary.unique_region_nt",
+    ]
+
+    def test_lookup_walks_structs_maps_and_counts(self):
+        raw = self.RAW
+        assert gr._lookup(raw, "isoform_massspec_summary.best_hyperscore") == 45.87
+        assert gr._lookup(raw, "isoform_clinical_summary.by_consequence.stop_gained") == 13
+        assert gr._lookup(raw, "n_isoform_massspec_hits") == 2
+        assert gr._lookup(raw, "isoform_clinical_summary.by_consequence.intronic") is gr._MISSING
+        assert gr._lookup(raw, "n_isoform_absent_hits") is gr._MISSING
+
+    def test_raw_arm_carries_d3_and_c_status(self):
+        cat = _catalog(
+            [{"feature": c, "category": "D"} for c in self.D_COLS]
+            + [{"feature": c, "category": "C", "dtype": "str"} for c in self.C_COLS]
+        )
+        build = gr._raw_body(gr.category_columns(cat))
+        d = build(_record(self.RAW, "truncated"), {"letter": "D", "name": "Detection"})
+        assert d["evidence"]["isoform_massspec_summary.best_hyperscore"] == 45.87
+        assert d["evidence"]["isoform_massspec_summary.validated_peptides"] == 1.0
+        assert d["evidence"]["n_isoform_massspec_hits"] == 2
+        assert set(d["evidence"]) == set(self.D_COLS)
+        c = build(_record(self.RAW, "truncated"), CATEGORY_C)
+        assert c["evidence"]["isoform_conservation_summary.region_status"] == "ok"
+        assert c["evidence"]["isoform_conservation_summary.unique_region_nt"] == 126
+
+    def test_dist_arm_ranks_dotted_and_derived_metrics(self):
+        numeric = [c for c in self.D_COLS] + ["isoform_conservation_summary.unique_region_nt"]
+        dist = _dist([{"metric": m, "stratum": "truncated", "n": 200} for m in numeric])
+        build = gr._dist_body({"D": self.D_COLS}, dist)
+        body = build(_record(self.RAW, "truncated"), {"letter": "D", "name": "Detection"})
+        assert set(body["fields"]) == set(self.D_COLS)
+        assert body["fields"]["n_isoform_massspec_hits"]["value"] == 2
+
+
+class TestSupersededStrip:
+    """P's PAE block means must leave every arm's tool-loop opening, not only criteria's.
+
+    ``pae_block()`` recomputes all three, so carrying them hands the loop its own
+    answers; the strip used to return early on any payload without ``members``,
+    which is every arm but criteria.
+    """
+
+    PAE = llm.SUPERSEDED_BY_TOOLS["P"]
+    CATEGORY_P = {"letter": "P", "name": "Predicted Structure", "members": []}
+
+    def _raw(self) -> dict:
+        return {
+            **{c: 4.2 for c in self.PAE},
+            "isoform_structure_pae_status": "ok",
+            "isoform_structure_plddt_diffregion_mean": 0.8,
+            "isoform_tags_states": {"p1_structured_extension": True},
+            "isoform_tags_citations": {"p1_structured_extension": 0.8},
+        }
+
+    def _opening(self, builder) -> dict:
+        previous = ev.use_category_body(builder)
+        try:
+            sliced = ev.slice_category(_record(self._raw()), self.CATEGORY_P)
+        finally:
+            ev.use_category_body(previous)
+        return llm._strip_superseded_evidence(sliced, "P")
+
+    def _assert_stripped(self, opening: dict) -> None:
+        text = json.dumps(opening, default=str)
+        assert not [c for c in self.PAE if c in text]
+        # Availability metadata is kept on purpose: it saves a wasted call.
+        assert "isoform_structure_pae_status" in text
+
+    def test_criteria_members_shape(self):
+        evidence = {**{c: 1.0 for c in self.PAE}, "isoform_structure_pae_status": "ok"}
+        record = {"members": [{"evidence": evidence}]}
+        out = llm._strip_superseded_evidence(record, "P")
+        self._assert_stripped(out)
+        assert "_superseded_note" in out["members"][0]["evidence"]
+
+    def test_raw_arm(self):
+        cat = _catalog(
+            [{"feature": c, "category": "P"} for c in self.PAE]
+            + [{"feature": "isoform_structure_pae_status", "category": "P", "dtype": "str"}]
+        )
+        out = self._opening(gr._raw_body(gr.category_columns(cat)))
+        self._assert_stripped(out)
+        assert out["_superseded_note"]
+
+    def test_tags_arm(self):
+        reg = _registry(
+            _tag_row(
+                tag_id="p1_structured_extension",
+                category="P",
+                kind=reg_mod.KIND_DERIVED,
+                metric="isoform_structure_plddt_diffregion_mean",
+                criterion_id="P1_structured_extension",
+            )
+        )
+        out = self._opening(gr._tags_body(reg))
+        self._assert_stripped(out)
+        # The criterion's other supporting numbers survive the strip.
+        assert out["tags"][0]["metrics"]["isoform_structure_plddt_diffregion_mean"] == 0.8
+
+    def test_dist_arm(self):
+        dist = _dist([{"metric": c, "stratum": "extended", "n": 200} for c in self.PAE])
+        out = self._opening(gr._dist_body({"P": list(self.PAE)}, dist))
+        assert set(out["fields"]) == set()
+        assert out["_superseded_note"]
+
+    def test_other_letters_untouched(self):
+        record = {"evidence": {self.PAE[0]: 1.0}}
+        assert llm._strip_superseded_evidence(record, "C") is record
+
+
 class TestBuild:
     def test_criteria_installs_no_hook(self):
         """The status-quo arm must run the untouched path, not a reimplementation."""
@@ -543,6 +851,16 @@ class TestBuild:
     def test_unknown_grounding_rejected(self):
         with pytest.raises(gr.GroundingError, match="unknown grounding"):
             gr.build("percentiles")
+
+    def test_provenance_pins_the_catalog_a_raw_arm_reads(self, tmp_path):
+        import hashlib
+
+        csv = tmp_path / "catalog.csv"
+        csv.write_text("feature,category\nisoform_a,C\n")
+        prov = gr.provenance("raw", catalog_csv=csv)
+        assert prov["grounding"] == "raw"
+        assert prov["feature_catalog"]["sha256"] == hashlib.sha256(csv.read_bytes()).hexdigest()
+        assert gr.provenance("criteria") == {"grounding": "criteria"}
 
     def test_dump_is_json(self):
         assert json.loads(gr.dump({"a": 1})) == {"a": 1}

@@ -64,6 +64,15 @@ class Request:
     arm_a: str = ""
     arm_b: str = ""
     order: int = 0  # 0 = (a, b) as listed; 1 = swapped
+    # What exactly was judged: sha256 and character length of each response as
+    # shown, and the build this request belongs to (see judge/provenance.py).
+    sha_a: str = ""
+    sha_b: str = ""
+    len_a: int = 0
+    len_b: int = 0
+    build_id: str = ""
+    # An M/P call judged without the tool results its arms read.
+    tool_blind: bool = False
 
     @property
     def cell(self) -> tuple[str, str]:
@@ -88,6 +97,10 @@ class Result:
     # Populated only when the completion never wrote a verdict, by the forced pass
     # below. Empty is the normal case, so it costs a key per row and nothing more.
     forced_logprobs: list[dict[str, float]] = field(default_factory=list)
+    # Copied from the request, so a result names the text it judged.
+    build_id: str = ""
+    sha_a: str = ""
+    sha_b: str = ""
 
 
 def _flatten_logprobs(completion: object) -> list[dict[str, float]]:
@@ -170,25 +183,46 @@ def read_requests(path: Path) -> Iterator[Request]:
                 yield Request(**json.loads(line))
 
 
-def completed_ids(path: Path) -> set[str]:
+def completed_ids(path: Path, build_id: str | None = None) -> set[str]:
     """Ids already in a results file, so a killed run resumes.
 
     Tolerates a truncated final line: a job killed mid-write leaves one, and
     refusing to resume over it would mean redoing the whole run.
+
+    With *build_id*, only rows from that build count as done. Resuming by id
+    alone is how a rebuilt request file inherited the previous build's results
+    for every id it shared -- judgments of text it no longer contained.
     """
     if not path.exists():
         return set()
     done: set[str] = set()
+    for row in _result_rows(path):
+        if build_id is None or row.get("build_id") == build_id:
+            done.add(row["id"])
+    return done
+
+
+def foreign_results(path: Path, build_id: str) -> int:
+    """How many rows in a results file belong to some other build (or none)."""
+    if not path.exists():
+        return 0
+    return sum(1 for row in _result_rows(path) if row.get("build_id") != build_id)
+
+
+def _result_rows(path: Path) -> Iterator[dict]:
+    """Parsed results rows that carry an id, skipping a truncated final write."""
     with path.open(encoding="utf-8") as handle:
         for line in handle:
             line = line.strip()
             if not line:
                 continue
             try:
-                done.add(json.loads(line)["id"])
-            except (json.JSONDecodeError, KeyError):
+                row = json.loads(line)
+            except json.JSONDecodeError:
                 logger.warning("ignoring unparseable results line (truncated write?)")
-    return done
+                continue
+            if "id" in row:
+                yield row
 
 
 class Judge:
@@ -297,6 +331,9 @@ class Judge:
                     prompt_tokens=len(output.prompt_token_ids or []),
                     completion_tokens=len(first.token_ids) if first else 0,
                     token_logprobs=_flatten_logprobs(first),
+                    build_id=request.build_id,
+                    sha_a=request.sha_a,
+                    sha_b=request.sha_b,
                 )
             )
         self._force_missing_verdicts(requests, results)
