@@ -1,0 +1,67 @@
+{
+  "id": "01_C_truncated",
+  "why": "removed segment constrained; two clades corroborate, phyloP is an independent level",
+  "instruction": {
+    "category": "C",
+    "name": "Conservation",
+    "isoform": {
+      "canonical_length_aa": 264,
+      "diff_space": "canonical",
+      "differential_region_location": "Truncation: the differential region is the canonical N-terminal segment the isoform does not translate; coordinates are in canonical space. It spans 19 aa.",
+      "differential_sequence": "MRLSQAVRWCGEPLLSKTDQ",
+      "gene_name": "TAF1D",
+      "isoform_length_aa": 245,
+      "orf_type": "truncated",
+      "tis_id": "chrA:2640000:+:CTG:ENST00000264.1"
+    },
+    "criteria": [
+      {
+        "axis": "E",
+        "criterion_id": "C1_primate_conservation",
+        "label": "Primate conservation",
+        "value": true,
+        "reason": "mean_pident=0.977; frac_intact=0.96",
+        "evidence": {
+          "isoform_conservation_frame_primate_mean_pident": 0.977,
+          "isoform_conservation_frame_primate_canonical_mean_pident": 0.981,
+          "isoform_conservation_frame_primate_frac_intact": 0.96,
+          "isoform_conservation_frame_primate_n_species_aligned": 24
+        },
+        "headline": "Removed region 97.7% similar across primates",
+        "interpretation_hint": "Is the reading frame conserved across primates? Score on mean_pident. For a within-gene baseline compare to canonical_mean_pident ONLY."
+      },
+      {
+        "axis": "E",
+        "criterion_id": "C2_mammalian_conservation",
+        "label": "Mammalian conservation",
+        "value": true,
+        "reason": "mean_pident=0.934; frac_intact=0.88",
+        "evidence": {
+          "isoform_conservation_frame_mammalian_mean_pident": 0.934,
+          "isoform_conservation_frame_mammalian_canonical_mean_pident": 0.941,
+          "isoform_conservation_frame_mammalian_frac_intact": 0.88,
+          "isoform_conservation_frame_mammalian_n_species_aligned": 21
+        },
+        "headline": "Removed region 93.4% similar across mammals",
+        "interpretation_hint": "Same question at greater evolutionary depth. Lower absolute identity is expected with divergence time; compare to canonical_mean_pident."
+      },
+      {
+        "axis": "E",
+        "criterion_id": "C3_phylop_coding_selection",
+        "label": "PhyloP constraint",
+        "value": true,
+        "reason": "phylop_unique=3.4",
+        "evidence": {
+          "isoform_conservation_phylop_unique_region_mean": 3.4,
+          "isoform_conservation_phylop_shared_region_mean": 3.1,
+          "isoform_conservation_phylop_at_tis": 4.8,
+          "isoform_conservation_phastcons_unique_region_mean": 0.92
+        },
+        "headline": "Removed region PhyloP 3.4",
+        "interpretation_hint": "Absolute nucleotide-level constraint over the differential region. This is measured on DNA and is independent of the protein alignments above."
+      }
+    ]
+  },
+  "terse": "reasoning: The 19 aa this truncation removes are under purifying selection, and the three measures corroborate rather than repeat each other. Primate and mammalian identity land at 0.977 and 0.934, so the signal holds at two evolutionary depths and is not an artefact of one clade's sampling. phyloP adds an independent nucleotide-level line rather than restating the protein alignments, and at 3.4 over the removed region against 3.1 over the region the isoform keeps, the lost segment is not the less constrained part of the protein. Its loss is therefore more likely to be consequential than neutral.",
+  "verbose": "reasoning: The conservation evidence for this truncation spans several independent measurements, each of which is worth setting out in turn. Primate amino-acid identity over the removed region is 0.977, which is a high value. The canonical baseline for primates is 0.981. The fraction of primate species retaining an intact frame is 0.96, across 24 aligned species. Mammalian amino-acid identity over the same region is 0.934, which is also a high value. The canonical mammalian baseline is 0.941. The mammalian fraction intact is 0.88, across 21 aligned species. The phyloP mean over the removed region is 3.4. The phyloP mean over the shared region is 3.1. The phyloP value at the translation initiation site is 4.8. The phastCons mean over the removed region is 0.92. The removed segment is 19 amino acids long and sits at the N-terminus of the canonical protein, as the annotation states. Taking all of these measurements together, the removed segment appears to be under purifying selection, and its loss is therefore more likely to be consequential than neutral."
+}

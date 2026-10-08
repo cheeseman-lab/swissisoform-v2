@@ -1,0 +1,52 @@
+{
+  "id": "05_L_extended",
+  "why": "two independent tools make the same call; that is why the shift is readable",
+  "instruction": {
+    "category": "L",
+    "name": "Localization",
+    "isoform": {
+      "canonical_length_aa": 203,
+      "diff_space": "isoform",
+      "differential_region_location": "Extension: the differential region is the N-terminal segment the isoform adds ahead of the canonical start; it was 5'UTR or intron in the canonical annotation and was never coding. It spans 31 aa.",
+      "differential_sequence": "MRLLPALLLLWACSAGVLGQPARGASWLLPAR",
+      "gene_name": "ARL6IP1",
+      "isoform_length_aa": 234,
+      "orf_type": "extended",
+      "tis_id": "chrA:2030000:+:CTG:ENST00000203.1"
+    },
+    "criteria": [
+      {
+        "axis": "F",
+        "criterion_id": "L1_localization_change",
+        "label": "Localization change",
+        "value": true,
+        "reason": "deeploc prediction changed",
+        "evidence": {
+          "canonical_localization_deeploc_prediction": "Cytoplasm",
+          "isoform_localization_deeploc_prediction": "Extracellular",
+          "cmp_localization_deeploc_prob_extracellular_delta": 0.417,
+          "cmp_localization_deeploc_prob_cytoplasm_delta": -0.362
+        },
+        "headline": "iso: Extracellular | canon: Cytoplasm",
+        "interpretation_hint": "Does the predicted compartment change between canonical and isoform? Read the delta in class probability, not the label alone."
+      },
+      {
+        "axis": "F",
+        "criterion_id": "L2_targeting_change",
+        "label": "Targeting change",
+        "value": true,
+        "reason": "signalp prediction changed",
+        "evidence": {
+          "cmp_signalp_signalp_prediction_canonical": "OTHER",
+          "cmp_signalp_signalp_prediction_isoform": "SP",
+          "cmp_signalp_signalp_probability_delta": 0.883,
+          "cmp_signalp_signalp_cleavage_site_isoform": 24
+        },
+        "headline": "iso: SP | canon: OTHER",
+        "interpretation_hint": "Does a signal peptide or transit peptide appear or disappear? SignalP and TargetP are separate predictors from DeepLoc."
+      }
+    ]
+  },
+  "terse": "reasoning: The added 31 aa introduce a secretory signal, and the strength of the read is that two independent predictors agree. SignalP flips from OTHER to SP with a probability delta of 0.883 and places a cleavage site at residue 24 — inside the added segment, so the call is anchored to the new sequence rather than to the canonical body. DeepLoc moves the same direction on different features: extracellular +0.417, cytoplasm -0.362. Either tool alone would be a prediction; both converging on a mechanism the coordinates support makes a genuine relocalisation the more economical explanation.",
+  "verbose": "reasoning: The localization evidence for this extension comes from two separate predictors, which are set out in turn. The canonical DeepLoc prediction is Cytoplasm. The isoform DeepLoc prediction is Extracellular. The change in extracellular probability is 0.417, which is a large increase. The change in cytoplasm probability is -0.362, which is a large decrease. The canonical SignalP prediction is OTHER. The isoform SignalP prediction is SP. The SignalP probability delta is 0.883, which is a large value. The predicted cleavage site in the isoform is at residue 24. The added segment is 31 amino acids long and sits ahead of the canonical start, as the annotation states. Taking all of these measurements together, the extension appears to introduce a signal peptide and to change the predicted subcellular localization of the protein from cytoplasm to extracellular."
+}

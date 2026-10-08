@@ -4,367 +4,94 @@
 
 **SwissIsoform v2** — Modular pipeline for annotating alternative protein isoforms from translation initiation sequencing (TI-seq). Consolidates code from three repos (`swissisoform`, `tiap`, `coTISja`) into a unified 9-module architecture with rich domain objects and symmetric canonical/isoform annotation.
 
-## Status
+## What's Built
 
-**All modules ported + hardened against shortcuts after code review.** ~768 tests, all passing (gpu/network markers excluded by default). Pipeline orchestration, assembly layer (with Kozak FASTA extraction, required-column validation, cross-transcript fallback warnings) done.
+Current state only. When something changes, update this section in place rather than appending a dated entry.
 
-**Upstream now a faithful coTISja port** — see "Upstream port (2026-04-18)" below. Assembly still on the old upstream signature; migrating it is the next step.
-Next up: simplify assembly to consume the new upstream output; then wire expensive modules into E2E (massspec, clinical cache, conservation cache); then comparator, CLI.
-
-### Upstream port (2026-04-18)
-
-Rewrote `run_upstream` as `run_sample` — a faithful end-to-end port of `coTISja/src/scripts/filter_ribotish.py`, one sample (cell line) at a time:
+### Upstream: per-sample TIS filtering (`run_sample`)
 
 ```
 load predict_all.txt + GTF
   → recategorize TisType
   → merge per-gene HTSeq RNA-seq counts + total mapped reads
   → NormTISCounts = TISCounts / TotalRNASeqCounts × 1e6   (true RPM)
-  → filter_tis (smaffa thresholds, exempt_annotated=False)
+  → filter_tis (smaffa thresholds)
   → impute_missing_canonical_starts (GTF CDS + start_codon + pc_translations.fa)
   → drop uncanonical transcripts (cds_start_NF, retained_intron on coding genes)
   → (final_df, dropped_df) per sample
 ```
 
-**Multi-cell-line design decision:** upstream runs per cell line, independently. The pipeline writes one `{sample}_TIS_filtered.parquet` per sample. **No cross-sample merging at this layer.** Cross-cell-line comparison is a *downstream* concern (assembly → annotation → comparator → `merging.py`). This matches smaffa's design and decouples filtering from differential analysis.
+`scripts/run.py` is a thin front-end that builds a `RunSpec` and calls `runner.run()` (`runner.py`: `prepare` / `annotate` / `run`). Sample inputs come from `data/reference/ribotish_sample_manifest.csv` + `ribotish_replicate_manifest.csv` (6 cell lines → predict file + RNA-seq replicates) and `rnaseq_counts/*_htseqcount.txt`.
 
-**Audit (validated then retired 2026-05-26):** `tests/test_smaffa_audit.py` compared our HeLa output row-for-row against `data/reference/smaffa_filtered_audit/` (ours ⊆ smaffa; difference = the uncanonical drop). Final run: 8 passed. The test + the 38M reference were then removed — re-derivable from smaffa source (`/lab/barcheese01/smaffa/coTISja/`) if ever needed.
+### Foundation layers
 
-**Imputation behaviour on HeLa:**
-
-| | count |
-|---|---|
-| Filter output (native) | 33,783 rows — exact match to smaffa |
-| Imputed canonicals | +5,933 synthetic Annotated rows (e.g. EIF4G1 goes from 1 Annotated to 13) |
-| Uncanonical drop | −1,337 rows on 223 transcripts (cds_start_NF + non-coding-on-coding-gene) |
-| Final | ~38,400 rows, every Tid has a canonical |
-
-**Files copied into `data/reference/` (end-to-end self-contained):**
-
-| Item | Source | Purpose |
+| Layer | Files | What it does |
 |---|---|---|
-| `ribotish_sample_manifest.csv` + `ribotish_replicate_manifest.csv` | smaffa (rewritten with relative paths) | 6-cell-line sample → predict file + RNA-seq replicates |
-| `rnaseq_counts/*_htseqcount.txt` (12) | `/lab/barcheese01/aTIS_data/counts/` | TIS-condition HTSeq counts for RPM normalization |
-| `gencode.v49.pc_translations.fa` | smaffa | Imputation — AASeq/AALen per transcript |
-| `Gencode_v49_GRCh38.primary_assembly.genome.fa` | smaffa (replaced the chr3-only dev FASTA) | Imputation — start-codon trinucleotides |
-
-**Scripts:**
-- `scripts/run.py` — thin front-end that builds a `RunSpec` and calls `runner.run()` (`src/swissisoform/runner.py`: `prepare`/`annotate`/`run`). Drives the pipeline end-to-end and produces `data/output/filtered/{sample}_TIS_filtered.parquet` per cell line.
-
-**Explicit: Ribo-TISH itself is the long-term swappable piece.** This upstream port locks us in to coTISja's filter + imputation contract, not to Ribo-TISH. Any future TIS caller can produce the same filtered-DataFrame schema and feed the rest of the pipeline unchanged.
-
-### Correctness hardening (2026-04-17 code review round)
-
-Shortcuts removed and made honest:
-- **Pipeline context dispatch** — `AnnotationPipeline` now uses introspection to pass `gene_name` and `canonical_protein` to modules whose `annotate()` signature accepts them (clinical, massspec). Pure-function modules (biophysics, motifs) unchanged.
-- **HGVSP shortcut** — `VariantFetcher` no longer sets `protein_pos` from HGVSp (which is canonical-frame, wrong for alternative TIS). Fetchers always return `protein_pos=None`; `ConsequenceValidator` is authoritative. Canonical-frame hint preserved in `metadata.hgvsp_canonical_hint`.
-- **MassSpec unique_to_isoform** — returns `None` (unknown) when canonical protein not provided, not `False`.
-- **Clinical silent-empty** — emits WARN when `gene_name` is empty (almost always a wiring bug).
-- **Conservation status semantics** — distinguishes "not_run" (score=None) from "no_hits" (score=0). Adds `status` field to output.
-- **ClinVar ref/alt** — parsed from the HGVSc notation in the title instead of hardcoded `""`.
-- **Assembly cross-transcript diff_region** — logs WARN when falling back to whole-isoform; adds tail verification to prefix-match heuristic.
-- **Assembly required columns** — raises on missing columns instead of silently returning None values.
-- **Kozak context** — populated from genome FASTA (strand-aware 13-nt window, ATG at indices 9-11) when `genome_fasta` is provided to `assemble_genes`.
-- **GeneRefModule** — added `annotate_gene(gene)` so it can be wired into `AnnotationPipeline` as a gene_module.
-- **InitiationContext** — removed four always-None output columns; schema now matches computed output.
-- **E2E tests** — replaced "field exists" assertions with value assertions (pI in plausible range, Kozak ATG at correct indices, motif hits found for TP53, etc.).
-- **Per-transcript canonical for TIS** — `assemble_genes` now picks each TIS's `canonical_protein` from its own transcript's Annotated row (`_build_canonical_by_tid`). Ribo-TISH classifies ORF type relative to each transcript's CDS, so comparing against the gene-level longest was wrong. When a Tid has no Annotated row in the Ribo-TISH output, falls back to gene-level canonical with a one-shot INFO log per (gene, Tid). `Gene.canonical_protein` stays the gene-level longest (representative for gene-level annotations).
-- **Upstream pipeline wired into E2E** — new `run_upstream(ribotish_path, gtf_path, config, sample=None) -> (filtered_df, annotated_df)` in `pipeline.py`. Runs `load_ribotish_predictions(gtf_path=...)` → `recategorize_tis_type` → `normalize_tis_counts` → `filter_tis`. E2E now tests filtered input (~100 TIS over 5 genes, not 789).
-- **Exempt Annotated from filter significance** — `filter_tis(exempt_annotated=True)` (new default) keeps Annotated rows from reference transcripts regardless of re-detection p-values. Annotated comes from GTF coordinates, so significance-filtering it would strip canonical reference sequences. `FilterConfig.exempt_annotated` plumbs the flag.
-- **Canonical source decoupled from alt-TIS filtering** — `assemble_genes(annotated_df=...)` accepts a separate canonical-source DataFrame. `run_upstream`'s `annotated_df` carries ALL `TisType == "Annotated"` rows (regardless of filter outcome or transcript support), so downstream per-Tid canonical lookup survives even when filtering drops an Annotated row from the alt stream.
-- **E2E gene set swap** — `PPP1R15A` replaced with `MYC` in `TEST_GENES`. PPP1R15A has no TSL-1/2/3 transcripts in HeLa so the filter drops it entirely; MYC has CUG-initiated MYC1 extension biology and survives filter with Ann/Ext/Trunc representation.
-
-### What's Built — Foundation
-
-| Layer | Files | What It Does |
-|-------|-------|-------------|
-| Domain model | `models.py`, `config.py` | `TIS`, `Gene`, `DifferentialRegion`, `ORFType`, `PipelineConfig` |
-| Module protocols | `modules/base.py` | `ProteinModule`, `SiteModule` protocols with validation |
-| I/O | `io/ribotish.py`, `io/gtf.py`, `io/parquet.py` | Ribo-TISH TSV reader (with AASeq), GTF transcript + CDS loaders, Parquet round-trip |
-| Filtering | `filtering.py` | 5-step filtering (ported from coTISja) |
+| Filtering | `filtering.py` | 5-step TIS filter (ported from coTISja) |
 | Merging | `merging.py` | Cross-cell-line combine, canonical-vs-alternative pairing |
-| Assembly | `assembly.py` | DataFrame → Gene objects: canonical selection, ORF type mapping, DifferentialRegion via sequence comparison |
-| Pipeline | `pipeline.py` | `AnnotationPipeline` wiring — runs ProteinModules on canonical + isoform, SiteModules per TIS, GeneModules per gene |
-| Comparator | `compare/paired.py` | Shared canonical-vs-isoform delta logic (needs positional subset extension) |
-| Tag layer | `tags/registry.py`, `tags/evaluate.py`, `tags/derived.py`, `setup/tags.py`, `modules/tags.py` | Frozen tag vocabulary + cutoffs → tri-state `isoform_tags_*` columns, **additive beside** `isoform_scoring_*` |
+| Assembly | `assembly.py` | DataFrame → `Gene` objects: canonical selection, ORF-type mapping, `DifferentialRegion` via sequence comparison, Kozak context from the genome FASTA |
+| ORF coordinates | `models.py` (`TranscriptCoordinates`), `io/gtf.py` (`load_exon_skeletons`), `coords.py` | Layer 1: one exon skeleton (5'UTR + CDS + 3'UTR) per transcript. Layer 2: `orf_exons_from_skeleton` walks it from each ORF start for `aa_len × 3` nt, skipping introns, and populates `TIS.orf_exons`, `TIS.canonical_orf_exons` and `Gene.canonical_orf_exons`. `interval_difference` / `interval_intersection` / `interval_length` derive the unique and shared regions |
+| Tag layer | `tags/`, `setup/tags.py`, `modules/tags.py` | Frozen tag vocabulary + cutoffs → tri-state `isoform_tags_*` columns (see Design Decisions) |
 
-### What's Built — Modules
+### Annotation modules
 
-All 9 modules implemented. Data model supports symmetric canonical/isoform annotation with differential region coordinates.
+| Module | Location | Type | What it does |
+|---|---|---|---|
+| Biophysics | `modules/biophysics.py` | ProteinModule | Scalar properties (pI, GRAVY, …), inline |
+| Motifs | `modules/motifs.py` | ProteinModule | Positional regex hits |
+| Localization | `evidence/l1_localization/localization.py` | ProteinModule | DeepLoc lookup (precomputed) |
+| Clinical | `clinical/module.py` | ProteinModule | gnomAD / ClinVar / COSMIC variants from local DBs, codon-level consequence validation |
+| Mass spec | `evidence/d3_mass_spec/massspec.py` | ProteinModule | Tryptic digest + PepQuery search of isoform-unique peptides |
+| Conservation | `modules/conservation.py` | SiteModule | Zoonomia 241-mammal PhyloP + PhastCons BigWig lookups at the TIS codon (3 nt) and Kozak window (13 nt, strand-aware), plus unique/shared region means and enrichment |
+| Conservation frame | `conservation_frame/` | SiteModule | Primate (25) + mammalian (20) reading-frame integrity over the unique region: MAF parse, per-species start-codon / frameshift / premature-stop / identity, deepest intact species from the HAL species tree (`halStats --tree`). Statuses `not_run` / `no_skeleton` / `no_unique_region` / `no_alignment` / `ok` |
+| Variant intersection | `modules/variant_intersection.py` | SiteModule | Tags each clinical hit as isoform-unique or shared by genomic membership; emits aggregate + pathogenic-in-unique counts |
+| Variant effect | `modules/varianteffect.py` | SiteModule | Per-variant ESM-C masked-marginal ΔLLR (frame-aware) + AlphaMissense, aggregated over the unique region |
+| PLM VEP | `plm/module.py` | SiteModule | ESM-C per-residue constraint from cached `logP(wt)`, unique vs shared region enrichment |
+| SAE features | `plm/sae.py`, `plm/sae_module.py`, `plm/atlas.py` | SiteModule | Top-K SAE on the ESM-C residual stream (default 6B layer 60), features differentially active in unique vs shared region, with ESM-Atlas term labels (aligned only for 6B) |
+| Structure | `structure/module.py` | SiteModule | Cached fold lookups (ESMFold2 default; Boltz-2 / Chai-1 supported) for canonical + isoform: diff-region pLDDT, TM-score, shared-region RMSD, contacts |
+| Secondary structure | `structure/sse.py` | (in Structure) | P-SEA helix/strand elements with per-type length floors (`MIN_LENGTH = {helix: 5, strand: 3}`), each tagged `unique` / `shared` / `spans` |
+| Core identity, initiation context | `modules/core_identity.py`, `modules/initiation_context.py` | SiteModule | TIS metadata |
+| GeneRef | `modules/generef.py` | Gene-level | External reference context, not diffed |
+| Evidence scoring | `modules/scoring.py` + `evidence/<criterion>/` | — | `EvidenceScoringModule`: 16 criteria on two axes, existence (C+D) and functional (L+M+P+S). Each returns True / False / None |
 
-| Module | Protocol | Interface | Mode |
-|--------|----------|-----------|------|
-| `biophysics.py` | ProteinModule | `annotate(protein) -> dict` (scalar) | Inline (pure Python) |
-| `motifs.py` | ProteinModule | `annotate(protein) -> dict` (positional hits) | Inline (regex) |
-| `localization.py` | ProteinModule | `annotate_by_key(key) -> dict` (lookup) | Lookup (DeepLoc results) |
-| `clinical.py` | ProteinModule | `annotate(protein, gene_name) -> dict` (positional variants) | Inline fetch (gnomAD/ClinVar/COSMIC) + codon-level consequence validation, or cache |
-| `conservation.py` | SiteModule | `annotate_site(site) -> dict` (nucleotide-level scores) | Zoonomia 241-mammal PhyloP + PhastCons BigWig lookups (point-based: TIS codon + Kozak). Region means stubbed until protein→genomic CDS mapper lands. |
-| `massspec.py` | ProteinModule | `annotate(protein, canonical, gene_name) -> dict` (positional peptides) | Inline tryptic digest + optional PepQuery lookup |
-| `core_identity.py` | SiteModule | `annotate_site(site) -> dict` | TIS metadata |
-| `initiation_context.py` | SiteModule | `annotate_site(site) -> dict` | TIS metadata |
-| `generef.py` | Gene-level | `annotate_by_gene(gene_name) -> dict` (lookup) | External reference data |
+`modules/conservation_homology.py` (DIAMOND/blastp homology) is dormant: kept, not wired in.
 
-### Clinical Subpackage
+GPU precomputes run out-of-band and are read as static inputs: `run_plm_embed.sbatch` (ESM-C embed, then the SAE encode in the same job; skip the SAE with `--skip-modules sae`) and `run_fold.sbatch` (structures).
 
-| File | Purpose |
-|------|---------|
-| `clinical/fetch.py` | `VariantFetcher`: gnomAD (GraphQL POST), ClinVar (NCBI E-utilities), COSMIC (local parquet via PyArrow) |
-| `clinical/validate.py` | `ConsequenceValidator`: genomic→coding position map from GTF CDS, codon-level SNV/indel analysis, strand-aware |
+### Not built
 
-### Roadmap
+- **Full end-to-end on all 6 cell lines.**
+- **Cross-validation against published Ribo-seq** (`crossval.py`): dropped, because the available human datasets are cross-species, gene-list-only, or lack GRCh38 coordinates. The replacement is feeding published human Ribo-seq in as additional upstream *inputs*, which is its own unscoped workstream.
 
-| Step | What | Status |
-|------|------|--------|
-| 1. Wiring layer | `pipeline.py` — AnnotationPipeline | **Done** |
-| 2. Harder modules | clinical, conservation, massspec | **Done** |
-| 3. Assembly + real test | `assembly.py` + 5-gene E2E on HeLa Ribo-TISH data | **Done** |
-| 3b. **Expensive modules E2E** | massspec, clinical (+ ConsequenceValidator), conservation (batch), localization (DeepLoc precompute) wired; all 3 clinical DBs (gnomAD + ClinVar + COSMIC) built from source and queried locally | **Done (2026-04-19)** |
-| 4. Comparator extension | Positional subset to diff region + scalar deltas | **Done** |
-| 4b. Conservation rewrite | Zoonomia PhyloP/PhastCons BigWig SiteModule (point-based) | **Done (2026-04-21)** |
-| 4c. ORF exon infrastructure | `TranscriptCoordinates` skeleton + Layer-2 walker; conservation region means (unique/shared/enrichment) now live. Unblocks clinical genomic intersection, Scope-A positional subsetting for all genomic modules, Evo 2 DNA extraction. | **Done (2026-04-21)** |
-| 4d. Conservation Path 1/2 | Primate + mammalian reading-frame integrity module (MAF parse, frame analysis, `hal2maf` wrapper, species lists, Cactus species-tree depth). Pure logic fully tested; active on download of Zoonomia HAL. | **Done (2026-04-21)** |
-| 4e. Clinical genomic intersection | `VariantIntersectionModule` (SiteModule): tags each clinical hit with genomic membership in isoform-unique / shared ORF region, emits aggregate + pathogenic-in-unique counts. Uses `orf_exons` + `canonical_orf_exons`. | **Done (2026-04-21)** |
-| 4f. Evidence scoring framework | `EvidenceScoringModule`: dual-axis existence (C+D) + functional (L+M+P+S), 16 criteria under the CDLMPS ids. Each criterion returns True / False / None so unbuilt-module criteria (structure/functional/VEP/proteomics) gracefully report unavailability. Wires up to `conservation_frame`, `conservation`, `massspec`, `variant_intersection`, `comparison["localization"]` today. | **Done (2026-04-21)** |
-| 5. CLI | `scripts/run.py` thin front-end (RunSpec → `runner.run`) | **Done** |
-| 4i. P3 secondary structure | `structure/sse.py` — P-SEA assignment off the cached CIFs (`annotate_sse`), collapsed into helix/strand elements with per-type length floors (`MIN_LENGTH = {helix: 5, strand: 3}`) and a per-element `plddt_mean`. `StructureModule` emits ONE whole-protein scan, `structure_sse_all_elements`, each element tagged `region=unique/shared/spans` against the differential bounds. `evidence/p3_secondary_structure/` scores True when the `unique`/`spans` subset holds an element ≥ `p3_min_sse_length` (6) whose own pLDDT clears `p3_min_sse_plddt` (0.70) — both required, so a geometrically clean helix through a disordered stretch is not a finding. Symmetric across ORF types, opposite narrative: an extension GAINS the element, a truncation LOSES one (read off the canonical, per `diff_space`). | **Done (2026-08-04)** |
-| 7. VEP stub | AlphaMissense precompute+lookup returning None until data exists. (InterProScan shipped as **S1**; Chai-1 moot — the pipeline folds with ESMFold2.) | Pending |
-| 4g. PLM VEP (ESM-2 LLR) | `PLMVEPModule` (SiteModule) + `swissisoform.plm.embed` cache (`<hash>.npz`, on-disk). Masked-marginal LLR per residue, unique vs shared region enrichment using `diff_region` coords (canonical-space for truncations, isoform-space otherwise). Precompute via `scripts/slurm/run_plm_embed.sbatch` (ESM-2 650M, A6000). InterPLM SAE feature path stubbed (cache stashes layer-18 embeddings) — feature module is a follow-up. | **Done (2026-04-28)** |
-| 4h. ESM-C SAE features (Part 3 of ESM migration) | Top-K sparse-autoencoder interpretability on the ESM-C residual stream — default now 6B layer-60 (`biohub/ESMC-6B-sae-layer60-k64-codebook16384`); 600M layer-27 (`biohub/ESMC-600M-sae-k64-codebook16384`) also supported. `embed.py` caches `embedding_sae` at the SAE-target layer for the chosen size; `plm/sae.py` encodes it to sparse `(L,64)` features in `data/cache/sae_esmc/<SIZE>/`; `plm/sae_module.py` `SAEFeatureModule` (SiteModule) ranks features differentially active in the isoform-unique vs shared region (`diff_region`-based, like PLM VEP); `plm/atlas.py` caches the ESM-Atlas term dictionary (`data/reference/sae_atlas/`; it describes the 6B-layer60 SAE — the pipeline's default — so feature #N IS that dictionary's #N and the labels are **aligned/correct**. It is only a placeholder for non-6B sizes (e.g. 600M layer-27), whose indices are not Atlas-aligned; `atlas_provenance(model_size)` stamps that caveat automatically). | **Productionized (2026-06-23): the SAE encode now rides the embed GPU job — `run_plm_embed.sbatch` runs `python -m swissisoform.plm.sae` after the embed, so a fresh `run.sbatch` lands `sae_esmc/` automatically (skip with `--skip-modules sae` → `SWISSISO_SKIP_SAE=1`). `SAEFeatureModule` is wired into the annotate stage (`runner.py`), and `sae_module`/`export_sae_comparison.py` emit the 4 counts + top-30 `sae_feature_changes.parquet`; `all_paired.parquet` carries the `isoform_sae_*` columns. The redundant `_sae_step1.sbatch` harness, `_verify_sae_layer.py` and the `sae_top_terms.py` whole-protein diagnostic were retired. Scored as **S3** (`evidence/s3_sae/`) with its own website card.** |
-| 8. Full end-to-end | All modules on real data, all 6 cell lines | Pending |
+## Design Decisions & Gotchas
 
-### Canonical validation set — cheeseman13
+Rules the code alone won't teach. Build history lives in `git log`, not here.
 
-The canonical validation set is `cheeseman13`: 13 reviewer-picked isoforms
-defined in `presets/cheeseman13.toml`. Run end-to-end via
-`python scripts/run.py --preset cheeseman13` (also the default with no mode
-flag). Integration is gated by the snapshot regression harness
-`tests/regression/snapshot_paired.py` (`capture` writes a baseline fingerprint
-of `all_paired.parquet`; `compare` asserts a later run is unchanged), not a
-pytest E2E — `tests/test_endtoend.py` has been deleted, and pytest now covers
-fast unit tests only.
+**Upstream (TIS filtering)**
+- Upstream (`run_sample`) is a faithful port of coTISja's `filter_ribotish.py` and runs **per cell line, independently**: one `{sample}_TIS_filtered.parquet` each, and **no cross-sample merging at this layer**. Cross-cell-line comparison belongs downstream (assembly → annotation → comparator → `merging.py`).
+- Ribo-TISH is the swappable piece. The contract is coTISja's filter + imputation output schema, so any TIS caller that produces the same filtered-DataFrame schema feeds the rest of the pipeline unchanged.
 
-### Conservation rewrite (2026-04-21)
+**Coordinates and canonicals**
+- Genomic coordinates are **0-based half-open, plus-strand** throughout (`TranscriptCoordinates`, `coords.py`). mRNA-order concerns live in the walker (`orf_exons_from_skeleton`), not in the data.
+- Each TIS's `canonical_protein` comes from **its own transcript's** Annotated row (`_build_canonical_by_tid` in `assembly.py`), not the gene-level longest: Ribo-TISH classifies ORF type relative to each transcript's CDS. `Gene.canonical_protein` stays the gene-level longest.
+- Clinical fetchers always return `protein_pos=None`. HGVSp is canonical-frame, which is wrong for alternative TIS, so `ConsequenceValidator` is authoritative.
 
-Swapped the homology-based `ConservationModule` (DIAMOND/blastp/MMseqs2 against
-SwissProt) for a BigWig-lookup SiteModule backed by the Zoonomia 241-mammal
-Cactus alignment (Christmas et al. 2023).  Rationale in
-`docs/reviews/conservation_module_spec.md`.
+**Not evaluable ≠ absent**
+- A value that couldn't be computed is `None`, never `False` or `0`. Keep statuses like `not_run` distinct from `no_hits`. Turning "could not evaluate" into "evidence absent" is the failure the tag layer (issue #30) exists to remove.
 
-- New `modules/conservation.py` — SiteModule that opens PhyloP + PhastCons
-  BigWigs once per worker and reads scores at the TIS start codon (3 nt) and
-  Kozak window (13 nt: −9..+4 mRNA, strand-aware).  Distinguishes `not_run`
-  (no BigWig/config) from genuine missing values.
-- Old homology module preserved as `modules/conservation_homology.py`
-  (`ConservationHomologyModule`) — dormant, not wired into the pipeline, kept
-  so protein-similarity evidence can be reintroduced as a separate module.
-- `ConservationConfig` now carries `phylop_bigwig` + `phastcons_bigwig` as
-  first-class fields; `diamond_db` / `tblastn_db` kept as dormant.
-- CLI: `--diamond-db` replaced by `--phylop-bigwig` / `--phastcons-bigwig`.
-  Homology precompute path removed (BigWig random access is cheap).
-- `scripts/setup/download_zoonomia_bigwigs.sh` — idempotent fetch of the two
-  tracks (~13 GB total) from UCSC into `data/reference/zoonomia/`.
-- Path 1/2 from the spec (primate + mammalian MAF frame-intactness) —
-  scaffolded 2026-04-21 (see below); active once the HAL download lands.
+**Scoring naming (CDLMPS)**
+- Criteria are named C/D/L/M/P/S all the way through `ScoringConfig` fields (`c1_pident_min`, `p1_plddt_threshold`, …). **The E/F axis is not criterion numbering and stays**: `"axis": "E"/"F"`, `EXISTENCE_CRITERIA` (C+D) / `FUNCTIONAL_CRITERIA` (L+M+P+S), and the `isoform_scoring_{existence,functional}_*` columns are the two-score framing the site renders.
 
-### Conservation Path 1/2 (2026-04-21)
+**Tag layer** (additive, beside `EvidenceScoringModule`, which it never touches)
+- Output: `isoform_tags_states` (struct of bool; **null = not-evaluable**), `isoform_tags_citations`, `isoform_tags_registry_version`, `isoform_tags_registry_sha256` (content hash of the tag definitions; `merge.py` refuses a campaign mixing two builds of one version).
+- The registry is **provisioned reference data** in `data/reference/tags/<version>/`, built by `python scripts/setup/build_tag_registry.py --version <v> --cutoffs config`. `v3` is the default and **provisional**: it and distributions v3 were frozen from the Aug-12 `full_catalog`, which predates the M1 sign flip and gate (2a48f89), so re-freeze both as v4 after the next genome-wide run. `distributions.DEFAULT_VERSION` is the one default every reader and builder takes. `v1` is a historical artifact: rebuilding `--version v1` against today's table would emit reviewed contents under the v1 name.
+- All sixteen criteria are `derived` tags that call the criterion's own scorer, so they equal the criterion **by construction**. Derived tags fire at the scorer's `ScoringConfig`; a registry `cutoff_overrides` entry is logged, not applied, so a tag and its criterion can never disagree (v3's swept S3 cutoff had given 7 of 50 cheeseman50 rows two S3 answers). Threshold forms dropped gates on 5 of 13 criteria.
+- `--cutoffs config` reproduces today's scoring exactly, so build it first: a calibration finding must never be confusable with a wiring bug. Under `--cutoffs distribution`, D1/D3 land between integers and need cutoffs chosen on the integers.
+- Firing-time guards apply to v3 without a rebuild: a `*_ratio` with a `*_shared` sibling is NA where shared ≤ 0 (a negative denominator inverts it); unique-region constraint metrics are valid only off `NO_CANONICAL_BASELINE_ORFS`, M1's own gate, and `Tag.label_for(orf_type)` reads "gained" as "lost" on truncations; a `*_changed` bool with one side present is a change, not-evaluable only when the predictor did not run. Registries may carry a per-ORF-type `cutoff_by_stratum`; no build fills it yet.
+- Tags run **last, over the finished frame** (`runner.annotate` → `_attach_tags`). A **missing registry warns and emits nothing** rather than failing the run.
 
-Primate + mammalian reading-frame integrity per
-`docs/reviews/conservation_path12_spec.md`. Pure logic tested end-to-end;
-HAL-dependent path emits `status="not_run"` until the download lands.
-
-- `src/swissisoform/conservation_frame/` subpackage:
-  - `maf.py` — MAF parser (`parse_maf`, `concat_species_rows`).
-  - `frame.py` — per-species `analyze_species` (start-codon conservation,
-    frameshift detection, premature-stop scan, AA pident) plus
-    `aggregate_species_results`.
-  - `species.py` — curated `PRIMATE_SPECIES` (22) and `MAMMALIAN_SPECIES`
-    (23) lists in UCSC assembly names; refinable via `halStats --genomes`.
-  - `hal.py` — `hal2maf` subprocess wrapper with graceful `None` on
-    missing binary / HAL / non-zero exit.
-- `conservation_frame/module.py` — `ConservationFrameModule` (SiteModule)
-  consumes `TIS.orf_exons` and `TIS.canonical_orf_exons`, queries the
-  unique region via `hal2maf`, reports primate/mammalian aggregates.
-  Distinguishes `not_run` / `no_skeleton` / `no_unique_region` /
-  `no_alignment` / `ok`.
-- `ConservationConfig` gains `hal_path`, `hal_ref_genome`,
-  `hal2maf_binary`, `primate_species`, `mammalian_species`.
-- `scripts/setup/download_zoonomia_hal.sh` — resumable curl with provenance
-  sidecar; 200-600 GB, run on demand.
-- Phylogenetic depth: `conservation_frame/tree.py` parses the HAL's own
-  species tree (via `halStats --tree`, with `hal_tree_newick` config
-  override for tests / offline runs) into a depth map. The module emits
-  `primate_deepest_species` / `primate_max_depth` and mammalian twins —
-  the deepest-MRCA species whose frame is still intact. Named clade
-  labels are deliberately not emitted; depth + species is enough and
-  doesn't drift with Zoonomia releases.
-- Tests: `test_conservation_frame.py` (MAF parse, frame analysis: identity,
-  substitution, premature stop, start-codon loss, frameshift vs. in-frame
-  deletion, all-gap target), `test_conservation_frame_module.py`
-  (not_run paths, no_skeleton / no_unique_region, revcomp MAF helper,
-  deepest-intact selection with a synthetic tree), and
-  `test_conservation_tree.py` (Newick parser, MRCA depth).
-
-### ORF exon infrastructure (2026-04-21)
-
-Landed the protein→genomic mapper that Conservation's region metrics
-(and a growing queue of other modules) were blocked on. Two layers:
-
-**Layer 1 — transcript skeleton, shared per transcript_id:**
-`TranscriptCoordinates` dataclass (`models.py`): full exon structure
-(5'UTR + CDS + 3'UTR), `cds_start`, `cds_end`, chrom, strand. Built once
-at GTF loading time by `load_exon_skeletons` (`io/gtf.py`), held on
-`UpstreamReference.exon_skeletons`. Coordinates are 0-based half-open
-plus-strand throughout; mRNA-order concerns live in the walker, not the
-data.
-
-**Layer 2 — per-ORF genomic intervals:**
-`orf_exons_from_skeleton(coords, orf_start_genomic, aa_len)`
-(`coords.py`): walks the skeleton from each ORF's genomic start forward
-through `aa_len * 3` nucleotides, skipping introns. Strand-aware.
-`assemble_genes(..., exon_skeletons=...)` populates:
-
-- `Gene.canonical_orf_exons` (gene-level longest Annotated)
-- `TIS.orf_exons` (per-TIS isoform ORF)
-- `TIS.canonical_orf_exons` (per-Tid canonical, matching `TIS.canonical_protein`)
-
-Also shipped `interval_difference` / `interval_intersection` /
-`interval_length` in `coords.py` — genomic set algebra used to derive
-unique vs. shared regions.
-
-**Conservation region metrics now live.** `modules/conservation.py`
-computes `phylop_unique_region_mean`, `phylop_shared_region_mean`,
-`phylop_enrichment`, and the phastcons twins by:
-1. `unique = site.orf_exons \ site.canonical_orf_exons`
-2. `shared = site.orf_exons ∩ site.canonical_orf_exons`
-3. Length-weighted mean over each interval set, enrichment = unique/shared.
-Stub status `region_map_not_implemented` retired — now returns
-`region_status="ok"` or `"no_skeleton"`.
-
-**What this unblocks (per handoff):**
-- Clinical isoform-level variant intersection (gnomAD/ClinVar coords vs `orf_exons`)
-- Motifs / clinical / massspec Scope-A positional subsetting (genomic path)
-- Evo 2 / AlphaGenome DNA sequence extraction
-- Conservation Path 1/2 MAF extraction over unique regions (pending HAL download)
-
-### Deferred (unclear value or needs redesign)
-
-| Module | Source | Complexity | Reason |
-|--------|--------|------------|--------|
-| `scoring.py` | TIAP | Medium | Needs full redesign around comparison outputs, not a port |
-| `crossval.py` | TIAP | Medium | Dropped 2026-04-19 after attempted port: the available human datasets (Ingolia, QTI, Fedorova, Kagan) are either cross-species, gene-list-only, or without GRCh38 coordinates — the tiered-matching framework can't exercise Tier 1/2 against them. The correct replacement is to treat published human Ribo-seq studies (Chen/Weissman, Chothani, etc.) as additional *inputs* to our upstream pipeline, giving coordinate-level confirmation by construction. That is its own workstream (raw read alignment + matched RNA-seq + Ribo-TISH re-run) and has not been scoped. |
-
-### CDLMPS naming (2026-08-04)
-
-The criterion rename (E1–E6 / F1–F7 → C/D/L/M/P/S) is complete through the
-**intermediate artifacts**, not just the criterion ids: `ScoringConfig` fields
-(`e1_pident_min` → `c1_pident_min`, `f1_plddt_threshold` → `p1_plddt_threshold`,
-`f5_*` → `m1_*`, `f6_*` → `m2_*`, `f7_*` → `p2_*`), every scorer docstring, and
-the comments that referenced old numbers. No CLI flag or preset TOML referenced
-any of them, so nothing user-facing moved and the parquet schema is unchanged.
-
-**The E/F axis is NOT criterion numbering and stays**: `"axis": "E"/"F"` on each
-criterion, `EXISTENCE_CRITERIA` (C+D) / `FUNCTIONAL_CRITERIA` (L+M+P+S), and the
-six `isoform_scoring_{existence,functional}_{score,evaluable,high_confidence}`
-columns. Existence-vs-functional is the two-score framing the site renders.
-
-### Tag layer (2026-09-03) — additive, beside the criteria
-
-Issue #30's per-category tags, wired into the pipeline **without touching
-`EvidenceScoringModule`**. Both axes now travel in the same parquet and each
-consumer picks; retiring either is a later, separate decision.
-
-| column | type | contents |
-|---|---|---|
-| `isoform_tags_states` | `struct<52 x bool>` | `True` / `False` / **null = not-evaluable** |
-| `isoform_tags_citations` | `struct<52 x double>` | the one number each tag rests on |
-| `isoform_tags_registry_version` | `string` | which frozen vocabulary fired |
-
-**The registry is provisioned reference data**, `data/reference/tags/<version>/`,
-built by `python scripts/setup/build_tag_registry.py --version v1 --cutoffs config`
-(mirrors `setup/distributions.py`: same `--version` / `--force` /
-refuse-to-clobber discipline and `_setup.json` provenance). It re-runs the sweep's
-own `propose → apply_filters → choose_cutoff` against distributions `v3` and keeps
-the rows `figures/tag_vocab/tag_candidates.csv` does not mark `remove` — nothing is
-recovered by parsing the CSV's `test` string.
-
-**`v3` is current and the default** — 46 tags, 42 code-fired, 16 derived. It is
-v2 plus `S2_biophysics` and `S3_sae`, readmitted after the judge study showed
-their absence was what the tags arm was being marked down for: of the 812
-Structural Characteristics pairs it lost under v2, 84.9% of the judge's own
-reasoning cites the whole-protein biophysical shift S2 carries and 81.5% the SAE
-shift S3 carries. Readmitting them moved S from **−1.05/−1.14 to +0.49/+0.82**.
-
-The two take their cutoffs from different places, deliberately. **S2 keeps its
-`ScoringConfig` numbers** — measured on `full_catalog` its three branches sit at
-p88–p89 and roll up to a 20.2% fire rate, mid-band and not measurably broken,
-where the sweep would have put all three at p60 on a bare percentile that *sets*
-the rate rather than discovering it. **S3 takes the swept cutoff**
-(`s3_top_delta_min` 10.0 → 11.37578), via `seeds.SWEPT_CUTOFF_CRITERIA`, which
-makes the cutoff source per-criterion instead of a global `--cutoffs` flag. Both
-are immune from Jaccard elimination, as ordinary criterion candidates.
-
-v3 also fixes a dead tag. `metrics.resolve` had no branch for the `<col>__len`
-metrics the profiler synthesizes, so v2's `cmp_motifs_hits_in_diff_region__len`
-resolved to None on every row of every run — 1 of 40 code-fired tags was dead,
-with one WARNING as the only symptom.
-`setup.tags._check_metrics_resolve` now refuses at build time to freeze a
-threshold tag whose metric no run can resolve.
-
-`v2` (same 44 tags, 39 live) is the faithful record of what the judged runs
-actually fired. `v1` (56/52/16) predates the review pass and is a *historical
-artifact*: it was built from an 89-row table, and rebuilding `--version v1`
-against today's 103-row table would emit the reviewed contents under the v1
-name. v2 dropped the eight tags that assert absence or ask an absolute question,
-plus S2/S3, whose thresholds were never calibrated — v3 brings those two back
-and `UNCALIBRATED_CRITERIA` is gone.
-
-**Four kinds, and only one of them is code.** Adding a tag is adding a row:
-
-| kind | n in v1 | what it is |
-|---|---|---|
-| `threshold` | 30 | `metric ⋈ cutoff` via `metrics.resolve` |
-| `derived` | 16 | runs the criterion's own `evidence/<crit>/score` fn |
-| `bool` | 6 | an existing boolean column, tri-stated |
-| `llm` | 4 | M/P tool-loop judgment; never fired by code |
-
-**Why all sixteen criteria are `derived`, not thresholds.** Measured on
-cheeseman50, the threshold form disagreed with the scorer on **5 of the 13**
-criteria the sweep can express, every time by dropping a gate: P1 reads a populated
-`plddt_diffregion_mean` on a protein whose fold status is `too_long` (scorer:
-not-evaluable, threshold: `False`); M1 is undefined for separate ORFs; M2/P2 gate
-on their own status fields; M1/S2 are either-or roll-ups over two and three inputs.
-Turning "could not evaluate" into "evidence absent" is the exact failure #30 exists
-to remove. A `derived` tag calls the scorer, so it equals the criterion **by
-construction** — and its cutoffs still come from the registry, as
-`cutoff_overrides` (`{ScoringConfig field: value}`) folded into the config the
-scorer is handed. Only the numbers move; the gates stay. Multi-threshold criteria
-override only their headline cutoff — P2's `p2_min_shared_len` / `p2_plddt_min` and
-P3's `p3_min_sse_plddt` are gates, not cutoffs, and stay at their config values.
-
-`--cutoffs config` reproduces today's scoring exactly (verified:
-`effective_scoring(v1, ScoringConfig()) == ScoringConfig()`, and
-`scripts/tags/check_tag_parity.py` shows every derived tag agreeing row-for-row
-— 16/16 under v1, 14/14 under v2, which carries no S2/S3 tag);
-`--cutoffs distribution` cuts where the frozen distribution put each criterion.
-Build the config one first — a calibration finding must never be confusable with a
-wiring bug. **Two distribution cutoffs are not usable as-is**: swept percentiles on
-counting thresholds land between integers, putting `min_cell_lines` at 1.12 and
-`massspec_unique_peptides_min` at 0.07 (i.e. "at least zero peptides"). The builder
-warns; D1/D3 need their cutoffs chosen on the integers.
-
-*Side-effect worth knowing:* M1's `blocked` ESM-C branch disappears under this
-design. It was blocked because the frozen `full_catalog` distribution carries the
-stale `constraint_enrichment` column — but a derived M1 asks the scorer, which
-reads `constraint_delta` from the run in front of it. No cutoff is derived from the
-stale column, so nothing is blocked.
-
-**Runs last, over the finished frame** (`runner.annotate` → `_attach_tags`), because
-a threshold's cutoff was derived from a named parquet column and evaluating it
-against a rebuilt one is how the two silently disagree. Derived tags additionally
-need the TIS objects, aligned by row order. Skippable with `--skip-modules tags`
-(`ALL_POST_MODULES`); `--tag-registry <version>` selects the vocabulary. **A missing
-registry warns and emits nothing rather than failing the run** — the layer is
-additive, so a fresh clone that has not built one still produces every other column.
+**Validation**
+- The canonical validation set is `cheeseman13` (`presets/cheeseman13.toml`; `python scripts/run.py --preset cheeseman13`). Integration is gated by the snapshot harness `tests/regression/snapshot_paired.py` (`capture` / `compare` on `all_paired.parquet`), not by pytest, which covers fast unit tests only.
 
 ## Documentation
 
@@ -504,7 +231,7 @@ uv pip install -e ".[dev]"
 - **Domain objects** in `models.py`: `TranslationInitiationSite`, `Gene`, `DifferentialRegion`, `VariantAnnotation`
 - **Module protocols** in `modules/base.py`: `ProteinModule` (`annotate(protein) -> dict`) and `SiteModule` (`annotate_site(site) -> dict`)
 - **Wiring layer** in `pipeline.py`: `AnnotationPipeline` orchestrates ProteinModules on canonical (per-gene) + isoform (per-TIS), SiteModules per TIS, GeneModules per gene
-- **Paired comparison** in `compare/paired.py`: shared canonical-vs-isoform delta logic (needs positional subset extension)
+- **Comparison** in `compare/comparator.py`: `Comparator` computes scalar deltas, categorical changes, and the positional subset of hits in the differential region (`hits_in_diff_region`); `compare/paired.py` holds the static `PairedComparison` helpers
 - **Serialization** in `io/parquet.py`: round-trip TIS ↔ DataFrame ↔ Parquet
 
 ### Annotation → Comparison Design
@@ -606,7 +333,7 @@ All modules must:
 ## Tests
 
 ```bash
-# All tests (unit + real-genome integration)
+# Unit tests (gpu/network markers excluded by default; integration is the cheeseman13 snapshot harness)
 pytest
 
 # Single module

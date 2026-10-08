@@ -1,0 +1,435 @@
+"""Turn the arm corpus into a JSONL of judge requests.
+
+Per cell (one isoform, one output unit), every arm present:
+
+  C(9,2) = 36 pairs x 2 presentation orders = 72 calls
+
+Both orders is not optional. Prometheus 2 relative grading has documented position
+bias, so a pair is only a verdict when the judge picks the same arm whichever slot
+it sits in; the rest are dropped and the drop rate reported as judge reliability.
+
+Requests come out ordered by cell, so vLLM prefills each ~5-24k reference prefix
+once for all 72 calls that share it rather than 72 times.
+
+Usage:
+    python scripts/judge/build_requests.py --limit 2      # smoke test
+    python scripts/judge/build_requests.py                # all 350 cells
+"""
+
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import itertools
+import json
+import logging
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
+
+from swissisoform.judge import (  # noqa: E402
+    CATEGORY_LETTERS,
+    DEFAULT_CORPUS,
+    SYNTHESIS_UNIT,
+    TOOL_UNITS,
+)
+from swissisoform.judge import prompts as PR  # noqa: E402
+from swissisoform.judge import provenance as PV  # noqa: E402
+from swissisoform.judge import rubrics as RB  # noqa: E402
+from swissisoform.judge.corpus import Corpus, arm_dir, load_corpus  # noqa: E402
+from swissisoform.judge.reference import (  # noqa: E402
+    REFERENCE_BUDGET_TOKENS,
+    ReferenceBuilder,
+    fit_reference,
+    isoform_records,
+    render,
+    render_tool_results,
+)
+from swissisoform.judge.serve import (  # noqa: E402
+    MAX_MODEL_LEN,
+    MAX_NEW_TOKENS,
+    Request,
+    estimate_tokens,
+    write_requests,
+)
+from swissisoform.site import grounding  # noqa: E402
+from swissisoform.site.llm import load_records  # noqa: E402
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+logger = logging.getLogger("judge.build")
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """CLI options."""
+    p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    p.add_argument("--corpus", default=DEFAULT_CORPUS)
+    p.add_argument("--out", type=Path, default=None)
+    p.add_argument("--limit", type=int, default=None, help="First N isoforms")
+    p.add_argument(
+        "--units",
+        default=",".join((*CATEGORY_LETTERS, SYNTHESIS_UNIT)),
+        help="Comma-separated units to build",
+    )
+    p.add_argument(
+        "--budget",
+        type=int,
+        default=REFERENCE_BUDGET_TOKENS,
+        help="Token budget for the reference payload",
+    )
+    p.add_argument(
+        "--tool-results-chars",
+        type=int,
+        default=0,
+        help=(
+            "Show each M/P response with up to this many characters of the tool "
+            "results its own run retrieved. 0 (default) judges M/P tool-blind, and "
+            "every such request and the analysis say so"
+        ),
+    )
+    p.add_argument(
+        "--tag-version",
+        default=None,
+        help="Tag registry for the reference. Default: the one the tags arms ran with",
+    )
+    p.add_argument(
+        "--dist-version",
+        default=None,
+        help="Distribution version for the reference. Default: the one the dist arms ran with",
+    )
+    p.add_argument(
+        "--allow-provenance-mismatch",
+        action="store_true",
+        help=(
+            "Build even when arm provenance is missing or disagrees with the reference. "
+            "Every problem is recorded in requests_meta.json, and analyze.py will "
+            "refuse the results unless given the same flag."
+        ),
+    )
+    return p.parse_args(argv)
+
+
+def _registry_sha(version: str) -> str | None:
+    """Content hash of the tag registry the reference will be built from, if it loads."""
+    from swissisoform.tags.registry import TagRegistryError
+    from swissisoform.tags.registry import load as load_registry
+
+    try:
+        return load_registry(version).sha256
+    except TagRegistryError:
+        return None
+
+
+def _reference_provenance(corpus: Corpus, args: argparse.Namespace) -> dict:
+    """Read each arm's recorded runs and decide the reference's versions from them.
+
+    The reference has to carry the inputs the arms ran on. The v3 build used tag
+    registry v1 for every reference while the tags arms ran on v2/v3, so a cutoff
+    those arms were shown read as fabricated in 22-25% of their outputs. Refuses
+    (``SystemExit``) on any disagreement unless ``--allow-provenance-mismatch``.
+    """
+    sources = PV.source_fingerprint(ROOT / "data" / "output" / args.corpus)
+    arm_runs = {arm: PV.effective_runs(arm_dir(arm, args.corpus)) for arm in corpus.arms}
+    resolved, problems = PV.reconcile(
+        arm_runs,
+        sources,
+        tag_version=args.tag_version,
+        dist_version=args.dist_version,
+        registry_sha=_registry_sha,
+    )
+    if problems and not args.allow_provenance_mismatch:
+        listed = "\n  ".join(problems[:20])
+        raise SystemExit(
+            f"arm provenance does not support one shared reference ({len(problems)} "
+            f"problem(s)):\n  {listed}\nRe-run the affected arms with "
+            "scripts/site/run_llm_variants.py, or pass --allow-provenance-mismatch "
+            "(recorded, and analyze.py will ask for it too)."
+        )
+    for problem in problems:
+        logger.warning("provenance (allowed by override): %s", problem)
+    return {
+        **resolved,
+        "corpus": args.corpus,
+        "tag_version": resolved["tag_version"] or grounding.DEFAULT_TAG_VERSION,
+        "dist_version": resolved["dist_version"] or grounding.DEFAULT_DIST_VERSION,
+        "sources": sources,
+        "problems": problems,
+        "allowed_by_override": bool(problems) and args.allow_provenance_mismatch,
+    }
+
+
+def _tokenizer():
+    """Prometheus's own tokenizer, loaded offline from the staged weights.
+
+    Counting with the real tokenizer rather than chars/4 is the whole point: the
+    estimate ran 1.8x optimistic on these JSON payloads, so 414 prompts sat over
+    the 32,768 context and vLLM would have silently truncated them.
+    """
+    from transformers import AutoTokenizer
+
+    from swissisoform.judge.serve import snapshot_dir
+
+    return AutoTokenizer.from_pretrained(str(snapshot_dir()))
+
+
+def _reference_for(
+    builder: ReferenceBuilder, record: dict, unit: str, arm: str, corpus: Corpus, slug: str
+) -> dict:
+    """The reference for one cell.
+
+    Category cells share one reference across arms -- that is the whole design.
+    Synthesis cannot: it is judged on coherence with *its own* inherited category
+    verdicts, which are the only thing that differs between arms, so each arm gets
+    its own synthesis reference.
+    """
+    if unit != SYNTHESIS_UNIT:
+        return builder.category(record, unit)
+    reads = {
+        letter: corpus.get(arm, slug, letter).payload
+        for letter in CATEGORY_LETTERS
+        if corpus.get(arm, slug, letter) is not None
+    }
+    return builder.synthesis(record, reads)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Build and write the request file."""
+    args = parse_args(argv)
+    units = [u.strip() for u in args.units.split(",") if u.strip()]
+    out_dir = args.out or (ROOT / "data" / "output" / "judge" / args.corpus)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    corpus = load_corpus(args.corpus)
+    provenance = _reference_provenance(corpus, args)
+    records = load_records(ROOT / "data" / "output" / args.corpus / "llm_evidence")
+    isos = isoform_records(records)
+    builder = ReferenceBuilder.build(
+        tag_version=provenance["tag_version"], dist_version=provenance["dist_version"]
+    )
+    logger.info(
+        "reference: tag registry %s, distributions %s",
+        provenance["tag_version"],
+        provenance["dist_version"],
+    )
+
+    tokenizer = _tokenizer()
+
+    def count_tokens(text: str) -> int:
+        return len(tokenizer.encode(text))
+
+    slugs = list(corpus.slugs)[: args.limit] if args.limit else list(corpus.slugs)
+    requests: list[Request] = []
+    at_risk: list[dict] = []
+    trimmed: list[dict] = []
+
+    for slug in slugs:
+        record = isos.get(slug)
+        if record is None:
+            logger.warning("no evidence record for %s — skipping", slug)
+            continue
+        for unit in units:
+            arms = corpus.arms_for(slug, unit)
+            if len(arms) < 2:
+                logger.warning("cell (%s, %s) has %d arm(s) — skipping", slug, unit, len(arms))
+                continue
+
+            # M/P arms read through tools; show each response with its own run's
+            # results when asked, and spend that out of this cell's reference budget
+            # (by the largest digest, so every arm meets the same reference).
+            digests: dict[str, str | None] = {}
+            cell_budget = args.budget
+            if unit in TOOL_UNITS and args.tool_results_chars > 0:
+                digests = {
+                    arm: render_tool_results(
+                        corpus.get(arm, slug, unit).trace, args.tool_results_chars
+                    )
+                    for arm in arms
+                }
+                cell_budget -= 2 * max(count_tokens(d or "") for d in digests.values())
+
+            # One fitted reference per cell, reused by all 9 arms -- trimming has
+            # to be identical across arms or they stop being comparable.
+            shared = None
+            if unit != SYNTHESIS_UNIT:
+                fitted = fit_reference(
+                    builder.category(record, unit), count_tokens, budget=cell_budget
+                )
+                shared = render(fitted.reference)
+                if fitted.trimmed:
+                    trimmed.append(
+                        {
+                            "slug": slug,
+                            "unit": unit,
+                            "tokens": fitted.tokens,
+                            "steps": fitted.steps_applied,
+                        }
+                    )
+
+            # Every unordered pair, both presentation orders.
+            for arm_a, arm_b in itertools.combinations(arms, 2):
+                for order, (first, second) in enumerate(((arm_a, arm_b), (arm_b, arm_a))):
+                    if shared is not None:
+                        instruction = shared
+                    else:
+                        instruction = render(
+                            fit_reference(
+                                _reference_for(builder, record, unit, first, corpus, slug),
+                                count_tokens,
+                                budget=args.budget,
+                            ).reference
+                        )
+                    text_a = corpus.get(first, slug, unit).text
+                    text_b = corpus.get(second, slug, unit).text
+                    shown_a, shown_b, tool_blind = _shown_pair(
+                        text_a, text_b, digests.get(first), digests.get(second), unit
+                    )
+                    prompt = PR.chat(
+                        PR.relative_prompt(
+                            instruction=instruction,
+                            response_a=shown_a,
+                            response_b=shown_b,
+                            rubric=RB.pairwise().criterion,
+                        )
+                    )
+                    requests.append(
+                        Request(
+                            id=f"pw|{slug}|{unit}|{first}|{second}|{order}",
+                            slug=slug,
+                            unit=unit,
+                            rubric=RB.PAIRWISE_ID,
+                            prompt=prompt,
+                            arm_a=first,
+                            arm_b=second,
+                            order=order,
+                            sha_a=PV.text_sha(text_a),
+                            sha_b=PV.text_sha(text_b),
+                            len_a=len(shown_a),
+                            len_b=len(shown_b),
+                            tool_blind=tool_blind,
+                        )
+                    )
+                    _note_if_at_risk(prompt, at_risk, slug, unit)
+
+    build_id = PV.build_digest((r.id, r.prompt) for r in requests)
+    requests = [dataclasses.replace(r, build_id=build_id) for r in requests]
+    path = out_dir / "requests.jsonl"
+    n = write_requests(requests, path)
+    _write_index(requests, out_dir / PV.INDEX_NAME)
+    _summarise(requests, at_risk, path, n, out_dir, trimmed, count_tokens, build_id, provenance)
+    return 1 if at_risk else 0
+
+
+def _shown_pair(
+    text_a: str, text_b: str, digest_a: str | None, digest_b: str | None, unit: str
+) -> tuple[str, str, bool]:
+    """``(shown_a, shown_b, tool_blind)``: what the judge reads for one pair.
+
+    Tool results go to both sides or to neither. With only one side's digest the
+    two answers would be judged on unequal evidence, and the pair would still feed
+    the fit, biased toward whichever arm left a trace; so the pair is shown bare
+    and flagged ``tool_blind``, like a pair where neither arm has one.
+    """
+    tool_blind = unit in TOOL_UNITS and not (digest_a and digest_b)
+    if tool_blind:
+        digest_a = digest_b = None
+    return _with_tools(text_a, digest_a), _with_tools(text_b, digest_b), tool_blind
+
+
+def _with_tools(text: str, digest: str | None) -> str:
+    """A response followed by its run's tool results, when there are any.
+
+    ``sha_*`` stays that of the response alone: the digest is evidence shown
+    beside it, not something the arm wrote, and staleness is about the arm's
+    text. ``len_*`` is the length of what the judge reads, response and digest
+    together, since that is what the length covariate has to describe.
+    """
+    return f"{text}\n\n{digest}" if digest else text
+
+
+def _write_index(requests: list[Request], path: Path) -> None:
+    """Every request minus its prompt, so analysis need not parse the 1 GB file."""
+    with path.open("w", encoding="utf-8") as handle:
+        for r in requests:
+            row = {k: v for k, v in dataclasses.asdict(r).items() if k != "prompt"}
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def _note_if_at_risk(prompt: str, sink: list[dict], slug: str, unit: str) -> None:
+    """Record a prompt whose estimated length leaves no room for feedback.
+
+    Estimated at 4 chars/token, so this is a screen rather than the assertion --
+    ``run_judge.py`` re-checks with the real tokenizer, which is the only count
+    that decides anything.
+    """
+    tokens = estimate_tokens(prompt)
+    if tokens + MAX_NEW_TOKENS > MAX_MODEL_LEN:
+        sink.append({"slug": slug, "unit": unit, "est_tokens": tokens})
+
+
+def _summarise(
+    requests: list[Request],
+    at_risk: list[dict],
+    path: Path,
+    n: int,
+    out_dir: Path,
+    trimmed: list[dict],
+    count_tokens,
+    build_id: str,
+    provenance: dict,
+) -> None:
+    """Print and persist the shape of what was built."""
+    by_unit: dict[str, int] = {}
+    longest = 0
+    longest_real = 0
+    for r in requests:
+        by_unit[r.unit] = by_unit.get(r.unit, 0) + 1
+        longest = max(longest, estimate_tokens(r.prompt))
+    # Real count on the longest few only -- tokenizing all 37k here would double
+    # the build time, and run_judge.py --check-context is the actual assertion.
+    for r in sorted(requests, key=lambda r: -len(r.prompt))[:40]:
+        longest_real = max(longest_real, count_tokens(r.prompt))
+
+    meta = {
+        "build_id": build_id,
+        "provenance": provenance,
+        "n_tool_blind": sum(r.tool_blind for r in requests),
+        "n_requests": n,
+        "by_unit": by_unit,
+        "longest_prompt_est_tokens": longest,
+        "longest_prompt_real_tokens": longest_real,
+        "n_cells_trimmed": len(trimmed),
+        "trimmed": trimmed[:100],
+        "max_model_len": MAX_MODEL_LEN,
+        "max_new_tokens": MAX_NEW_TOKENS,
+        "n_at_risk": len(at_risk),
+        "at_risk": at_risk[:50],
+    }
+    (out_dir / "requests_meta.json").write_text(
+        json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8"
+    )
+
+    print(f"\n{n:,} pairwise request(s) -> {path}")
+    print("\nper unit:")
+    for unit, count in sorted(by_unit.items()):
+        print(f"  {unit:10s} {count:>8,}")
+    print(
+        f"\nlongest prompt ~{longest:,} est / {longest_real:,} real tokens (ctx {MAX_MODEL_LEN:,})"
+    )
+    if trimmed:
+        steps: dict[str, int] = {}
+        for entry in trimmed:
+            for step in entry["steps"]:
+                steps[step] = steps.get(step, 0) + 1
+        print(f"{len(trimmed)} reference(s) trimmed to fit: {steps}")
+        print("  (a trimmed cell is weaker evidence; requests_meta.json lists them)")
+    else:
+        print("no reference needed trimming")
+    if at_risk:
+        print(f"!! {len(at_risk)} prompt(s) leave no room for {MAX_NEW_TOKENS} new tokens")
+    else:
+        print(f"all prompts leave room for {MAX_NEW_TOKENS} new tokens")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

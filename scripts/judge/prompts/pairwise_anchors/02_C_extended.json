@@ -1,0 +1,51 @@
+{
+  "id": "02_C_extended",
+  "why": "unremarkable constraint in never-coding sequence is the norm, not a negative finding",
+  "instruction": {
+    "category": "C",
+    "name": "Conservation",
+    "isoform": {
+      "canonical_length_aa": 227,
+      "diff_space": "isoform",
+      "differential_region_location": "Extension: the differential region is the N-terminal segment the isoform adds ahead of the canonical start; it was 5'UTR or intron in the canonical annotation and was never coding. It spans 14 aa.",
+      "differential_sequence": "MAGPRTLSAWQRGP",
+      "gene_name": "NUDT21",
+      "isoform_length_aa": 241,
+      "orf_type": "extended",
+      "tis_id": "chrA:2270000:+:CTG:ENST00000227.1"
+    },
+    "criteria": [
+      {
+        "axis": "E",
+        "criterion_id": "C1_primate_conservation",
+        "label": "Primate conservation",
+        "value": true,
+        "reason": "mean_pident=0.964",
+        "evidence": {
+          "isoform_conservation_frame_primate_mean_pident": 0.964,
+          "isoform_conservation_frame_primate_canonical_mean_pident": 0.988,
+          "isoform_conservation_frame_primate_frac_intact": 0.92
+        },
+        "headline": "Added region 96.4% similar across primates",
+        "interpretation_hint": "Is the reading frame conserved across primates? For an extension the added region was never coding, so identity reflects the underlying DNA."
+      },
+      {
+        "axis": "E",
+        "criterion_id": "C3_phylop_coding_selection",
+        "label": "PhyloP constraint",
+        "value": false,
+        "reason": "phylop_unique=1.13",
+        "evidence": {
+          "isoform_conservation_phylop_unique_region_mean": 1.13,
+          "isoform_conservation_phylop_shared_region_mean": 4.62,
+          "isoform_conservation_phylop_enrichment": 0.24,
+          "isoform_conservation_phastcons_unique_region_mean": 0.19
+        },
+        "headline": "Added region PhyloP 1.13",
+        "interpretation_hint": "Absolute nucleotide-level constraint over the differential region. phyloP 0 is neutral evolution. For an extension the shared region is the canonical CDS and is expected to be conserved; that says nothing about the added sequence."
+      }
+    ]
+  },
+  "terse": "reasoning: The 14 aa this extension adds sit in sequence that was 5'UTR in the canonical annotation, and nothing here argues it has been under protein-level selection. phyloP over the added region is 1.13 against 4.62 over the canonical body the isoform retains, so the constraint the gene carries belongs to the shared CDS and does not extend forward into the new N-terminus. Primate identity of 0.964 does not contradict that: in never-coding sequence it tracks DNA-level similarity between close relatives rather than protein constraint, so the two measures are not in conflict — one is simply uninformative here.",
+  "verbose": "reasoning: The conservation evidence for this extension spans two measurements, which are set out in turn below. Primate amino-acid identity over the added region is 0.964, which is a fairly high value. The canonical primate baseline is 0.988. The fraction of primate species retaining an intact frame over the added region is 0.92. The phyloP mean over the added region is 1.13, which is a modest value. The phyloP mean over the shared region is 4.62, which is a high value, so the shared region is well conserved. The phyloP enrichment ratio of added region to shared region is 0.24. The phastCons mean over the added region is 0.19, which is a low value. The added segment is 14 amino acids long and sits ahead of the canonical start codon, as the annotation states, and was 5'UTR in the canonical annotation. Taking all of these measurements together, the added region does not appear to be under strong protein-level selection, and the conservation the gene carries belongs to the canonical body rather than the extension."
+}
