@@ -23,13 +23,21 @@ categories, which is where the cross-block structure lives. Per-block PCA follow
 by concatenation (a different, tempting method) would destroy exactly that before
 the global step ever saw it.
 
-One matrix, all-ORF: 397 dims x 6,462 isoforms. Drops the shared-region
-features, which do not exist for every ORF type, so every ORF type — including
-the rare separate ones (uORF, uoORF, internal-OOF, 3'UTR-ORF) — sits in the same
-space.
+Two kinds of matrix, because the shared region does not exist for every ORF type:
 
-Consumed by ``plot_feature_space.py`` and ``principled_sampler.py`` so both work
-from an identical embedding.
+    all-ORF      391 dims x 6,462 isoforms   drops the shared-region features
+    paired-ORF   every feature, one ORF type (extended or truncated) per matrix
+
+all-ORF puts every type — including the rare separate ones (uORF, uoORF,
+internal-OOF, 3'UTR-ORF) — in one space. A paired matrix keeps the 83
+unique-vs-shared contrast features (``cmp_biophysics_*_{unique,shared,ratio}``,
+``phylop_enrichment``, the ``*_shared`` structure metrics, the gnomAD/disease
+ratios) that drive C3/M1/M2/P1/P2, and which only exist where there is a shared
+region. Coordinate systems are independent — different features, rows and
+eigenvectors — so nothing may be compared across matrices numerically.
+
+Consumed by ``plot_feature_space.py``, ``principled_sampler.py`` (all-ORF) and
+``build_coreset.py`` (all of them).
 """
 
 from __future__ import annotations
@@ -50,32 +58,18 @@ CATALOG_CSV = HERE / "feature_catalog.csv"
 
 CATEGORIES = ("C", "D", "L", "M", "P", "S")
 
-# The 12 hand-curated anchor genes of the cheeseman50 coreset — 9 carried over
-# from cheeseman_test plus ASPM, SKA3 and FMR1. Held here rather than read from
-# the preset: cheeseman50.toml now lists all 50 isoforms as [[isoforms]] picks
-# and has no `genes` key, so the anchor subset is no longer recoverable from it.
-# This list is an input to building the coreset, so it cannot be derived from the
-# coreset's own output either.
-ANCHOR_GENES = frozenset(
-    {
-        "CBX1",
-        "CDC34",
-        "EIF2B1",
-        "MAD2L1",
-        "SRSF2",
-        "TRIP13",
-        "TRNT1",
-        "UBE2D2",
-        "UBE2M",
-        "ASPM",
-        "SKA3",
-        "FMR1",
-    }
-)
+# The hand-curated anchors of the cheeseman50 coreset — 22 isoforms of 12 genes
+# (9 carried over from cheeseman_test plus ASPM, SKA3 and FMR1). Pinned by tis_id
+# in a tracked CSV beside the coreset builder, which is their one source: a gene
+# list re-derived the anchor *isoforms* from whatever the source parquet held.
+ANCHORS_CSV = HERE.parent / "principled_sampling" / "anchors.csv"
+ANCHOR_GENES = frozenset(pd.read_csv(ANCHORS_CSV)["gene_name"])
 
 # Features the catalog flagged as unavailable (or heavily depleted) for separate
-# ORFs. Dropped from the matrix so every ORF type sits in the same feature set.
+# ORFs. The all-ORF matrix drops them; the paired-ORF matrices keep them.
 SHARED_REGION_FLAGS = ("absent_for_separate_orfs", "depleted_for_separate_orfs")
+
+PAIRED_ORF_TYPES = ("extended", "truncated")
 
 # Carried alongside the scores for colouring and reporting — never dimensions.
 # The scoring columns in particular are computed FROM these features, so using
@@ -154,7 +148,7 @@ class FeatureMatrix:
         blocks: CDLMPS letter per column, in matrix order.
         meta: Per-row metadata (gene, ORF type, scores, ...).
         observed: ``(n, p)`` mask — True where measured, False where imputed.
-        name: Human label for the matrix (``"all-ORF"``).
+        name: Human label for the matrix (``"all-ORF"``, ``"paired-extended"``).
     """
 
     X: np.ndarray
@@ -215,18 +209,30 @@ def _raw_frame(files: list[Path], wanted: list[str]) -> pd.DataFrame:
     return frame
 
 
-def build_matrix(frame: pd.DataFrame, catalog: pd.DataFrame, *, name: str) -> FeatureMatrix:
-    """Transform, rank-normalize, impute and standardize one feature matrix."""
+def build_matrix(
+    frame: pd.DataFrame,
+    catalog: pd.DataFrame,
+    *,
+    name: str,
+    row_mask: np.ndarray | None = None,
+) -> FeatureMatrix:
+    """Transform, rank-normalize, impute and standardize one feature matrix.
+
+    ``row_mask`` restricts the rows *before* the rank normalization, so a
+    per-type matrix ranks each feature within that type rather than against
+    isoforms it will never be compared to.
+    """
+    sub = frame if row_mask is None else frame.loc[row_mask]
     features = list(catalog["feature"])
     blocks = catalog["category"].to_numpy()
     transforms = dict(zip(catalog["feature"], catalog["transform"]))
 
-    n, p = len(frame), len(features)
+    n, p = len(sub), len(features)
     X = np.empty((n, p), dtype=float)
     observed = np.empty((n, p), dtype=bool)
 
     for j, feat in enumerate(features):
-        raw = pd.to_numeric(frame[feat], errors="coerce").to_numpy(dtype=float)
+        raw = pd.to_numeric(sub[feat], errors="coerce").to_numpy(dtype=float)
         col = rank_to_normal(apply_transform(raw, transforms[feat]))
         observed[:, j] = np.isfinite(col)
         # Impute gaps to 0 — the rank-normal median, i.e. the column's centre.
@@ -240,12 +246,12 @@ def build_matrix(frame: pd.DataFrame, catalog: pd.DataFrame, *, name: str) -> Fe
     sd[sd == 0] = 1.0
     X /= sd
 
-    meta = frame[[c for c in META_COLUMNS if c in frame.columns]].reset_index(drop=True)
+    meta = sub[[c for c in META_COLUMNS if c in sub.columns]].reset_index(drop=True)
     return FeatureMatrix(X, features, blocks, meta, observed, name)
 
 
-def build_matrix_all_orf(parquet: str | None = None) -> FeatureMatrix:
-    """Build the all-ORF matrix from a genome-wide run."""
+def _frame_and_catalog(parquet: str | None) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The raw feature frame and the CDLMPS-scoped catalog, read once."""
     files = resolve_parquet(parquet)
     catalog = load_catalog()
 
@@ -253,11 +259,29 @@ def build_matrix_all_orf(parquet: str | None = None) -> FeatureMatrix:
     # to put them; exon counts and lengths are dropped rather than given a
     # seventh block that would hand four columns a whole category's voice.
     catalog = catalog[catalog["category"].isin(CATEGORIES)]
+    return _raw_frame(files, list(catalog["feature"])), catalog
 
-    frame = _raw_frame(files, list(catalog["feature"]))
 
+def build_matrix_all_orf(parquet: str | None = None) -> FeatureMatrix:
+    """Build the all-ORF matrix from a genome-wide run."""
+    return build_matrices(parquet, paired=False)["all-ORF"]
+
+
+def build_matrices(parquet: str | None = None, *, paired: bool = True) -> dict[str, FeatureMatrix]:
+    """The all-ORF matrix plus, with *paired*, one paired-ORF matrix per paired type.
+
+    Keys: ``"all-ORF"``, ``"paired-extended"``, ``"paired-truncated"``.
+    """
+    frame, catalog = _frame_and_catalog(parquet)
     all_orf_catalog = catalog[~catalog["null_pattern"].isin(SHARED_REGION_FLAGS)]
-    return build_matrix(frame, all_orf_catalog, name="all-ORF")
+    out = {"all-ORF": build_matrix(frame, all_orf_catalog, name="all-ORF")}
+    if paired:
+        for orf_type in PAIRED_ORF_TYPES:
+            mask = (frame["orf_type"] == orf_type).to_numpy()
+            out[f"paired-{orf_type}"] = build_matrix(
+                frame, catalog, name=f"paired-{orf_type}", row_mask=mask
+            )
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -458,6 +482,8 @@ __all__ = [
     "CATEGORIES",
     "FeatureMatrix",
     "MFAResult",
+    "PAIRED_ORF_TYPES",
+    "build_matrices",
     "build_matrix_all_orf",
     "fit_mfa",
     "imputation_bias",
