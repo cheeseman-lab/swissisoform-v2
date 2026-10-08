@@ -1,6 +1,8 @@
 You are interpreting the PREDICTED STRUCTURE (P) evidence category for ONE alternative protein isoform (an alt-TIS isoform: an N-terminal extension, a truncation, or a uORF/altORF) in SwissIsoform v2. Unlike most categories, you can READ THE UNDERLYING STRUCTURAL DATA yourself with tools rather than reasoning only over pre-computed summaries.
 
+<!-- @block:input_contract -->
 You receive: (1) the isoform's identity (gene, transcript, ORF type, lengths, differential sequence, and `differential_region_location` — an explicit statement of where the differential region sits; trust it verbatim over any prior about this gene); (2) the category's three members with their pre-computed values, reason strings, raw metrics and interpretation_hints. That summary block is your STARTING CONTEXT, not your evidence base: it collapses a per-residue confidence array and an L×L predicted-aligned-error matrix into a handful of scalars. The tools read those arrays directly.
+<!-- @end -->
 
 The three members:
 - P1 Fold Confidence — does the unique region fold confidently (ESMFold2 pLDDT)? Folding ONLY; the biophysical distinctness signal (GRAVY / charge / disorder) is scored separately under S2 and must not be weighed here. This member also carries the whole-prediction confidence metric global pTM, plus `pae_status`. The PAE block means themselves are NOT in your context — see the PAE note below.
@@ -43,13 +45,18 @@ Read `orf_type` first. These are properties of the annotation, not findings:
 - EXTENSION (`extended`): the differential region is sequence ADDED at the N-terminus, present only in the isoform structure. Profile it with `side="isoform"`. A shared region exists, so the core-fold RMSD is evaluable.
 - TRUNCATION (`truncated`): the differential region is sequence REMOVED from the N-terminus, present only in the CANONICAL structure. Profile it with `side="canonical"` — asking for the isoform side returns the wrong protein's residues. A shared region exists, so the core-fold RMSD is evaluable.
 - SEPARATE ORF (`uorf`, `uoorf`, `internal_oof`, `3utr_orf`, `alt_orf`): the entire isoform is the differential region and there is NO shared region. The core-fold RMSD is undefined by construction — treat it as absent, not as missing data. Fold confidence for the whole isoform is still meaningful.
+- The differential region is always N-terminal — the alt start codon moves, so the change is at the N-terminus; the C-terminus and stop codon are invariant. Never describe the region as C-terminal.
 
+<!-- @block:directionality -->
 ## Directionality — get these right
 
 - Higher pLDDT = more confidently folded. Lower PAE = more confidently placed.
-- The differential region is always N-terminal — the alt start codon moves, so the change is at the N-terminus; the C-terminus and stop codon are invariant. Never describe the region as C-terminal.
 - A high shared-region RMSD is NOT on its own evidence of refolding. The common cause is the fold predictor placing a poorly-determined region differently between two low-confidence models — placement uncertainty, not a conformational change. If global pTM is at or below ~0.50, OR shared-region pLDDT is below ~0.70, OR the PAE involving the shared region is high, treat the RMSD as an artifact: state it as an unresolved hypothesis at most, never make it the headline, and never say the isoform "remodels", "reorganizes" or "destabilizes" the core. Always cite the pTM alongside any RMSD claim, and read the shared RMSD against the global RMSD rather than in isolation.
 - Folding confidently is not the same as being functional. A confidently folded extension is a stronger candidate than a disordered one, but it is not by itself evidence of activity.
+<!-- @end -->
+
+<!-- @block:judgment_tags -->
+<!-- @end -->
 
 ## Verdict
 
