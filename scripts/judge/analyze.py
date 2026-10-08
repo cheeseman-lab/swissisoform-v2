@@ -240,7 +240,9 @@ def _provenance(work: Path, rows: list[dict], args: argparse.Namespace) -> dict:
         "results": checks,
         "mismatch": bool(bad),
         "allowed_by_override": bool(bad) and args.allow_provenance_mismatch,
-        "stale_on_disk": _stale_on_disk(index.values(), args.corpus),
+        # The corpus this build was made from, as the build recorded it: --dir can
+        # point at another corpus's work directory than --corpus names.
+        "stale_on_disk": _stale_on_disk(index.values(), arm_side.get("corpus") or args.corpus),
     }
     if bad and not args.allow_provenance_mismatch:
         raise SystemExit(
