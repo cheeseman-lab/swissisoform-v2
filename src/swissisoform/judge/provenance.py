@@ -28,7 +28,9 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
+
+from swissisoform.setup._common import sha256_file
 
 # Written beside requests.jsonl: every request without its prompt.
 INDEX_NAME = "requests_index.jsonl"
@@ -118,14 +120,8 @@ def stale_on_disk(index: Iterable[dict], current: dict[tuple[str, str, str], str
 
 
 def file_sha(path: Path) -> str | None:
-    """sha256 of a file's bytes, or None when it does not exist."""
-    if not path.is_file():
-        return None
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    """sha256 of a file's bytes (``setup._common.sha256_file``), or None when absent."""
+    return sha256_file(path) if path.is_file() else None
 
 
 def records_digest(records_dir: Path) -> str | None:
@@ -175,7 +171,8 @@ def effective_runs(out_dir: Path) -> tuple[list[dict[str, Any]], set[str]]:
     """The recorded runs whose outputs are still on disk, and stamps with no record.
 
     Returns ``(runs, unrecorded)``: provenance entries whose ``run_id`` appears in
-    at least one per-isoform ``*.meta.json`` stamp, and stamped run ids that have
+    at least one per-isoform ``*.meta.json`` stamp — the file-level ``run_id`` or
+    any per-category one in ``category_runs`` — and stamped run ids that have
     no provenance entry at all (outputs written before recording existed, or by
     something other than ``run_llm_variants.py``).
     """
@@ -183,10 +180,15 @@ def effective_runs(out_dir: Path) -> tuple[list[dict[str, Any]], set[str]]:
     for name in _STAMPS:
         for stamp in out_dir.glob(f"*/{name}"):
             try:
-                run_id = json.loads(stamp.read_text(encoding="utf-8")).get("run_id")
+                data = json.loads(stamp.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
-                run_id = None
-            stamped.add(run_id or "")
+                data = {}
+            stamped.add(data.get("run_id") or "")
+            # A partial (--only-category) rerun stamps the file with its own
+            # run_id, but the categories it carried forward were made by earlier
+            # runs, named per category. Those runs' inputs are on disk too.
+            for entry in (data.get("category_runs") or {}).values():
+                stamped.add((entry or {}).get("run_id") or "")
     path = out_dir / ARM_PROVENANCE
     recorded = json.loads(path.read_text(encoding="utf-8"))["runs"] if path.exists() else []
     runs = [r for r in recorded if r.get("run_id") in stamped]
@@ -199,6 +201,7 @@ def reconcile(
     *,
     tag_version: str | None = None,
     dist_version: str | None = None,
+    registry_sha: Callable[[str], str | None] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """Decide the reference's versions from the arms, listing every disagreement.
 
@@ -210,6 +213,11 @@ def reconcile(
             ``tags`` arms ran with, or that is listed as a problem.
         dist_version: Explicit distribution version, checked the same way
             against the ``dist`` arms.
+        registry_sha: ``version -> TagRegistry.sha256`` of the registry the
+            reference will be built from. A name says which vocabulary, the hash
+            which build of it: a version rebuilt in place (cutoffs moved, same
+            name) passes a name check, so the ``tags`` arms' recorded hash must
+            also equal this one.
 
     Returns:
         ``(resolved, problems)``. ``resolved`` holds ``tag_version`` and
@@ -221,6 +229,7 @@ def reconcile(
     """
     problems: list[str] = []
     tag_seen: set[str] = set()
+    tag_sha_seen: set[str] = set()
     dist_seen: set[str] = set()
     per_arm: dict[str, Any] = {}
 
@@ -240,7 +249,19 @@ def reconcile(
                         "than the reference is built from"
                     )
         category = [r for r in runs if r.get("pass") == "category"]
-        tag_seen |= {r.get("tag_registry") for r in category if r.get("grounding") == "tags"}
+        tags_runs = [r for r in category if r.get("grounding") == "tags"]
+        tag_seen |= {r.get("tag_registry") for r in tags_runs}
+        unhashed = sorted(
+            str(r.get("run_id")) for r in tags_runs if not r.get("tag_registry_sha256")
+        )
+        if unhashed:
+            problems.append(
+                f"{arm}: run(s) {', '.join(unhashed[:3])} recorded no tag-registry content "
+                "hash, so the registry build they ran on cannot be checked"
+            )
+        tag_sha_seen |= {
+            r["tag_registry_sha256"] for r in tags_runs if r.get("tag_registry_sha256")
+        }
         dist_seen |= {r.get("dist_version") for r in category if r.get("grounding") == "dist"}
         per_arm[arm] = {
             "run_ids": sorted({r.get("run_id") for r in runs}),
@@ -262,9 +283,26 @@ def reconcile(
             return explicit
         return next(iter(seen)) if len(seen) == 1 else None
 
+    if len(tag_sha_seen) > 1:
+        problems.append(
+            f"tag registry: arms ran on {len(tag_sha_seen)} different builds "
+            f"({', '.join(sorted(h[:12] for h in tag_sha_seen))}); the reference can carry one"
+        )
+    resolved_tag = pick("tag registry", tag_seen, tag_version)
+    if registry_sha is not None and resolved_tag is not None and len(tag_sha_seen) == 1:
+        (ran_on,) = tag_sha_seen
+        current = registry_sha(resolved_tag)
+        if current != ran_on:
+            problems.append(
+                f"tag registry: {resolved_tag!r} has been rebuilt since the tags arms ran "
+                f"(ran on {ran_on[:12]}, now {str(current)[:12]}); the reference would not "
+                "show them the cutoffs they were given"
+            )
+
     resolved = {
-        "tag_version": pick("tag registry", tag_seen, tag_version),
+        "tag_version": resolved_tag,
         "dist_version": pick("distribution version", dist_seen, dist_version),
+        "tag_registry_sha256": next(iter(tag_sha_seen)) if len(tag_sha_seen) == 1 else None,
         "per_arm": per_arm,
     }
     return resolved, problems
