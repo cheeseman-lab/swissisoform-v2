@@ -1394,3 +1394,37 @@ def test_stale_check_reads_the_corpus_the_build_recorded(tmp_path, monkeypatch):
         tmp_path, rows, argparse.Namespace(corpus="cheeseman50", allow_provenance_mismatch=False)
     )
     assert seen["name"] == "cheeseman13"
+
+
+class TestAnalyzeReport:
+    """The printed report runs after analysis.json is written; a None must not end it."""
+
+    def test_missing_rates_print_as_na(self, capsys):
+        from types import SimpleNamespace
+
+        an = _script("analyze")
+        delta = {"point": 0.1, "lo": 0.0, "hi": 0.2}
+        an._print(
+            checks={},
+            per_unit_fit={},
+            pooled_fit=SimpleNamespace(strengths={}),
+            position={"C": {"slot_a_win_rate": None, "delta": delta}},
+            per_unit_bt={},
+            per_unit_len={},
+            length={"C": {"n": 4, "beta": delta, "longer_wins_rate": None, "by_quartile": []}},
+        )
+        out = capsys.readouterr().out
+        assert "slot A wins    n/a" in out
+        assert "longer wins    n/a (top quartile n/a)" in out
+
+    def test_resolution_floor_is_the_rounded_interval_plus_half_width(self):
+        an = _script("analyze")
+        rep = W.Interval(point=0.123456, lo=-0.2, hi=0.44444)
+        out = an._resolution_floor({"C": {REPLICATE: rep}, "D": {}}, {REPLICATE: rep})
+        expected = {
+            "point": 0.1235,
+            "lo": -0.2,
+            "hi": 0.4444,
+            "half_width": round(rep.half_width, 4),
+        }
+        assert out == {"C": expected, "pooled": expected}

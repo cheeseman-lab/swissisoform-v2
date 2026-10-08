@@ -129,6 +129,15 @@ def _interval(i) -> dict:
     return {"point": round(i.point, 4), "lo": round(i.lo, 4), "hi": round(i.hi, 4)}
 
 
+def _pct(value: float | None, width: int = 0) -> str:
+    """A rate as a percentage, or ``n/a`` when it could not be computed.
+
+    The report is printed after analysis.json is written, so formatting a None
+    with ``:.1%`` used to end a finished run on a TypeError.
+    """
+    return f"{value:{width}.1%}" if value is not None else "n/a".rjust(width)
+
+
 def _position_report(calls, per_unit_fit, pooled_fit) -> dict:
     """Raw slot-A win rate and the fitted slot-A log-odds, per unit and pooled."""
     out = {}
@@ -328,23 +337,10 @@ def _resolution_floor(per_unit_bt, pooled_bt) -> dict:
     judged against itself.
     """
     out = {}
-    for unit, fit in per_unit_bt.items():
+    for unit, fit in (*per_unit_bt.items(), ("pooled", pooled_bt)):
         i = fit.get(REPLICATE)
         if i is not None:
-            out[unit] = {
-                "point": round(i.point, 4),
-                "lo": round(i.lo, 4),
-                "hi": round(i.hi, 4),
-                "half_width": round(i.half_width, 4),
-            }
-    i = pooled_bt.get(REPLICATE)
-    if i is not None:
-        out["pooled"] = {
-            "point": round(i.point, 4),
-            "lo": round(i.lo, 4),
-            "hi": round(i.hi, 4),
-            "half_width": round(i.half_width, 4),
-        }
+            out[unit] = {**_interval(i), "half_width": round(i.half_width, 4)}
     return out
 
 
@@ -447,7 +443,7 @@ def _print(checks, per_unit_fit, pooled_fit, position, per_unit_bt, per_unit_len
         if delta is None:
             continue
         print(
-            f"  {unit:10s} slot A wins {entry['slot_a_win_rate']:6.1%}   "
+            f"  {unit:10s} slot A wins {_pct(entry['slot_a_win_rate'], 6)}   "
             f"delta {delta['point']:+5.2f} [{delta['lo']:+5.2f}, {delta['hi']:+5.2f}]"
         )
 
@@ -474,8 +470,8 @@ def _print(checks, per_unit_fit, pooled_fit, position, per_unit_bt, per_unit_len
             continue
         top = entry["by_quartile"][-1]["longer_wins_rate"] if entry["by_quartile"] else None
         print(
-            f"  {unit:10s} longer wins {entry['longer_wins_rate']:6.1%} "
-            f"(top quartile {top:.1%})   "
+            f"  {unit:10s} longer wins {_pct(entry['longer_wins_rate'], 6)} "
+            f"(top quartile {_pct(top)})   "
             f"beta {beta['point']:+5.2f} [{beta['lo']:+5.2f}, {beta['hi']:+5.2f}] per log-ratio"
         )
 
