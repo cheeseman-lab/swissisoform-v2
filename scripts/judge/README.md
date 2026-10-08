@@ -18,7 +18,10 @@ science.
 python scripts/judge/run_checks.py
 
 # 2. Build the requests. Ordered by cell so each reference prefix is prefilled
-#    once for the ~108 calls that share it.
+#    once for the ~108 calls that share it. The reference takes its tag registry
+#    and distribution version from what the arms ran with (each arm run records
+#    them in llm/_arm_provenance.json), and the build refuses arms whose outputs
+#    came from unrecorded runs, other source data, or disagreeing versions.
 python scripts/judge/build_requests.py
 
 # 3. Gates, before the expensive run. Each is minutes; the run is hours.
@@ -27,10 +30,14 @@ sbatch ... scripts/slurm/run_judge.sbatch --sanity-anchor
 sbatch ... scripts/slurm/run_judge.sbatch --self-consistency
 
 # 4. Score. bf16 on 2x A100-80, resumable: results.jsonl is append-only and
-#    completed ids are skipped.
+#    completed ids are skipped -- within one request build. Every request and
+#    result carries the build id and the sha256 of both responses, and a results
+#    file holding another build's rows is refused rather than appended to.
 sbatch ... scripts/slurm/run_judge.sbatch --batch-size 64
 
-# 5. Weigh.
+# 5. Weigh. Refuses results it cannot tie to the current build
+#    (--allow-provenance-mismatch to override, recorded in analysis.json), and
+#    reports judged responses whose text on disk has changed since.
 python scripts/judge/analyze.py
 ```
 
@@ -51,7 +58,9 @@ Per cell: C(9,2)=36 pairs × 2 presentation orders = 72 calls.
 | rule | why |
 |---|---|
 | Bradley-Terry per category, status quo pinned at 0 | every number reads as log-odds vs what we ship |
-| Order-inconsistent pairs dropped, not split | Prometheus 2 has position bias; splitting dilutes real signal |
+| Both orders kept, slot-A effect fitted and reported | Prometheus 2 has position bias; dropping the pairs it splits lets whatever decides agreement carry the ranking |
+| Consistent-only fit kept as a secondary readout, drops counted per arm | comparable to earlier rounds, and the filter's reach is visible |
+| Length-adjusted fit beside the raw one, longer-wins rate reported | the judge rewards length despite the rubric; an effect that vanishes under the covariate is a length effect |
 | Cluster bootstrap over isoforms | the 7 units of one isoform share evidence and are not independent |
 | Everything in floor units | see below |
 | Nothing pooled across categories in a headline | S has 24 tags, D has 3 |
@@ -92,6 +101,11 @@ real"; a third of them are not.
 - **M and P are excluded from the fabrication check.** Their arms queried the full
   variant/structure tables through tool readers while the reference holds a 30-row
   sample (30 of 13,690 on the worst M cell).
+- **M and P are judged tool-blind by default.** For the same reason the judge does
+  not see what those arms read. `build_requests.py --tool-results-chars N` shows
+  each M/P response with up to N characters of its own run's tool results;
+  otherwise every such request carries `tool_blind`, and `analysis.json` /
+  `bradley_terry.tsv` mark the M/P scores as tool-blind.
 - **No reference answers**, so verdicts are noisier than Prometheus's published
   benchmarks.
 - **One rubric, gated on the anchor pairs.** Each pair states the same conclusion
@@ -99,9 +113,10 @@ real"; a third of them are not.
   support is equal by construction and only economy can decide. The rubric has to
   prefer the terse read in both presentation orders.
 - **Prometheus has a total position bias on this corpus.** Given identical text in
-  both slots it picked A in 35 of 35 decided comparisons. Only order-consistent
-  pairs count as verdicts; without that filter the ranking would reflect request
-  order.
+  both slots it picked A in 35 of 35 decided comparisons. Every call is fitted
+  with the slot as a covariate (`position_effect` in `analysis.json`), so the
+  ranking does not reflect request order and does not rest on the subset of
+  pairs the judge happened to decide the same way twice.
 - **48 references were trimmed to fit the 32,768 context**, 25 of them hard
   truncated (all synthesis, 3 isoforms), retaining a median 28,397 of the 29,000
   budget. `requests_meta.json` lists every one; a trimmed cell is weaker evidence.

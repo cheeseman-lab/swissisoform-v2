@@ -36,6 +36,11 @@ CATEGORY_NAMES: dict[str, str] = {
 }
 LETTER_BY_NAME: dict[str, str] = {v: k for k, v in CATEGORY_NAMES.items()}
 
+# Categories the arms answered through a tool loop. What they read came back from
+# tool calls, not from the opening payload, so the shared reference does not hold
+# it; see ``reference.render_tool_results``.
+TOOL_UNITS: tuple[str, ...] = ("M", "P")
+
 # The eight arms of the matrix, then the replicate. The replicate is NOT a cell of
 # the design: it exists only to set the noise floor, and including it in the
 # factorial would invent a fifth grounding.
@@ -65,5 +70,6 @@ __all__ = [
     "LETTER_BY_NAME",
     "REPLICATE",
     "SYNTHESIS_UNIT",
+    "TOOL_UNITS",
     "UNITS",
 ]
