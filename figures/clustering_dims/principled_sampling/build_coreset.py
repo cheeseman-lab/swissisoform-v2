@@ -260,7 +260,12 @@ def build_coreset(
     is_anchor = np.isin(tis, list(anchor_ids))
     rare: list[dict] = []
     for orf_type in RARE_TYPES:
-        stratum = np.flatnonzero((orf == orf_type) & ~is_anchor)
+        # Anchors are pinned by tis_id, but a gene is still taken once: drop every
+        # isoform of a claimed gene (the anchor genes, then each rare pick's), or
+        # rare_type_fill — which does not consult `claimed` — can pick one and
+        # abort the build below.
+        taken = np.isin(genes, list(claimed))
+        stratum = np.flatnonzero((orf == orf_type) & ~is_anchor & ~taken)
         for p in rare_type_fill(all_orf.scores, stratum):
             gene = genes[p["row_index"]]
             if gene in claimed:
