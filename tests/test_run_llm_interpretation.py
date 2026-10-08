@@ -1067,11 +1067,14 @@ def test_cap_reasoning_falls_back_to_a_word_break(mod):
 
 
 def test_parse_category_read_recloses_a_cut_off_object(mod):
-    """The observed break — reasoning closed early, trailing comma — is recovered."""
-    cut = '{"reasoning": "The fold holds. The helix is gained but at low confid",'
-    out = mod._parse_category_read(cut, _CAP_SCHEMA)
-    assert out == {"reasoning": "The fold holds. […]", "reasoning_truncated": True}
-    # Intact reasoning with only the optional tail lost needs no cut.
+    """The observed break — reasoning closed early, trailing comma — is recovered as written.
+
+    The reasoning string is complete, so its last clause is the model's: trimming
+    it to a sentence end deleted content ("No junction peptide was […]" for
+    "No junction peptide was detected").
+    """
+    out = mod._parse_category_read('{"reasoning": "No junction peptide was detected",')
+    assert out == {"reasoning": "No junction peptide was detected"}
     assert mod._parse_category_read('{"reasoning": "Complete.",', _CAP_SCHEMA) == {
         "reasoning": "Complete."
     }
@@ -1105,9 +1108,13 @@ def test_category_pass_caps_over_long_and_cut_off_reads(
     payload = json.loads((out_dir / mod._tis_slug(TIS_ID) / "categories.json").read_text())
     assert len(payload) == 6
     for read in payload.values():
-        assert read["reasoning_truncated"] is True
         assert len(read["reasoning"]) <= limit
-        assert read["reasoning"].endswith(". […]")
+    long_reads = [r for r in payload.values() if r.get("reasoning_truncated")]
+    cut_off = [r for r in payload.values() if not r.get("reasoning_truncated")]
+    # Over-long reads are cut to a whole sentence, last; the re-closed reads are
+    # under the cap and kept exactly as the model wrote them.
+    assert len(long_reads) == 3 and all(r["reasoning"].endswith(". […]") for r in long_reads)
+    assert [r["reasoning"] for r in cut_off] == ["Bottom line first. Then a clause cut mid"] * 3
 
 
 def test_category_pass_writes_a_separate_tool_usage_report(
@@ -1957,7 +1964,8 @@ def test_reused_output_keeps_its_old_run_id_and_the_capture_says_so(
 
 
 def _verdict_says(text: str):
-    return lambda *a, **kw: json.dumps({"verdict": "neutral", "reasoning": text})
+    # A category read: the category schema has no verdict, and forbids extra keys.
+    return lambda *a, **kw: json.dumps({"reasoning": text})
 
 
 def test_only_category_reruns_one_category_and_keeps_the_rest_s_provenance(
@@ -2047,7 +2055,7 @@ def test_single_shot_overlong_reasoning_is_re_asked_once(
         mod._record_usage(None)
         retry = "Your previous response was rejected" in prompt.user
         text = "short and sharp" if retry else "x" * 1600
-        return json.dumps({"verdict": "neutral", "reasoning": text})
+        return json.dumps({"reasoning": text})
 
     monkeypatch.setattr(mod, "call_llm", fake)
     out_dir = tmp_path / "out"
@@ -2653,3 +2661,42 @@ def test_rejection_message_does_not_echo_the_markup_back(mod):
     assert not mod._VERDICT_MARKUP.search(msg), "markup must not survive into the reply"
     assert len(msg) < 400, f"rejection ballooned to {len(msg)} chars"
     assert "too long" in msg and "tool-call markup" in msg
+
+
+def test_a_repaired_read_is_validated_as_written_and_marked_only_by_the_cap(mod):
+    """Validation sees the model's read; the harness's mark comes after it, if at all."""
+    schema = mod.load_output_schema(
+        ROOT / "scripts" / "site" / "prompts" / "output_schemas" / "category_read.json"
+    )
+    cut = mod._parse_category_read('{"reasoning": "Bottom line first. Then a clause cut mid",')
+    assert "reasoning_truncated" not in cut
+    assert mod._verdict_violations(cut, schema) == []
+    # The mark is never exempt as model output: a model writing it is rejected.
+    assert mod._verdict_violations({"reasoning": "ok.", "reasoning_truncated": True}, schema)
+    assert mod._verdict_violations({"reasoning": "ok.", "verdict": "neutral"}, schema)
+
+
+def test_only_reasonings_own_length_is_waived_after_the_retry(mod):
+    assert mod._reasoning_too_long("reasoning: 'x' is too long")
+    assert mod._reasoning_too_long("reasoning: is too long (1600 > maxLength 1500)")
+    assert not mod._reasoning_too_long("evidence_used: [...] is too long")
+    assert not mod._reasoning_too_long("<root>: 'is too long' was unexpected")
+
+
+def test_an_abbreviation_is_not_a_sentence_end(mod):
+    """A cut after "e.g." would store a broken sentence as the read."""
+    schema = {"properties": {"reasoning": {"type": "string", "maxLength": 70}}}
+    text = "The isoform is conserved. Several signals agree, e.g. the PhyloP track and more."
+    out = mod._cap_reasoning({"reasoning": text}, schema)
+    assert out["reasoning"] == "The isoform is conserved. […]"
+
+
+def test_a_salvaged_read_ships_only_the_schema_fields(mod):
+    """A habitual "verdict" must not reach categories.json, where it overrides the criteria."""
+    schema = {"properties": {"reasoning": {"type": "string"}, "evidence_used": {}}}
+    trace: dict = {}
+    out, _ = mod._salvaged(
+        [{"reasoning": "A read.", "verdict": "not_interesting"}],
+        trace, n_data_calls=3, turns=5, schema=schema,
+    )
+    assert out == {"reasoning": "A read."}

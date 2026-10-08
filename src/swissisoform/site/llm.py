@@ -1250,7 +1250,10 @@ def run_tool_loop(
                 # earning its own; a payload rejected on content is still worth
                 # salvaging, one rejected as premature is not.
                 if bad_verdicts:
-                    return _salvaged(bad_verdicts, trace, n_data_calls=n_data_calls, turns=turn)
+                    return _salvaged(
+                        bad_verdicts, trace, n_data_calls=n_data_calls, turns=turn,
+                        schema=verdict_schema,
+                    )
                 trace["outcome"] = "no_tool_call"
                 raise ToolLoopError(
                     f"model made no tool call and gave no usable verdict after "
@@ -1334,7 +1337,10 @@ def run_tool_loop(
         messages.append({"role": "user", "content": results})
 
     if bad_verdicts:
-        return _salvaged(bad_verdicts, trace, n_data_calls=n_data_calls, turns=max_turns)
+        return _salvaged(
+            bad_verdicts, trace, n_data_calls=n_data_calls, turns=max_turns,
+            schema=verdict_schema,
+        )
 
     trace["outcome"] = "max_turns_exhausted"
     trace["n_data_calls"] = n_data_calls
@@ -1629,7 +1635,9 @@ def _verdict_violations(payload: Any, schema: dict[str, Any]) -> list[str]:
     """Why this verdict payload is unusable, or ``[]`` if it is fine.
 
     jsonschema honours ``maxLength`` even though the decoder ignores it, so the
-    reasoning cap is enforced here rather than at generation time.
+    reasoning cap is enforced here rather than at generation time. It sees the
+    model's read as written: the harness's own marks (``reasoning_truncated``)
+    are added only after validation, by :func:`_cap_reasoning`.
     """
     if not isinstance(payload, dict):
         return [f"payload is {type(payload).__name__}, expected object"]
@@ -1667,7 +1675,9 @@ def _checked_single_shot(
     own text, so the model shortens it rather than starting over (an identical
     re-send at temperature 0 would return the same text). A second violation
     raises, which the caller records as that category's error — except a read
-    that is still only too long, which the caller cuts with :func:`_cap_reasoning`.
+    whose reasoning is still only too long, which the caller cuts with
+    :func:`_cap_reasoning` after this returns. The read is validated as the
+    model wrote it; nothing here trims or marks it.
 
     Raises:
         ValueError: The verdict still violates the schema after one retry.
@@ -1680,8 +1690,8 @@ def _checked_single_shot(
         system=prompt.system,
         user=(
             f"{prompt.user}\n\nYour previous response was rejected: "
-            f"{'; '.join(violations)}. Re-emit the complete JSON verdict, fixing only "
-            f"that — keep the verdict and the substance, cut the wording.\n\n"
+            f"{'; '.join(violations)}. Re-emit the complete JSON read, fixing only "
+            f"that — keep the substance, cut the wording.\n\n"
             f"Previous response:\n{response_text}"
         ),
     )
@@ -1696,15 +1706,26 @@ def _checked_single_shot(
         ),
         output_schema,
     )
-    # A read that is only still too long is not lost: the caller's
-    # _cap_reasoning cuts it back to a whole sentence and flags it. Anything
-    # else wrong after the retry is an error.
+    # A read whose reasoning is only still too long is not lost: the caller's
+    # _cap_reasoning cuts it back to a whole sentence and flags it. Only that
+    # one field is waived — _cap_reasoning fixes nothing else, so any other
+    # field over its limit is still an error.
     violations = [
-        v for v in _verdict_violations(payload, output_schema) if "is too long" not in v
+        v for v in _verdict_violations(payload, output_schema) if not _reasoning_too_long(v)
     ]
     if violations:
         raise ValueError("verdict failed the schema after one retry: " + "; ".join(violations))
     return payload, 1
+
+
+def _reasoning_too_long(violation: str) -> bool:
+    """Whether *violation* is the ``reasoning`` field exceeding its maxLength.
+
+    Both validators name the field first (``reasoning: … is too long``), so the
+    path prefix, not a substring anywhere in the message, decides it: a message
+    about another field, or quoting the model's own text, is not waived.
+    """
+    return violation.startswith("reasoning: ") and "is too long" in violation
 
 
 def _premature_verdict_msg(*, min_data_calls: int, n_data_calls: int, terminal_tool: str) -> str:
@@ -1723,7 +1744,12 @@ def _premature_verdict_msg(*, min_data_calls: int, n_data_calls: int, terminal_t
 
 
 def _salvaged(
-    bad_verdicts: list[dict[str, Any]], trace: dict[str, Any], *, n_data_calls: int, turns: int
+    bad_verdicts: list[dict[str, Any]],
+    trace: dict[str, Any],
+    *,
+    n_data_calls: int,
+    turns: int,
+    schema: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Ship the last rejected read with its markup cut off. Last resort.
 
@@ -1739,6 +1765,13 @@ def _salvaged(
             it would land in categories.json as a success.
     """
     salvaged = _strip_verdict_markup(bad_verdicts[-1])
+    # Only the fields the read schema declares ship. A payload rejected for an
+    # extra key — a habitual "verdict" — would otherwise land in categories.json,
+    # where the website reads any `verdict` as a legacy verdict that overrides
+    # the criteria.
+    allowed = set(((schema or {}).get("properties") or {}))
+    if allowed:
+        salvaged = {k: v for k, v in salvaged.items() if k in allowed}
     if not str(salvaged.get("reasoning") or "").strip():
         trace["outcome"] = "salvage_empty"
         trace["n_data_calls"] = n_data_calls
@@ -1772,6 +1805,12 @@ def _strip_verdict_markup(payload: dict[str, Any]) -> dict[str, Any]:
 # ``reasoning_truncated: True`` so the cut is machine-visible, not just visible.
 _TRUNCATION_MARK = " […]"
 _SENTENCE_END = re.compile(r"[.!?][\"')\]]*(?=\s|$)")
+# A period that ends an abbreviation or a lone initial, not a sentence. Matched
+# against the text up to and including the period.
+_NOT_A_SENTENCE_END = re.compile(
+    r"(?:\b(?:e\.g|i\.e|vs|approx|etc|cf|al|fig|figs|ca|resp|no|ref|refs)|\b[A-Za-z])\.$",
+    re.IGNORECASE,
+)
 
 
 def _reasoning_limit(schema: dict[str, Any] | None) -> int | None:
@@ -1781,32 +1820,42 @@ def _reasoning_limit(schema: dict[str, Any] | None) -> int | None:
     return limit if isinstance(limit, int) and limit > len(_TRUNCATION_MARK) else None
 
 
-def _cap_reasoning(
-    payload: Any, schema: dict[str, Any] | None, *, mid_sentence: bool = False
-) -> Any:
+def _sentence_ends(text: str) -> list[int]:
+    """Offsets just past each sentence end in *text*, abbreviations excluded.
+
+    A period after ``e.g``, ``i.e``, ``vs``, ``approx`` and the like, or after a
+    lone initial, does not end a sentence: cutting there leaves a broken
+    fragment ("… e.g. […]") stored as the read.
+    """
+    return [
+        m.end()
+        for m in _SENTENCE_END.finditer(text)
+        if not _NOT_A_SENTENCE_END.search(text[: m.start() + 1])
+    ]
+
+
+def _cap_reasoning(payload: Any, schema: dict[str, Any] | None) -> Any:
     """Cut an over-long ``reasoning`` back to its last whole sentence, marked.
 
-    The decoder ignores ``maxLength`` and the single-shot path only warns, so
-    without this an over-cap read was shipped as-is on most paths. Deterministic
-    by construction: the same text always yields the same cut. Falls back to the
-    last word break when no sentence ends inside the budget.
+    The decoder ignores ``maxLength``, so a read can arrive over the cap; this is
+    the last step before it is stored, after validation and any re-ask.
+    Deterministic by construction: the same text always yields the same cut.
+    Falls back to the last word break when no sentence ends inside the budget.
+    A read under the cap is returned untouched, whatever its last character.
 
     Args:
         payload: A category read; anything else is returned unchanged.
         schema: The output schema whose ``reasoning.maxLength`` is the cap.
-        mid_sentence: The text is known to stop mid-sentence (a repaired cut-off
-            response), so cut back to a sentence boundary even under the cap.
     """
     limit = _reasoning_limit(schema)
     text = payload.get("reasoning") if isinstance(payload, dict) else None
     if limit is None or not isinstance(text, str):
         return payload
     text = text.rstrip()
-    ends_cleanly = bool(_SENTENCE_END.search(text[-4:]))
-    if len(text) <= limit and (ends_cleanly or not mid_sentence):
+    if len(text) <= limit:
         return payload
     head = text[: limit - len(_TRUNCATION_MARK)]
-    ends = [m.end() for m in _SENTENCE_END.finditer(head)]
+    ends = _sentence_ends(head)
     cut = ends[-1] if ends else (head.rfind(" ") if " " in head else len(head))
     kept = head[:cut].rstrip()
     if not kept:
@@ -1819,14 +1868,19 @@ def _cap_reasoning(
     return {**payload, "reasoning": kept + _TRUNCATION_MARK, "reasoning_truncated": True}
 
 
-def _parse_category_read(text: str, schema: dict[str, Any] | None) -> dict[str, Any]:
+def _parse_category_read(text: str, schema: dict[str, Any] | None = None) -> dict[str, Any]:
     """Parse a single-shot category read, recovering a response cut off after ``reasoning``.
 
     The one recoverable break is an object closed early with the ``reasoning``
     string itself intact — ``{"reasoning": "…",`` — which is what an over-long
-    read has produced. That is re-closed and its reasoning cut back to a whole
-    sentence. Anything else (an unterminated string, a non-object, no reasoning)
-    raises the original ``JSONDecodeError``.
+    read has produced. The object is re-closed and the read returned as written:
+    the string is complete, so its last clause is the model's, not a cut, and
+    trimming it back to a sentence end deleted real content (a negation, a
+    number). Length is checked by the caller and enforced by
+    :func:`_cap_reasoning` as the last step. Anything else (an unterminated
+    string, a non-object, no reasoning) raises the original ``JSONDecodeError``.
+
+    ``schema`` is accepted for call compatibility and unused.
     """
     try:
         return parse_response(text)
@@ -1841,7 +1895,6 @@ def _parse_category_read(text: str, schema: dict[str, Any] | None) -> dict[str, 
             raise original from None
         if not (isinstance(payload, dict) and str(payload.get("reasoning") or "").strip()):
             raise original from None
-        payload = _cap_reasoning(payload, schema, mid_sentence=True)
         print("    [repaired] category read was cut off; re-closed the object", file=sys.stderr)
         return payload
 
