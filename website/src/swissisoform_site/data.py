@@ -25,7 +25,7 @@ import math
 import os
 import re
 from dataclasses import dataclass, field
-from functools import lru_cache
+from functools import cached_property, lru_cache
 from itertools import zip_longest
 from pathlib import Path
 from typing import Any
@@ -130,9 +130,14 @@ class Isoform:
     # Raw row (kept for /api/data.json)
     raw: dict[str, Any] = field(default_factory=dict)
 
-    @property
+    @cached_property
     def category_flags(self) -> dict[str, dict[str, Any]]:
-        """Category letter -> :func:`category_flag`, in CARD_GROUPS order."""
+        """Category letter -> :func:`category_flag`, in CARD_GROUPS order.
+
+        Cached: net_score, n_interesting, fired_categories and the index page each
+        read it, several times per isoform per render, and its inputs
+        (category_verdicts, criteria) are fixed when the Isoform is built.
+        """
         return {
             group["letter"]: category_flag(
                 group, self.category_verdicts.get(group["name"]), self.criteria
