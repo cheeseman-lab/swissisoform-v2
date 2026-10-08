@@ -1964,7 +1964,7 @@ def test_reused_output_keeps_its_old_run_id_and_the_capture_says_so(
 
 
 def _verdict_says(text: str):
-    # A category read: the category schema has no verdict, and forbids extra keys.
+    # A category read: improve_prompts' schema has no verdict, and forbids extra keys.
     return lambda *a, **kw: json.dumps({"reasoning": text})
 
 
