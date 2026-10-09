@@ -125,6 +125,24 @@ def test_a_rare_isoform_of_an_anchor_gene_is_never_picked(anchors):
     assert picks["gene_name"].is_unique
 
 
+@pytest.mark.parametrize("orf_type", ["uorf", "truncated"])
+def test_a_chry_isoform_is_never_picked(anchors, orf_type):
+    """A PAR gene on chrY, at the far end of PC1 in its own space, stays out."""
+    pool = _pool(anchors)
+    extra = {"gene_name": "GTPBP6", "tis_id": "chrY:316965:-:ACG:ENSTY", "orf_type": orf_type}
+    pool = pd.concat([pool, pd.DataFrame([extra])], ignore_index=True)
+    results = _results(pool)
+    space = "all-ORF" if orf_type in bc.RARE_TYPES else f"paired-{orf_type}"
+    meta = results[space].matrix.meta
+    results[space].scores[int(np.flatnonzero(meta["tis_id"] == extra["tis_id"])[0]), 0] = 1e6
+
+    picks, final = bc.build_coreset(results, anchors)
+
+    assert extra["tis_id"] not in set(final["tis_id"])
+    assert len(final) == bc.TARGET
+    assert bc.verify(picks, final, anchors, results) == []
+
+
 def test_a_missing_anchor_stops_the_build(anchors):
     pool = _pool(anchors)
     pool = pool[pool["tis_id"] != anchors["tis_id"].iloc[0]]

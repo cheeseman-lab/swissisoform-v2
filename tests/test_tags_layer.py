@@ -138,8 +138,10 @@ class TestRegistry:
         """The sweep, the builder and the reader must default to the same version."""
         from swissisoform import distributions as dist_mod
         from swissisoform.setup import tags as build_mod
+        from swissisoform.site import grounding
 
         assert build_mod.DEFAULT_DIST_VERSION == dist_mod.DEFAULT_VERSION
+        assert grounding.DEFAULT_DIST_VERSION == dist_mod.DEFAULT_VERSION
         assert dist_mod.DEFAULT_VERSION in dist_mod.PROVISIONAL_VERSIONS
 
 
@@ -652,6 +654,7 @@ class TestBuilderGuards:
     def test_renamed_criterion_fails_the_build(self, monkeypatch):
         """A criterion rename must not leave a derived tag scoring the wrong thing."""
         from swissisoform.setup import tags as build_mod
+        from swissisoform.site import grounding
 
         monkeypatch.setattr(
             build_mod.derived_mod, "check_names", lambda *_: ["C1_primate_conservation"]
@@ -661,5 +664,6 @@ class TestBuilderGuards:
 
     def test_scorer_names_match_today(self):
         from swissisoform.setup import tags as build_mod
+        from swissisoform.site import grounding
 
         build_mod._check_scorer_names()  # raises if the map has drifted
