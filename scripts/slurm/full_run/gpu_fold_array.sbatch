@@ -25,7 +25,9 @@ cd "${SLURM_SUBMIT_DIR:-.}"
 eval "$(conda shell.bash hook)"
 # Pick the env by what it can import, not by name — an env that exists but lacks
 # ESMFold2 would otherwise be activated and fail mid-array.
-source "$(dirname "$(readlink -f "$0")")/activate_gpu_env.sh"
+# Under Slurm $0 is the spooled copy in /var/spool, not this file, so its
+# directory has no helper; the job has already cd'd to the repo root.
+source scripts/slurm/full_run/activate_gpu_env.sh
 activate_gpu_env "fold" "swissisoform-v2-fold,swissisoform-v2" esm.models.esmfold2
 
 export TORCH_HOME="$PWD/.torch_cache"
