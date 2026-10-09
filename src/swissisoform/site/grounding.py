@@ -463,7 +463,9 @@ def _tags_body(
             state = states[tag.tag_id]
             entry: dict[str, Any] = {
                 "tag_id": tag.tag_id,
-                "label": tag.label,
+                # Read for this ORF type from the registry, not the parquet's
+                # isoform_tags_labels: that column keeps the wording it was fired with.
+                "label": tag.label_for(record.get("orf_type")),
                 "state": "on" if state is True else "off" if state is False else "not_evaluable",
             }
             citation = _clean(citations.get(tag.tag_id))
@@ -514,7 +516,7 @@ def _open_question(tag: reg_mod.Tag, record: dict[str, Any]) -> dict[str, Any]:
     evaluable = not tag.valid_for or orf_type in tag.valid_for
     entry: dict[str, Any] = {
         "tag_id": tag.tag_id,
-        "label": tag.label,
+        "label": tag.label_for(orf_type),
         "state": "unanswered" if evaluable else "not_evaluable",
     }
     if seed is not None:

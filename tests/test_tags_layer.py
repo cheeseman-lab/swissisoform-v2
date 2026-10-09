@@ -250,7 +250,7 @@ class TestFire:
         both = _registry(_row(label="Domain gained or lost")).get("t")
         assert both.label_for("truncated") == "Domain gained or lost"
 
-    def test_a_truncation_reads_the_unique_region_as_lost(self):
+    def test_each_orf_type_names_the_unique_region_its_own_way(self):
         def label(text: str, orf_type: str, metric: str = "m") -> str:
             return _registry(_row(label=text, metric=metric)).get("t").label_for(orf_type)
 
@@ -261,9 +261,15 @@ class TestFire:
             "Lost region under selection"
         )
         # An extension adds the region; a separate ORF is wholly unique.
-        assert label("Unique region more basic", "extended") == "Unique region more basic"
-        assert label("Unique region more basic", "uorf") == "Unique region more basic"
+        assert label("Unique region more basic", "extended") == "Extension more basic"
+        assert label("Long unique region", "extended") == "Long extension"
+        assert label("Motifs in unique region", "extended") == "Motifs in extension"
+        assert label("Unique region more basic", "uorf") == "ORF more basic"
+        assert label("Long unique region", "alt_orf") == "Long ORF"
         assert label("Constrained residues gained", "uorf") == "Constrained residues gained"
+        assert label("Constrained residues gained", "extended") == "Constrained residues gained"
+        # No ORF type: the label as written.
+        assert label("Unique region more basic", None) == "Unique region more basic"
         assert label("Domain gained or lost", "truncated") == "Domain gained or lost"
         assert label("Basic unique region", "truncated") == "Basic lost region"
 
@@ -508,9 +514,9 @@ class TestModule:
         out = TagModule(reg).annotate_frame(df, sites)
 
         assert list(out[LABELS_COLUMN]) == [
-            {"hi": "Unique region more basic"},
+            {"hi": "Extension more basic"},
             {"hi": "Lost region more basic"},
-            {"hi": "Unique region more basic"},
+            {"hi": "ORF more basic"},
         ]
         assert sites[1].isoform_annotations["tags"]["labels"] == {"hi": "Lost region more basic"}
 

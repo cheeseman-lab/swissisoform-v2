@@ -285,6 +285,19 @@ class TestTags:
         assert tag["value"] == 7.5
         assert tag["test"] == "isoform_x >= 2"
 
+    @pytest.mark.parametrize(
+        "orf_type, label",
+        [
+            ("extended", "Extension more basic"),
+            ("truncated", "Lost region more basic"),
+            ("uorf", "ORF more basic"),
+        ],
+    )
+    def test_label_names_the_region_for_the_orf_type(self, orf_type, label):
+        reg = _registry(_tag_row(tag_id="a", label="Unique region more basic"))
+        rec = _record({"isoform_tags_states": {"a": True}}, orf_type=orf_type)
+        assert gr._tags_body(reg)(rec, CATEGORY_C)["tags"][0]["label"] == label
+
     def test_llm_tags_are_questions_not_states(self):
         reg = _registry(_tag_row(tag_id="judged", category="M", kind=reg_mod.KIND_LLM))
         rec = _record({"isoform_tags_states": {"other": True}})
