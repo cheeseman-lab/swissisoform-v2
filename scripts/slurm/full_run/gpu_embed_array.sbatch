@@ -29,7 +29,9 @@ eval "$(conda shell.bash hook)"
 # fair-esm stack from before the ESM-C migration and cannot run this workload.
 # The SAE encode below rides the same env, so require its module too unless the
 # encode is skipped. Fails with a pointer to the setup job if nothing qualifies.
-source "$(dirname "$(readlink -f "$0")")/activate_gpu_env.sh"
+# Under Slurm $0 is the spooled copy in /var/spool, not this file, so its
+# directory has no helper; the job has already cd'd to the repo root.
+source scripts/slurm/full_run/activate_gpu_env.sh
 EMBED_MODULES=(transformers.models.esmc.modeling_esmc)
 [[ "${SWISSISO_SKIP_SAE:-0}" == "1" ]] || EMBED_MODULES+=(transformers.models.esmc.modeling_esmc_sae)
 activate_gpu_env "embed" "swissisoform-v2-plm,swissisoform-v2-fold,swissisoform-v2" \
