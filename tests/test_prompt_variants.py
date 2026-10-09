@@ -68,7 +68,7 @@ def _norm(text: str) -> str:
 
 class TestParse:
     def test_finds_every_section(self):
-        assert sorted(A.parse_blocks(SAMPLE)) == sorted(A.SECTIONS + A.ID_SECTIONS)
+        assert set(A.parse_blocks(SAMPLE)) == set(A.SECTIONS + A.ID_SECTIONS[A.BASE_PROMPTS[0]])
 
     def test_unclosed_block_rejected(self):
         with pytest.raises(A.AssembleError, match="never closed"):
@@ -148,8 +148,7 @@ class TestBasePrompts:
     def test_declares_every_section_exactly_once(self, name):
         """One missing marker and an arm silently keeps a block it should swap."""
         spans = A.parse_blocks((BASE / name).read_text(encoding="utf-8"))
-        shared = name == A.BASE_PROMPTS[0]
-        assert sorted(spans) == sorted(A.SECTIONS + (A.ID_SECTIONS if shared else ()))
+        assert set(spans) == set(A.SECTIONS + A.ID_SECTIONS[name])
 
     @pytest.mark.parametrize("name", A.BASE_PROMPTS)
     def test_hint_on_round_trips_to_the_tracked_file(self, name):
@@ -170,9 +169,7 @@ class TestBasePrompts:
     @pytest.mark.parametrize("name", A.BASE_PROMPTS)
     def test_status_quo_arm_is_what_production_sends(self, name):
         text = (BASE / name).read_text(encoding="utf-8")
-        status_quo = A.render(
-            text, grounding="criteria", hints=True, is_tool_prompt=name != A.BASE_PROMPTS[0]
-        )
+        status_quo = A.render(text, grounding="criteria", hints=True, name=name)
         assert status_quo.strip() == llm.load_system_prompt(BASE / name)
 
     @pytest.mark.parametrize("name", A.BASE_PROMPTS)
@@ -194,18 +191,18 @@ class TestBasePrompts:
     @pytest.mark.parametrize("grounding", ["criteria", "raw", "tags", "dist"])
     def test_directionality_and_p2_gate_survive_hint_stripping(self, name, grounding):
         text = (BASE / name).read_text(encoding="utf-8")
-        tool = name != A.BASE_PROMPTS[0]
-        out = A.render(text, grounding=grounding, hints=False, is_tool_prompt=tool)
+        out = A.render(text, grounding=grounding, hints=False, name=name)
         assert "Directionality — get these right" in out
         if name != "category-pass-M.txt":
             assert "RMSD" in out and "pLDDT" in out
 
+    @pytest.mark.parametrize("name", A.BASE_PROMPTS)
     @pytest.mark.parametrize("hints", [True, False])
     @pytest.mark.parametrize("grounding", sorted(A.ID_FREE_GROUNDINGS))
-    def test_id_free_arms_name_no_member_ids_or_thresholds(self, grounding, hints):
+    def test_id_free_arms_name_no_member_ids_or_thresholds(self, grounding, hints, name):
         """raw/dist payloads carry neither; the prompt taught them to write both."""
-        text = (BASE / A.BASE_PROMPTS[0]).read_text(encoding="utf-8")
-        out = A.render(text, grounding=grounding, hints=hints)
+        text = (BASE / name).read_text(encoding="utf-8")
+        out = A.render(text, grounding=grounding, hints=hints, name=name)
         assert not re.findall(r"\b[CDLMPS][1-3]\b", out)
         # The dist contract's own "no thresholds" and the tempering rule, whose
         # anchors (pLDDT 0.70, ratio 1.0, phyloP 0) mean something outside the
@@ -214,7 +211,8 @@ class TestBasePrompts:
         assert "threshold" not in body.lower().replace("no thresholds", "")
         assert "`reason`" not in body and "`state`" not in body
         assert "Directionality — get these right" in out
-        assert "core-fold change (Cα RMSD) is only meaningful" in out
+        if name == A.BASE_PROMPTS[0]:
+            assert "core-fold change (Cα RMSD) is only meaningful" in out
 
     @pytest.mark.parametrize("grounding", ["raw", "tags", "dist"])
     def test_swapped_contract_keeps_the_role_sentence(self, grounding):
@@ -222,10 +220,26 @@ class TestBasePrompts:
         out = A.render(text, grounding=grounding, hints=True)
         assert out.startswith("You are interpreting ONE evidence CATEGORY")
 
+    @pytest.mark.parametrize(
+        "name, member",
+        [
+            ("category-pass.txt", "C1 primate AA-identity"),
+            ("category-pass-M.txt", "M1 germline tolerance"),
+            ("category-pass-P.txt", "P1 Fold Confidence"),
+        ],
+    )
     @pytest.mark.parametrize("grounding", ["criteria", "tags"])
-    def test_member_backed_arms_keep_the_roster(self, grounding):
-        text = (BASE / A.BASE_PROMPTS[0]).read_text(encoding="utf-8")
-        assert "C1 primate AA-identity" in A.render(text, grounding=grounding, hints=True)
+    def test_member_backed_arms_keep_the_roster(self, grounding, name, member):
+        text = (BASE / name).read_text(encoding="utf-8")
+        assert member in A.render(text, grounding=grounding, hints=True, name=name)
+
+    @pytest.mark.parametrize("name", ["category-pass-M.txt", "category-pass-P.txt"])
+    def test_id_free_tool_prompts_keep_their_orf_kind_rules(self, name):
+        """Only the ids go: the per-ORF-type validity rules must survive the swap."""
+        text = (BASE / name).read_text(encoding="utf-8")
+        out = A.render(text, grounding="raw", hints=True, name=name)
+        assert "EXTENSION (`extended`)" in out and "SEPARATE ORF (`uorf`" in out
+        assert "`am_pathogenicity` is absent by construction" in out or name.endswith("P.txt")
 
     def test_id_free_rendering_needs_the_roster_block(self):
         no_roster = re.sub(r"<!-- @block:roster -->.*?<!-- @end -->\n", "", SAMPLE, flags=re.S)
@@ -401,26 +415,25 @@ class TestJudgmentTags:
     @pytest.mark.parametrize("name", A.BASE_PROMPTS)
     def test_only_the_tags_arm_mentions_tags_fired(self, name):
         text = (BASE / name).read_text(encoding="utf-8")
-        tool = name != "category-pass.txt"
         for grounding in ("criteria", "raw", "dist"):
-            out = A.render(text, grounding=grounding, hints=True, is_tool_prompt=tool)
+            out = A.render(text, grounding=grounding, hints=True, name=name)
             assert "tags_fired" not in out
 
     def test_tool_prompts_are_asked_to_emit(self):
         text = (BASE / "category-pass-M.txt").read_text(encoding="utf-8")
-        out = A.render(text, grounding="tags", hints=True, is_tool_prompt=True)
+        out = A.render(text, grounding="tags", hints=True, name="category-pass-M.txt")
         assert "pass the ids that fired as `tags_fired`" in out
         assert "Always include `tags_fired`, even when it is empty" in out
 
     def test_single_shot_prompt_is_told_it_has_none(self):
         text = (BASE / "category-pass.txt").read_text(encoding="utf-8")
-        out = A.render(text, grounding="tags", hints=True, is_tool_prompt=False)
+        out = A.render(text, grounding="tags", hints=True)
         assert "does not apply to it" in out
 
     def test_instruction_survives_hint_stripping(self):
         """It states what to emit, not how to weigh evidence."""
         text = (BASE / "category-pass-P.txt").read_text(encoding="utf-8")
-        out = A.render(text, grounding="tags", hints=False, is_tool_prompt=True)
+        out = A.render(text, grounding="tags", hints=False, name="category-pass-P.txt")
         assert "tags_fired" in out
 
     def test_enums_are_unioned_not_overwritten(self):
