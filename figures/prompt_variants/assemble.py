@@ -6,7 +6,7 @@ first prose fix — and the three already differ in ways that matter:
 check the other two lack. Editing one and not the others would change the verdict
 bar for four categories but not M, a confound *inside* a single arm.
 
-So the base files stay single-source and carry HTML-comment markers around the two
+So the base files stay single-source and carry HTML-comment markers around the
 blocks an arm needs to vary:
 
 ``input_contract``
@@ -15,10 +15,20 @@ blocks an arm needs to vary:
     none of which exist under ``raw`` / ``tags`` / ``dist``. Leaving it is a broken
     prompt, and would surface as degraded quality wrongly blamed on grounding.
 ``directionality``
-    The interpretive guidance the ``-hint`` arms drop. The N-terminal rule that
-    used to live here has been moved into the always-kept ORF-kind block: it is a
-    property of the annotation, not guidance, and dropping it would reintroduce
-    the N/C-terminal confusion the PR #24 audit found the prompt had fixed.
+    The system-level reading rules (signal directions, the P2 confidence gate).
+    Kept in **every** arm, hint or not: dropping it in ``-hint`` made the hint axis
+    two changes at once — the per-member hints *and* the gate — so a hint effect
+    could not be told from a gate effect. The ``-hint`` arms now vary only the
+    hint content itself (per-member ``interpretation_hint`` / per-tag ``means``).
+``roster`` / ``machinery`` / ``id_examples`` / ``id_example`` (every prompt)
+    The member roster and the writing rules that name member ids and
+    thresholds. ``raw`` and ``dist`` payloads carry neither ids nor thresholds, so
+    for them these are swapped for id- and threshold-free wordings of the same
+    rules — plus the shared prompt's ``directionality`` and the M prompt's
+    ``orf_extension`` / ``orf_separate`` bullets, which say what M1 reports. Left
+    as-is they taught those arms to write "C1/C2/C3" and cite thresholds the
+    payload never showed (audit38_C). Which sections a prompt declares is
+    ``ID_SECTIONS[name]``.
 
 Markers are stripped in **every** arm, so the ``+hint`` `criteria` assembly is the
 base file verbatim — and production strips them by the same rule
@@ -42,6 +52,196 @@ BASE_PROMPTS: tuple[str, ...] = (
     "category-pass-P.txt",
 )
 SECTIONS: tuple[str, ...] = ("input_contract", "directionality", "judgment_tags")
+# Groundings whose payload names no member ids and states no thresholds.
+ID_FREE_GROUNDINGS: frozenset[str] = frozenset({"raw", "dist"})
+
+# Each prompt's id-bearing blocks, reworded for ID_FREE_GROUNDINGS. Same rules,
+# same order; only the member ids, the scorer/reason-string references and the
+# thresholds are gone.
+_ID_FREE_SHARED: dict[str, str] = {
+    "roster": (
+        "The six categories (CDLMPS) and what each one asks:\n"
+        "- C Conservation: amino-acid identity across primates and across mammals, and "
+        "absolute phyloP constraint over the unique region.\n"
+        "- D Detection: reproducibility across cell lines, initiation efficiency "
+        "(start-site usage), and unique-peptide mass spectrometry.\n"
+        "- L Localization: DeepLoc compartment/signal change, and SignalP/TargetP "
+        "targeting change.\n"
+        "- M Mutation Landscape: germline tolerance/constraint, and disease-variant "
+        "density enrichment.\n"
+        "- P Predicted Structure: unique-region folding (pLDDT), shared-region core-fold "
+        "perturbation (Cα RMSD), and secondary structure — a helix or strand gained "
+        "(extension) or lost (truncation) in the differential region.\n"
+        "- S Structural Characteristics: real-InterPro-domain gain/loss, whole-protein "
+        "biophysical shift (isoform vs canonical gravy/charge/disorder), and differential "
+        "ESM-C sparse-autoencoder interpretability features (the size of the strongest "
+        "shared-feature activation shift; gained/lost counts are context only)."
+    ),
+    "directionality": (
+        "Directionality — get these right:\n"
+        "- The two germline-constraint signals are INDEPENDENT, either-or evidence, not "
+        "two measurements of one quantity, and they run in OPPOSITE numerical directions "
+        "for the same conclusion (gnomAD: lower = constrained; ESM-C constraint_delta: "
+        "higher = constrained). Either one alone can carry the signal. Do not expect them "
+        "to corroborate, and do not treat one being quiet as undercutting the other.\n"
+        "- Germline TOLERANCE/CONSTRAINT: a gnomAD depletion ratio < 1 means population "
+        "variation AVOIDS the unique region (evidence it is important); a positive ESM-C "
+        "constraint_delta means the model predicts the unique region's residues better "
+        "than the shared core, i.e. finds them more conserved (it is mean logP(wt) unique "
+        "minus shared). Never read gnomAD variants as disease/pathogenic burden.\n"
+        "- DISEASE density: a ClinVar/COSMIC enrichment ratio >= 1 means disease variants "
+        "CONCENTRATE in the unique region.\n"
+        "- Unique-region pLDDT measures folding only; the biophysical signal "
+        "(whole-protein gravy/charge/disorder delta, isoform vs canonical) is a separate "
+        "question in S. Domain gain/loss counts only real InterPro domains (not "
+        "disorder/coiled-coil/low-complexity).\n"
+        "- A shared-region core-fold change (Cα RMSD) is only meaningful when the shared "
+        "region is confidently folded in BOTH structures — read it against the "
+        "shared-region pLDDT. Never call an elevated RMSD a real refold when that "
+        "confidence is low; a floppy, low-pLDDT loop moves the backbone without any "
+        "conformational meaning. Weigh the RMSD against its pLDDT before treating it as "
+        "signal.\n"
+        "- Primate/mammalian conservation is amino-acid identity; phyloP is absolute "
+        "constraint, larger |mean| = stronger.\n"
+        "- For the ESM-C sparse-autoencoder features, the MAGNITUDE of the strongest "
+        "shared-feature activation shift is the signal, not presence. Gained/lost feature "
+        "counts are context only — two proteins of different length always differ in "
+        "hundreds of features, so a large count is not evidence of anything. Feature "
+        "labels are auto-generated and provisional, not curated annotation: many carry no "
+        "content at all, and many others merely describe the feature's own activation "
+        "pattern or restate sequence composition the biophysics already covers. Never "
+        "name, quote or interpret an SAE feature label in the reasoning, and never let a "
+        "label move the read — cite the activation-shift magnitude, not the labels. "
+        "Never invent biology the inputs do not state."
+    ),
+    # One sentence: the tempering paragraph that follows this block in every arm
+    # already carries the "never report that a value cleared a standard" rule and
+    # its 13.7 example. Repeating them here gave raw/dist the rule twice and the
+    # criteria/tags arms once — a second difference between arms beside the
+    # grounding under test.
+    "machinery": "Cite the measurement, not a judgement about it.",
+    "id_examples": (
+        '- Name each measurement by what it measures ("primate amino-acid identity", '
+        '"the unique-peptide mass-spec check", "whole-protein hydropathy/charge/disorder '
+        'shift", "the shared-core fold RMSD"). Give the two or three numbers that carry '
+        "the read — unusually large or small, or the one that tempers a claim."
+    ),
+    "id_example": (
+        'Example — Bad, reads as an inventory: "Conservation is high across the board: '
+        'primate identity 97.7%, mammalian 93.4%, phyloP 3.4 over the region." Good, the '
+        'same evidence as interplay: "The removed segment is under purifying selection: '
+        "primate and mammalian identity agree (97.7% and 93.4%), so this is not one "
+        "clade's artefact, and phyloP of 3.4 confirms it at the nucleotide level. Its "
+        'loss is likely consequential."'
+    ),
+}
+
+# Rewording shared by the M and P tool prompts: their machinery paragraph is the
+# shared prompt's, under its own heading.
+_ID_FREE_MACHINERY = "## Cite the measurement\n\n" + _ID_FREE_SHARED["machinery"]
+
+_ID_FREE_M: dict[str, str] = {
+    "roster": (
+        "The two members:\n"
+        "- germline tolerance/constraint — gnomAD depletion ratio + ESM-C constraint. "
+        "NOT disease burden.\n"
+        "- disease-variant density enrichment — ClinVar/COSMIC density in the unique "
+        "region vs the shared core."
+    ),
+    "orf_extension": (
+        "- EXTENSION (`extended`): the unique region was 5'UTR or intron and was NEVER "
+        "coding. Germline constraint cannot be read here, because both of its inputs "
+        "contrast the unique region against the shared core and the two are not "
+        "comparable quantities: the gnomAD depletion ratio would measure variation in "
+        "never-coding nucleotides (shaped by UTR/splicing selection and coverage), and "
+        "the ESM-C constraint delta would measure a never-evolved sequence against a "
+        "conserved core. Do not read their values as protein constraint, and do not "
+        "report germline constraint's absence as a negative finding about this "
+        "isoform. The per-variant effect scores are NOT both in that position: "
+        "`am_pathogenicity` is absent by construction (a canonical-transcript lookup "
+        "with no entry outside the canonical CDS — a null is a missing lookup, not "
+        "tolerance), but `plm_delta_llr` IS scored here, in the isoform's own frame, "
+        "and you may use it — calibrated as model-perceived disruptiveness of the "
+        "substitution, not as evidence of purifying selection. Never present the two "
+        "constraint inputs as conflicting, never adjudicate between them, and never "
+        "report their disagreement as a result. Lean on the positional clustering and "
+        "the raw disease counts instead."
+    ),
+    "orf_separate": (
+        "- SEPARATE ORF (`uorf`, `uoorf`, `internal_oof`, `3utr_orf`, `alt_orf`): the "
+        "entire isoform is the differential region — there is no shared region. The "
+        "gnomAD depletion ratio, the ESM-C constraint delta and the disease enrichment "
+        "ratio are structurally undefined (their denominator or baseline is the shared "
+        "region), so germline constraint cannot be read here — treat those as absent "
+        "by construction, not as missing data. Of the per-variant effect scores, only "
+        "`am_pathogenicity` is absent by construction (canonical-transcript lookup, no "
+        "entry here); `plm_delta_llr` is scored against this protein's own residues "
+        "and is usable, calibrated as model-perceived disruptiveness rather than as "
+        "evidence of purifying selection."
+    ),
+    "machinery": _ID_FREE_MACHINERY,
+    "id_examples": (
+        '- Refer to each measurement by what it measures ("germline depletion in the '
+        'unique region", "disease-variant density"). Give the two or three numbers '
+        "that carry the read — unusually large or small, or the one that tempers a "
+        "claim."
+    ),
+    "id_example": (
+        'Example — Bad: "The disease enrichment ratio is 2.1, so disease variants '
+        'concentrate in the unique region." Good: "The lost segment overlaps a '
+        "disease-critical site, not just a denser patch: 7 of the 9 pathogenic ClinVar "
+        "variants fall on residues 14-17, all AlphaMissense-pathogenic (mean 0.91), "
+        "which the 2.1x density over the shared core would not show on its own. The "
+        'loss likely matters clinically."'
+    ),
+}
+
+_ID_FREE_P: dict[str, str] = {
+    "roster": (
+        "The three members:\n"
+        "- Unique-region fold confidence — does the unique region fold confidently "
+        "(ESMFold2 pLDDT)? Folding ONLY; the biophysical distinctness signal (GRAVY / "
+        "charge / disorder) is a separate question in S and must not be weighed here. "
+        "It comes with the whole-prediction confidence metric global pTM, plus "
+        "`pae_status`. The PAE block means themselves are NOT in your context — see "
+        "the PAE note below.\n"
+        "- Shared-region core-fold perturbation — does the RETAINED (shared) region fold "
+        "differently in the isoform vs the canonical protein? The shared region is "
+        "identical in sequence, so a high Ca RMSD is CONSISTENT WITH the "
+        "extension/truncation reorganizing how it folds.\n"
+        "- Secondary structure in the differential region — does it contain an actual "
+        "helix or strand, as opposed to coil? Assigned from the predicted coordinates, "
+        "so each element carries its own mean pLDDT. On an EXTENSION the isoform GAINS "
+        "the element; on a TRUNCATION it LOSES one and the element is read off the "
+        "CANONICAL structure. It says nothing about whether the element is INTEGRATED "
+        "with the rest of the fold — that is what contacts and PAE answer."
+    ),
+    "machinery": _ID_FREE_MACHINERY,
+    "id_examples": (
+        '- Refer to each measurement by what it measures ("unique-region fold '
+        'confidence", "the shared-core fold RMSD"). Give the two or three numbers that '
+        "carry the read — unusually large or small, or the one that tempers a claim."
+    ),
+    "id_example": (
+        'Example — Bad: "Unique-region pLDDT is 0.76, so the extension is structured." '
+        'Good: "The extension folds but does not attach: confidence holds near 0.85 '
+        "over its first 20 residues, yet predicted aligned error to the canonical body "
+        "averages 30 A, so its orientation is unresolved. It should not be read as an "
+        'integrated domain."'
+    ),
+}
+
+ID_FREE: dict[str, dict[str, str]] = {
+    "category-pass.txt": _ID_FREE_SHARED,
+    "category-pass-M.txt": _ID_FREE_M,
+    "category-pass-P.txt": _ID_FREE_P,
+}
+# The id-bearing sections each prompt declares; required when an id-free arm
+# renders it.
+ID_SECTIONS: dict[str, tuple[str, ...]] = {name: tuple(d) for name, d in ID_FREE.items()}
+# M and P emit through a tool loop; the shared file serves C/D/L/S.
+TOOL_PROMPTS: frozenset[str] = frozenset({"category-pass-M.txt", "category-pass-P.txt"})
+
 SCHEMA_REL = Path("output_schemas") / "category_read.json"
 # Read by llm._tool_categories when present; the loop validates against this
 # instead of the shared file. Must match llm.TOOL_VERDICT_SCHEMA.
@@ -54,6 +254,15 @@ _IDENTITY = (
     "differential sequence, and `differential_region_location` — an explicit statement "
     "of where the differential region sits; trust it verbatim over any prior about "
     "this gene); (2) the category name and letter; and (3) "
+)
+
+# The shared prompt's opening role sentence sits inside its input_contract block
+# (the M/P prompts keep theirs outside), so a swapped contract must restore it or
+# the alternative arms lose the one line saying what the task is.
+_ROLE = (
+    "You are interpreting ONE evidence CATEGORY for an alternative protein isoform (an "
+    "alt-TIS isoform: an N-terminal extension, a truncation, or a uORF/altORF) in "
+    "SwissIsoform v2. "
 )
 
 CONTRACTS: dict[str, str] = {
@@ -77,7 +286,7 @@ CONTRACTS: dict[str, str] = {
         "caveat. A tag with no `metrics` is single-metric by construction: its `value` "
         "is the whole of its evidence, not an excerpt. There are no verdict strings and "
         "no row-level records: reason from the states, their numbers, and the "
-        "supporting metrics where they are given."
+        "supporting metrics where they are given. The `state`, `test` and `cutoff` are how the payload was built, not findings — read them, never cite them."
     ),
     "dist": (
         _IDENTITY + "`fields` — every numeric metric for the category with its `value` "
@@ -208,28 +417,41 @@ def parse_blocks(text: str) -> dict[str, tuple[int, int]]:
     return spans
 
 
-def render(text: str, *, grounding: str, hints: bool, is_tool_prompt: bool = False) -> str:
+def render(text: str, *, grounding: str, hints: bool, name: str = BASE_PROMPTS[0]) -> str:
     """One base prompt, spliced for an arm and with every marker removed.
 
     Replacement is keyed by *section*, not by line index: a block can legitimately
     be empty in the base file (``judgment_tags`` is), and an index-keyed insert
     would land on the ``@end`` marker — which is stripped before replacements are
     consulted, so the content silently vanished.
+
+    ``hints`` reaches only the contract's hint clause: the Directionality block is
+    kept either way, so the hint axis varies the hint content and nothing else.
+    ``name`` is the base prompt's file name: it picks the id-free rewordings and
+    whether the prompt drives a tool loop.
     """
     spans = parse_blocks(text)
-    missing = [s for s in SECTIONS if s not in spans]
+    is_tool_prompt = name in TOOL_PROMPTS
+    id_free = grounding in ID_FREE_GROUNDINGS
+    required = SECTIONS + (ID_SECTIONS[name] if id_free else ())
+    missing = [s for s in required if s not in spans]
     if missing:
         raise AssembleError(f"base prompt is missing section(s): {', '.join(missing)}")
 
     # section -> replacement lines, or None to delete the block's body entirely.
     edits: dict[str, list[str] | None] = {}
     if grounding in CONTRACTS:
-        contract = CONTRACTS[grounding] + (_HINT_CLAUSE.get(grounding, "") if hints else "")
+        contract = (
+            ("" if is_tool_prompt else _ROLE)
+            + CONTRACTS[grounding]
+            + (_HINT_CLAUSE.get(grounding, "") if hints else "")
+        )
         edits["input_contract"] = [
             contract + _TERMINOLOGY.format(noun=NOUNS[grounding], na=_NA[grounding])
         ]
-    if not hints:
-        edits["directionality"] = None
+    if id_free:
+        for section, wording in ID_FREE[name].items():
+            edits[section] = wording.split("\n")
     edits["judgment_tags"] = (
         [JUDGMENT_TAGS["tools" if is_tool_prompt else "single_shot"], ""]
         if grounding == "tags"
@@ -289,8 +511,7 @@ def materialize(
                 source.read_text(encoding="utf-8"),
                 grounding=grounding,
                 hints=hints,
-                # M and P emit through a tool loop; the base file serves C/D/L/S.
-                is_tool_prompt=name != "category-pass.txt",
+                name=name,
             ),
             encoding="utf-8",
         )
@@ -323,9 +544,13 @@ def materialize(
 __all__ = [
     "BASE_PROMPTS",
     "CONTRACTS",
+    "ID_FREE",
+    "ID_FREE_GROUNDINGS",
+    "ID_SECTIONS",
     "JUDGMENT_TAGS",
     "NOUNS",
     "SECTIONS",
+    "TOOL_PROMPTS",
     "TOOL_SCHEMA_REL",
     "AssembleError",
     "materialize",

@@ -20,6 +20,9 @@ first is the only way they appear at all. Equally, 44 pool genes carry both a
 rare type and a common one, so the rare strata must claim their genes before the
 samplers run or a gene gets picked twice and the set lands short.
 
+chrY isoforms are out of the pool for every pick (``off_pool``): PAR genes sit on
+chrY in this catalog while the cell lines are female.
+
 Spaces. The rare types are filled in the **all-ORF** matrix (no shared-region
 features: they have no shared region). Extended and truncated are each sampled
 in their **own paired-ORF** matrix — every feature, the 83 unique-vs-shared
@@ -75,6 +78,17 @@ TARGET = 50
 RARE_TYPES = ("uorf", "internal_oof", "3utr_orf", "uoorf")
 # Sampled per type, each in its own paired-ORF matrix (see module docstring).
 PAIRED_STRATA = fs.PAIRED_ORF_TYPES
+
+
+def off_pool(tis_ids: np.ndarray) -> np.ndarray:
+    """True for isoforms no pick may take: everything on chrY.
+
+    PAR genes are annotated on chrY in this catalog (GTPBP6 was a pick) while the
+    cell lines are female, so their position-based evidence — conservation,
+    gnomAD, ClinVar, COSMIC — can be missing for reasons that are not biology.
+    """
+    return np.char.startswith(np.asarray(tis_ids, dtype=str), "chrY:")
+
 
 SET_STYLE = {
     "Y": ("#2563eb", "^", "Y — largest projection"),
@@ -266,7 +280,7 @@ def build_coreset(
         # rare_type_fill — which does not consult `claimed` — can pick one and
         # abort the build below.
         taken = np.isin(genes, list(claimed))
-        stratum = np.flatnonzero((orf == orf_type) & ~is_anchor & ~taken)
+        stratum = np.flatnonzero((orf == orf_type) & ~is_anchor & ~taken & ~off_pool(tis))
         for p in rare_type_fill(all_orf.scores, stratum):
             gene = genes[p["row_index"]]
             if gene in claimed:
@@ -279,7 +293,7 @@ def build_coreset(
         result = results[f"paired-{orf_type}"]
         pool = result.matrix.meta
         pool_ids = pool["tis_id"].to_numpy()
-        keep = ~np.isin(pool_ids, list(anchor_ids))
+        keep = ~np.isin(pool_ids, list(anchor_ids)) & ~off_pool(pool_ids)
         rows = np.flatnonzero(keep)
         n = math.ceil(k / 3)
         local = sampler_fill(result.scores[rows], pool["gene_name"].to_numpy()[rows], claimed, n, k)
@@ -315,6 +329,8 @@ def verify(
         problems.append("picks contain a repeated gene (rule 3)")
     if set(picks["gene_name"]) & anchor_genes:
         problems.append(f"picks land on anchor genes: {set(picks['gene_name']) & anchor_genes}")
+    if off_pool(picks["tis_id"].to_numpy()).any():
+        problems.append("picks include a chrY isoform")
 
     counts = final["orf_type"].value_counts()
     for t, c in counts.items():
@@ -340,7 +356,8 @@ def verify(
         result = results[f"paired-{orf_type}"]
         pool = result.matrix.meta
         genes = pool["gene_name"].to_numpy()
-        eligible = ~np.isin(pool["tis_id"].to_numpy(), list(anchor_ids))
+        pool_ids = pool["tis_id"].to_numpy()
+        eligible = ~np.isin(pool_ids, list(anchor_ids)) & ~off_pool(pool_ids)
         stratum = sampled[sampled["orf_type"] == orf_type]
         for _, r in stratum[stratum["set"] == "Y"].iterrows():
             i = int(r["component"]) - 1

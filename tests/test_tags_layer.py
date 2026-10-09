@@ -138,8 +138,10 @@ class TestRegistry:
         """The sweep, the builder and the reader must default to the same version."""
         from swissisoform import distributions as dist_mod
         from swissisoform.setup import tags as build_mod
+        from swissisoform.site import grounding
 
         assert build_mod.DEFAULT_DIST_VERSION == dist_mod.DEFAULT_VERSION
+        assert grounding.DEFAULT_DIST_VERSION == dist_mod.DEFAULT_VERSION
         assert dist_mod.DEFAULT_VERSION in dist_mod.PROVISIONAL_VERSIONS
 
 
@@ -250,7 +252,7 @@ class TestFire:
         both = _registry(_row(label="Domain gained or lost")).get("t")
         assert both.label_for("truncated") == "Domain gained or lost"
 
-    def test_a_truncation_reads_the_unique_region_as_lost(self):
+    def test_each_orf_type_names_the_unique_region_its_own_way(self):
         def label(text: str, orf_type: str, metric: str = "m") -> str:
             return _registry(_row(label=text, metric=metric)).get("t").label_for(orf_type)
 
@@ -261,9 +263,15 @@ class TestFire:
             "Lost region under selection"
         )
         # An extension adds the region; a separate ORF is wholly unique.
-        assert label("Unique region more basic", "extended") == "Unique region more basic"
-        assert label("Unique region more basic", "uorf") == "Unique region more basic"
+        assert label("Unique region more basic", "extended") == "Extension more basic"
+        assert label("Long unique region", "extended") == "Long extension"
+        assert label("Motifs in unique region", "extended") == "Motifs in extension"
+        assert label("Unique region more basic", "uorf") == "ORF more basic"
+        assert label("Long unique region", "alt_orf") == "Long ORF"
         assert label("Constrained residues gained", "uorf") == "Constrained residues gained"
+        assert label("Constrained residues gained", "extended") == "Constrained residues gained"
+        # No ORF type: the label as written.
+        assert label("Unique region more basic", None) == "Unique region more basic"
         assert label("Domain gained or lost", "truncated") == "Domain gained or lost"
         assert label("Basic unique region", "truncated") == "Basic lost region"
 
@@ -508,9 +516,9 @@ class TestModule:
         out = TagModule(reg).annotate_frame(df, sites)
 
         assert list(out[LABELS_COLUMN]) == [
-            {"hi": "Unique region more basic"},
+            {"hi": "Extension more basic"},
             {"hi": "Lost region more basic"},
-            {"hi": "Unique region more basic"},
+            {"hi": "ORF more basic"},
         ]
         assert sites[1].isoform_annotations["tags"]["labels"] == {"hi": "Lost region more basic"}
 
@@ -646,6 +654,7 @@ class TestBuilderGuards:
     def test_renamed_criterion_fails_the_build(self, monkeypatch):
         """A criterion rename must not leave a derived tag scoring the wrong thing."""
         from swissisoform.setup import tags as build_mod
+        from swissisoform.site import grounding
 
         monkeypatch.setattr(
             build_mod.derived_mod, "check_names", lambda *_: ["C1_primate_conservation"]
@@ -655,5 +664,6 @@ class TestBuilderGuards:
 
     def test_scorer_names_match_today(self):
         from swissisoform.setup import tags as build_mod
+        from swissisoform.site import grounding
 
         build_mod._check_scorer_names()  # raises if the map has drifted

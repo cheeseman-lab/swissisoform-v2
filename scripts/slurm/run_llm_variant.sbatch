@@ -48,6 +48,11 @@ ARM="$1"; shift
 eval "$(conda shell.bash hook)"
 conda activate swissisoform-v2
 
+# Run the checkout we were submitted from, not the one the editable install
+# points at. Without this a worktree gets its own prompts paired with another
+# branch's llm.py — which fails as rejected payloads, not as an import error.
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
+
 # ANTHROPIC_API_KEY. Fail loudly rather than burning the allocation on a run that
 # cannot make a single call.
 [[ -f .env ]] && set -a && . ./.env && set +a

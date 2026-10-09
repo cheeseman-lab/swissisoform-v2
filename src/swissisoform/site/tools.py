@@ -133,7 +133,7 @@ def require_variants_long(path: Path | str) -> Path:
 
     Called once at wiring time so a misconfigured run fails immediately rather
     than after the first API call. Deliberately NOT a soft fallback to the
-    single-shot path: an M verdict produced with tools and one produced without
+    single-shot path: an M read produced with tools and one produced without
     are not comparable, and silently choosing between them per run is exactly the
     hidden state the fresh-rerun contract forbids.
     """
@@ -616,7 +616,7 @@ M_TOOLS: list[dict[str, Any]] = [
     {
         "name": EMIT_VERDICT,
         "description": (
-            "Terminal call: record the category verdict and stop. Call it exactly "
+            "Terminal call: record the category read and stop. Call it exactly "
             "once, after you have gathered enough data with the reader tools to "
             "justify the call."
         ),
@@ -625,7 +625,7 @@ M_TOOLS: list[dict[str, Any]] = [
         # something other than what is declared. Applied to the terminal tool
         # specifically because its input is *persisted* — a malformed reader call
         # is answered with an error the model can recover from mid-loop, whereas a
-        # malformed verdict is written to categories.json and rendered.
+        # malformed read is written to categories.json and rendered.
         #
         # Strict requires additionalProperties:false and rejects minItems>1, which
         # is why P's pae_block (two-element range params) stays unstrict.
@@ -637,15 +637,11 @@ M_TOOLS: list[dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "verdict": {
-                    "type": "string",
-                    "enum": ["interesting", "neutral", "not_interesting"],
-                },
                 "reasoning": {
                     "type": "string",
                     "description": (
                         "A few tight sentences, bottom line first, citing the specific "
-                        "numbers that justify the verdict. Never write the submodule "
+                        "numbers that carry it. Never write the submodule "
                         "ID codes (M1, M2)."
                     ),
                 },
@@ -654,13 +650,13 @@ M_TOOLS: list[dict[str, Any]] = [
                     "items": {"type": "string"},
                     "description": (
                         "Short notes on which tool findings actually drove the "
-                        "verdict, one per entry."
+                        "read, one per entry."
                     ),
                 },
             },
-            # evidence_used is required so a verdict cannot be recorded without
+            # evidence_used is required so a read cannot be recorded without
             # its citations — under strict that is a guarantee, not a request.
-            "required": ["verdict", "reasoning", "evidence_used"],
+            "required": ["reasoning", "evidence_used"],
             "additionalProperties": False,
         },
     },

@@ -44,11 +44,16 @@ from swissisoform.site import evidence as ev
 from swissisoform.tags import registry as reg_mod
 from swissisoform.tags import seeds
 
+# The terminal tool's name, from the module that defines it — a bare literal here
+# would drift silently the day the tool is renamed.
+from swissisoform.site.tools import EMIT_VERDICT
+
 logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_CATALOG = ROOT / "figures" / "clustering_dims" / "feature_space" / "feature_catalog.csv"
-DEFAULT_DIST_VERSION = "v3"
+# The one distributions default, so the dist arm follows a version flip.
+DEFAULT_DIST_VERSION = dist_mod.DEFAULT_VERSION
 # Deferred, not restated: a literal here silently pinned the tags arm to the
 # retired vocabulary after the registry default moved.
 DEFAULT_TAG_VERSION = reg_mod.DEFAULT_VERSION
@@ -382,7 +387,7 @@ def _tags_body(
         raw = record.get("_raw") or {}
         return {col: _clean(raw.get(col)) for col in cfg.get("evidence_cols", ())} or None
 
-    def hits_for(tag: reg_mod.Tag, record: dict[str, Any]) -> dict[str, Any] | None:
+    def hits_for(tag: reg_mod.Tag, sliced: dict[str, Any]) -> dict[str, Any] | None:
         """The criterion's per-record hit list, capped exactly as the UI caps it.
 
         Five criteria carry evidence that is one row per observed thing rather
@@ -415,7 +420,6 @@ def _tags_body(
         cfg = criterion_cfg.get(tag.tag_id)
         if cfg is None or not cfg.get("evidence_hits_col"):
             return None
-        sliced = ev.slice_criterion(record, tag.criterion_id)
         if tag.category in STRIP_LISTS_FOR:
             n_total = sliced.get("n_hits_total") or len(sliced.get("hits") or [])
             if not n_total:
@@ -460,7 +464,9 @@ def _tags_body(
             state = states[tag.tag_id]
             entry: dict[str, Any] = {
                 "tag_id": tag.tag_id,
-                "label": tag.label,
+                # Read for this ORF type from the registry, not the parquet's
+                # isoform_tags_labels: that column keeps the wording it was fired with.
+                "label": tag.label_for(record.get("orf_type")),
                 "state": "on" if state is True else "off" if state is False else "not_evaluable",
             }
             citation = _clean(citations.get(tag.tag_id))
@@ -481,7 +487,13 @@ def _tags_body(
                 metrics = metrics_for(tag, record)
                 if metrics:
                     entry["metrics"] = metrics
-                entry.update(hits_for(tag, record) or {})
+                sliced = ev.slice_criterion(record, tag.criterion_id)
+                # The criteria arm's summary lines ("detected in 1/6 cell lines"); without
+                # them the model derives the ratios and counts itself, and gets them wrong.
+                for key in ("reason", "headline"):
+                    if sliced.get(key) is not None:
+                        entry[key] = sliced[key]
+                entry.update(hits_for(tag, sliced) or {})
                 if hints:
                     entry["means"] = criterion_cfg[tag.tag_id]["interpretation_hint"]
             fired.append(entry)
@@ -505,7 +517,7 @@ def _open_question(tag: reg_mod.Tag, record: dict[str, Any]) -> dict[str, Any]:
     evaluable = not tag.valid_for or orf_type in tag.valid_for
     entry: dict[str, Any] = {
         "tag_id": tag.tag_id,
-        "label": tag.label,
+        "label": tag.label_for(orf_type),
         "state": "unanswered" if evaluable else "not_evaluable",
     }
     if seed is not None:
@@ -749,9 +761,9 @@ def install_verdict_extras(
     """
     if not extras:
         return lambda: None
-    index = next((i for i, t in enumerate(tools) if t.get("name") == "emit_verdict"), None)
+    index = next((i for i, t in enumerate(tools) if t.get("name") == EMIT_VERDICT), None)
     if index is None:  # pragma: no cover - both tool lists define one
-        raise GroundingError("tool list has no emit_verdict entry to extend")
+        raise GroundingError(f"tool list has no {EMIT_VERDICT} entry to extend")
     original = tools[index]
     patched = copy.deepcopy(original)
     patched["input_schema"]["properties"].update(extras)

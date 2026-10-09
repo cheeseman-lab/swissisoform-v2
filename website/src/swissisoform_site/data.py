@@ -25,7 +25,7 @@ import math
 import os
 import re
 from dataclasses import dataclass, field
-from functools import lru_cache
+from functools import cached_property, lru_cache
 from itertools import zip_longest
 from pathlib import Path
 from typing import Any
@@ -91,8 +91,9 @@ class Isoform:
     functional_evaluable: int | None
     criteria: dict[str, bool | None]
     reasons: dict[str, str]
-    # Per-category LLM verdicts (raw ``categories.json`` blob): category name ->
-    # {"verdict": "interesting"|"neutral"|"not_interesting", "reasoning": str}.
+    # Per-category LLM reads (raw ``categories.json`` blob): category name ->
+    # {"reasoning": str, ...}. Files written before the verdict was dropped also
+    # carry {"verdict": "interesting"|"neutral"|"not_interesting"}.
     category_verdicts: dict[str, dict[str, Any]]
     # Key metrics
     localization_canonical: str | None
@@ -129,22 +130,32 @@ class Isoform:
     # Raw row (kept for /api/data.json)
     raw: dict[str, Any] = field(default_factory=dict)
 
-    def _verdict_counts(self) -> tuple[int, int, int]:
-        """(# interesting, # not_interesting, # fired) over the six CDLMPS categories.
+    @cached_property
+    def category_flags(self) -> dict[str, dict[str, Any]]:
+        """Category letter -> :func:`category_flag`, in CARD_GROUPS order.
 
-        A category "fires" when its LLM verdict is ``interesting`` or
-        ``not_interesting`` (``neutral`` and missing do not).
+        Cached: net_score, n_interesting, fired_categories and the index page each
+        read it, several times per isoform per render, and its inputs
+        (category_verdicts, criteria) are fixed when the Isoform is built.
         """
-        n_interesting = 0
-        n_not = 0
-        for group in CARD_GROUPS:
-            cat = self.category_verdicts.get(group["name"]) or {}
-            v = cat.get("verdict")
-            if v == "interesting":
-                n_interesting += 1
-            elif v == "not_interesting":
-                n_not += 1
-        return n_interesting, n_not, n_interesting + n_not
+        return {
+            group["letter"]: category_flag(
+                group, self.category_verdicts.get(group["name"]), self.criteria
+            )
+            for group in CARD_GROUPS
+        }
+
+    def _verdict_counts(self) -> tuple[int, int, int]:
+        """(# green, # red, # fired) over the six CDLMPS categories.
+
+        Green is a legacy ``interesting`` verdict or, without one, a category with
+        at least one criterion met; red is a legacy ``not_interesting``. Neutral,
+        unmet and unscored categories do not fire.
+        """
+        states = [f["state"] for f in self.category_flags.values()]
+        n_green = sum(s in FIRING_GREEN for s in states)
+        n_red = sum(s == "not_interesting" for s in states)
+        return n_green, n_red, n_green + n_red
 
     @property
     def n_interesting(self) -> int:
@@ -156,19 +167,18 @@ class Isoform:
 
     @property
     def net_score(self) -> int:
-        """Net CDLMPS score: +1 per green (interesting), −1 per red (not_interesting)."""
-        n_int, n_not, _ = self._verdict_counts()
-        return n_int - n_not
+        """Net CDLMPS score: +1 per green category, −1 per red (legacy only)."""
+        n_green, n_red, _ = self._verdict_counts()
+        return n_green - n_red
 
     @property
     def fired_categories(self) -> list[str]:
-        """Category letters (CARD_GROUPS order) whose verdict fires (green or red)."""
-        out = []
-        for group in CARD_GROUPS:
-            cat = self.category_verdicts.get(group["name"]) or {}
-            if cat.get("verdict") in ("interesting", "not_interesting"):
-                out.append(group["letter"])
-        return out
+        """Category letters (CARD_GROUPS order) that fire (green or red)."""
+        return [
+            letter
+            for letter, flag in self.category_flags.items()
+            if flag["state"] in FIRING_GREEN or flag["state"] == "not_interesting"
+        ]
 
 
 @dataclass
@@ -193,7 +203,7 @@ class GeneRecord:
 
         Ranks by net_score (green +1, red −1) descending; ties fall back to
         more green, then the existing evidence scores, then ``aa_len`` so genes
-        with no LLM verdicts still surface a deterministic representative.
+        with no scored categories still surface a deterministic representative.
         """
         if not self.isoforms:
             return None
@@ -2515,15 +2525,50 @@ CARD_BADGES = {
 CRITERIA_BY_ID = {c["id"]: c for c in CRITERIA_FOR_PAGE}
 
 
+# Verdicts written by the category pass before #41 dropped the field. Still
+# honoured, so an LLM directory that predates the change renders as it did.
+LEGACY_VERDICT_LABELS = {
+    "interesting": "Interesting",
+    "neutral": "Neutral",
+    "not_interesting": "Not interesting",
+}
+
+# Flag states that light a lineup letter green.
+FIRING_GREEN = frozenset({"interesting", "met"})
+
+
+def category_flag(
+    group: dict[str, Any], read: dict[str, Any] | None, criteria: dict[str, bool | None]
+) -> dict[str, Any]:
+    """The state shown for one category on its tile and lineup letter.
+
+    A legacy ``verdict`` in the category read wins. Without one the state comes
+    from the category's own criterion scores in the parquet, not from the LLM:
+    ``met`` when any member criterion is True, ``unmet`` when members were
+    evaluated and none is, ``pending`` when none could be evaluated.
+    """
+    values = [criteria.get(m) for m in group["members"]]
+    n_met = sum(v is True for v in values)
+    n_evaluable = sum(v is not None for v in values)
+    verdict = (read or {}).get("verdict")
+    if verdict in LEGACY_VERDICT_LABELS:
+        state, label = verdict, LEGACY_VERDICT_LABELS[verdict]
+    elif not n_evaluable:
+        state, label = "pending", "Not assessed"
+    else:
+        state = "met" if n_met else "unmet"
+        label = f"{n_met}/{n_evaluable} criteria met"
+    return {"state": state, "label": label, "n_met": n_met, "n_evaluable": n_evaluable}
+
+
 def category_verdicts_for_isoform(*, llm_dir: Path, tis_slug: str) -> dict:
-    """Per-category LLM verdict + reasoning, keyed by CARD_GROUPS category name.
+    """Per-category LLM read, keyed by CARD_GROUPS category name.
 
     Reads ``<llm_dir>/<tis_slug>/categories.json`` — an object keyed by category
-    ``name`` (e.g. "Conservation") →
-    ``{"verdict": "interesting" | "neutral" | "not_interesting", "reasoning": str}``,
-    produced by the ``category`` LLM pass (``llm.py``). Returns ``{}`` when the
-    file is absent or unreadable, so the front end falls back to a neutral
-    "pending" flag + a placeholder reasoning line.
+    ``name`` (e.g. "Conservation") → ``{"reasoning": str, ...}``, produced by the
+    ``category`` LLM pass (``llm.py``); tags arms add ``tags_fired`` and older
+    files a ``verdict``. Returns ``{}`` when the file is absent or unreadable, so
+    the front end falls back to a placeholder reasoning line.
     """
     p = Path(llm_dir) / tis_slug / "categories.json"
     if not p.exists():

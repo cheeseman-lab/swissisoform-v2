@@ -28,9 +28,10 @@ so the object graph and the frame cannot drift:
     boolean and derived tags, which have no one number behind them.
 ``isoform_tags_labels``
     ``struct<n x string>`` — each tag's label as it reads for this isoform,
-    :meth:`Tag.label_for` of its ``orf_type``. A truncation's unique region is
-    the canonical stretch it *lost*, so "Unique region more basic" reads "Lost
-    region more basic" there. Resolved here, once, so every consumer (the LLM
+    :meth:`Tag.label_for` of its ``orf_type``. "Unique region more basic" reads
+    "Extension more basic" on an extension, "Lost region more basic" on a
+    truncation (the canonical stretch it *lost*) and "ORF more basic" on a
+    separate ORF. Resolved here, once, so every consumer (the LLM
     grounding, the site, exports) shows the same wording instead of each
     re-deriving it from ``orf_type``.
 ``isoform_tags_registry_version``

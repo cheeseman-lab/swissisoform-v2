@@ -261,6 +261,99 @@ def test_category_verdicts_for_isoform_returns_empty_when_missing(tmp_path):
     assert out == {}
 
 
+def _isoform_with(category_verdicts, criteria):
+    """A bare Isoform carrying only what the CDLMPS flags read."""
+    import dataclasses
+
+    from swissisoform_site.data import Isoform
+
+    required = {
+        f.name: None
+        for f in dataclasses.fields(Isoform)
+        if f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING
+    }
+    return Isoform(**{**required, "category_verdicts": category_verdicts, "criteria": criteria})
+
+
+def test_category_flag_without_verdict_reads_criterion_scores():
+    """With no verdict in the read, the flag comes from the parquet's criteria."""
+    if str(WEBSITE_SRC) not in sys.path:
+        sys.path.insert(0, str(WEBSITE_SRC))
+    from swissisoform_site.data import CARD_GROUPS, category_flag
+
+    group = next(g for g in CARD_GROUPS if g["letter"] == "C")
+    read = {"reasoning": "Primate identity holds across the extension."}
+    c1, c2, c3 = group["members"]
+
+    met = category_flag(group, read, {c1: True, c2: False, c3: None})
+    assert met == {"state": "met", "label": "1/2 criteria met", "n_met": 1, "n_evaluable": 2}
+    assert category_flag(group, read, {c1: False, c2: False})["state"] == "unmet"
+    assert category_flag(group, read, {})["state"] == "pending"
+    assert category_flag(group, None, {c1: True})["state"] == "met"
+
+
+def test_category_flag_honours_legacy_verdict():
+    """A categories.json written before the verdict was dropped renders as before."""
+    if str(WEBSITE_SRC) not in sys.path:
+        sys.path.insert(0, str(WEBSITE_SRC))
+    from swissisoform_site.data import CARD_GROUPS, category_flag
+
+    group = next(g for g in CARD_GROUPS if g["letter"] == "C")
+    flag = category_flag(group, {"verdict": "not_interesting", "reasoning": "x"}, {})
+    assert (flag["state"], flag["label"]) == ("not_interesting", "Not interesting")
+
+
+def test_isoform_firing_counts_follow_flags():
+    """Counts, net score and fired letters work for new and legacy reads alike."""
+    if str(WEBSITE_SRC) not in sys.path:
+        sys.path.insert(0, str(WEBSITE_SRC))
+    iso = _isoform_with(
+        {
+            "Conservation": {"reasoning": "new-style read"},
+            "Detection": {"verdict": "not_interesting", "reasoning": "legacy"},
+            "Localization": {"verdict": "interesting", "reasoning": "legacy"},
+        },
+        {
+            "C1_primate_conservation": True,
+            "D1_multi_cell_line": True,
+            "M1_pathogenic_variant_enrichment": False,
+        },
+    )
+    assert iso.fired_categories == ["C", "D", "L"]
+    assert iso.n_interesting == 2
+    assert iso.n_fired == 3
+    assert iso.net_score == 1
+    assert iso.category_flags["M"]["state"] == "unmet"
+    assert iso.category_flags["P"]["state"] == "pending"
+
+
+def test_isoform_page_renders_reasoning_and_tags_without_verdict(client, monkeypatch):
+    """Post-#41 reads carry no verdict and must not render as all "pending".
+
+    Tiles show the reasoning, the fired tags and the criterion-derived flag.
+    """
+    import pandas as pd
+    from swissisoform_site import app as app_mod
+    from swissisoform_site.data import CARD_GROUPS
+    from swissisoform_site.data import tis_slug as make_slug
+
+    reads = {
+        g["name"]: {"reasoning": f"Read for {g['name']}.", "tags_fired": ["frame_intact"]}
+        for g in CARD_GROUPS
+    }
+    monkeypatch.setattr(app_mod, "category_verdicts_for_isoform", lambda **_: reads)
+    df = pd.read_parquet(WEBSITE_DATA / "all_paired.parquet", columns=["gene_name", "tis_id"])
+    row = df.iloc[0]
+    r = client.get(f"/genes/{row['gene_name']}/isoforms/{make_slug(row['tis_id'])}")
+    assert r.status_code == 200
+    body = r.data.decode()
+    for g in CARD_GROUPS:
+        assert f"Read for {g['name']}." in body
+    assert "frame intact" in body
+    assert body.count('<details class="cat-reasoning" open>') == len(CARD_GROUPS)
+    assert "cat-flag-interesting" not in body and "cat-flag-neutral" not in body
+
+
 def test_synthesis_narrative_html_converts_markdown():
     """_markdown_to_html converts the tiny markdown subset, escape-first."""
     if str(WEBSITE_SRC) not in sys.path:

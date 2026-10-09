@@ -48,6 +48,8 @@ from typing import Any
 
 import pandas as pd
 
+from swissisoform.distributions import SEPARATE_ORF_TYPES
+
 ROOT = Path(__file__).resolve().parents[3]
 REF_DIR = ROOT / "data" / "reference" / "tags"
 # v3 is the current vocabulary: v2's 44 tags plus S2_biophysics and S3_sae,
@@ -76,9 +78,14 @@ PROVISIONAL_VERSIONS: dict[str, str] = {
     ),
 }
 
-# How a label names the unique region; a truncation reads it as the lost region
-# (``Tag.label_for``).
+# How a label names the unique region, and what it reads as per ORF type
+# (``Tag.label_for``) — the nouns the category prompts tell the model to use.
 _UNIQUE_REGION = re.compile(r"\b[Uu]nique region\b")
+_REGION_NOUN: dict[str, str] = {
+    "extended": "extension",
+    "truncated": "lost region",
+    **dict.fromkeys(SEPARATE_ORF_TYPES, "ORF"),
+}
 
 REGISTRY_FILE = "registry.parquet"
 SIDECAR_FILE = "_setup.json"
@@ -187,27 +194,29 @@ class Tag:
     def label_for(self, orf_type: str | None) -> str:
         """The label as it reads for one isoform.
 
-        A tag about the unique region describes sequence the isoform *adds* on an
-        extension and sequence it *lost* on a truncation — the canonical stretch
-        ahead of the truncated start (``diff_region`` is canonical-space there).
-        The label table is written for the extension reading, so for a
-        truncation:
+        The label table says "unique region"; each ORF type names that region
+        the way the category prompts do:
 
-        - "unique region" reads "lost region" ("Unique region more basic" →
-          "Lost region more basic", "Long unique region" → "Long lost region");
-        - a trailing " gained" reads " lost" ("Constrained residues gained" →
-          "Constrained residues lost").
+        - an extension adds it: "Unique region more basic" → "Extension more
+          basic", "Long unique region" → "Long extension";
+        - a truncation lost it — the canonical stretch ahead of the truncated
+          start (``diff_region`` is canonical-space there): "Lost region more
+          basic", "Long lost region";
+        - a separate ORF is wholly unique: "ORF more basic", "Long ORF".
 
-        Separate ORFs are wholly unique and keep the label as written. SAE tags
-        are left alone: their "gained" is a feature the isoform gained, compared
-        across both proteins, not something about the region.
+        A trailing " gained" reads " lost" on a truncation only ("Constrained
+        residues gained" → "Constrained residues lost"). SAE tags are left alone:
+        their "gained" is a feature the isoform gained, compared across both
+        proteins, not something about the region. An unknown ORF type keeps the
+        label as written.
         """
-        if orf_type != "truncated" or "_sae_" in self.metric:
+        noun = _REGION_NOUN.get(orf_type or "")
+        if noun is None or "_sae_" in self.metric:
             return self.label
         label = _UNIQUE_REGION.sub(
-            lambda m: "Lost region" if m.group(0)[0] == "U" else "lost region", self.label
+            lambda m: noun[0].upper() + noun[1:] if m.group(0)[0] == "U" else noun, self.label
         )
-        if label.endswith(" gained"):
+        if orf_type == "truncated" and label.endswith(" gained"):
             label = label[: -len(" gained")] + " lost"
         return label
 

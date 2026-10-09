@@ -67,7 +67,6 @@ from swissisoform_site.data import (
     Isoform,
     _isoform_view,
     biophysics_card_for_isoform,
-    category_verdicts_for_isoform,
     criterion_evidence_for,
     data_dir,
     llm_synthesis_for_isoform,
@@ -538,7 +537,10 @@ def create_app() -> Flask:
         data_dir_path = data_dir()
         llm_dir = data_dir_path / "llm"
         synthesis = llm_synthesis_for_isoform(llm_dir=llm_dir, tis_slug=tis_slug_str)
-        category_llms = category_verdicts_for_isoform(llm_dir=llm_dir, tis_slug=tis_slug_str)
+        # The reads and their flags come from the Isoform, as on the index page,
+        # so the two pages cannot disagree about a category.
+        category_llms = iso.category_verdicts
+        category_flags = iso.category_flags
 
         # Reconstruct the per-isoform record shape slice_criterion wants: a
         # ``{"_raw": ..., "scoring": {"criteria": {name: {"value", "reason"}}}, ...}``
@@ -606,6 +608,7 @@ def create_app() -> Flask:
             card_badges=CARD_BADGES,
             criteria_by_id=CRITERIA_BY_ID,
             category_llms=category_llms,
+            category_flags=category_flags,
             criterion_slices=criterion_slices,
             synthesis=synthesis,
             variant_rows=variant_rows,

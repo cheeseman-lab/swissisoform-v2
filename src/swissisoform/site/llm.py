@@ -1013,12 +1013,12 @@ MAX_TOOL_RESULT_CHARS = 60_000
 # get it wrong.
 _TOOL_NUDGE = (
     "You did not call a tool. Use the reader tools to inspect the underlying data, "
-    "then call emit_verdict exactly once with your verdict and reasoning."
+    "then call emit_verdict exactly once with your reasoning and evidence_used."
 )
 
 
 class ToolLoopError(RuntimeError):
-    """A tool loop that ended without a verdict, carrying its partial trace.
+    """A tool loop that ended without a read, carrying its partial trace.
 
     The trace is attached because a loop that failed is precisely the one worth
     inspecting; the caller persists it alongside successful ones.
@@ -1108,7 +1108,7 @@ def run_tool_loop(
     max_turns: int = DEFAULT_MAX_TOOL_TURNS,
     verdict_schema: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Drive a multi-turn tool conversation to a terminal verdict.
+    """Drive a multi-turn tool conversation to a terminal read.
 
     The model receives ``user`` as its opening context (for the category passes,
     the same precomputed slice the single-shot path uses) plus ``tools``. On each
@@ -1207,7 +1207,21 @@ def run_tool_loop(
                     payload = None
 
             reason: str | None = None  # None means "accept"
-            if not (isinstance(payload, dict) and payload.get("verdict")):
+            # Tier 1: is this an answer at all? The verdict enum used to serve as
+            # the format marker separating a real payload from chatter; with it
+            # gone, non-empty reasoning is what says "the model answered". Keep
+            # this distinct from the _verdict_violations branch below — that one
+            # means "an answer, but a bad one", and collects for salvage. Merging
+            # them would let arbitrary JSON reach the salvage path and ship.
+            #
+            # Deliberately NOT derived from verdict_schema["required"]: the tags
+            # arms list tags_fired there, whose legitimate value is [], so a
+            # truthiness rule over required keys would nudge a valid payload.
+            if not (
+                isinstance(payload, dict)
+                and isinstance(payload.get("reasoning"), str)
+                and payload["reasoning"].strip()
+            ):
                 reason = _TOOL_NUDGE
             elif n_data_calls < min_data_calls:
                 # Premature, not corrupt — and deliberately NOT added to
@@ -1236,7 +1250,10 @@ def run_tool_loop(
                 # earning its own; a payload rejected on content is still worth
                 # salvaging, one rejected as premature is not.
                 if bad_verdicts:
-                    return _salvaged(bad_verdicts, trace, n_data_calls=n_data_calls, turns=turn)
+                    return _salvaged(
+                        bad_verdicts, trace, n_data_calls=n_data_calls, turns=turn,
+                        schema=verdict_schema,
+                    )
                 trace["outcome"] = "no_tool_call"
                 raise ToolLoopError(
                     f"model made no tool call and gave no usable verdict after "
@@ -1320,7 +1337,10 @@ def run_tool_loop(
         messages.append({"role": "user", "content": results})
 
     if bad_verdicts:
-        return _salvaged(bad_verdicts, trace, n_data_calls=n_data_calls, turns=max_turns)
+        return _salvaged(
+            bad_verdicts, trace, n_data_calls=n_data_calls, turns=max_turns,
+            schema=verdict_schema,
+        )
 
     trace["outcome"] = "max_turns_exhausted"
     trace["n_data_calls"] = n_data_calls
@@ -1498,14 +1518,14 @@ def _write_category_results(
     model: str,
     regenerated: set[str] | None = None,
 ) -> bool:
-    """Write ``categories.json`` only when every category produced a verdict.
+    """Write ``categories.json`` only when every category produced a read.
 
     The skip check downstream is bare file existence, so a file carrying an
     ``{"error": ...}`` entry would block its own retry: the rerun skips the
-    isoform, reports ``0/0 successful`` and exits 0 with the errored verdict
+    isoform, reports ``0/0 successful`` and exits 0 with the errored read
     staged. Holding the write back leaves the isoform genuinely absent, so the
     next run regenerates it. Partial results land in ``categories.partial.json``
-    — nothing reads that name — so the good verdicts stay auditable.
+    — nothing reads that name — so the good reads stay auditable.
 
     ``regenerated`` names the categories this run produced, for a partial run;
     ``None`` means all of them. The stamp records it per category.
@@ -1615,7 +1635,9 @@ def _verdict_violations(payload: Any, schema: dict[str, Any]) -> list[str]:
     """Why this verdict payload is unusable, or ``[]`` if it is fine.
 
     jsonschema honours ``maxLength`` even though the decoder ignores it, so the
-    reasoning cap is enforced here rather than at generation time.
+    reasoning cap is enforced here rather than at generation time. It sees the
+    model's read as written: the harness's own marks (``reasoning_truncated``)
+    are added only after validation, by :func:`_cap_reasoning`.
     """
     if not isinstance(payload, dict):
         return [f"payload is {type(payload).__name__}, expected object"]
@@ -1652,12 +1674,15 @@ def _checked_single_shot(
     check here: a violating verdict is re-asked once, with the rejection and its
     own text, so the model shortens it rather than starting over (an identical
     re-send at temperature 0 would return the same text). A second violation
-    raises, which the caller records as that category's error.
+    raises, which the caller records as that category's error — except a read
+    whose reasoning is still only too long, which the caller cuts with
+    :func:`_cap_reasoning` after this returns. The read is validated as the
+    model wrote it; nothing here trims or marks it.
 
     Raises:
         ValueError: The verdict still violates the schema after one retry.
     """
-    payload = parse_response(response_text)
+    payload = _parse_category_read(response_text, output_schema)
     violations = _verdict_violations(payload, output_schema)
     if not violations:
         return payload, 0
@@ -1665,12 +1690,12 @@ def _checked_single_shot(
         system=prompt.system,
         user=(
             f"{prompt.user}\n\nYour previous response was rejected: "
-            f"{'; '.join(violations)}. Re-emit the complete JSON verdict, fixing only "
-            f"that — keep the verdict and the substance, cut the wording.\n\n"
+            f"{'; '.join(violations)}. Re-emit the complete JSON read, fixing only "
+            f"that — keep the substance, cut the wording.\n\n"
             f"Previous response:\n{response_text}"
         ),
     )
-    payload = parse_response(
+    payload = _parse_category_read(
         call_llm(
             retry,
             model=model,
@@ -1678,12 +1703,29 @@ def _checked_single_shot(
             max_tokens=max_tokens,
             api_key=api_key,
             output_schema=output_schema,
-        )
+        ),
+        output_schema,
     )
-    violations = _verdict_violations(payload, output_schema)
+    # A read whose reasoning is only still too long is not lost: the caller's
+    # _cap_reasoning cuts it back to a whole sentence and flags it. Only that
+    # one field is waived — _cap_reasoning fixes nothing else, so any other
+    # field over its limit is still an error.
+    violations = [
+        v for v in _verdict_violations(payload, output_schema) if not _reasoning_too_long(v)
+    ]
     if violations:
         raise ValueError("verdict failed the schema after one retry: " + "; ".join(violations))
     return payload, 1
+
+
+def _reasoning_too_long(violation: str) -> bool:
+    """Whether *violation* is the ``reasoning`` field exceeding its maxLength.
+
+    Both validators name the field first (``reasoning: … is too long``), so the
+    path prefix, not a substring anywhere in the message, decides it: a message
+    about another field, or quoting the model's own text, is not waived.
+    """
+    return violation.startswith("reasoning: ") and "is too long" in violation
 
 
 def _premature_verdict_msg(*, min_data_calls: int, n_data_calls: int, terminal_tool: str) -> str:
@@ -1702,22 +1744,50 @@ def _premature_verdict_msg(*, min_data_calls: int, n_data_calls: int, terminal_t
 
 
 def _salvaged(
-    bad_verdicts: list[dict[str, Any]], trace: dict[str, Any], *, n_data_calls: int, turns: int
+    bad_verdicts: list[dict[str, Any]],
+    trace: dict[str, Any],
+    *,
+    n_data_calls: int,
+    turns: int,
+    schema: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Ship the last rejected verdict with its markup cut off. Last resort.
+    """Ship the last rejected read with its markup cut off. Last resort.
 
     A rejected payload is usually good prose with the markup at the tail, so
-    truncating beats losing the turn's work. Shared by both verdict doors —
-    only content rejections reach here; a premature verdict is never collected.
+    truncating beats losing the turn's work. Shared by both doors — only content
+    rejections reach here; a premature read is never collected.
+
+    Raises:
+        ToolLoopError: Truncation left no reasoning. This mattered less when a
+            verdict label rode alongside — an empty string still shipped a
+            usable category. Now the record would be *contentless*, and the only
+            write gate is ``"error" in v`` (:func:`_write_category_results`), so
+            it would land in categories.json as a success.
     """
+    salvaged = _strip_verdict_markup(bad_verdicts[-1])
+    # Only the fields the read schema declares ship. A payload rejected for an
+    # extra key — a habitual "verdict" — would otherwise land in categories.json,
+    # where the website reads any `verdict` as a legacy verdict that overrides
+    # the criteria.
+    allowed = set(((schema or {}).get("properties") or {}))
+    if allowed:
+        salvaged = {k: v for k, v in salvaged.items() if k in allowed}
+    if not str(salvaged.get("reasoning") or "").strip():
+        trace["outcome"] = "salvage_empty"
+        trace["n_data_calls"] = n_data_calls
+        raise ToolLoopError(
+            f"no read validated in {turns} turns, and truncating the last payload "
+            "left no reasoning — nothing to salvage",
+            trace,
+        )
     trace["outcome"] = "emit_verdict_salvaged"
     trace["n_data_calls"] = n_data_calls
     print(
-        f"    [salvage] no verdict validated in {turns} turns; "
+        f"    [salvage] no read validated in {turns} turns; "
         "truncating the last payload at the markup marker",
         file=sys.stderr,
     )
-    return _strip_verdict_markup(bad_verdicts[-1]), trace
+    return salvaged, trace
 
 
 def _strip_verdict_markup(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1729,6 +1799,106 @@ def _strip_verdict_markup(payload: dict[str, Any]) -> dict[str, Any]:
             if m:
                 out[field] = value[: m.start()].rstrip()
     return out
+
+
+# Appended to a reasoning cut back to fit the schema's cap. The record also gets
+# ``reasoning_truncated: True`` so the cut is machine-visible, not just visible.
+_TRUNCATION_MARK = " […]"
+_SENTENCE_END = re.compile(r"[.!?][\"')\]]*(?=\s|$)")
+# A period that ends an abbreviation, not a sentence. Matched against the text up
+# to and including the period. Deliberately no "lone letter" or "no" rule: those
+# end real sentences ("…than isoform B.", "…the answer is no."), and the inner
+# period of "e.g." is followed by a letter, so _SENTENCE_END never matches it.
+_NOT_A_SENTENCE_END = re.compile(
+    r"\b(?:e\.g|i\.e|vs|approx|etc|cf|al|fig|figs|ca|resp|ref|refs)\.$",
+    re.IGNORECASE,
+)
+
+
+def _reasoning_limit(schema: dict[str, Any] | None) -> int | None:
+    """The ``reasoning`` maxLength the schema declares, if any."""
+    prop = ((schema or {}).get("properties") or {}).get("reasoning") or {}
+    limit = prop.get("maxLength")
+    return limit if isinstance(limit, int) and limit > len(_TRUNCATION_MARK) else None
+
+
+def _sentence_ends(text: str) -> list[int]:
+    """Offsets just past each sentence end in *text*, abbreviations excluded.
+
+    A period after ``e.g``, ``i.e``, ``vs``, ``approx`` and the like does not end
+    a sentence: cutting there leaves a broken fragment ("… e.g. […]") stored as
+    the read.
+    """
+    return [
+        m.end()
+        for m in _SENTENCE_END.finditer(text)
+        if not _NOT_A_SENTENCE_END.search(text[: m.start() + 1])
+    ]
+
+
+def _cap_reasoning(payload: Any, schema: dict[str, Any] | None) -> Any:
+    """Cut an over-long ``reasoning`` back to its last whole sentence, marked.
+
+    The decoder ignores ``maxLength``, so a read can arrive over the cap; this is
+    the last step before it is stored, after validation and any re-ask.
+    Deterministic by construction: the same text always yields the same cut.
+    Falls back to the last word break when no sentence ends inside the budget.
+    A read under the cap is returned untouched, whatever its last character.
+
+    Args:
+        payload: A category read; anything else is returned unchanged.
+        schema: The output schema whose ``reasoning.maxLength`` is the cap.
+    """
+    limit = _reasoning_limit(schema)
+    text = payload.get("reasoning") if isinstance(payload, dict) else None
+    if limit is None or not isinstance(text, str):
+        return payload
+    text = text.rstrip()
+    if len(text) <= limit:
+        return payload
+    head = text[: limit - len(_TRUNCATION_MARK)]
+    ends = _sentence_ends(head)
+    cut = ends[-1] if ends else (head.rfind(" ") if " " in head else len(head))
+    kept = head[:cut].rstrip()
+    if not kept:
+        return payload
+    print(
+        f"    [truncated] reasoning cut from {len(text)} to {len(kept)} chars at a "
+        "sentence boundary",
+        file=sys.stderr,
+    )
+    return {**payload, "reasoning": kept + _TRUNCATION_MARK, "reasoning_truncated": True}
+
+
+def _parse_category_read(text: str, schema: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Parse a single-shot category read, recovering a response cut off after ``reasoning``.
+
+    The one recoverable break is an object closed early with the ``reasoning``
+    string itself intact — ``{"reasoning": "…",`` — which is what an over-long
+    read has produced. The object is re-closed and the read returned as written:
+    the string is complete, so its last clause is the model's, not a cut, and
+    trimming it back to a sentence end deleted real content (a negation, a
+    number). Length is checked by the caller and enforced by
+    :func:`_cap_reasoning` as the last step. Anything else (an unterminated
+    string, a non-object, no reasoning) raises the original ``JSONDecodeError``.
+
+    ``schema`` is accepted for call compatibility and unused.
+    """
+    try:
+        return parse_response(text)
+    except json.JSONDecodeError as original:
+        stub = text.strip()
+        if stub.startswith("```"):  # same fence handling as parse_response
+            stub = stub.split("\n", 1)[1] if "\n" in stub else stub
+        stub = stub.removesuffix("```").rstrip().rstrip(",").rstrip()
+        try:
+            payload = json.loads(stub if stub.endswith("}") else stub + "}")
+        except json.JSONDecodeError:
+            raise original from None
+        if not (isinstance(payload, dict) and str(payload.get("reasoning") or "").strip()):
+            raise original from None
+        print("    [repaired] category read was cut off; re-closed the object", file=sys.stderr)
+        return payload
 
 
 def _emit_schema_warnings(
@@ -1889,6 +2059,17 @@ def build_parser() -> argparse.ArgumentParser:
             "Isoforms with no categories.json yet are skipped."
         ),
     )
+    parser.add_argument(
+        "--only-isoform",
+        action="append",
+        default=None,
+        metavar="TIS_SLUG",
+        help=(
+            "Restrict to these isoforms by tis_slug (repeatable). The sibling of "
+            "--only-category: together they retry one failed cell without touching "
+            "the rest of an arm that cost 45 minutes to produce."
+        ),
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument(
         "--batch",
@@ -2036,6 +2217,8 @@ def main(
         output_schema = load_output_schema(prompts_root / spec.output_schema_filename)
 
     records = _load_records_with_synthetic_fallback(args.records, args.gene, args.dry_run)
+    if getattr(args, "only_isoform", None):
+        records = _filter_isoforms(records, args.only_isoform)
 
     if spec.requires_prereq:
         missing = _check_prereqs(records, args.out, spec.requires_prereq)
@@ -2523,6 +2706,25 @@ def _run_tool_category(
     return verdict
 
 
+def _filter_isoforms(records: dict, wanted: list[str]) -> dict:
+    """Keep only ``wanted`` tis_slugs, dropping genes left with none.
+
+    Raises on a slug that matches nothing: a targeted retry that silently
+    selects zero isoforms looks exactly like a successful one.
+    """
+    want = set(wanted)
+    kept: dict = {}
+    seen: set[str] = set()
+    for gene, record in records.items():
+        isos = [i for i in (record.get("isoforms") or []) if _tis_slug(i.get("tis_id")) in want]
+        seen.update(_tis_slug(i.get("tis_id")) for i in isos)
+        if isos:
+            kept[gene] = {**record, "isoforms": isos}
+    if missing := sorted(want - seen):
+        raise SystemExit(f"--only-isoform matched no record for: {', '.join(missing)}")
+    return kept
+
+
 def _check_prereqs(records, out_dir: Path, prereqs: tuple[str, ...]) -> list[str]:
     """Return tis_slugs missing any prereq output file."""
     missing: list[str] = []
@@ -2547,14 +2749,14 @@ def _run_category_pass(
 
     Each call bundles all of the category's members (all first-class scored
     criteria, including S2 biophysics + S3 SAE) into one slice and asks the model
-    for a single ``{verdict, reasoning}``. Writes ``{tis_slug}/categories.json`` as
+    for a single ``{reasoning}``. Writes ``{tis_slug}/categories.json`` as
     a dict keyed by category name (the shape ``category_verdicts_for_isoform``
     consumes) — but only once every category produced a verdict; a run with any
     errored category holds the file back (:func:`_write_category_results`).
 
     Categories in :data:`TOOL_CATEGORY_PROMPTS` instead run a multi-turn tool
     loop, reading their own underlying data before emitting the same
-    ``{verdict, reasoning}`` shape, and additionally write ``{letter}_trace.json``.
+    ``{reasoning}`` shape, and additionally write ``{letter}_trace.json``.
     """
     tool_configs = _tool_categories(args, prompts_root, records)
 
@@ -2686,7 +2888,7 @@ def _run_category_pass(
                         f"{tis_slug_val}/{category['name']}",
                         verbose=getattr(args, "verbose", False),
                     )
-                    results[category["name"]] = payload
+                    results[category["name"]] = _cap_reasoning(payload, output_schema)
                     n_ok += 1
                 except Exception as e:
                     if tool_config is not None:
@@ -2844,7 +3046,7 @@ def _run_category_pass_batch(
                 payload, output_schema, f"{tis_slug_val}/{cat_name}",
                 verbose=getattr(args, "verbose", False),
             )
-            iso_results[tis_slug_val][cat_name] = payload
+            iso_results[tis_slug_val][cat_name] = _cap_reasoning(payload, output_schema)
             n_ok += 1
         except Exception as e:
             print(f"[{cid}] {cat_name} parse FAIL: {e}", file=sys.stderr)
@@ -2880,7 +3082,7 @@ def _run_category_pass_batch(
                     f"{tis_slug_val}/{category['name']}",
                     verbose=getattr(args, "verbose", False),
                 )
-                iso_results[tis_slug_val][category["name"]] = payload
+                iso_results[tis_slug_val][category["name"]] = _cap_reasoning(payload, output_schema)
                 n_tool_ok += 1
             except Exception as e:
                 _tool_usage, _tool_turns = _drain_all_usage()
@@ -2919,7 +3121,7 @@ def _build_synthesis_record(
 
     Carries the gene's ESTABLISHED function (``gene`` — Affinage function / keywords
     / localization, the baseline the isoform diverges from), the digested per-category
-    reads (``category_reads`` — the ``{verdict, reasoning}`` per CDLMPS category), and
+    reads (``category_reads`` — the ``{reasoning}`` per CDLMPS category), and
     the raw underlying evidence (``criteria_evidence``, one ``slice_criterion`` payload
     per criterion, all 16 incl. P3/S2/S3) so the model can weigh actual numbers.
 

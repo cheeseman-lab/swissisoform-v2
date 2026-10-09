@@ -39,7 +39,7 @@
       {% if isoform.uniprot_id %}
         <a href="https://www.uniprot.org/uniprotkb/{{ isoform.uniprot_id }}/entry" target="_blank" rel="noopener">UniProt {{ isoform.uniprot_id }}</a> ·
       {% endif %}
-      {{ sc.cdlmps(category_llms) }}
+      {{ sc.cdlmps(category_flags) }}
     </p>
     <p class="iso-head-tis"><span class="font-mono text-xs text-slate-500">{{ isoform.tis_id }}</span></p>
   </header>
@@ -105,20 +105,24 @@
        differential-region evidence. -->
   <section class="evidence-tiles">
     <h2>Evidence <span class="evidence-sub">— click any tile for the differential-region detail</span></h2>
-    {% set flag_labels = {'interesting': 'Interesting', 'neutral': 'Neutral', 'not_interesting': 'Not interesting', 'pending': 'Not assessed'} %}
     {% for group in card_groups %}
       {% set cat = category_llms.get(group.name) %}
-      {% set v = (cat.verdict if cat else none) or 'pending' %}
+      {% set flag = category_flags[group.letter] %}
       <section class="cat-box cat-{{ group.letter }}">
         <div class="cat-head">
           <span class="cat-tag">{{ group.letter }}</span>
           <span class="cat-name">{{ group.name }}</span>
-          <span class="cat-flag cat-flag-{{ v }}">{{ flag_labels[v] }}</span>
+          <span class="cat-flag cat-flag-{{ flag.state }}">{{ flag.label }}</span>
         </div>
-        <details class="cat-reasoning">
+        {# Open by default once the read is the category's only LLM output; a
+           legacy file still carries a verdict on the flag, so it stays folded. #}
+        <details class="cat-reasoning"{% if cat and cat.reasoning and not cat.verdict %} open{% endif %}>
           <summary class="cat-reasoning-summary">LLM reasoning</summary>
           {% if cat and cat.reasoning %}
             <div class="cat-reasoning-body">{{ cat.reasoning }}</div>
+            {% if cat.tags_fired %}
+              <div class="iso-tags-row cat-reasoning-tags">{% for t in cat.tags_fired %}<span class="iso-tag-chip sm">{{ t|replace('_', ' ') }}</span>{% endfor %}</div>
+            {% endif %}
           {% else %}
             <p class="cat-reasoning-body cat-reasoning-empty">Category-level LLM reasoning not yet generated.</p>
           {% endif %}
