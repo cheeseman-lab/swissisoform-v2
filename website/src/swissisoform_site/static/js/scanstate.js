@@ -7,7 +7,15 @@
  *
  *   swissiso.scan.summary  {schema, filename, scanned_at, counts, genes,
  *                           provenance, derived, hits_stored}
- *   swissiso.scan.hits     [hit, …] — each with x and protein_change already set
+ *   swissiso.scan.hits     the hits, packed (see pack/unpack) — each hit carries
+ *                          x and protein_change already set
+ *
+ * Hits are packed because sessionStorage holds ~5M characters per origin and a
+ * scan at the 20,000-hit cap is ~9M as an array of objects: every row repeats 17
+ * field names and long values (tis_id, notes) that many rows share. Packed, the
+ * field names are written once and every all-string column becomes indexes into
+ * a table of its distinct values (~3.3M at the cap). load() unpacks to the same
+ * array of hit objects, so nothing outside this file sees the difference.
  *
  * Two checks on every read, against values the server writes on <body>:
  *   data-scan-schema   a stored shape this build does not know is discarded;
@@ -27,6 +35,8 @@
   var HITS_KEY = "swissiso.scan.hits";
   //: Hits kept when the full list does not fit — the same cap the results table uses.
   var PARTIAL_HITS = 1000;
+  //: Version of the packed layout; a stored value in any other layout is discarded.
+  var PACK_FORMAT = "columns-1";
 
   var cached; // undefined = not read yet; null = no usable scan
 
@@ -48,6 +58,52 @@
     cached = null;
   }
 
+  /* hits → {format, columns, tables, rows}. Lossless: unpack(pack(h)) equals h.
+
+     Columns come from the first hit (every hit has the same fields). A column
+     whose every value is a string is dictionary-encoded: its table lists the
+     distinct values in first-seen order and the rows hold their indexes. Other
+     columns (numbers, and null-able ones like residue and x) are stored as is. */
+  function pack(hits) {
+    var columns = hits.length ? Object.keys(hits[0]) : [];
+    var tables = {};
+    var lookups = {};
+    columns.forEach(function (c) {
+      if (hits.every(function (h) { return typeof h[c] === "string"; })) {
+        tables[c] = [];
+        lookups[c] = new Map();
+      }
+    });
+    var rows = hits.map(function (h) {
+      return columns.map(function (c) {
+        var lookup = lookups[c];
+        if (!lookup) return h[c];
+        var i = lookup.get(h[c]);
+        if (i === undefined) {
+          i = tables[c].length;
+          tables[c].push(h[c]);
+          lookup.set(h[c], i);
+        }
+        return i;
+      });
+    });
+    return { format: PACK_FORMAT, columns: columns, tables: tables, rows: rows };
+  }
+
+  /* The inverse of pack(), or null for anything that is not this layout. */
+  function unpack(packed) {
+    if (!packed || packed.format !== PACK_FORMAT || !Array.isArray(packed.rows)) return null;
+    var columns = packed.columns;
+    var tables = packed.tables || {};
+    return packed.rows.map(function (row) {
+      var hit = {};
+      columns.forEach(function (c, j) {
+        hit[c] = tables[c] ? tables[c][row[j]] : row[j];
+      });
+      return hit;
+    });
+  }
+
   /* Store one scan. Hits first and the summary last, so a hits write that fails
      part-way can never leave a summary claiming a full list. Returns
      "full" or "partial"; throws if even the summary cannot be stored. */
@@ -55,12 +111,12 @@
     remove();
     var stored = "full";
     try {
-      sessionStorage.setItem(HITS_KEY, JSON.stringify(hits));
+      sessionStorage.setItem(HITS_KEY, JSON.stringify(pack(hits)));
     } catch (e) {
       // QuotaExceededError (~5 MB per origin): keep what the results table shows.
       stored = "partial";
       try {
-        sessionStorage.setItem(HITS_KEY, JSON.stringify(hits.slice(0, PARTIAL_HITS)));
+        sessionStorage.setItem(HITS_KEY, JSON.stringify(pack(hits.slice(0, PARTIAL_HITS))));
       } catch (e2) {
         stored = "none";
       }
@@ -86,7 +142,7 @@
     var summary, hits;
     try {
       summary = JSON.parse(rawSummary);
-      hits = rawHits ? JSON.parse(rawHits) : [];
+      hits = rawHits ? unpack(JSON.parse(rawHits)) : [];
     } catch (e) {
       clear();
       return null;
@@ -154,6 +210,9 @@
       return hitsWhere("tis_id", tisId);
     },
     countVariants: countVariants,
+    // Exposed for tests: the storage layout is the one thing here with a format.
+    pack: pack,
+    unpack: unpack,
   };
 
   if (document.readyState === "loading") {
