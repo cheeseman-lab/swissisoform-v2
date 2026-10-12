@@ -114,8 +114,9 @@ done
 # person's 2> redirect fails on permissions before python even starts, and the
 # failure reads as "the staged tree does not import", which is a lie. website/ is
 # gitignored build output (*.log already covered), so the log belongs here with the
-# thing it describes. The container's own /tmp default in scanstore.py is fine by
-# contrast: that path only ever exists inside one Railway container.
+# thing it describes. The container's own /tmp defaults (the throttle dir, the
+# per-request upload staging) are fine by contrast: those paths only ever exist
+# inside one Railway container.
 IMPORT_LOG="$PWD/prepare_deploy_import.log"
 echo "[prepare_deploy] verifying the staged tree imports on its own"
 if ! (cd "$PWD" && env -u PYTHONPATH PYTHONPATH="$PWD/src" SWISSISOFORM_DATA_DIR="$PWD/data" \

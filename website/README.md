@@ -102,33 +102,20 @@ railway up         # builds via Dockerfile, deploys, runs entrypoint.sh
 `railway.json` already wires the healthcheck at `/healthz`. No env vars are
 required for the baked-in-data MVP.
 
-### The variant-query endpoints need one replica
+### The variant query keeps no scan on the server
 
-`POST /api/variants/scan` writes uploaded VCFs and their scan digests to the
-container's **ephemeral writable layer** (`/tmp/swissisoform-scans` by default,
-override with `SWISSISOFORM_SCAN_DIR`). That layer is shared by both gunicorn
-workers because they live in one container — but **not across containers**.
+`POST /api/variants/scan` stages the upload to a private temp file only for the
+length of the request (`scan()` reads a path), deletes it before the response is
+built, and returns the whole result — enriched hits included — with
+`Cache-Control: no-store`. The browser keeps it in `sessionStorage`, so a scan
+lasts as long as the tab and every page reads it from there (`scanview.py`; issue
+#33, step 1). There is no token, no TTL and no store to sweep, and a redeploy
+loses nothing a user still has open.
 
-So the service must stay at **one replica**. A second replica would take uploads
-on one container and serve the follow-up requests from another, which sees
-nothing and 404s roughly half of them. This — not durability — is the trigger to
-move the scan store to object storage; all filesystem access goes through
-`scanstore.py` precisely so that swap is one file.
-
-Two consequences that are fine as designed:
-
-- A redeploy or crash wipes in-flight scans. The read path treats "files gone"
-  and "past its TTL" identically, so the user sees *this scan is no longer
-  available, upload again* rather than an error.
-- Retention is 24 h (`SWISSISOFORM_SCAN_TTL_HOURS`), enforced when a token is
-  read and swept lazily at most hourly on the upload path. There is no background
-  thread; a per-worker timer would race for no benefit.
-
-Bounded so behaviour never depends on Railway's ephemeral-disk quota (which is
-plan-dependent and not readable from inside the container): 100 MB per upload
-(`MAX_CONTENT_LENGTH` → JSON 413), 20,000 hits per digest, and a total store
-budget with oldest-first eviction (`SWISSISOFORM_SCAN_BUDGET_BYTES`, default
-2 GiB).
+Bounded per request: 100 MB per upload (`MAX_CONTENT_LENGTH` → JSON 413) and
+20,000 hits per scan. The only state left on disk is the throttle below, which is
+why the service still runs as **one replica**: a second container would keep its
+own throttle buckets and double every client's limit.
 
 ### The scan is bounded in time and size, not just on disk
 
@@ -155,13 +142,13 @@ default and takes `--max-records` / `--max-seconds`.
 The upload endpoint is unauthenticated on a public URL, so uploads are rate
 limited per client: **5 per hour and 20 per day** by default
 (`SWISSISOFORM_SCAN_RATE_HOURLY` / `SWISSISOFORM_SCAN_RATE_DAILY`; `0` disables
-either window). A cache hit — the same bytes re-uploaded — skips the parse
-entirely and is not charged. Over the limit is a JSON 429 with `Retry-After`.
+either window). Every upload is parsed and charged — with nothing stored there is
+no cache hit to exempt. Over the limit is a JSON 429 with `Retry-After`.
 
-State is one marker file per request under the scan store, hashed by IP, counted
-by mtime, and cleaned up by the same hourly sweep. Files rather than a counter
-because two workers writing a counter lose updates; the same one-replica caveat
-above applies. It **fails open** — a disk that refuses the write logs a warning
+State is one marker file per request under `SWISSISOFORM_THROTTLE_DIR` (default
+`/tmp/swissisoform-throttle`), hashed by IP, counted by mtime, and purged at most
+hourly from the upload path. Files rather than a counter because two workers
+writing a counter lose updates; the one-replica caveat above applies. It **fails open** — a disk that refuses the write logs a warning
 and lets the request through, since the per-request bounds above still hold.
 
 **Railway fronts the container with its own proxy, so `remote_addr` is the proxy

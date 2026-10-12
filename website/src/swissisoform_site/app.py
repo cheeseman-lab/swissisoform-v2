@@ -3,13 +3,13 @@
 Almost entirely read-only — the gene/isoform payloads come from
 ``data.load_all()``, cached per worker at the first request. There is no DB.
 
-The exception is the variant query: ``POST /api/variants/scan`` stores an uploaded
-VCF under ``scanstore``'s temp directory, resolves it against the ORF index and
-writes a digest beside the blob — the app's only write path. ``GET
-/variants/<token>`` renders that digest, ``GET /api/variants/<token>.json`` returns
-it raw, and ``GET /api/variants/status`` reports whether the scan path is
-functional in this deployment (the index staged, the disk writable) since there is
-no shell into the container.
+The exception is the variant query: ``POST /api/variants/scan`` stages an uploaded
+VCF to a temp file for the length of the request, resolves it against the ORF index
+and returns the whole result (``scanview``). Nothing about a scan is kept on the
+server: the browser stores the response in ``sessionStorage``, and ``GET /variants``
+plus every gene/isoform page draw scan context from there. ``GET
+/api/variants/status`` reports whether the scan path is functional in this
+deployment (the index staged), since there is no shell into the container.
 """
 
 from __future__ import annotations
@@ -27,8 +27,6 @@ from typing import Any
 from flask import (
     Flask,
     abort,
-    g,
-    has_request_context,
     jsonify,
     make_response,
     render_template,
@@ -37,25 +35,18 @@ from flask import (
     url_for,
 )
 from markupsafe import Markup, escape
-from werkzeug.middleware.proxy_fix import ProxyFix
-
 from swissisoform.clinical.significance import is_pathogenic
 from swissisoform.site.evidence import (
     CRITERIA_METRIC_LABELS,
     format_metric,
     slice_criterion,
 )
-from swissisoform.variantquery.consequence import (
-    MISSENSE,
-    START_LOST,
-    STOP_GAINED,
-    STOP_LOST,
-    SYNONYMOUS,
-)
 from swissisoform.variantquery.frame import x_offset_residues
 from swissisoform.variantquery.scan import scan
 from swissisoform.variantquery.vcf import VcfLimitExceeded
-from swissisoform_site import scanstore, throttle
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+from swissisoform_site import throttle
 from swissisoform_site.data import (
     CARD_BADGES,
     CARD_GROUPS,
@@ -80,7 +71,13 @@ from swissisoform_site.data import (
 from swissisoform_site.genomics import interval_intersection
 from swissisoform_site.plots import build_gene_protein_figure
 from swissisoform_site.plots.protein import CONSEQ_COLOR, CONSEQ_SHORT
-from swissisoform_site.scanstore import ScanStoreError
+from swissisoform_site.scanview import (
+    SCAN_SCHEMA,
+    StagingError,
+    build_response,
+    staged_upload,
+    with_frame,
+)
 
 # Cell line samples used by the transcript figure's bottom panel.
 _CELL_LINE_SAMPLES = ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen")
@@ -89,11 +86,6 @@ _CELL_LINE_SAMPLES = ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Se
 #: exome/somatic files while rejecting germline WGS, which has no business being
 #: parsed synchronously inside a request.
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
-
-#: Hit rows rendered on the results page. The scan records up to
-#: ``scan.DEFAULT_MAX_HITS`` (20,000), and the page is rebuilt on every view of the
-#: token — so the table is capped here and the full list served from the JSON route.
-PAGE_MAX_HITS = 1000
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -132,77 +124,6 @@ def _log_llm_coverage(genes: dict, llm_dir: Path) -> None:
     )
 
 
-#: Endpoints that participate in the variant-scan breadcrumb, and so should keep
-#: ``?vcf=`` alive when one is active. Deliberately a whitelist: appending the token
-#: to ``static`` or the structure-file routes would bust asset caching and write the
-#: token into asset request logs for no benefit.
-_SCAN_AWARE_ENDPOINTS = frozenset({"index", "gene_page", "isoform_page", "variants_page"})
-
-
-def resolve_scan() -> tuple[str, dict[str, Any]]:
-    """The request's active scan as ``(token, digest)``, resolved **once**.
-
-    Memoised on ``g`` for two reasons. It is consulted by both the view and the URL
-    injector, and the injector fires for every ``url_for`` — 17+ per page — so an
-    un-cached lookup would mean that many disk reads per render.
-
-    A token naming a scan that has expired or been swept resolves to ``("", {})``,
-    which is what keeps a dead token from following the user around the site and lets
-    every page render normally minus the breadcrumb. Scan context is always
-    supplementary; it never fails a page.
-    """
-    if not has_request_context():
-        return "", {}
-
-    cached = getattr(g, "_swiss_scan", None)
-    if cached is not None:
-        return cached
-
-    token = request.args.get("vcf") or ""
-    # On the results page the token is a path segment, not a query arg — without
-    # this that page's own outbound links would go out bare.
-    if not token and request.endpoint == "variants_page":
-        token = (request.view_args or {}).get("token") or ""
-
-    digest: dict[str, Any] = {}
-    if token:
-        loaded = scanstore.load(token)
-        if loaded.ok:
-            digest = loaded.digest or {}
-        else:
-            token = ""
-
-    cached = (token, digest)
-    g._swiss_scan = cached
-    return cached
-
-
-def scan_hits(hits_key: str, hits_value: str) -> tuple[str, list[dict[str, Any]]]:
-    """Active scan token plus the hits matching one field.
-
-    Shared by the gene and isoform pages so their graceful-degradation behaviour
-    cannot drift apart.
-
-    Args:
-        hits_key: Field of each hit to match on (``"gene"`` or ``"tis_id"``).
-        hits_value: Value it must equal.
-
-    Returns:
-        ``(token, hits)``; ``("", [])`` when there is no usable scan.
-    """
-    token, digest = resolve_scan()
-    if not token:
-        return "", []
-    hits = digest.get("hits", []) or []
-    return token, [h for h in hits if h.get(hits_key) == hits_value]
-
-
-def scan_context(hits_key: str, hits_value: str) -> tuple[str, int | None]:
-    """As :func:`scan_hits`, but only the count — for the breadcrumb chips."""
-    token, hits = scan_hits(hits_key, hits_value)
-    return token, (len(hits) if token else None)
-
-
 def _scan_debug_enabled() -> bool:
     """True when the full scan payload may be logged.
 
@@ -218,21 +139,20 @@ def _scan_debug_enabled() -> bool:
     )
 
 
-def _log_scan(body: dict[str, Any], saved: Any) -> None:
+def _log_scan(body: dict[str, Any]) -> None:
     """Log a scan to stdout — i.e. to the platform's log console.
 
-    The default line is deliberately redacted: counts, gene *names*, and ids, but
-    no positions, no residues and no filename. That is enough to confirm from the
-    logs that a scan ran and roughly what it found, without persisting variant
-    coordinates anywhere we do not control.
+    The default line is deliberately redacted: counts, gene *names*, and a prefix of
+    the upload's hash, but no positions, no residues and no filename. That is enough
+    to confirm from the logs that a scan ran and roughly what it found, without
+    persisting variant coordinates anywhere we do not control.
     """
     counts = body.get("counts", {}) or {}
+    provenance = body.get("provenance", {}) or {}
     logger.info(
-        "scan token=%s key=%s cached=%s lines=%s alleles=%s non_pass=%s "
+        "scan sha=%s lines=%s alleles=%s non_pass=%s "
         "no_orf=%s off_contig=%s hits=%s genes=%s index=%s rejected=%s genes_hit=%s",
-        body.get("vcf_id"),
-        saved.key,
-        saved.was_cached,
+        (provenance.get("vcf_sha256") or "")[:12],
         counts.get("lines"),
         counts.get("alleles"),
         counts.get("skipped_non_pass"),
@@ -240,7 +160,7 @@ def _log_scan(body: dict[str, Any], saved: Any) -> None:
         counts.get("off_catalog_contig"),
         counts.get("hits"),
         counts.get("genes_hit"),
-        (body.get("provenance", {}) or {}).get("index_version"),
+        provenance.get("index_version"),
         counts.get("rejected"),
         [g.get("gene") for g in body.get("genes", []) or []],
     )
@@ -251,26 +171,6 @@ def _log_scan(body: dict[str, Any], saved: Any) -> None:
         )
 
 
-def _private_scan(response: Any) -> Any:
-    """Stamp a token-addressed scan response as neither crawlable nor storable.
-
-    Two separate controls, both needed, on every scan response — HTML and JSON alike:
-
-    ``X-Robots-Tag: noindex`` keeps it out of search indexes. A token pasted anywhere
-    a URL gets scanned — chat, an issue tracker, browser sync — would otherwise make
-    somebody's variant positions crawlable.
-
-    ``Cache-Control: no-store`` keeps it off disk. The page renders uploaded variant
-    positions, and a browser cache entry on a shared machine outlives the 24 h
-    server-side TTL entirely — the store deletes the scan and the copy in the cache
-    does not care. It also stops Back re-rendering a scan that has since expired
-    instead of the page saying so.
-    """
-    response.headers["X-Robots-Tag"] = "noindex, nofollow"
-    response.headers["Cache-Control"] = "no-store"
-    return response
-
-
 #: Reader caps → (error code, status). Both are 4xx and both are the uploader's
 #: file to fix; the codes stay distinct from the compressed-body ``too_large`` so
 #: a caller can tell which limit it hit.
@@ -278,52 +178,6 @@ _LIMIT_RESPONSES = {
     "decompressed_bytes": ("expands_too_large", 413),
     "line_bytes": ("line_too_long", 422),
 }
-
-
-#: Terms whose hits actually had their REF compared against the reference. The
-#: classifier reaches ``reference_mismatch`` only on the substitution path
-#: (clinical/validate.py) — intronic spans and indels return before that check —
-#: so counting them in the denominator would dilute a real mismatch below the
-#: threshold on any VCF with many indels or intronic-in-ORF hits.
-_REF_CHECKED_TERMS = frozenset(
-    {
-        MISSENSE,
-        SYNONYMOUS,
-        STOP_GAINED,
-        STOP_LOST,
-        START_LOST,
-        # Lives as a literal in clinical/validate.py, like "intronic" does in
-        # variantquery/scan.py's note table; there is no constant to import.
-        "reference_mismatch",
-    }
-)
-
-#: A REF disagreement or two is ordinary — a miscalled base, a variant normalised
-#: against a different representation. A *majority* of them is what an hg19 file
-#: looks like scanned against GRCh38 coordinates, which is the one failure mode a
-#: user cannot see for themselves: the scan "succeeds" and reports plausible
-#: garbage. Below the floor the fraction is noise, so it stays a plain tally.
-_ASSEMBLY_MIN_CLASSIFIED = 10
-_ASSEMBLY_SUSPECT_FRACTION = 0.5
-
-
-def _assembly_check(counts: dict[str, Any]) -> dict[str, Any]:
-    """REF-mismatch tally, and whether it looks like the wrong genome build.
-
-    The classifier already computes ``reference_mismatch`` per hit; this only reads
-    the tally it was throwing away.
-    """
-    consequences = counts.get("consequences") or {}
-    mismatches = int(consequences.get("reference_mismatch") or 0)
-    checked = sum(int(n or 0) for term, n in consequences.items() if term in _REF_CHECKED_TERMS)
-    fraction = mismatches / checked if checked else 0.0
-    return {
-        "mismatches": mismatches,
-        "ref_checked": checked,
-        "fraction": fraction,
-        "percent": round(fraction * 100),
-        "suspect": (checked >= _ASSEMBLY_MIN_CLASSIFIED and fraction >= _ASSEMBLY_SUSPECT_FRACTION),
-    }
 
 
 def _human_delay(seconds: int) -> str:
@@ -355,25 +209,29 @@ def create_app() -> Flask:
 
     @app.after_request
     def _referrer_policy(response: Any) -> Any:
-        """Never hand the scan token to another site in a ``Referer`` header.
+        """Send no ``Referer`` to other origins.
 
-        With a scan active, ``_keep_scan_token`` puts ``?vcf=<token>`` on every
-        gene/isoform URL, and that token is a 24-hour read capability over someone's
-        uploaded variant data — not an identifier. The pages carry outbound links
-        (doi.org, UniProt, PubMed) and CDN subresources that load without a click, so
-        the full URL would otherwise be offered to each of them.
-
-        Current browsers default to ``strict-origin-when-cross-origin``, which already
-        strips the query cross-origin — but that is a default we do not control and
-        any per-link override reinstates the leak. ``same-origin`` sends nothing at
-        all to another origin and keeps same-origin referrers intact.
-
-        Set here rather than only in the base template so it covers every response,
-        including the JSON digest route, which is not an HTML document and cannot
-        carry a meta tag.
+        The pages carry outbound links (doi.org, UniProt, PubMed) and CDN
+        subresources that load without a click. No URL here carries scan data any
+        more — a scan lives in the browser's ``sessionStorage``, never in a query
+        string — so this is defence in depth rather than a leak fix: ``same-origin``
+        sends nothing cross-origin and keeps same-origin referrers intact, without
+        depending on a browser default we do not control.
         """
         response.headers.setdefault("Referrer-Policy", "same-origin")
         return response
+
+    @app.context_processor
+    def _scan_versions() -> dict[str, str]:
+        """Index version and scan schema, for ``<body data-…>`` on every page.
+
+        ``scanstate.js`` compares both with what a stored scan carries: a schema it
+        does not know is discarded, and a scan resolved against another index is
+        flagged instead of drawn at coordinates that may no longer be right. Read
+        from the server so neither value has a second copy in the JS.
+        """
+        index = load_orf_index()
+        return {"index_version": index.version if index else "", "scan_schema": SCAN_SCHEMA}
 
     # Slugify filter — must match data.py::tis_slug and the LLM dispatcher's
     # _tis_slug so that landing-page dropdown links resolve to the right
@@ -386,29 +244,6 @@ def create_app() -> Flask:
     @app.template_filter("slugify")
     def slugify(value: Any) -> str:
         return _slug_re.sub("-", str(value or "unknown"))
-
-    @app.url_defaults
-    def _keep_scan_token(endpoint: str, values: dict[str, Any]) -> None:
-        """Carry ``?vcf=`` through every navigation link automatically.
-
-        Without this, the token has to be threaded by hand through 17 ``url_for``
-        calls across 15 templates, and the breadcrumb breaks the moment one is
-        missed. ``url_for`` puts any key absent from the URL rule into the query
-        string, so this needs no route changes.
-
-        Only a token that actually resolves is propagated — see ``resolve_scan``.
-        Forwarding a dead one would make a stale ``?vcf=`` trail the user around the
-        whole site, decorating every link with a scan that no longer exists.
-        """
-        if endpoint not in _SCAN_AWARE_ENDPOINTS:
-            return
-        # Never override an explicit value: a call site may pass vcf=None precisely
-        # to drop the token, which gene.html does for its JS base.
-        if "vcf" in values:
-            return
-        token, _digest = resolve_scan()
-        if token:
-            values["vcf"] = token
 
     # Linkify ``PMID:NNN`` citations in the gene mechanistic narrative. Match each
     # PMID token (not the enclosing bracket) so multi-PMID brackets like
@@ -488,8 +323,9 @@ def create_app() -> Flask:
         if gene is None or not gene.isoforms:
             abort(404)
 
-        scan_token, gene_scan_hits = scan_hits("gene", gene.name)
-        view = _make_gene_protein_view(gene, uploaded=gene_scan_hits)
+        # Uploaded-VCF markers are not drawn here: the scan lives in the browser,
+        # and gene_overlay.js adds them to both figures before the first render.
+        view = _make_gene_protein_view(gene)
         gene_fig = build_gene_protein_figure(view)
         gene_fig_collapsed = build_gene_protein_figure(view, collapse_domains=True)
 
@@ -498,16 +334,10 @@ def create_app() -> Flask:
         truncations = [i for i in gene.isoforms if i.orf_type == "truncated"]
         others = [i for i in gene.isoforms if i.orf_type not in ("extended", "truncated")]
 
-        scan_gene_hits = len(gene_scan_hits) if scan_token else None
-
         return render_template(
             "gene.html",
-            scan_token=scan_token,
-            scan_gene_hits=scan_gene_hits,
-            # The click handler concatenates a path onto the base, so the query
-            # string has to be kept separate — see gene.html.
-            gene_path=url_for("gene_page", gene_name=gene.name, vcf=None),
-            scan_qs=f"?vcf={scan_token}" if scan_token else "",
+            # The click handler concatenates the isoform path onto this base.
+            gene_path=url_for("gene_page", gene_name=gene.name),
             gene=gene,
             extensions=extensions,
             truncations=truncations,
@@ -591,15 +421,9 @@ def create_app() -> Flask:
         sae = sae_card_for_isoform(iso)
         bio = biophysics_card_for_isoform(iso)
 
-        # Same helper the gene page uses, keyed on this isoform rather than the
-        # gene, so the breadcrumb survives one level deeper.
-        scan_token, scan_isoform_hits = scan_context("tis_id", iso.tis_id)
-
         return render_template(
             "isoform.html",
             isoform=_isoform_view(iso, gene),
-            scan_token=scan_token,
-            scan_isoform_hits=scan_isoform_hits,
             sae=sae,
             bio=bio,
             criterion_evidence=criterion_evidence_for(iso),
@@ -687,14 +511,13 @@ def create_app() -> Flask:
         return send_from_directory(root, filename, mimetype="application/json")
 
     # ---------- Variant query ----------
-    # The app's only write path. An uploaded VCF is stored under scanstore's temp
-    # directory, resolved against the ORF index, and its digest written beside the
-    # blob. The token returned here is what threads through the results and gene
-    # pages so a scan survives navigation.
+    # The app's only write path, and it writes nothing that outlives the request: the
+    # upload is staged to a temp file for scan(), deleted before the response is
+    # built, and the result goes back whole for the browser to keep.
 
     @app.post("/api/variants/scan")
     def variants_scan() -> Any:
-        """Accept a VCF upload, resolve it against the ORF index, return a token."""
+        """Accept a VCF upload, resolve it against the ORF index, return the result."""
         # First, before the index load and the token check: it is the cheapest
         # check, and it is the one that has to hold when the endpoint is hot.
         client = request.remote_addr or "unknown"
@@ -747,180 +570,56 @@ def create_app() -> Flask:
                 {"error": "no_file", "message": "attach a VCF as the 'vcf' form field"}
             ), 400
 
-        # Sweeping here (rather than on a timer) keeps expiry enforcement off the
-        # read path and out of background threads; it is rate-limited internally.
-        scanstore.sweep()
-
+        # Charged before the parse, on every upload: with no stored results there
+        # is no cache hit to exempt.
+        throttle.record(client)
         try:
-            saved = scanstore.save(
-                upload.stream, index_version=index.version, filename=upload.filename
-            )
-        except ScanStoreError as exc:
-            logger.exception("scan upload failed")
+            with staged_upload(upload.stream) as staged:
+                result = scan(staged.path, index)
+        except StagingError as exc:
+            logger.exception("scan upload could not be staged")
             return jsonify({"error": "storage_failed", "message": str(exc)}), 507
+        except VcfLimitExceeded as exc:
+            logger.info("scan refused kind=%s", exc.kind)
+            error, status = _LIMIT_RESPONSES[exc.kind]
+            return jsonify({"error": error, "message": str(exc)}), status
 
-        if saved.was_cached:
-            # Same file, same index version — the finished digest is already on
-            # disk, so the parse is skipped entirely.
-            logger.info("scan reused cached digest key=%s", saved.key)
-        else:
-            # Charged here rather than at the top: a cache hit skips the parse
-            # entirely, so it costs nothing and should not spend anyone's budget.
-            throttle.record(client)
-            try:
-                result = scan(scanstore.source_path(saved.key), index)
-            except VcfLimitExceeded as exc:
-                logger.info("scan refused key=%s kind=%s", saved.key, exc.kind)
-                # The blob stays; the next sweep collects it, since no digest was
-                # written and nothing will resolve the token.
-                error, status = _LIMIT_RESPONSES[exc.kind]
-                return jsonify({"error": error, "message": str(exc)}), status
-            digest = result.to_dict()
-            digest["provenance"] = {
-                "vcf_sha256": saved.vcf_sha256,
-                "index_version": index.version,
-                "catalog_genes": index.n_genes,
-                "catalog_isoforms": index.n_isoforms,
-            }
-            # Deliberately NOT digest["filename"]: the blob is keyed by content and
-            # shared by every uploader of the same bytes, so a filename written here
-            # is served to whoever uploads it next. It lives on the token instead,
-            # and scanstore.load() reads it from there.
-            scanstore.write_digest(saved.key, digest)
+        # The staged file is already gone; everything below works from the result.
+        body = build_response(result, index=index, vcf_sha256=staged.vcf_sha256)
+        _log_scan(body)
+        response = jsonify(body)
+        # The body carries uploaded variant positions; keep it out of every cache.
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
-        loaded = scanstore.load(saved.token)
-        if not loaded.ok:
-            # Only reachable if the blob vanished between write and read.
-            return jsonify({"error": "storage_failed", "message": "digest disappeared"}), 507
+    @app.get("/variants")
+    def variants_page() -> Any:
+        """The scan results page — the same HTML for everyone.
 
-        payload = loaded.digest or {}
-        # ``was_cached`` is deliberately absent. Blobs are content-addressed and
-        # shared across uploaders, so reporting a cache hit tells the caller that
-        # SOMEONE ELSE already scanned those exact bytes — the confirm-by-upload
-        # oracle this module's capability tokens exist to prevent (scanstore.py
-        # docstring). It stays in the server log, which is ours.
-        response_body = {
-            "vcf_id": saved.token,
-            "redirect": f"/variants/{saved.token}",
-            "counts": payload.get("counts", {}),
-            "genes": payload.get("genes", []),
-            "provenance": payload.get("provenance", {}),
-            "expires_at": payload.get("expires_at", ""),
-        }
-        _log_scan(response_body, saved)
-        return jsonify(response_body)
-
-    @app.get("/variants/<token>")
-    def variants_page(token: str) -> Any:
-        """Render one scan's results: the funnel, the genes hit, and the hit table.
-
-        The hit list is capped at :data:`PAGE_MAX_HITS` rows and left out of the raw
-        JSON block. ``scan.DEFAULT_MAX_HITS`` is 20,000, and both the table and a
-        pretty-printed digest are rebuilt on *every* view of the token, not just the
-        first — a germline exome reaching that cap would render a multi-MB page each
-        time. The full list stays one request away, on the JSON route.
+        It carries no scan data: ``variants.js`` reads the scan this tab stored and
+        fills the page in. Only site-wide facts are rendered here — the consequence
+        palette, and which genes this build has a page for, since the scan index
+        covers the whole catalogue and a hit in an undisplayed gene is expected.
         """
-        loaded = scanstore.load(token)
-        if loaded.expired:
-            return _private_scan(
-                make_response(
-                    render_template(
-                        "variants_gone.html",
-                        heading="Scan expired",
-                        message=(
-                            "Uploaded VCFs are deleted after 24 hours. Upload the file "
-                            "again to run a fresh scan."
-                        ),
-                    ),
-                    410,
-                )
-            )
-        if not loaded.ok:
-            return _private_scan(
-                make_response(
-                    render_template(
-                        "variants_gone.html",
-                        heading="Scan not found",
-                        message=(
-                            "That scan id is unknown — it may have expired, or the "
-                            "deployment may have restarted since the upload."
-                        ),
-                    ),
-                    404,
-                )
-            )
-
-        digest = _clean(loaded.digest) or {}
-        counts = digest.get("counts", {}) or {}
-        all_hits = digest.get("hits", []) or []
-        # Structurally honest: the key is dropped rather than truncated in place, so
-        # nothing reads a short list as if it were the whole one.
-        preview = {k: v for k, v in digest.items() if k != "hits"}
-        preview["hits_omitted"] = {
-            "count": len(all_hits),
-            "full_digest": url_for("variants_digest", token=token),
-        }
-        # Only genes the *displayed* catalogue knows about can be linked. The scan
-        # index deliberately covers the whole catalogue, so a hit in a gene this
-        # build has no page for is expected, not an error.
-        known_genes = set(load_all().keys())
-        return _private_scan(
-            make_response(
-                render_template(
-                    "variants.html",
-                    token=token,
-                    digest=digest,
-                    counts=counts,
-                    assembly=_assembly_check(counts),
-                    provenance=digest.get("provenance", {}) or {},
-                    genes=digest.get("genes", []) or [],
-                    hits=all_hits[:PAGE_MAX_HITS],
-                    hits_total=len(all_hits),
-                    hits_capped=len(all_hits) > PAGE_MAX_HITS,
-                    digest_url=url_for("variants_digest", token=token),
-                    known_genes=known_genes,
-                    passing=max(
-                        (counts.get("alleles") or 0) - (counts.get("skipped_non_pass") or 0), 0
-                    ),
-                    # Alleles that landed in an ORF, derived by subtraction so the funnel
-                    # stays monotonic. counts["hits"] is NOT usable here: it counts
-                    # (variant, isoform) pairs, so one allele in three isoforms is 3 hits
-                    # and the last step would appear to grow. Subtraction is also
-                    # independent of the hit-list cap.
-                    in_orf_alleles=max(
-                        (counts.get("alleles") or 0)
-                        - (counts.get("skipped_non_pass") or 0)
-                        - (counts.get("off_catalog_contig") or 0)
-                        - (counts.get("no_orf") or 0),
-                        0,
-                    ),
-                    raw_json=json.dumps(preview, indent=2, sort_keys=True),
-                )
+        response = make_response(
+            render_template(
+                "variants.html",
+                known_genes=sorted(load_all().keys()),
+                conseq_color=CONSEQ_COLOR,
+                conseq_short=CONSEQ_SHORT,
             )
         )
+        response.headers["X-Robots-Tag"] = "noindex, nofollow"
+        return response
 
     @app.get("/api/variants/status")
     def variants_status() -> Any:
         """Report whether the scan path is actually functional in this deployment.
 
-        Exists because the two things most likely to differ between local and the
-        Railway container — was ``orf_index.parquet`` staged, and is the ephemeral
-        disk writable — cannot be told apart from a failed upload, and there is no
-        shell into the container.
+        Exists because whether ``orf_index.parquet`` was staged cannot be told apart
+        from a failed upload, and there is no shell into the container.
         """
         index = load_orf_index()
-        probe_dir = scanstore.scan_dir()
-        writable = False
-        write_error = ""
-        try:
-            probe_dir.mkdir(parents=True, exist_ok=True)
-            probe = probe_dir / f".writeprobe-{os.getpid()}"
-            probe.write_text("ok")
-            writable = probe.read_text() == "ok"
-            probe.unlink(missing_ok=True)
-        except OSError as exc:
-            write_error = str(exc)
-
         return jsonify(
             {
                 "index_loaded": index is not None,
@@ -929,37 +628,11 @@ def create_app() -> Flask:
                 "catalog_isoforms": index.n_isoforms if index else 0,
                 "catalog_intervals": index.n_intervals if index else 0,
                 "displayed_genes": len(load_all()),
-                "scan_dir": str(probe_dir),
-                "scan_dir_writable": writable,
-                "scan_dir_error": write_error,
-                "ttl_hours": scanstore.ttl_hours(),
-                "budget_bytes": scanstore.budget_bytes(),
                 "max_upload_bytes": app.config.get("MAX_CONTENT_LENGTH"),
                 "scan_token_required": bool(os.environ.get("SWISSISOFORM_SCAN_TOKEN")),
                 "debug_logging": _scan_debug_enabled(),
             }
         )
-
-    @app.get("/api/variants/<token>.json")
-    def variants_digest(token: str) -> Any:
-        """Return one scan's digest: 200, 404 if unknown, 410 if past its TTL."""
-        loaded = scanstore.load(token)
-        # All three exits go through _private_scan, matching the HTML route: the 404
-        # and 410 are reached by token too, so they are as token-addressed as the 200
-        # and get the same headers. Marking only the success path is how the two
-        # controls drift apart.
-        if loaded.expired:
-            return _private_scan(
-                jsonify(
-                    {
-                        "error": "expired",
-                        "message": "this scan has expired; upload the VCF again",
-                    }
-                )
-            ), 410
-        if not loaded.ok:
-            return _private_scan(jsonify({"error": "not_found", "message": "unknown scan id"})), 404
-        return _private_scan(jsonify(_clean(loaded.digest)))
 
     @app.errorhandler(413)
     def upload_too_large(e: Any) -> tuple[Any, int]:
@@ -1224,164 +897,6 @@ def _frame_domain_clusters(occurrences: list[dict[str, Any]]) -> list[dict[str, 
     return out
 
 
-def with_frame(protein_change: str | None, frame: str) -> str:
-    """Name the frame a residue number counts against, in the same breath as the number.
-
-    Both variant populations on the gene figure carry protein notation, and the two
-    are numbered in **different coordinate systems**: a scan hit is numbered against
-    one ORF, while an annotated variant's HGVSp is copied from ClinVar / gnomAD /
-    COSMIC and numbered against that source's canonical transcript. For an
-    alternative-TIS isoform those disagree — the isoform starts elsewhere, so
-    canonical residue N is not the isoform's residue N.
-
-    They previously hedged asymmetrically, and the wrong way round: the scan side
-    named its frame while the annotated string beside it appeared bare and therefore
-    more authoritative, when it is the one whose numbering does not apply to the
-    isoform being drawn. Routing both through here means neither can be rendered
-    without saying which protein it counts against.
-    """
-    if not protein_change or not frame:
-        return protein_change or ""
-    return f"{protein_change} · {frame} frame"
-
-
-def hgvsp_from_hit(aa_ref: str, aa_alt: str, residue: int, consequence: str) -> str:
-    """HGVS protein notation for one scan hit, or ``""`` when none is derivable.
-
-    An uploaded variant has no upstream annotator — the pipeline's own variants carry
-    whatever VEP / ClinVar / COSMIC wrote — so the notation is built here from the
-    classifier's amino acids. Three-letter codes and the same conventions those
-    sources use, since both kinds share a tooltip:
-
-    ========================  ==========================
-    missense                  ``p.Arg253Glu``
-    synonymous                ``p.Arg253=``
-    stop gained               ``p.Arg253Ter``
-    stop lost                 ``p.Ter253Arg``
-    start lost                ``p.Leu1?``
-    multi-residue (MNV)       ``p.Phe225_Glu226delinsSerLys``
-    ========================  ==========================
-
-    **The residue is numbered against the ORF the hit names, not a transcript.** The
-    same nucleotide is a different residue in every ORF containing it, so the caller
-    must show the frame alongside — a bare ``p.Arg253Glu`` next to a ClinVar string
-    would otherwise read as the same coordinate system when it is not.
-
-    Args:
-        aa_ref: Reference residue(s), one letter each; empty for indels, which the
-            classifier resolves by length without reading sequence.
-        aa_alt: Alternate residue(s), same length as *aa_ref*.
-        residue: 0-based residue of the first affected codon.
-        consequence: The classifier's term, which decides the notation's shape.
-
-    Returns:
-        The notation, or ``""`` when there are no amino acids to name.
-    """
-    from Bio.Data.IUPACData import protein_letters_1to3
-
-    def three(one: str) -> str:
-        return "Ter" if one == "*" else protein_letters_1to3.get(one.upper(), one)
-
-    if not aa_ref or len(aa_ref) != len(aa_alt):
-        return ""
-
-    first = residue + 1
-    if consequence == "start_lost":
-        # What changed is whether the codon still initiates, not the residue — the
-        # same "?" VEP writes for p.Met1?.
-        return f"p.{three(aa_ref[0])}{first}?"
-    if len(aa_ref) > 1:
-        last = first + len(aa_ref) - 1
-        inserted = "".join(three(a) for a in aa_alt)
-        return f"p.{three(aa_ref[0])}{first}_{three(aa_ref[-1])}{last}delins{inserted}"
-    if aa_ref == aa_alt:
-        return f"p.{three(aa_ref)}{first}="
-    return f"p.{three(aa_ref)}{first}{three(aa_alt)}"
-
-
-def _uploaded_variant_records(hits: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    """Scan hits → figure records, in the same shape the ClinVar variants use.
-
-    Sharing the shape means they land on the same consequence rows, so an uploaded
-    variant can be read against where the known pathogenics cluster. ``source`` is
-    what the figure keys the distinct marker off.
-
-    ``x`` comes from ``frame.plotly_x``, the same conversion the fixture's
-    ``expect_x`` column pins — the residue is meaningless without the frame, since
-    a truncation's lost region is numbered against the canonical protein.
-    """
-    if not hits:
-        return []
-
-    from swissisoform.variantquery.frame import plotly_x
-
-    index = load_orf_index()
-    # Keyed by (variant, x, consequence): one variant inside N isoforms yields N
-    # hits, and shared-region hits all map to the SAME canonical x — so without this
-    # they stack into one visible diamond with only one reachable hover. Distinct
-    # variants that happen to collide at an x stay separate.
-    merged: dict[tuple[str, int, str], dict[str, Any]] = {}
-    isoform_counts: dict[tuple[str, int, str], set[str]] = {}
-
-    for hit in hits:
-        residue = hit.get("residue")
-        if residue is None:
-            # Classified but unplaceable (e.g. an indel crossing an intron). It has
-            # no residue, so it has nowhere to sit on a protein axis.
-            continue
-        record = index.by_tis_id(hit.get("tis_id", "")) if index else None
-        if record is None:
-            continue
-        x = plotly_x(record, int(residue), hit.get("frame", ""))
-        if x is None:
-            continue
-
-        change = f"{hit.get('ref', '')}>{hit.get('alt', '')}"
-        # Namespaced so it can never collide with a ClinVar/gnomAD id.
-        variant_id = f"vcf:{hit.get('chrom')}:{hit.get('pos')}:{change}"
-        consequence = hit.get("consequence") or "other"
-        key = (variant_id, x, consequence)
-        isoform_counts.setdefault(key, set()).add(hit.get("tis_id", ""))
-
-        if key in merged:
-            # A hit in the unique region of ANY isoform makes the mark prominent.
-            merged[key]["in_unique"] |= hit.get("region") == "unique"
-            continue
-        # HGVS protein notation, in the same three-letter style the annotated
-        # variants carry, so both read alike on the same tooltip.
-        protein_change = hgvsp_from_hit(
-            hit.get("aa_ref") or "", hit.get("aa_alt") or "", residue, consequence
-        )
-        if not protein_change:
-            # Absent is a real answer for an indel — the classifier resolves those by
-            # length without reading sequence — so say which, rather than leaving a
-            # blank line in the tooltip that reads as a bug.
-            protein_change = f"residue {residue + 1} — no amino-acid change resolved"
-            note = hit.get("consequence_note") or ""
-            if note:
-                protein_change += f" ({note})"
-        protein_change = with_frame(protein_change, hit.get("frame") or "")
-
-        merged[key] = {
-            "variant_id": variant_id,
-            "pos": x + 1,  # the caller applies the global -1 shift
-            "consequence": consequence,
-            "significance": None,
-            "protein_change": protein_change,
-            "source": "uploaded",
-            "in_unique": hit.get("region") == "unique",
-            "uploaded_detail": (
-                f"{hit.get('chrom')}:{hit.get('pos'):,} {change} · line {hit.get('line_no')}"
-            ),
-        }
-
-    for key, record in merged.items():
-        n = len(isoform_counts[key])
-        if n > 1:
-            record["uploaded_detail"] += f" · in {n} isoforms"
-    return list(merged.values())
-
-
 def _isoform_x_offset(
     orf_index: Any, iso: Any, canonical_len: int, isoform_len: int, has_shared: bool
 ) -> int | float:
@@ -1406,9 +921,7 @@ def _isoform_x_offset(
     return canonical_len - isoform_len if has_shared and canonical_len else 0
 
 
-def _make_gene_protein_view(
-    gene: Any, uploaded: list[dict[str, Any]] | None = None
-) -> types.SimpleNamespace:
+def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
     """Residue-frame combined view consumed by ``build_gene_protein_figure``.
 
     One canonical bar (residues ``1..canonical_len``) plus one bar per isoform,
@@ -1622,10 +1135,6 @@ def _make_gene_protein_view(
         for s in _depth_segments([{"start": d["x0"], "end": d["x1"]} for d in domains])
     ]
     variants = list(var_by_id.values())
-    # Uploaded VCF hits are appended AFTER the dedupe, never through it: var_by_id
-    # merges by variant_id with pathogenic-wins, which would absorb an uploaded hit
-    # into a ClinVar record (or be absorbed by one) and lose its provenance.
-    variants.extend(_uploaded_variant_records(uploaded))
     motif_list = list(motifs.values())
 
     # Anchor the canonical start at x=0 (residue 1 → 0) so extensions read as

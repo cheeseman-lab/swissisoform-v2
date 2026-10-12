@@ -1,8 +1,11 @@
 /* Landing-page VCF drop zone.
  *
- * Posts a VCF to /api/variants/scan and navigates to the results page it names.
+ * Posts a VCF to /api/variants/scan, stores the result in this tab
+ * (SwissScan.save, sessionStorage) and opens /variants, which reads it back. The
+ * server keeps nothing about the scan, so the response is the only copy — and the
+ * filename never leaves the browser: it is taken from the File, not the reply.
  * Unlike the gene filters beside it, this talks to the server: resolving a
- * variant needs the ORF index, which is far too large to ship to the browser.
+ * variant needs the ORF index, which is not shipped to the browser.
  *
  * The response JSON is logged to the browser console on every reply, success or
  * failure — the fastest way to inspect what the backend actually returned, and it
@@ -41,6 +44,39 @@
     return "Scan failed (HTTP " + response.status + ").";
   }
 
+  /* Store the scan for this tab, then open the results page. */
+  function keep(file, payload) {
+    var scan = window.SwissScan;
+    var expected = document.body.getAttribute("data-scan-schema");
+    if (!scan || !payload || payload.schema !== expected) {
+      // The page and the server disagree on the shape — a deploy landed between
+      // loading this page and uploading.
+      busy = false;
+      setState("is-error", "The site was updated while this page was open. Reload and try again.");
+      return;
+    }
+    var summary = Object.assign({}, payload, {
+      filename: file.name,
+      scanned_at: new Date().toISOString(),
+    });
+    delete summary.hits;
+    try {
+      scan.save(summary, payload.hits || []);
+    } catch (err) {
+      busy = false;
+      console.error("[swissisoform] could not store the scan", err);
+      setState("is-error", "This browser would not store the scan (is site storage blocked?).");
+      return;
+    }
+    var counts = payload.counts || {};
+    setState(
+      "is-busy",
+      "Found " + (counts.hits || 0) + " hits in " + (counts.genes_hit || 0) +
+        " genes — opening results…"
+    );
+    window.location.href = "/variants";
+  }
+
   function upload(file) {
     if (busy || !file) return;
     busy = true;
@@ -68,17 +104,7 @@
               setState("is-error", describe(payload, response));
               return;
             }
-            var counts = (payload && payload.counts) || {};
-            setState(
-              "is-busy",
-              "Found " +
-                (counts.hits || 0) +
-                " hits in " +
-                (counts.genes_hit || 0) +
-                " genes — opening results…"
-            );
-            window.location.href =
-              (payload && payload.redirect) || "/variants/" + payload.vcf_id;
+            keep(file, payload);
           });
       })
       .catch(function (err) {

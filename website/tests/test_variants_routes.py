@@ -1,8 +1,9 @@
-"""The two variant-query endpoints, end to end through Flask.
+"""The variant-query endpoint, end to end through Flask, against the fixture VCF.
 
-Exercises the contract the front end will depend on: a token in, a digest out,
-and the four failure modes mapped onto distinct status codes (400 / 404 / 410 /
-413) rather than a generic 500.
+Exercises the contract the front end depends on: a VCF in, the whole result out
+(the browser keeps it; the server keeps nothing), and the failure modes mapped onto
+distinct status codes rather than a generic 500. ``test_scan_route.py`` covers the
+same contract with a VCF it writes itself, for when this fixture is absent.
 
 Skipped without the ``cheeseman_test`` run, which lives outside the repository.
 """
@@ -11,7 +12,6 @@ from __future__ import annotations
 
 import gzip
 import io
-import json
 import shutil
 from pathlib import Path
 
@@ -45,8 +45,7 @@ def data_dir(tmp_path_factory) -> Path:
 @pytest.fixture
 def client(data_dir, tmp_path, monkeypatch):
     monkeypatch.setenv("SWISSISOFORM_DATA_DIR", str(data_dir))
-    monkeypatch.setenv("SWISSISOFORM_SCAN_DIR", str(tmp_path / "scans"))
-    monkeypatch.delenv("SWISSISOFORM_SCAN_TTL_HOURS", raising=False)
+    monkeypatch.setenv("SWISSISOFORM_THROTTLE_DIR", str(tmp_path / "throttle"))
     # The throttle is off for the rest of the suite: these tests post several
     # uploads each, and only the throttle's own tests should feel it.
     monkeypatch.setenv("SWISSISOFORM_SCAN_RATE_HOURLY", "0")
@@ -88,10 +87,9 @@ def vcf_bytes() -> bytes:
 # ----------------------------------------------------------------------
 
 
-def test_scan_returns_a_token_and_the_funnel(client, vcf_bytes) -> None:
+def test_scan_returns_the_funnel_and_no_token(client, vcf_bytes) -> None:
     payload = _post(client, vcf_bytes).get_json()
-    assert payload["vcf_id"]
-    assert payload["redirect"] == f"/variants/{payload['vcf_id']}"
+    assert "vcf_id" not in payload and "redirect" not in payload
 
     counts = payload["counts"]
     # Totals are derived, not literal, so adding fixture coverage does not break
@@ -136,49 +134,26 @@ def test_gene_rollup_separates_variants_from_hit_records(client, vcf_bytes) -> N
         assert g["n_variants"] >= 1
 
 
-def test_digest_route_returns_the_hits(client, vcf_bytes) -> None:
-    token = _post(client, vcf_bytes).get_json()["vcf_id"]
-    response = client.get(f"/api/variants/{token}.json")
-    assert response.status_code == 200
-    assert response.headers["X-Robots-Tag"] == "noindex, nofollow"
+def test_the_response_carries_the_hits(client, vcf_bytes) -> None:
+    response = _post(client, vcf_bytes)
+    assert response.headers["Cache-Control"] == "no-store"
 
-    digest = response.get_json()
-    assert digest["vcf_id"] == token
-    assert len(digest["hits"]) == digest["counts"]["hits"]
-    hit = next(h for h in digest["hits"] if h["gene"] == "MAD2L1" and h["frame"] == "canonical")
+    body = response.get_json()
+    assert len(body["hits"]) == body["counts"]["hits"]
+    hit = next(h for h in body["hits"] if h["gene"] == "MAD2L1" and h["frame"] == "canonical")
     assert (hit["residue"], hit["region"]) == (12, "unique")
+    assert hit["x"] is not None
 
 
-def test_persisted_digest_contains_no_genotype_data(client, vcf_bytes, tmp_path) -> None:
-    """The 24 h artifact on disk must not carry the uploaded sample columns.
+def test_the_response_contains_no_genotype_data(client, vcf_bytes) -> None:
+    """What the browser stores must not carry the uploaded sample columns.
 
     The fixture is full-width (INFO / FORMAT / NORMAL / TUMOR), so this asserts
-    against real genotype text rather than a hypothetical. Read straight off the
-    filesystem, not through the API, because the file is what persists.
+    against real genotype text rather than a hypothetical.
     """
-    token = _post(client, vcf_bytes).get_json()["vcf_id"]
-
-    from swissisoform_site import scanstore
-
-    pointer = json.loads((scanstore.scan_dir() / "tokens" / f"{token}.json").read_text())
-    on_disk = scanstore.digest_path(pointer["key"]).read_text()
-
+    body = _post(client, vcf_bytes).get_data(as_text=True)
     for leak in ("zcc10-N", "zcc10-T", "GT:DP:FDP", "GT:DP:DP2", "0/1:", "0/0:", "SOMATIC"):
-        assert leak not in on_disk, f"{leak!r} was written to the scan digest"
-
-
-def test_stored_source_keeps_the_upload_verbatim(client, vcf_bytes) -> None:
-    """The blob is the upload byte-for-byte — that is what makes a re-scan honest.
-
-    Genotypes do live here, which is exactly why no route serves this file back.
-    """
-    token = _post(client, vcf_bytes).get_json()["vcf_id"]
-
-    from swissisoform_site import scanstore
-
-    pointer = json.loads((scanstore.scan_dir() / "tokens" / f"{token}.json").read_text())
-    stored = gzip.decompress(scanstore.source_path(pointer["key"]).read_bytes())
-    assert stored == vcf_bytes
+        assert leak not in body, f"{leak!r} was sent back in the scan response"
 
 
 def test_gzipped_upload_resolves_identically(client, vcf_bytes) -> None:
@@ -187,52 +162,14 @@ def test_gzipped_upload_resolves_identically(client, vcf_bytes) -> None:
     assert packed["counts"] == plain["counts"]
 
 
-def test_reupload_skips_the_parse_but_mints_a_new_token(client, vcf_bytes) -> None:
-    first = _post(client, vcf_bytes).get_json()
-    second = _post(client, vcf_bytes).get_json()
-    assert second["vcf_id"] != first["vcf_id"]
-    assert second["counts"] == first["counts"]
-    # Both tokens resolve to the same shared digest.
-    assert client.get(f"/api/variants/{first['vcf_id']}.json").status_code == 200
-    assert client.get(f"/api/variants/{second['vcf_id']}.json").status_code == 200
+def test_the_filename_is_never_echoed(client, vcf_bytes) -> None:
+    """The browser already has the filename; the server never hands one back.
 
-    # The blob really is shared — checked at the store, not from the response,
-    # which must not say so (see test_response_never_reveals_a_cache_hit).
-    from swissisoform_site import scanstore
-
-    def _key(tok: str) -> str:
-        return json.loads((scanstore.scan_dir() / "tokens" / f"{tok}.json").read_text())["key"]
-
-    assert _key(first["vcf_id"]) == _key(second["vcf_id"])
-
-
-def test_response_never_reveals_a_cache_hit(client, vcf_bytes) -> None:
-    """Blobs are content-addressed and shared between uploaders.
-
-    So "this was already scanned" is a fact about someone *else's* upload, and
-    returning it lets anyone holding a candidate VCF confirm it was submitted —
-    the confirm-by-upload oracle the capability token exists to prevent.
+    It used to be stored, and a filename written into a shared digest was served to
+    the next uploader of the same bytes. Not storing it at all ends that class.
     """
-    first = _post(client, vcf_bytes).get_json()
-    second = _post(client, vcf_bytes).get_json()
-    assert "was_cached" not in first
-    assert "was_cached" not in second
-
-
-def test_filename_is_token_scoped_not_blob_scoped(client, vcf_bytes) -> None:
-    """A second uploader of the same bytes must see their OWN filename.
-
-    The digest lives in the shared blob, so a filename written into it was served
-    to everyone who uploaded those bytes afterwards — leaking what the first
-    uploader called their file.
-    """
-    a = _post(client, vcf_bytes, name="patient_A_confidential.vcf").get_json()
-    b = _post(client, vcf_bytes, name="patient_B.vcf").get_json()
-
-    da = client.get(f"/api/variants/{a['vcf_id']}.json").get_json()
-    db = client.get(f"/api/variants/{b['vcf_id']}.json").get_json()
-    assert da["filename"] == "patient_A_confidential.vcf"
-    assert db["filename"] == "patient_B.vcf"
+    body = _post(client, vcf_bytes, name="patient_A_confidential.vcf").get_data(as_text=True)
+    assert "patient_A" not in body
 
 
 # ----------------------------------------------------------------------
@@ -244,20 +181,6 @@ def test_missing_file_is_400(client) -> None:
     response = client.post("/api/variants/scan", data={}, content_type="multipart/form-data")
     assert response.status_code == 400
     assert response.get_json()["error"] == "no_file"
-
-
-def test_unknown_token_is_404(client) -> None:
-    response = client.get("/api/variants/doesnotexist.json")
-    assert response.status_code == 404
-    assert response.get_json()["error"] == "not_found"
-
-
-def test_expired_scan_is_410_not_500(client, vcf_bytes, monkeypatch) -> None:
-    token = _post(client, vcf_bytes).get_json()["vcf_id"]
-    monkeypatch.setenv("SWISSISOFORM_SCAN_TTL_HOURS", "0")
-    response = client.get(f"/api/variants/{token}.json")
-    assert response.status_code == 410
-    assert response.get_json()["error"] == "expired"
 
 
 def test_oversized_upload_is_413_json(client) -> None:
@@ -278,10 +201,6 @@ def test_missing_index_reports_503_rather_than_matching_nothing(
     response = _post(client, vcf_bytes)
     assert response.status_code == 503
     assert response.get_json()["error"] == "index_unavailable"
-
-
-def test_traversal_token_is_refused(client) -> None:
-    assert client.get("/api/variants/..%2F..%2Fetc%2Fpasswd.json").status_code == 404
 
 
 def test_existing_pages_still_render(client) -> None:
@@ -323,14 +242,6 @@ def test_a_newline_free_upload_is_422_json_not_a_500(client, monkeypatch) -> Non
     assert response.get_json()["error"] == "line_too_long"
 
 
-def test_a_refused_upload_leaves_no_resolvable_token(client, monkeypatch) -> None:
-    """No digest is written, so nothing should look like a finished scan."""
-    monkeypatch.setenv("SWISSISOFORM_VCF_MAX_LINE_BYTES", str(4 * 1024))
-    refused = _post(client, b"A" * (256 * 1024), "oneline.vcf")
-    assert refused.status_code == 422
-    assert "vcf_id" not in (refused.get_json() or {})
-
-
 # ----------------------------------------------------------------------
 # Per-IP throttle
 # ----------------------------------------------------------------------
@@ -339,7 +250,6 @@ def test_a_refused_upload_leaves_no_resolvable_token(client, monkeypatch) -> Non
 def test_uploads_are_throttled_per_ip(client, vcf_bytes, monkeypatch) -> None:
     monkeypatch.setenv("SWISSISOFORM_SCAN_RATE_HOURLY", "2")
 
-    # Distinct bytes each time: an identical re-upload is a cache hit and free.
     for i in range(2):
         assert _post(client, vcf_bytes + f"\n#pad{i}\n".encode()).status_code == 200
 
@@ -352,12 +262,13 @@ def test_uploads_are_throttled_per_ip(client, vcf_bytes, monkeypatch) -> None:
     assert int(response.headers["Retry-After"]) > 0
 
 
-def test_a_cache_hit_does_not_spend_budget(client, vcf_bytes, monkeypatch) -> None:
-    """Identical bytes skip the parse entirely, so they cost nothing to serve."""
+def test_an_identical_reupload_is_charged(client, vcf_bytes, monkeypatch) -> None:
+    """With nothing stored there is no cache hit: every upload is parsed and charged."""
     monkeypatch.setenv("SWISSISOFORM_SCAN_RATE_HOURLY", "2")
 
-    for _ in range(5):
+    for _ in range(2):
         assert _post(client, vcf_bytes).status_code == 200
+    assert _post(client, vcf_bytes).status_code == 429
 
 
 def test_the_throttle_answers_before_the_index_is_needed(client, vcf_bytes, monkeypatch) -> None:
@@ -387,7 +298,7 @@ def test_forwarded_for_splits_buckets_when_the_proxy_is_trusted(
     data_dir, tmp_path, vcf_bytes, monkeypatch
 ) -> None:
     monkeypatch.setenv("SWISSISOFORM_DATA_DIR", str(data_dir))
-    monkeypatch.setenv("SWISSISOFORM_SCAN_DIR", str(tmp_path / "scans"))
+    monkeypatch.setenv("SWISSISOFORM_THROTTLE_DIR", str(tmp_path / "throttle"))
     monkeypatch.setenv("SWISSISOFORM_SCAN_RATE_HOURLY", "1")
     monkeypatch.setenv("SWISSISOFORM_SCAN_RATE_DAILY", "0")
     monkeypatch.setenv("SWISSISOFORM_TRUST_PROXY", "1")
