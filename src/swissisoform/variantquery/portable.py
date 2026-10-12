@@ -1,65 +1,100 @@
-"""The ORF index as gzipped JSON, readable with the standard library alone.
+"""The ORF index as a compact binary file, readable with the standard library alone.
 
 The browser scan (issue #33, step 2) runs this package under Pyodide, where
 pyarrow would cost tens of MB to download, so the index it scans against is served
-in this form instead of as ``orf_index.parquet``. It is the same records — the
-columns :mod:`load` projects, one row per ORF — and :func:`from_portable` rebuilds
-the same :class:`OrfIndex` the server builds from the parquet.
+in this form instead of as ``orf_index.parquet``. It is the packed
+:class:`~swissisoform.variantquery.index.OrfColumns` written out as they sit in
+memory, so :func:`from_portable` rebuilds the same :class:`OrfIndex` the server
+builds from the parquet with one ``array.frombytes`` per integer column — no
+per-number Python objects at any point, which is what keeps the tab's peak memory
+near the size of the data.
 
-Layout (gzip of compact JSON)::
+Layout (the whole file gzip-compressed, ``mtime=0`` so the bytes depend only on
+the index and stay cacheable under a version-keyed URL)::
 
-    {"format": 1, "version": "<index_version>",
-     "columns": ["gene_name", "tis_id", …], "rows": [[…], …]}
+    b"SWISSORF"                      magic
+    uint32 little-endian             length of the header
+    header (UTF-8 JSON)              {"format": 2, "version", "n",
+                                      "strings": {field: [str, …]},
+                                      "blobs": {name: [offset, length]}}
+    blobs, back to back              int64 little-endian arrays (ints, interval
+                                     bounds and offsets, sequence-pool bounds and
+                                     ids) and the UTF-8 sequence pool
 
-Columnar rows rather than one object per ORF: the key names would otherwise repeat
-6,000+ times. ``gzip`` is written with ``mtime=0`` so the bytes depend only on the
-index, which keeps them cacheable under a version-keyed URL.
+Blob names are ``ints.<field>``, ``bounds.<field>``, ``offsets.<field>``,
+``cds_ids.<field>``, ``cds_bounds`` and ``cds_pool``.
 """
 
 from __future__ import annotations
 
 import gzip
 import json
-from typing import Any
+import struct
+import sys
+from array import array
 
 from swissisoform.variantquery.index import (
-    CDS_COLUMNS,
-    DERIVED_COLUMNS,
-    INDEX_COLUMNS,
-    OPTIONAL_COLUMNS,
+    CDS_FIELDS,
+    INT_FIELDS,
+    INTERVAL_FIELDS,
+    STRING_FIELDS,
+    OrfColumns,
     OrfIndex,
-    OrfRecord,
 )
 
 #: Bump when the layout above changes; :func:`from_portable` refuses other values.
-PORTABLE_FORMAT = 1
+PORTABLE_FORMAT = 2
 
-COLUMNS = INDEX_COLUMNS + OPTIONAL_COLUMNS + CDS_COLUMNS + DERIVED_COLUMNS
-
-#: Column name → OrfRecord attribute, where they differ.
-_ATTRIBUTE = {
-    "unique_genomic_intervals": "unique_intervals",
-    "shared_genomic_intervals": "shared_intervals",
-}
+MAGIC = b"SWISSORF"
 
 
-def _cell(record: OrfRecord, column: str) -> Any:
-    value = getattr(record, _ATTRIBUTE.get(column, column))
-    if isinstance(value, tuple):
-        return [list(pair) for pair in value]
-    return value
+def _le_bytes(values: array) -> bytes:
+    if sys.byteorder == "little":
+        return values.tobytes()
+    swapped = array(values.typecode, values)
+    swapped.byteswap()
+    return swapped.tobytes()
+
+
+def _from_le(data: bytes) -> array:
+    values = array("q")
+    values.frombytes(data)
+    if sys.byteorder != "little":
+        values.byteswap()
+    return values
 
 
 def to_portable(index: OrfIndex) -> bytes:
-    """Serialise ``index`` to gzipped JSON (see the module docstring)."""
-    body = {
-        "format": PORTABLE_FORMAT,
-        "version": index.version,
-        "columns": list(COLUMNS),
-        "rows": [[_cell(record, column) for column in COLUMNS] for record in index.records],
-    }
-    raw = json.dumps(body, separators=(",", ":")).encode("utf-8")
-    return gzip.compress(raw, compresslevel=6, mtime=0)
+    """Serialise ``index`` (see the module docstring)."""
+    columns = index.columns
+    blobs: list[tuple[str, bytes]] = []
+    for field in INT_FIELDS:
+        blobs.append((f"ints.{field}", _le_bytes(columns.ints[field])))
+    for field in INTERVAL_FIELDS:
+        blobs.append((f"bounds.{field}", _le_bytes(columns.bounds[field])))
+        blobs.append((f"offsets.{field}", _le_bytes(columns.offsets[field])))
+    for field in CDS_FIELDS:
+        blobs.append((f"cds_ids.{field}", _le_bytes(columns.cds_ids[field])))
+    blobs.append(("cds_bounds", _le_bytes(columns.cds_bounds)))
+    blobs.append(("cds_pool", columns.cds_pool.encode("utf-8")))
+
+    table: dict[str, list[int]] = {}
+    position = 0
+    for name, data in blobs:
+        table[name] = [position, len(data)]
+        position += len(data)
+    header = json.dumps(
+        {
+            "format": PORTABLE_FORMAT,
+            "version": index.version,
+            "n": columns.n,
+            "strings": {field: columns.strings[field] for field in STRING_FIELDS},
+            "blobs": table,
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    body = b"".join([MAGIC, struct.pack("<I", len(header)), header] + [d for _, d in blobs])
+    return gzip.compress(body, compresslevel=6, mtime=0)
 
 
 def from_portable(data: bytes) -> OrfIndex:
@@ -70,13 +105,34 @@ def from_portable(data: bytes) -> OrfIndex:
             not know.
     """
     try:
-        body = json.loads(gzip.decompress(data))
-    except (OSError, ValueError) as exc:
+        body = gzip.decompress(data)
+    except (OSError, EOFError) as exc:
         raise ValueError(f"not a portable ORF index: {exc}") from exc
-    if not isinstance(body, dict) or body.get("format") != PORTABLE_FORMAT:
-        raise ValueError(f"unknown portable ORF index format: {body.get('format')!r}")
-    columns = body["columns"]
-    return OrfIndex.from_records(
-        (dict(zip(columns, row, strict=True)) for row in body["rows"]),
-        version=str(body.get("version") or ""),
+    if not body.startswith(MAGIC):
+        raise ValueError("not a portable ORF index: bad magic")
+    (header_len,) = struct.unpack_from("<I", body, len(MAGIC))
+    start = len(MAGIC) + 4
+    header = json.loads(body[start : start + header_len])
+    if header.get("format") != PORTABLE_FORMAT:
+        raise ValueError(f"unknown portable ORF index format: {header.get('format')!r}")
+    base = start + header_len
+    view = memoryview(body)
+
+    def blob(name: str) -> memoryview:
+        offset, length = header["blobs"][name]
+        return view[base + offset : base + offset + length]
+
+    strings = {}
+    for field in STRING_FIELDS:
+        pool: dict[str, str] = {}
+        strings[field] = [pool.setdefault(v, v) for v in header["strings"][field]]
+    columns = OrfColumns(
+        strings=strings,
+        ints={field: _from_le(blob(f"ints.{field}")) for field in INT_FIELDS},
+        bounds={field: _from_le(blob(f"bounds.{field}")) for field in INTERVAL_FIELDS},
+        offsets={field: _from_le(blob(f"offsets.{field}")) for field in INTERVAL_FIELDS},
+        cds_pool=str(blob("cds_pool"), "utf-8"),
+        cds_bounds=_from_le(blob("cds_bounds")),
+        cds_ids={field: _from_le(blob(f"cds_ids.{field}")) for field in CDS_FIELDS},
     )
+    return OrfIndex.from_columns(columns, version=str(header.get("version") or ""))

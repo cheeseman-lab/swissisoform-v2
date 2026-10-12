@@ -650,7 +650,7 @@ def load_orf_index():
 
 @lru_cache(maxsize=1)
 def portable_orf_index() -> tuple[str, bytes] | None:
-    """``(index_version, gzipped JSON)`` for the browser scan, or None.
+    """``(index_version, portable file bytes)`` for the browser scan, or None.
 
     Built once per worker from the index :func:`load_orf_index` already holds
     (~1.7 s and ~2.8 MB for ``full_catalog``), so there is no second deploy

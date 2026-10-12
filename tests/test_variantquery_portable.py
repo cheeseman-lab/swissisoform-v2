@@ -1,24 +1,28 @@
-"""The gzipped-JSON ORF index the browser scans against.
+"""The packed ORF index: the binary file the browser scans against, and the loaders.
 
-It must rebuild exactly the index the server builds from the parquet — the same
-records and the same lookups — or a browser scan and a server scan of one VCF
-would disagree.
+Every way of building an index — the column-wise parquet loader the server uses,
+the binary file the browser downloads, and the general row-by-row path — must
+yield the same records and the same lookups, or a browser scan and a server scan
+of one VCF would disagree.
 """
 
 from __future__ import annotations
 
 import gzip
 import json
+import struct
 from pathlib import Path
 
 import pytest
 
 from swissisoform.variantquery.index import OrfIndex
-from swissisoform.variantquery.portable import PORTABLE_FORMAT, from_portable, to_portable
+from swissisoform.variantquery.portable import MAGIC, PORTABLE_FORMAT, from_portable, to_portable
 
-RUN_INDEX = (
-    Path(__file__).resolve().parents[1] / "data" / "output" / "cheeseman_test" / "orf_index.parquet"
-)
+OUTPUT = Path(__file__).resolve().parents[1] / "data" / "output"
+REAL_INDEXES = [
+    pytest.param(OUTPUT / run / "orf_index.parquet", id=run)
+    for run in ("cheeseman_test", "full_catalog")
+]
 
 
 def _index() -> OrfIndex:
@@ -63,21 +67,62 @@ def test_the_bytes_depend_only_on_the_index() -> None:
     assert to_portable(_index()) == to_portable(_index())
 
 
+def _with_header(data: bytes, **changes) -> bytes:
+    body = gzip.decompress(data)
+    (length,) = struct.unpack_from("<I", body, len(MAGIC))
+    start = len(MAGIC) + 4
+    header = json.loads(body[start : start + length])
+    header.update(changes)
+    encoded = json.dumps(header).encode()
+    rest = body[start + length :]
+    return gzip.compress(MAGIC + struct.pack("<I", len(encoded)) + encoded + rest)
+
+
 def test_an_unknown_format_is_refused() -> None:
-    body = json.loads(gzip.decompress(to_portable(_index())))
-    body["format"] = PORTABLE_FORMAT + 1
     with pytest.raises(ValueError, match="format"):
-        from_portable(gzip.compress(json.dumps(body).encode()))
+        from_portable(_with_header(to_portable(_index()), format=PORTABLE_FORMAT + 1))
     with pytest.raises(ValueError, match="not a portable"):
         from_portable(b"not gzip")
 
 
-@pytest.mark.skipif(not RUN_INDEX.is_file(), reason="needs the cheeseman_test orf_index")
-def test_a_real_index_round_trips_record_for_record() -> None:
+def test_the_old_json_layout_is_refused() -> None:
+    """Format 1 was gzipped JSON rows; a stale cached copy must not load."""
+    old = gzip.compress(json.dumps({"format": 1, "columns": [], "rows": []}).encode())
+    with pytest.raises(ValueError, match="bad magic"):
+        from_portable(old)
+
+
+def test_a_none_survives_the_packed_integer_columns() -> None:
+    (record,) = from_portable(to_portable(_index())).records
+    assert record.canonical_per_tid_length is None
+    assert record.canonical_x_offset_nt == -30
+
+
+def _boundaries(index: OrfIndex):
+    """Every exon edge of every ORF, plus a point just outside each one."""
+    for record in index.records:
+        for start, end in (*record.orf_exons, *record.canonical_orf_exons):
+            for pos in (start, start + 1, (start + end) // 2 + 1, end, end + 1):
+                yield record.chrom, pos
+
+
+@pytest.mark.parametrize("path", REAL_INDEXES)
+def test_every_way_of_loading_a_real_index_agrees(path: Path) -> None:
+    """Fast column loader, binary round trip and the row path: identical answers."""
+    if not path.is_file():
+        pytest.skip(f"needs {path}")
+    import pyarrow.parquet as pq
+
     from swissisoform.variantquery.load import load_index
 
-    index = load_index(RUN_INDEX)
-    rebuilt = from_portable(to_portable(index))
-    assert rebuilt.version == index.version
-    assert list(rebuilt.records) == list(index.records)
-    assert rebuilt.n_intervals == index.n_intervals
+    fast = load_index(path)
+    slow = OrfIndex.from_records(pq.read_table(path).to_pylist(), version=fast.version)
+    browser = from_portable(to_portable(fast))
+    for other in (slow, browser):
+        assert other.version == fast.version
+        assert list(other.records) == list(fast.records)
+        assert other.n_intervals == fast.n_intervals
+    for chrom, pos in _boundaries(fast):
+        expected = fast.lookup_span(chrom, pos, pos + 2)
+        assert slow.lookup_span(chrom, pos, pos + 2) == expected
+        assert browser.lookup_span(chrom, pos, pos + 2) == expected

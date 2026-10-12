@@ -74,7 +74,7 @@ def test_the_archive_alone_runs_a_scan_with_no_heavy_dependency(tmp_path) -> Non
 
     archive = tmp_path / "scanner.zip"
     archive.write_bytes(scanner_archive()[1])
-    index = tmp_path / "index.json.gz"
+    index = tmp_path / "index.bin.gz"
     index.write_bytes(to_portable(load_index(RUN_DIR / "orf_index.parquet")))
     vcf = tmp_path / "mine.vcf"
     vcf.write_text(VCF)
@@ -137,6 +137,9 @@ def test_the_drop_zone_names_all_three_downloads(client) -> None:
     page = client.get("/").data.decode()
     assert f'data-pyodide="{PYODIDE_URL}"' in page
     assert f'data-scanner="/api/variants/scanner/{scanner_archive()[0]}.zip"' in page
-    assert f'data-index="/api/variants/index/{load_orf_index().version}.json.gz"' in page
+    from swissisoform.variantquery.portable import PORTABLE_FORMAT
+
+    expected = f"/api/variants/index/{load_orf_index().version}/f{PORTABLE_FORMAT}.bin.gz"
+    assert f'data-index="{expected}"' in page
     assert 'data-worker="/static/js/scan_worker.js"' in page
     assert "the file is not uploaded" in page

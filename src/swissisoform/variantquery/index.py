@@ -5,6 +5,14 @@ fall inside any ORF?* — so the interval set is flattened into per-chromosome
 sorted arrays and queried by bisection. A linear scan would be ~54,000 interval
 comparisons per variant.
 
+The index is **packed**: every ORF field is one column — a list of strings, or a
+stdlib ``array('q')`` of 8-byte integers, with each interval field flattened into
+one bounds array plus per-ORF offsets (:class:`OrfColumns`). An :class:`OrfRecord`
+is built only when a query returns that ORF. As one Python object per value, the
+genome-wide catalogue cost ~280 MB per gunicorn worker against ~90 MB of actual
+data, and the browser scan (Pyodide) holds the same index in a tab. ``array``
+rather than numpy because the browser must not download numpy (issue #33, item 3).
+
 Both the isoform ORF (``orf_exons``) and the per-transcript canonical ORF
 (``canonical_orf_exons``) are indexed. That matters for **truncations**: the lost
 N-terminal region is in the canonical ORF but *not* in the isoform's, and a
@@ -14,9 +22,10 @@ miss it.
 
 from __future__ import annotations
 
+from array import array
 from bisect import bisect_left
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 Interval = tuple[int, int]
@@ -161,6 +170,129 @@ class OrfRecord:
         )
 
 
+#: Stands for ``None`` in the nullable integer columns.
+NULL_INT = -(2**63)
+
+#: :class:`OrfRecord` fields, grouped by how :class:`OrfColumns` stores them.
+STRING_FIELDS = (
+    "gene_name",
+    "tis_id",
+    "transcript_id",
+    "chrom",
+    "strand",
+    "diff_space",
+    "orf_type",
+    "start_codon",
+    "canonical_start_codon",
+)
+INT_FIELDS = ("canonical_len", "isoform_len", "canonical_x_offset_nt", "canonical_per_tid_length")
+INTERVAL_FIELDS = ("orf_exons", "canonical_orf_exons", "unique_intervals", "shared_intervals")
+CDS_FIELDS = ("orf_cds", "canonical_cds")
+
+
+def _int_array(values: Iterable[int] = ()) -> array:
+    return array("q", values)
+
+
+@dataclass
+class OrfColumns:
+    """Every ORF field as one column, row ``i`` being ORF ``i``.
+
+    * ``strings[f]`` — one ``str`` per ORF; repeated values share one object.
+    * ``ints[f]`` — ``array('q')``, :data:`NULL_INT` for ``None``.
+    * ``bounds[f]`` / ``offsets[f]`` — an interval field flattened: ORF ``i``'s
+      intervals are ``(bounds[2k], bounds[2k+1])`` for ``k`` in
+      ``offsets[i] .. offsets[i+1]-1``; ``offsets`` has ``n + 1`` entries.
+    * ``cds_pool`` / ``cds_bounds`` / ``cds_ids[f]`` — every *distinct* coding
+      sequence once, concatenated; entry ``j`` is
+      ``cds_pool[cds_bounds[j]:cds_bounds[j+1]]`` and ORF ``i``'s sequence for
+      field ``f`` is entry ``cds_ids[f][i]``. Sequences dominate the index, and a
+      third of them repeat (isoforms of one transcript share its canonical). The
+      pool is built in ORF order, each ORF's own then canonical sequence, so the
+      two — which largely overlap — sit side by side and gzip well.
+    """
+
+    strings: dict[str, list[str]]
+    ints: dict[str, array]
+    bounds: dict[str, array]
+    offsets: dict[str, array]
+    cds_pool: str
+    cds_bounds: array
+    cds_ids: dict[str, array]
+
+    @property
+    def n(self) -> int:
+        """Number of ORFs."""
+        return len(self.strings["tis_id"])
+
+    @classmethod
+    def from_records(cls, records: Sequence[OrfRecord]) -> OrfColumns:
+        """Pack ready-made records (the slow, general path; loaders build columns)."""
+        pools: dict[str, dict[str, str]] = {f: {} for f in STRING_FIELDS}
+        strings = {
+            f: [pools[f].setdefault(getattr(r, f), getattr(r, f)) for r in records]
+            for f in STRING_FIELDS
+        }
+        ints = {
+            f: _int_array(NULL_INT if getattr(r, f) is None else getattr(r, f) for r in records)
+            for f in INT_FIELDS
+        }
+        bounds: dict[str, array] = {}
+        offsets: dict[str, array] = {}
+        for f in INTERVAL_FIELDS:
+            flat, offs = _int_array(), _int_array([0])
+            for r in records:
+                for start, end in getattr(r, f):
+                    flat.append(start)
+                    flat.append(end)
+                offs.append(len(flat) // 2)
+            bounds[f], offsets[f] = flat, offs
+        pool, cds_bounds, cds_ids = pool_sequences(
+            {f: [getattr(r, f) for r in records] for f in CDS_FIELDS}
+        )
+        return cls(strings, ints, bounds, offsets, pool, cds_bounds, cds_ids)
+
+    def intervals(self, f: str, i: int) -> tuple[Interval, ...]:
+        """ORF ``i``'s intervals for field ``f``, as the record carries them."""
+        flat, offs = self.bounds[f], self.offsets[f]
+        return tuple((flat[2 * k], flat[2 * k + 1]) for k in range(offs[i], offs[i + 1]))
+
+    def record(self, i: int) -> OrfRecord:
+        """Build ORF ``i``'s :class:`OrfRecord`."""
+        fields: dict[str, Any] = {f: self.strings[f][i] for f in STRING_FIELDS}
+        for f in INT_FIELDS:
+            value = self.ints[f][i]
+            fields[f] = None if value == NULL_INT else value
+        for f in INTERVAL_FIELDS:
+            fields[f] = self.intervals(f, i)
+        for f in CDS_FIELDS:
+            j = self.cds_ids[f][i]
+            fields[f] = self.cds_pool[self.cds_bounds[j] : self.cds_bounds[j + 1]]
+        return OrfRecord(**fields)
+
+
+def pool_sequences(per_field: Mapping[str, Sequence[str]]) -> tuple[str, array, dict[str, array]]:
+    """``{field: [sequence per ORF]}`` → ``(pool, bounds, ids)`` for :class:`OrfColumns`.
+
+    Distinct sequences in first-seen order, walking ORFs and, within each, the
+    fields in :data:`CDS_FIELDS` order.
+    """
+    entries: dict[str, int] = {}
+    ids = {f: _int_array() for f in CDS_FIELDS}
+    n = len(per_field[CDS_FIELDS[0]])
+    for i in range(n):
+        for f in CDS_FIELDS:
+            seq = per_field[f][i]
+            j = entries.get(seq)
+            if j is None:
+                j = entries[seq] = len(entries)
+            ids[f].append(j)
+    bounds = _int_array([0])
+    for seq in entries:
+        bounds.append(bounds[-1] + len(seq))
+    return "".join(entries), bounds, ids
+
+
 @dataclass
 class _ChromIndex:
     """Exon intervals on one chromosome, sorted by start.
@@ -170,31 +302,83 @@ class _ChromIndex:
     ``start >= end - max_len`` and ``end >= p``.
     """
 
-    starts: list[int] = field(default_factory=list)
-    ends: list[int] = field(default_factory=list)
-    owners: list[int] = field(default_factory=list)
+    starts: array
+    ends: array
+    owners: array
     max_len: int = 0
+
+
+def _chrom_index(columns: OrfColumns) -> dict[str, _ChromIndex]:
+    """Per-chromosome sorted interval arrays over both ORFs of every record."""
+    staging: dict[str, list[tuple[int, int, int]]] = {}
+    chroms = columns.strings["chrom"]
+    for owner in range(columns.n):
+        # Union of the two ORFs, deduplicated: an extension's canonical exons
+        # are mostly a subset of its own, so most pairs collapse.
+        seen: set[Interval] = set()
+        for f in ("orf_exons", "canonical_orf_exons"):
+            for start, end in columns.intervals(f, owner):
+                if end <= start or (start, end) in seen:
+                    continue
+                seen.add((start, end))
+                staging.setdefault(chroms[owner], []).append((start, end, owner))
+    by_chrom: dict[str, _ChromIndex] = {}
+    for chrom, triples in staging.items():
+        # Sorted once at the end — cheaper than keeping three parallel arrays
+        # ordered during insertion.
+        triples.sort()
+        by_chrom[chrom] = _ChromIndex(
+            starts=_int_array(t[0] for t in triples),
+            ends=_int_array(t[1] for t in triples),
+            owners=_int_array(t[2] for t in triples),
+            max_len=max(t[1] - t[0] for t in triples),
+        )
+    return by_chrom
+
+
+class _Records(Sequence[OrfRecord]):
+    """``OrfIndex.records`` — every ORF, built one at a time as it is read."""
+
+    def __init__(self, index: OrfIndex) -> None:
+        self._index = index
+
+    def __len__(self) -> int:
+        return self._index.n_isoforms
+
+    def __getitem__(self, i: Any) -> Any:
+        if isinstance(i, slice):
+            return [self._index.record(j) for j in range(*i.indices(len(self)))]
+        if i < 0:
+            i += len(self)
+        if not 0 <= i < len(self):
+            raise IndexError(i)
+        return self._index.record(i)
+
+    def __iter__(self) -> Iterator[OrfRecord]:
+        return (self._index.record(i) for i in range(len(self)))
 
 
 class OrfIndex:
     """Point/span membership over every annotated ORF exon.
 
-    Build with :meth:`from_records`; query with :meth:`lookup` (a single 1-based
+    Build with :meth:`from_records` (rows or records) or :meth:`from_columns`
+    (what the loaders produce); query with :meth:`lookup` (a single 1-based
     position) or :meth:`lookup_span` (an inclusive 1-based range, for indels).
     """
 
-    __slots__ = ("_by_chrom", "_records", "_tis_index", "version")
+    __slots__ = ("_by_chrom", "_cache", "_columns", "_tis_index", "version")
 
-    def __init__(
-        self,
-        records: Sequence[OrfRecord],
-        by_chrom: dict[str, _ChromIndex],
-        version: str = "",
-    ) -> None:
-        """Store the records and their prebuilt per-chromosome interval arrays."""
-        self._records = list(records)
-        self._by_chrom = by_chrom
-        self._tis_index: dict[str, OrfRecord] | None = None
+    #: Records kept built between queries. A scan returns the same few ORFs over
+    #: and over (every variant in a gene), so a small cache avoids rebuilding them
+    #: without growing back into one object per ORF.
+    CACHE_SIZE = 4096
+
+    def __init__(self, columns: OrfColumns, version: str = "") -> None:
+        """Index packed columns (see :meth:`from_records` / :meth:`from_columns`)."""
+        self._columns = columns
+        self._by_chrom = _chrom_index(columns)
+        self._tis_index: dict[str, int] | None = None
+        self._cache: dict[int, OrfRecord] = {}
         self.version = version
 
     # ------------------------------------------------------------------
@@ -208,44 +392,35 @@ class OrfIndex:
         *,
         version: str = "",
     ) -> OrfIndex:
-        """Build the index from parquet rows or ready-made :class:`OrfRecord`s.
+        """Build the index from parquet-style rows or ready-made :class:`OrfRecord`s.
 
         Takes plain mappings rather than a DataFrame so this module stays free of
-        pandas — the pyarrow read lives at the call site.
+        pandas. Rows without a chromosome are dropped. The loaders use the faster
+        :meth:`from_columns`; this is the general path (tests, small builds).
         """
-        records: list[OrfRecord] = []
-        by_chrom: dict[str, _ChromIndex] = {}
-        # (start, end, owner) triples per chrom, sorted once at the end — cheaper
-        # than keeping three parallel lists ordered during insertion.
-        staging: dict[str, list[tuple[int, int, int]]] = {}
+        records = [
+            row if isinstance(row, OrfRecord) else OrfRecord.from_mapping(row) for row in rows
+        ]
+        return cls(OrfColumns.from_records([r for r in records if r.chrom]), version=version)
 
-        for row in rows:
-            record = row if isinstance(row, OrfRecord) else OrfRecord.from_mapping(row)
-            if not record.chrom:
-                continue
-            owner = len(records)
-            records.append(record)
+    @classmethod
+    def from_columns(cls, columns: OrfColumns, *, version: str = "") -> OrfIndex:
+        """Build the index from already-packed columns (``load`` / ``portable``)."""
+        return cls(columns, version=version)
 
-            # Union of the two ORFs, deduplicated: an extension's canonical exons
-            # are mostly a subset of its own, so most pairs collapse.
-            seen: set[Interval] = set()
-            for start, end in (*record.orf_exons, *record.canonical_orf_exons):
-                if end <= start or (start, end) in seen:
-                    continue
-                seen.add((start, end))
-                staging.setdefault(record.chrom, []).append((start, end, owner))
+    @property
+    def columns(self) -> OrfColumns:
+        """The packed columns, for serialisers (``portable``)."""
+        return self._columns
 
-        for chrom, triples in staging.items():
-            triples.sort()
-            chrom_index = _ChromIndex(
-                starts=[t[0] for t in triples],
-                ends=[t[1] for t in triples],
-                owners=[t[2] for t in triples],
-                max_len=max(t[1] - t[0] for t in triples),
-            )
-            by_chrom[chrom] = chrom_index
-
-        return cls(records, by_chrom, version=version)
+    def record(self, i: int) -> OrfRecord:
+        """ORF ``i``'s record, built on demand and kept in a small cache."""
+        cached = self._cache.get(i)
+        if cached is None:
+            if len(self._cache) >= self.CACHE_SIZE:
+                self._cache.clear()
+            cached = self._cache[i] = self._columns.record(i)
+        return cached
 
     # ------------------------------------------------------------------
     # Query
@@ -283,18 +458,18 @@ class OrfIndex:
                     owners.append(owner)
 
         # Stable, run-independent order so digests are reproducible.
-        return sorted((self._records[o] for o in owners), key=lambda r: r.tis_id)
+        return sorted((self.record(o) for o in owners), key=lambda r: r.tis_id)
 
     def by_tis_id(self, tis_id: str) -> OrfRecord | None:
         """The record for one ``tis_id``, or None.
 
-        Built lazily on first use: the gene figure needs each hit's ORF to convert a
-        residue into a plot coordinate (it needs ``canonical_len``/``isoform_len``),
-        and scanning ``records`` per hit would be quadratic on a busy gene.
+        The ``tis_id`` → row map is built lazily on first use: the gene figure
+        needs each hit's ORF to convert a residue into a plot coordinate.
         """
         if self._tis_index is None:
-            self._tis_index = {r.tis_id: r for r in self._records}
-        return self._tis_index.get(tis_id)
+            self._tis_index = {t: i for i, t in enumerate(self._columns.strings["tis_id"])}
+        i = self._tis_index.get(tis_id)
+        return None if i is None else self.record(i)
 
     def has_chrom(self, chrom: str) -> bool:
         """True when the index carries any ORF on ``chrom``.
@@ -310,18 +485,18 @@ class OrfIndex:
 
     @property
     def records(self) -> Sequence[OrfRecord]:
-        """Every indexed ORF, in insertion order."""
-        return self._records
+        """Every indexed ORF, in insertion order (built as it is read)."""
+        return _Records(self)
 
     @property
     def n_isoforms(self) -> int:
         """Number of indexed ORFs."""
-        return len(self._records)
+        return self._columns.n
 
     @property
     def n_genes(self) -> int:
         """Number of distinct genes represented."""
-        return len({r.gene_name for r in self._records if r.gene_name})
+        return len({g for g in self._columns.strings["gene_name"] if g})
 
     @property
     def n_intervals(self) -> int:

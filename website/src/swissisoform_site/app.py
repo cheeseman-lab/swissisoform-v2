@@ -42,6 +42,7 @@ from swissisoform.site.evidence import (
     slice_criterion,
 )
 from swissisoform.variantquery.frame import x_offset_residues
+from swissisoform.variantquery.portable import PORTABLE_FORMAT
 from swissisoform.variantquery.scan import scan
 from swissisoform.variantquery.vcf import VcfLimitExceeded
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -292,7 +293,11 @@ def create_app() -> Flask:
         browser_scan = {
             "pyodide": PYODIDE_URL,
             "scanner": url_for("variants_scanner", version=scanner_archive()[0]),
-            "index": url_for("variants_index", version=orf_index.version) if orf_index else "",
+            "index": (
+                url_for("variants_index", version=orf_index.version, fmt=PORTABLE_FORMAT)
+                if orf_index
+                else ""
+            ),
         }
         return render_template(
             "index.html",
@@ -616,17 +621,18 @@ def create_app() -> Flask:
         response.headers["X-Robots-Tag"] = "noindex, nofollow"
         return response
 
-    @app.get("/api/variants/index/<version>.json.gz")
-    def variants_index(version: str) -> Any:
-        """The ORF index for the browser scan, as gzipped JSON (``portable``).
+    @app.get("/api/variants/index/<version>/f<int:fmt>.bin.gz")
+    def variants_index(version: str, fmt: int) -> Any:
+        """The ORF index for the browser scan, in the packed binary ``portable`` file.
 
-        Addressed by version, so a URL's bytes never change and the response is
-        cached as immutable: the browser downloads it once per index build. A
-        version this deployment does not hold is a 404, never a different index —
-        a scan must not silently resolve against coordinates it did not ask for.
+        Addressed by index version *and* file format, so a URL's bytes never change
+        and the response is cached as immutable: a browser that cached an older
+        format can never be handed it for newer code. A version or format this
+        deployment does not hold is a 404, never a different index — a scan must
+        not silently resolve against coordinates it did not ask for.
         """
         portable = portable_orf_index()
-        if portable is None or portable[0] != version:
+        if portable is None or portable[0] != version or fmt != PORTABLE_FORMAT:
             abort(404)
         response = make_response(portable[1])
         response.headers["Content-Type"] = "application/gzip"

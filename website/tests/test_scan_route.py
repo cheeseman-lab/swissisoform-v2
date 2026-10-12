@@ -187,7 +187,9 @@ def test_the_browser_index_is_served_by_version_and_rebuilds_the_same_index(clie
     from swissisoform_site.data import load_orf_index
 
     index = load_orf_index()
-    response = client.get(f"/api/variants/index/{index.version}.json.gz")
+    from swissisoform.variantquery.portable import PORTABLE_FORMAT
+
+    response = client.get(f"/api/variants/index/{index.version}/f{PORTABLE_FORMAT}.bin.gz")
     assert response.status_code == 200
     assert response.headers["Content-Type"] == "application/gzip"
     assert "immutable" in response.headers["Cache-Control"]
@@ -198,4 +200,17 @@ def test_the_browser_index_is_served_by_version_and_rebuilds_the_same_index(clie
 
 def test_another_index_version_is_not_served(client) -> None:
     """A stale page must not silently scan against coordinates it did not ask for."""
-    assert client.get("/api/variants/index/0000000000000000.json.gz").status_code == 404
+    from swissisoform.variantquery.portable import PORTABLE_FORMAT
+
+    assert (
+        client.get(f"/api/variants/index/0000000000000000/f{PORTABLE_FORMAT}.bin.gz").status_code
+        == 404
+    )
+    # The right index in a format this code does not write is refused too.
+    from swissisoform_site.data import load_orf_index
+
+    version = load_orf_index().version
+    assert (
+        client.get(f"/api/variants/index/{version}/f{PORTABLE_FORMAT - 1}.bin.gz").status_code
+        == 404
+    )
