@@ -1,18 +1,21 @@
 /* Landing-page VCF drop zone.
  *
- * Posts a VCF to /api/variants/scan, stores the result in this tab
+ * Scans a VCF in the browser (scan_worker.js — Pyodide running the server's own
+ * scan code) so the file never leaves the machine, stores the result in this tab
  * (SwissScan.save, sessionStorage) and opens /variants, which reads it back. The
- * server keeps nothing about the scan, so the response is the only copy — and the
- * filename never leaves the browser: it is taken from the File, not the reply.
- * Unlike the gene filters beside it, this talks to the server: resolving a
- * variant needs the ORF index, which is not shipped to the browser.
+ * filename never leaves the browser either: it is taken from the File.
  *
- * The response JSON is logged to the browser console on every reply, success or
- * failure — the fastest way to inspect what the backend actually returned, and it
- * leaks nothing (the payload is already here).
+ * Only when the browser cannot run the scanner at all (no Web Workers or
+ * WebAssembly, or Pyodide failed to load) is the server offered — as a button the
+ * user presses, never silently, because it means uploading the file. A file the
+ * scanner refuses (too large once decompressed, a runaway line) is reported, not
+ * retried on the server: the server would refuse it the same way.
  *
- * No spinner: the codebase has no animation anywhere, and a scan of 237k records
- * measures ~0.5 s server-side, so a status line and a border change suffice.
+ * The result is logged to the browser console, success or failure — the fastest
+ * way to inspect what the scan produced, and it leaks nothing.
+ *
+ * No spinner: the codebase has no animation anywhere, so a status line and a
+ * border change suffice; the worker reports each stage as it starts.
  */
 (function () {
   "use strict";
@@ -20,11 +23,15 @@
   var zone = document.getElementById("vq-drop");
   var input = document.getElementById("vq-file");
   var status = document.getElementById("vq-status");
+  var serverButton = document.getElementById("vq-server");
   if (!zone || !input || !status) return;
 
   var busy = false;
+  var worker = null;
+  var pendingFile = null; // offered to the server after a scanner failure
 
   function setState(cls, message) {
+    if (serverButton) serverButton.hidden = true;
     zone.classList.remove("is-over", "is-busy", "is-error");
     if (cls) zone.classList.add(cls);
     status.textContent = message || "";
@@ -77,10 +84,87 @@
     window.location.href = "/variants";
   }
 
-  function upload(file) {
+  /* The scanner could not run in this browser: say why and offer the server. */
+  function offerServer(file, why) {
+    busy = false;
+    console.error("[swissisoform] browser scan unavailable:", why);
+    setState("is-error", "This browser could not run the scan (" + why + ").");
+    if (serverButton && file) {
+      pendingFile = file;
+      serverButton.hidden = false;
+    }
+  }
+
+  function scanInBrowser(file) {
+    if (busy || !file) return;
+    var cfg = zone.dataset;
+    if (!cfg.index) {
+      // No ORF index in this deployment: neither path can scan, so say so here
+      // rather than uploading the file only for the server to refuse it.
+      setState("is-error", "Variant scanning is unavailable: this deployment has no ORF index.");
+      return;
+    }
+    if (typeof Worker === "undefined" || typeof WebAssembly === "undefined") {
+      offerServer(file, "it has no Web Worker or WebAssembly support");
+      return;
+    }
+    busy = true;
+    setState("is-busy", "Scanning " + file.name + " (" + humanBytes(file.size) + ") in your browser…");
+    try {
+      // A module worker: Pyodide 314 will not boot in a classic one.
+      worker = worker || new Worker(cfg.worker, { type: "module" });
+    } catch (err) {
+      offerServer(file, "the scan worker would not start");
+      return;
+    }
+    worker.onmessage = function (event) {
+      var msg = event.data;
+      if (msg.type === "status") {
+        setState("is-busy", msg.message);
+      } else if (msg.type === "done") {
+        var payload = JSON.parse(msg.json);
+        console.log("[swissisoform] browser scan result", payload);
+        if (payload.error) {
+          busy = false;
+          setState("is-error", describe(payload, { status: "n/a" }));
+          return;
+        }
+        keep(file, payload);
+      } else if (msg.type === "failed") {
+        if (msg.infra) {
+          offerServer(file, msg.message);
+        } else {
+          busy = false;
+          console.error("[swissisoform] browser scan failed", msg.message);
+          setState("is-error", "The scan failed: " + msg.message);
+        }
+      }
+    };
+    worker.onerror = function (event) {
+      offerServer(file, (event && event.message) || "the scan worker crashed");
+      worker = null;
+    };
+    worker.postMessage({
+      file: file,
+      pyodide: cfg.pyodide,
+      scanner: cfg.scanner,
+      index: cfg.index,
+    });
+  }
+
+  if (serverButton) {
+    serverButton.addEventListener("click", function () {
+      var file = pendingFile;
+      pendingFile = null;
+      uploadToServer(file);
+    });
+  }
+
+  /* The fallback: the server route scans the upload and keeps nothing. */
+  function uploadToServer(file) {
     if (busy || !file) return;
     busy = true;
-    setState("is-busy", "Scanning " + file.name + " (" + humanBytes(file.size) + ")…");
+    setState("is-busy", "Uploading " + file.name + " (" + humanBytes(file.size) + ") to scan on the server…");
 
     var body = new FormData();
     body.append("vcf", file);
@@ -115,7 +199,7 @@
   }
 
   input.addEventListener("change", function () {
-    if (input.files && input.files.length) upload(input.files[0]);
+    if (input.files && input.files.length) scanInBrowser(input.files[0]);
   });
 
   // dragover must be cancelled on every event or the browser navigates to the file.
@@ -139,7 +223,7 @@
     e.preventDefault();
     e.stopPropagation();
     var files = e.dataTransfer && e.dataTransfer.files;
-    if (files && files.length) upload(files[0]);
+    if (files && files.length) scanInBrowser(files[0]);
     else setState("is-error", "That drop carried no file.");
   });
 })();

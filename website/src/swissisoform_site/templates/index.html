@@ -98,12 +98,16 @@
     </div>
     </div>{# /.vq-controls #}
 
-    {# Variant query. Unlike everything to the left, this posts to the server and
-       navigates to a results page. Progressive-enhancement note: the whole thing
-       is driven by vcf_drop.js, so the input is a plain file field that does
-       nothing without JS — acceptable because resolving a VCF needs the ORF index
-       server-side and cannot degrade to a client-only path. #}
-    <div class="vq-drop" id="vq-drop">
+    {# Variant query, driven by vcf_drop.js: the input is a plain file field that does
+       nothing without JS. The scan runs in the browser (static/js/scan_worker.js,
+       Pyodide), and the data-* attributes are the three version-keyed downloads it
+       needs. The file is never uploaded unless the browser cannot run the scan and
+       the user chooses the server instead. #}
+    <div class="vq-drop" id="vq-drop"
+         data-pyodide="{{ browser_scan.pyodide }}"
+         data-scanner="{{ browser_scan.scanner }}"
+         data-index="{{ browser_scan.index }}"
+         data-worker="{{ url_for('static', filename='js/scan_worker.js') }}">
       <span class="vq-drop-title">Query a VCF</span>
       <p class="vq-drop-hint">
         Drop a <code>.vcf</code> or <code>.vcf.gz</code> here to find which genes
@@ -113,8 +117,9 @@
         <input type="file" id="vq-file" accept=".vcf,.vcf.gz,.gz,text/plain" class="sr-only">
         Choose a file
       </label>
+      <p class="vq-drop-note">Scanned in your browser — the file is not uploaded. Results stay in this browser tab.</p>
       <p class="vq-drop-status" id="vq-status" role="status" aria-live="polite"></p>
-      <p class="vq-drop-note">Scanned on the server and not kept; results stay in this browser tab. Don't upload data you aren't permitted to.</p>
+      <button type="button" class="vq-drop-btn" id="vq-server" hidden>Scan on the server instead</button>
     </div>
   </div>
 

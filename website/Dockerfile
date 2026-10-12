@@ -9,13 +9,10 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # that baked a corrupted swissisoform_site/__init__.py ("source code string
 # cannot contain null bytes"). Instead the source is copied straight onto
 # PYTHONPATH below, so there is no local-package build/cache step at all.
-# biopython is here for one reason: the vendored swissisoform.clinical.validate
-# translates codons with Bio.Seq, and it is the pipeline's classifier that the scan
-# now calls rather than keeping a second copy of. pysam is NOT needed with it — the
-# coding sequence ships in orf_index.parquet, so the genome-reading functions are
-# never reached.
-RUN pip install --no-cache-dir "flask>=3.0" "gunicorn>=21.2" "pandas>=2.0" "pyarrow>=15.0" \
-    "biopython>=1.80"
+# No biopython or pysam: the scan classifies with the vendored
+# swissisoform.variantclass, which is stdlib-only, and the coding sequence ships
+# in orf_index.parquet.
+RUN pip install --no-cache-dir "flask>=3.0" "gunicorn>=21.2" "pandas>=2.0" "pyarrow>=15.0"
 
 # Source onto the path directly (swissisoform_site from src/, scripts.site from
 # scripts/). prepare_deploy.sh dereferences data/ symlinks and stages scripts/.

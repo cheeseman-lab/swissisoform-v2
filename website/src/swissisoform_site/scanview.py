@@ -18,6 +18,7 @@ here once, at scan time, because the browser has no ORF index:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import tempfile
 from collections.abc import Iterator
@@ -26,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
 
+from swissisoform.variantclass import PROTEIN_LETTERS_1TO3
 from swissisoform.variantquery.consequence import (
     MISSENSE,
     START_LOST,
@@ -34,6 +36,9 @@ from swissisoform.variantquery.consequence import (
     SYNONYMOUS,
 )
 from swissisoform.variantquery.frame import plotly_x
+from swissisoform.variantquery.portable import from_portable
+from swissisoform.variantquery.scan import scan
+from swissisoform.variantquery.vcf import VcfLimitExceeded
 
 #: Shape of the response body, which the browser stores as-is. ``scanstate.js``
 #: refuses a stored scan whose schema it does not know, so a deploy that changes
@@ -48,6 +53,15 @@ SCAN_SCHEMA = "c1"
 _DROPPED_HIT_FIELDS = frozenset({"vclass", "transcript_id"})
 
 _CHUNK = 1 << 20
+
+#: Reader caps → (error code, status). Both are 4xx and both are the uploader's
+#: file to fix; the codes stay distinct from the compressed-body ``too_large`` so
+#: a caller can tell which limit it hit. Shared by the server route and the
+#: browser scan, so both report a bad file the same way.
+LIMIT_RESPONSES = {
+    "decompressed_bytes": ("expands_too_large", 413),
+    "line_bytes": ("line_too_long", 422),
+}
 
 
 class StagingError(Exception):
@@ -152,10 +166,9 @@ def hgvsp_from_hit(aa_ref: str, aa_alt: str, residue: int, consequence: str) -> 
     Returns:
         The notation, or ``""`` when there are no amino acids to name.
     """
-    from Bio.Data.IUPACData import protein_letters_1to3
 
     def three(one: str) -> str:
-        return "Ter" if one == "*" else protein_letters_1to3.get(one.upper(), one)
+        return "Ter" if one == "*" else PROTEIN_LETTERS_1TO3.get(one.upper(), one)
 
     if not aa_ref or len(aa_ref) != len(aa_alt):
         return ""
@@ -309,3 +322,43 @@ def build_response(result: Any, *, index: Any, vcf_sha256: str) -> dict[str, Any
         "derived": derived_counts(counts),
         "hits": enrich_hits(digest["hits"], index),
     }
+
+
+def load_portable_index(path: str | Path) -> Any:
+    """The browser's index: :mod:`variantquery.portable` bytes read from ``path``."""
+    return from_portable(Path(path).read_bytes())
+
+
+def scan_file(path: str | Path, index: Any, *, max_seconds: float = 0) -> dict[str, Any]:
+    """Hash and scan a VCF already on disk, returning the response body.
+
+    The browser scan's entry point (Pyodide, ``static/js/scan_worker.js``): the
+    worker writes the dropped file into Pyodide's in-memory filesystem and calls
+    this, so the result is the very dict the server route returns. The wall-clock
+    cap is off by default — it exists for gunicorn's request timeout, and a Web
+    Worker has none. The record and byte caps in ``scan`` / ``vcf`` still apply.
+
+    Raises:
+        VcfLimitExceeded: As ``scan`` does; see :func:`scan_file_json`.
+    """
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        while chunk := handle.read(_CHUNK):
+            digest.update(chunk)
+    result = scan(path, index, max_seconds=max_seconds)
+    return build_response(result, index=index, vcf_sha256=digest.hexdigest())
+
+
+def scan_file_json(path: str | Path, index: Any) -> str:
+    """:func:`scan_file` as JSON, with a refused file as ``{error, message}``.
+
+    One string across the Pyodide boundary, rather than a proxied dict, so the
+    worker posts exactly what ``JSON.parse`` gives the page. The error shape is
+    the server route's, so ``vcf_drop.js`` reports both paths the same way.
+    """
+    try:
+        body = scan_file(path, index)
+    except VcfLimitExceeded as exc:
+        error, _status = LIMIT_RESPONSES[exc.kind]
+        body = {"error": error, "message": str(exc)}
+    return json.dumps(body, separators=(",", ":"))

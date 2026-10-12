@@ -18,6 +18,7 @@ from swissisoform_site.scanview import (
     derived_counts,
     enrich_hits,
     hgvsp_from_hit,
+    scan_file_json,
     staged_upload,
     with_frame,
 )
@@ -150,3 +151,17 @@ def test_derived_funnel_is_monotonic_and_clamped() -> None:
     assert derived["in_orf_alleles"] == 4
     assert derived["assembly"]["suspect"] is True
     assert derived_counts({})["in_orf_alleles"] == 0
+
+
+def test_a_refused_file_comes_back_in_the_server_routes_error_shape(tmp_path, monkeypatch) -> None:
+    """The browser path reports a bad file exactly as POST /api/variants/scan does."""
+    import json
+
+    from swissisoform.variantquery.index import OrfIndex
+
+    monkeypatch.setenv("SWISSISOFORM_VCF_MAX_LINE_BYTES", "64")
+    vcf = tmp_path / "oneline.vcf"
+    vcf.write_bytes(b"A" * 4096)
+    body = json.loads(scan_file_json(vcf, OrfIndex.from_records([])))
+    assert body["error"] == "line_too_long"
+    assert body["message"]

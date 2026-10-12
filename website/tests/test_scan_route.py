@@ -68,12 +68,14 @@ def client(data_dir, tmp_path, monkeypatch, stage_dir):
 
     site_data.load_all.cache_clear()
     site_data.load_orf_index.cache_clear()
+    site_data.portable_orf_index.cache_clear()
     app = create_app()
     app.config["TESTING"] = True
     with app.test_client() as test_client:
         yield test_client
     site_data.load_all.cache_clear()
     site_data.load_orf_index.cache_clear()
+    site_data.portable_orf_index.cache_clear()
 
 
 def _post(client, body: bytes, name: str = "mine.vcf"):
@@ -177,3 +179,23 @@ def test_every_page_states_the_index_version(client) -> None:
     version = load_orf_index().version
     html = client.get("/genes/CBX1").get_data(as_text=True)
     assert f'data-index-version="{version}"' in html
+
+
+def test_the_browser_index_is_served_by_version_and_rebuilds_the_same_index(client) -> None:
+    from swissisoform.variantquery.portable import from_portable
+
+    from swissisoform_site.data import load_orf_index
+
+    index = load_orf_index()
+    response = client.get(f"/api/variants/index/{index.version}.json.gz")
+    assert response.status_code == 200
+    assert response.headers["Content-Type"] == "application/gzip"
+    assert "immutable" in response.headers["Cache-Control"]
+    rebuilt = from_portable(response.data)
+    assert rebuilt.version == index.version
+    assert list(rebuilt.records) == list(index.records)
+
+
+def test_another_index_version_is_not_served(client) -> None:
+    """A stale page must not silently scan against coordinates it did not ask for."""
+    assert client.get("/api/variants/index/0000000000000000.json.gz").status_code == 404

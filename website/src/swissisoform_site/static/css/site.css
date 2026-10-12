@@ -1371,6 +1371,9 @@
   cursor: pointer;
 }
 .vq-drop-btn:hover { background: #e0e7ff; }
+/* The class sets display, which would otherwise override the hidden attribute
+   (the server-fallback button must stay hidden until vcf_drop.js offers it). */
+.vq-drop [hidden] { display: none; }
 .vq-drop-status { font-size: 12.5px; color: #475569; margin: 0; min-height: 1.2em; }
 .vq-drop.is-error .vq-drop-status { color: #b91c1c; }
 .vq-drop-note { font-size: 11px; color: #94a3b8; margin: 0; }

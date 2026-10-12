@@ -47,6 +47,7 @@ from swissisoform.variantquery.vcf import VcfLimitExceeded
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from swissisoform_site import throttle
+from swissisoform_site.browserscan import PYODIDE_URL, scanner_archive
 from swissisoform_site.data import (
     CARD_BADGES,
     CARD_GROUPS,
@@ -63,6 +64,7 @@ from swissisoform_site.data import (
     llm_synthesis_for_isoform,
     load_all,
     load_orf_index,
+    portable_orf_index,
     sae_card_for_isoform,
     tis_slug,
     variant_rows_for_isoform,
@@ -72,6 +74,7 @@ from swissisoform_site.genomics import interval_intersection
 from swissisoform_site.plots import build_gene_protein_figure
 from swissisoform_site.plots.protein import CONSEQ_COLOR, CONSEQ_SHORT
 from swissisoform_site.scanview import (
+    LIMIT_RESPONSES,
     SCAN_SCHEMA,
     StagingError,
     build_response,
@@ -169,15 +172,6 @@ def _log_scan(body: dict[str, Any]) -> None:
             "scan response payload (SWISSISOFORM_SCAN_DEBUG=1)\n%s",
             json.dumps(body, indent=2, sort_keys=True, default=str),
         )
-
-
-#: Reader caps → (error code, status). Both are 4xx and both are the uploader's
-#: file to fix; the codes stay distinct from the compressed-body ``too_large`` so
-#: a caller can tell which limit it hit.
-_LIMIT_RESPONSES = {
-    "decompressed_bytes": ("expands_too_large", 413),
-    "line_bytes": ("line_too_long", 422),
-}
 
 
 def _human_delay(seconds: int) -> str:
@@ -291,12 +285,22 @@ def create_app() -> Flask:
     @app.get("/")
     def index() -> Any:
         genes = load_all()
+        orf_index = load_orf_index()
+        # What vcf_drop.js hands the scan worker. Empty index URL when no index is
+        # staged: the drop zone then goes straight to the server route, which
+        # reports the missing index itself.
+        browser_scan = {
+            "pyodide": PYODIDE_URL,
+            "scanner": url_for("variants_scanner", version=scanner_archive()[0]),
+            "index": url_for("variants_index", version=orf_index.version) if orf_index else "",
+        }
         return render_template(
             "index.html",
             genes=list(genes.values()),
             n_genes=len(genes),
             existence_criteria=EXISTENCE_CRITERIA,
             functional_criteria=FUNCTIONAL_CRITERIA,
+            browser_scan=browser_scan,
         )
 
     @app.get("/about")
@@ -581,7 +585,7 @@ def create_app() -> Flask:
             return jsonify({"error": "storage_failed", "message": str(exc)}), 507
         except VcfLimitExceeded as exc:
             logger.info("scan refused kind=%s", exc.kind)
-            error, status = _LIMIT_RESPONSES[exc.kind]
+            error, status = LIMIT_RESPONSES[exc.kind]
             return jsonify({"error": error, "message": str(exc)}), status
 
         # The staged file is already gone; everything below works from the result.
@@ -610,6 +614,39 @@ def create_app() -> Flask:
             )
         )
         response.headers["X-Robots-Tag"] = "noindex, nofollow"
+        return response
+
+    @app.get("/api/variants/index/<version>.json.gz")
+    def variants_index(version: str) -> Any:
+        """The ORF index for the browser scan, as gzipped JSON (``portable``).
+
+        Addressed by version, so a URL's bytes never change and the response is
+        cached as immutable: the browser downloads it once per index build. A
+        version this deployment does not hold is a 404, never a different index —
+        a scan must not silently resolve against coordinates it did not ask for.
+        """
+        portable = portable_orf_index()
+        if portable is None or portable[0] != version:
+            abort(404)
+        response = make_response(portable[1])
+        response.headers["Content-Type"] = "application/gzip"
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+    @app.get("/api/variants/scanner/<version>.zip")
+    def variants_scanner(version: str) -> Any:
+        """The scan's Python package for the browser worker (``browserscan``).
+
+        Version-keyed and immutable like the index; a version this build does not
+        have is a 404, so a page from before a deploy fails loudly instead of
+        running new code against its old expectations.
+        """
+        current, data = scanner_archive()
+        if version != current:
+            abort(404)
+        response = make_response(data)
+        response.headers["Content-Type"] = "application/zip"
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         return response
 
     @app.get("/api/variants/status")

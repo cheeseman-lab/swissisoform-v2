@@ -102,15 +102,34 @@ railway up         # builds via Dockerfile, deploys, runs entrypoint.sh
 `railway.json` already wires the healthcheck at `/healthz`. No env vars are
 required for the baked-in-data MVP.
 
-### The variant query keeps no scan on the server
+### The variant query runs in the browser
 
-`POST /api/variants/scan` stages the upload to a private temp file only for the
-length of the request (`scan()` reads a path), deletes it before the response is
-built, and returns the whole result — enriched hits included — with
-`Cache-Control: no-store`. The browser keeps it in `sessionStorage`, so a scan
-lasts as long as the tab and every page reads it from there (`scanview.py`; issue
-#33, step 1). There is no token, no TTL and no store to sweep, and a redeploy
-loses nothing a user still has open.
+Dropping a VCF on the landing page scans it **in the browser** (issue #33, step
+2): `static/js/scan_worker.js` runs Pyodide in a module Web Worker (Pyodide 314
+refuses classic workers) and calls the same Python the server would — `variantquery` + `variantclass` +
+`scanview`, all stdlib-only — so the file never leaves the user's machine. It
+fetches two version-keyed downloads, cached as immutable:
+
+| URL | What | Built from |
+|---|---|---|
+| `/api/variants/scanner/<hash>.zip` | the scan package | `browserscan.SCANNER_MODULES`, zipped from the modules this process imports |
+| `/api/variants/index/<index_version>.json.gz` | the ORF index (~2.8 MB for `full_catalog`) | `variantquery.portable`, from the loaded `orf_index.parquet` |
+
+Both are built once per gunicorn worker on first request; there is no extra
+deploy artifact for them.
+
+Pyodide itself is loaded from jsDelivr at the pinned version
+(`browserscan.PYODIDE_URL`). The result is the same response body the server route returns,
+and the browser keeps it in `sessionStorage` (one scan per tab). Measured with the
+real worker under Pyodide 314.0.7: ~5 s first-time start-up, then about 2.3×
+CPython's scan time.
+
+`POST /api/variants/scan` stays as a **fallback**, offered as a button only when
+the browser cannot run the scanner (no Web Workers/WebAssembly, or Pyodide failed
+to load) — never automatically, since it uploads the file. It stages the upload to
+a private temp file for the length of the request, deletes it before responding,
+and returns the result with `Cache-Control: no-store`. Nothing about a scan is kept
+on the server either way: no token, no TTL, no store to sweep.
 
 Bounded per request: 100 MB per upload (`MAX_CONTENT_LENGTH` → JSON 413) and
 20,000 hits per scan. The only state left on disk is the throttle below, which is
@@ -129,9 +148,10 @@ answer 4xx because they are the uploader's file to fix:
 | Decompressed bytes | 2 GiB | `SWISSISOFORM_VCF_MAX_BYTES` | JSON 413 `expands_too_large` |
 | Single line | 4 MiB | `SWISSISOFORM_VCF_MAX_LINE_BYTES` | JSON 422 `line_too_long` |
 | Records scanned | 5,000,000 | — (`scan(max_records=…)`) | partial result, `counts.stopped` |
-| Wall clock | 45 s | — (`scan(max_seconds=…)`) | partial result, `counts.stopped` |
+| Wall clock | 45 s (server route only) | — (`scan(max_seconds=…)`) | partial result, `counts.stopped` |
 
-The last two deliberately sit under gunicorn's 60 s `--timeout`: past that the
+The browser scan keeps the byte, line and record caps but has no wall-clock
+cap — a Web Worker has no request timeout. On the server, the last two deliberately sit under gunicorn's 60 s `--timeout`: past that the
 worker is killed and the uploader gets a proxy error, where stopping early
 returns a partial answer *that says on the page that it is partial*. `0` disables
 any of them; the CLI (`python -m swissisoform.variantquery scan`) is unbounded by

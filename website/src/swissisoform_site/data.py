@@ -648,6 +648,22 @@ def load_orf_index():
     return index
 
 
+@lru_cache(maxsize=1)
+def portable_orf_index() -> tuple[str, bytes] | None:
+    """``(index_version, gzipped JSON)`` for the browser scan, or None.
+
+    Built once per worker from the index :func:`load_orf_index` already holds
+    (~1.7 s and ~2.8 MB for ``full_catalog``), so there is no second deploy
+    artifact to fall out of step with the parquet.
+    """
+    from swissisoform.variantquery.portable import to_portable
+
+    index = load_orf_index()
+    if index is None:
+        return None
+    return index.version, to_portable(index)
+
+
 @dataclass(frozen=True)
 class TranscriptSkeleton:
     """Slim view of a transcript's exon structure for the V2 transcript graph."""
