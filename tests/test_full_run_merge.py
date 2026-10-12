@@ -280,3 +280,38 @@ def test_manifest_from_another_campaign_is_refused(campaign: Path) -> None:
     manifest.write_text(manifest.read_text().replace(f"campaign\t{CAMPAIGN}", "campaign\tother"))
     code, _ = run(campaign)
     assert code == 2
+
+
+def test_map_typed_clinical_summary_survives_the_merge(campaign: Path) -> None:
+    """Shards pin the clinical summaries to maps (``paired_schema``); a pandas
+    round-trip turns those into tuple lists that ``to_parquet`` cannot write, which
+    is how the first ``full_catalog_20261009`` merge died after 117 good shards.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from swissisoform.io.parquet import paired_schema
+
+    write_all(campaign)
+    for k, genes in SHARDS.items():
+        summary = [
+            {
+                "total_variants": 3,
+                "by_source": {"clinvar": 2, "gnomad": 1},
+                "by_consequence": {} if k == 0 else {"missense_variant": 3},
+                "pathogenic_count": 1,
+            }
+            for _ in genes
+        ]
+        df = pd.DataFrame({"gene_name": genes, "canonical_clinical_summary": summary})
+        path = campaign / f"{CAMPAIGN}_shard_{k}" / "all_paired.parquet"
+        pq.write_table(pa.Table.from_pandas(df, schema=paired_schema(df), preserve_index=False), path)
+
+    code, _ = merge.merge_campaign(CAMPAIGN, campaign)
+
+    assert code == 0
+    merged = pq.read_table(campaign / CAMPAIGN / "all_paired.parquet")
+    assert merged.num_rows == 6
+    field = merged.schema.field("canonical_clinical_summary").type
+    assert pa.types.is_map(field.field("by_source").type)
+    assert not list((campaign / CAMPAIGN).glob(".*.tmp"))

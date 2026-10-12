@@ -40,6 +40,8 @@ import shutil
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 OUTPUT_ROOT = Path("data/output")
 
@@ -90,6 +92,30 @@ def shard_status(shard_dir: Path, shard_list: Path) -> tuple[str, pd.DataFrame |
         print(f"  shard {shard_dir.name}: unreadable ({exc})")
         return "unreadable", None
     return status, df
+
+
+def write_merged(shard_dirs: list[Path], target: Path) -> int:
+    """Concatenate the shards' own Arrow tables into *target*; return the row count.
+
+    Not ``df.to_parquet``: the shards were written against ``paired_schema``,
+    which pins the clinical summaries to map types, and a pandas round-trip turns
+    a map into a list of ``(key, value)`` tuples that Arrow cannot infer back
+    ("Expected bytes, got a 'int' object" on ``canonical_clinical_summary``).
+    Concatenating the tables keeps every pinned type as the shards wrote it;
+    permissive promotion only widens a column that one shard left all-null. A
+    same-directory temp file plus ``os.replace`` means a killed job never leaves
+    a truncated catalog behind.
+    """
+    tables = [pq.read_table(d / "all_paired.parquet") for d in shard_dirs]
+    table = pa.concat_tables(tables, promote_options="permissive")
+    del tables
+    tmp = target.with_name(f".{target.name}.tmp")
+    try:
+        pq.write_table(table, tmp)
+        os.replace(tmp, target)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return table.num_rows
 
 
 def gpu_hole_fractions(df: pd.DataFrame) -> dict[str, float | str]:
@@ -276,9 +302,11 @@ def merge_campaign(
             )
             return 1, report
 
+    # The checks are done; free the pandas copies before the Arrow concat.
+    del df, frames
     if complete or allow_partial:
         target = out / "all_paired.parquet"
-        df.to_parquet(target)
+        n_rows = write_merged(ok_dirs, target)
         (out / "all_paired.partial.parquet").unlink(missing_ok=True)  # superseded
         n_gene_files = 0
         for d in ok_dirs:
@@ -287,15 +315,15 @@ def merge_campaign(
                     continue
                 shutil.copyfile(g, out / g.name)
                 n_gene_files += 1
-        print(f"wrote {target} ({len(df)} rows), {n_gene_files} per-gene parquets copied")
+        print(f"wrote {target} ({n_rows} rows), {n_gene_files} per-gene parquets copied")
         if not complete:
             print("WARNING: published under --allow-partial — this catalog has known gaps")
         return 0, report
 
     target = out / "all_paired.partial.parquet"
-    df.to_parquet(target)
+    n_rows = write_merged(ok_dirs, target)
     print(
-        f"INCOMPLETE: wrote {target} ({len(df)} rows) and left all_paired.parquet untouched.\n"
+        f"INCOMPLETE: wrote {target} ({n_rows} rows) and left all_paired.parquet untouched.\n"
         "Refill the shards above and re-run this merge, or pass --allow-partial to publish as-is."
     )
     return 1, report
