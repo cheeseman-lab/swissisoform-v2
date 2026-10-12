@@ -94,28 +94,45 @@ def shard_status(shard_dir: Path, shard_list: Path) -> tuple[str, pd.DataFrame |
     return status, df
 
 
-def write_merged(shard_dirs: list[Path], target: Path) -> int:
-    """Concatenate the shards' own Arrow tables into *target*; return the row count.
+def _summary_with_maps(value: object) -> object:
+    """A clinical summary read back through pandas, with its maps as dicts again.
 
-    Not ``df.to_parquet``: the shards were written against ``paired_schema``,
-    which pins the clinical summaries to map types, and a pandas round-trip turns
-    a map into a list of ``(key, value)`` tuples that Arrow cannot infer back
-    ("Expected bytes, got a 'int' object" on ``canonical_clinical_summary``).
-    Concatenating the tables keeps every pinned type as the shards wrote it;
-    permissive promotion only widens a column that one shard left all-null. A
-    same-directory temp file plus ``os.replace`` means a killed job never leaves
-    a truncated catalog behind.
+    Parquet maps come back from ``read_parquet`` as lists of ``(key, value)``
+    tuples, which Arrow cannot write back as a map.
     """
-    tables = [pq.read_table(d / "all_paired.parquet") for d in shard_dirs]
-    table = pa.concat_tables(tables, promote_options="permissive")
-    del tables
+    if not isinstance(value, dict):
+        return value
+    return {k: dict(v) if isinstance(v, list) else v for k, v in value.items()}
+
+
+def write_merged(df: pd.DataFrame, target: Path) -> None:
+    """Write the merged frame to *target* against the schema the shards were written with.
+
+    Not a bare ``df.to_parquet``: the shards pin the clinical summaries to map
+    types (``paired_schema``), and pandas reads a map back as a list of
+    ``(key, value)`` tuples that inference cannot turn back into one ("Expected
+    bytes, got a 'int' object" on ``canonical_clinical_summary``, which killed
+    the first full_catalog_20261009 merge). The maps are restored and the frame
+    written against ``paired_schema`` plus the tag-struct pins, exactly as
+    ``runner.run`` writes each shard. Everything else is inferred from the
+    concatenated frame, which is what reconciles the shards' per-frame types
+    (an int column that is float in a shard with a NaN, an all-null column).
+    A temp file plus ``os.replace`` means a killed job leaves no truncated file.
+    """
+    from swissisoform.io.parquet import CLINICAL_SUMMARY_COLUMNS, paired_schema
+    from swissisoform.modules.tags import schema_overrides
+
+    for col in CLINICAL_SUMMARY_COLUMNS:
+        if col in df.columns:
+            df[col] = [_summary_with_maps(v) for v in df[col]]
+    schema = paired_schema(df, schema_overrides(df))
+    table = pa.Table.from_pandas(df, schema=schema, preserve_index=False)
     tmp = target.with_name(f".{target.name}.tmp")
     try:
         pq.write_table(table, tmp)
         os.replace(tmp, target)
     finally:
         tmp.unlink(missing_ok=True)
-    return table.num_rows
 
 
 def gpu_hole_fractions(df: pd.DataFrame) -> dict[str, float | str]:
@@ -302,11 +319,10 @@ def merge_campaign(
             )
             return 1, report
 
-    # The checks are done; free the pandas copies before the Arrow concat.
-    del df, frames
+    del frames  # concatenated into df; free the per-shard copies before writing
     if complete or allow_partial:
         target = out / "all_paired.parquet"
-        n_rows = write_merged(ok_dirs, target)
+        write_merged(df, target)
         (out / "all_paired.partial.parquet").unlink(missing_ok=True)  # superseded
         n_gene_files = 0
         for d in ok_dirs:
@@ -315,15 +331,15 @@ def merge_campaign(
                     continue
                 shutil.copyfile(g, out / g.name)
                 n_gene_files += 1
-        print(f"wrote {target} ({n_rows} rows), {n_gene_files} per-gene parquets copied")
+        print(f"wrote {target} ({len(df)} rows), {n_gene_files} per-gene parquets copied")
         if not complete:
             print("WARNING: published under --allow-partial — this catalog has known gaps")
         return 0, report
 
     target = out / "all_paired.partial.parquet"
-    n_rows = write_merged(ok_dirs, target)
+    write_merged(df, target)
     print(
-        f"INCOMPLETE: wrote {target} ({n_rows} rows) and left all_paired.parquet untouched.\n"
+        f"INCOMPLETE: wrote {target} ({len(df)} rows) and left all_paired.parquet untouched.\n"
         "Refill the shards above and re-run this merge, or pass --allow-partial to publish as-is."
     )
     return 1, report

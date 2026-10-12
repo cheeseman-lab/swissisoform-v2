@@ -285,7 +285,8 @@ def test_manifest_from_another_campaign_is_refused(campaign: Path) -> None:
 def test_map_typed_clinical_summary_survives_the_merge(campaign: Path) -> None:
     """Shards pin the clinical summaries to maps (``paired_schema``); a pandas
     round-trip turns those into tuple lists that ``to_parquet`` cannot write, which
-    is how the first ``full_catalog_20261009`` merge died after 117 good shards.
+    is how the first ``full_catalog_20261009`` merge died after 117 good shards. The
+    second died concatenating the shards' own tables, whose per-frame types differ.
     """
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -304,6 +305,10 @@ def test_map_typed_clinical_summary_survives_the_merge(campaign: Path) -> None:
             for _ in genes
         ]
         df = pd.DataFrame({"gene_name": genes, "canonical_clinical_summary": summary})
+        # The per-frame drift the real shards showed: an int column that is float
+        # in a shard holding a NaN, and a bool column that is all-null in another.
+        df["n_species"] = [None] * len(genes) if k == 1 else list(range(len(genes)))
+        df["gravy_enriched"] = [None] * len(genes) if k == 2 else [True, False]
         path = campaign / f"{CAMPAIGN}_shard_{k}" / "all_paired.parquet"
         pq.write_table(pa.Table.from_pandas(df, schema=paired_schema(df), preserve_index=False), path)
 
@@ -314,4 +319,7 @@ def test_map_typed_clinical_summary_survives_the_merge(campaign: Path) -> None:
     assert merged.num_rows == 6
     field = merged.schema.field("canonical_clinical_summary").type
     assert pa.types.is_map(field.field("by_source").type)
+    rows = merged.to_pylist()
+    assert dict(rows[0]["canonical_clinical_summary"]["by_source"]) == {"clinvar": 2, "gnomad": 1}
+    assert merged.schema.field("gravy_enriched").type == pa.bool_()
     assert not list((campaign / CAMPAIGN).glob(".*.tmp"))
