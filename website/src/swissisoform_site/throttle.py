@@ -7,9 +7,9 @@ be; this bounds how many a single client can send.
 
 **Why not flask-limiter.** Its default backend is per-process, and with two
 workers that silently permits twice the configured limit. There is no Redis here
-and no database — the store is the container's ephemeral disk — so a new
-dependency would buy a weaker guarantee than the filesystem pattern
-``scanstore`` already uses for exactly this problem.
+and no database, so the markers live on the container's disk, which both workers
+share. This is the only per-client state the scan path keeps: scan results live in
+the browser, never on the server.
 
 **Counting is one marker file per request, not a counter.** A read-modify-write
 counter loses updates under concurrency, which is precisely the condition this
@@ -32,8 +32,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from swissisoform_site.scanstore import scan_dir
-
 logger = logging.getLogger(__name__)
 
 #: Uploads per IP per rolling hour / day. Generous for exploratory use; a single
@@ -44,7 +42,14 @@ DEFAULT_DAILY = 20
 HOUR = 3600.0
 DAY = 24 * HOUR
 
+DEFAULT_THROTTLE_DIR = Path("/tmp/swissisoform-throttle")
+
+#: Minimum gap between purges, tracked by a marker file's mtime. Every worker
+#: runs the same check; purging is idempotent so overlap is harmless.
+PURGE_INTERVAL_SECONDS = 3600
+
 _SALT_FILE = ".throttle_salt"
+_PURGE_MARKER = ".last_purge"
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,8 +85,12 @@ def daily_limit() -> int:
 
 
 def throttle_dir() -> Path:
-    """Root of the throttle markers, inside the scan store."""
-    return scan_dir() / "throttle"
+    """Root of the throttle state, from ``SWISSISOFORM_THROTTLE_DIR``.
+
+    Holds one directory per client bucket plus the salt and purge-marker files.
+    """
+    configured = os.environ.get("SWISSISOFORM_THROTTLE_DIR")
+    return Path(configured) if configured else DEFAULT_THROTTLE_DIR
 
 
 def _salt() -> str:
@@ -96,7 +105,7 @@ def _salt() -> str:
     if configured:
         return configured
 
-    path = scan_dir() / _SALT_FILE
+    path = throttle_dir() / _SALT_FILE
     existing = _read_salt(path)
     if existing:
         return existing
@@ -207,20 +216,56 @@ def record(ip: str) -> None:
         return
 
     bucket = _bucket(ip)
+    # Twice at most: a purge in another worker can remove this bucket, empty,
+    # between the mkdir and the touch.
+    for attempt in range(2):
+        try:
+            bucket.mkdir(parents=True, exist_ok=True)
+            # Timestamp in the name is for reading the directory by eye; the count
+            # itself goes by mtime, which survives a copy the name would not.
+            (bucket / f"{int(time.time())}-{secrets.token_hex(4)}").touch()
+            break
+        except FileNotFoundError as exc:
+            if attempt:
+                logger.warning("could not record a scan rate marker: %s", exc)
+        except OSError as exc:
+            logger.warning("could not record a scan rate marker: %s", exc)
+            break
+    _maybe_purge()
+
+
+def _maybe_purge() -> None:
+    """Run :func:`purge` at most once per :data:`PURGE_INTERVAL_SECONDS`.
+
+    Driven from the upload path, so there is no scheduler. The marker's mtime is
+    the clock; a missed purge only leaves stale markers that ``check`` already
+    ignores, since it counts by mtime inside its windows. So a purge is never
+    allowed to fail the upload that ran it.
+
+    The marker is touched *before* purging, so a worker arriving a moment later
+    sees the slot taken and skips. Two workers can still both pass the check in
+    the same instant; :func:`purge` tolerates that.
+    """
+    marker = throttle_dir() / _PURGE_MARKER
     try:
-        bucket.mkdir(parents=True, exist_ok=True)
-        # Timestamp in the name is for reading the directory by eye; the count
-        # itself goes by mtime, which survives a copy the name would not.
-        (bucket / f"{int(time.time())}-{secrets.token_hex(4)}").touch()
+        if time.time() - marker.stat().st_mtime < PURGE_INTERVAL_SECONDS:
+            return
+    except OSError:
+        pass  # Never purged yet.
+    try:
+        marker.touch()
+    except OSError:
+        pass
+    try:
+        purge()
     except OSError as exc:
-        logger.warning("could not record a scan rate marker: %s", exc)
+        logger.warning("throttle purge failed: %s", exc)
 
 
 def purge(max_age: float = DAY) -> int:
     """Drop markers older than ``max_age`` and any bucket left empty.
 
-    Called from :func:`swissisoform_site.scanstore.sweep`, which already runs on
-    the upload path at most once an hour — no new scheduler.
+    Called from :func:`record` via :func:`_maybe_purge`, at most once an hour.
 
     Returns:
         How many markers were removed.
@@ -231,10 +276,19 @@ def purge(max_age: float = DAY) -> int:
 
     now = time.time()
     removed = 0
-    for bucket in root.iterdir():
+    try:
+        buckets = list(root.iterdir())
+    except OSError:
+        return 0
+    for bucket in buckets:
         if not bucket.is_dir():
             continue
-        for marker in bucket.iterdir():
+        # Another worker's purge may remove the bucket between the check and here.
+        try:
+            markers = list(bucket.iterdir())
+        except OSError:
+            continue
+        for marker in markers:
             try:
                 if now - marker.stat().st_mtime > max_age:
                     marker.unlink(missing_ok=True)

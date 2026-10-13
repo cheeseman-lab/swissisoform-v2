@@ -1,7 +1,8 @@
 """Where an isoform bar sits, and whether its variant markers sit on it.
 
 ``_make_gene_protein_view`` (bars, domains, motifs, annotated variants) and
-``variantquery.frame.plotly_x`` (uploaded VCF markers) both convert an isoform
+``scanview.enrich_hits`` (uploaded VCF markers, via ``variantquery.frame.plotly_x``,
+computed at scan time and drawn by the browser) both convert an isoform
 residue into the figure's canonical-residue space. They used to do it with two
 copies of ``canonical_len - isoform_len``, which is exact only when the two proteins
 share a C-terminus — for a uORF the adapter fell back to ``offset = 0`` while
@@ -22,6 +23,7 @@ from types import SimpleNamespace
 import pytest
 
 from swissisoform_site.app import _make_gene_protein_view
+from swissisoform_site.scanview import enrich_hits
 
 CAN_LEN = 100
 UORF_LEN = 17
@@ -154,11 +156,10 @@ def test_uploaded_marker_lands_on_the_bar_it_belongs_to(index) -> None:
         "region": "unique",
         "line_no": 1,
     }
-    view = _make_gene_protein_view(_uorf_gene(), uploaded=[hit])
-    bar = _bar(view, "uorf")
-    marker = next(v for v in view.variants if v.get("source") == "uploaded")
-    assert marker["pos"] == bar["x0"] + residue
-    assert bar["x0"] <= marker["pos"] <= bar["x1"]
+    bar = _bar(_make_gene_protein_view(_uorf_gene()), "uorf")
+    (marker,) = enrich_hits([hit], index)
+    assert marker["x"] == bar["x0"] + residue
+    assert bar["x0"] <= marker["x"] <= bar["x1"]
 
 
 def test_canonical_frame_marker_lands_in_the_lost_n_terminus(index) -> None:
@@ -186,10 +187,9 @@ def test_canonical_frame_marker_lands_in_the_lost_n_terminus(index) -> None:
         "line_no": 1,
     }
     gene = _gene(_isoform("truncated", "canonical", TRUNC_LEN, 20, TRUNC_TIS))
-    view = _make_gene_protein_view(gene, uploaded=[hit])
-    bar = _bar(view, "truncated")
-    marker = next(v for v in view.variants if v.get("source") == "uploaded")
+    bar = _bar(_make_gene_protein_view(gene), "truncated")
+    (marker,) = enrich_hits([hit], index)
 
-    assert marker["pos"] == residue + (CAN_LEN - TRUNC_CANON_LEN)
+    assert marker["x"] == residue + (CAN_LEN - TRUNC_CANON_LEN)
     lost = TRUNC_CANON_LEN - TRUNC_LEN
-    assert bar["x0"] - lost <= marker["pos"] < bar["x0"]
+    assert bar["x0"] - lost <= marker["x"] < bar["x0"]
