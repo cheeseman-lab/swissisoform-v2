@@ -43,6 +43,7 @@ from swissisoform.site.evidence import (
     slice_criterion,
 )
 from swissisoform.variantquery.frame import x_offset_residues
+from swissisoform.variantquery.portable import PORTABLE_FORMAT
 from swissisoform.variantquery.scan import scan
 from swissisoform.variantquery.vcf import VcfLimitExceeded
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -314,7 +315,11 @@ def create_app() -> Flask:
         browser_scan = {
             "pyodide": PYODIDE_URL,
             "scanner": url_for("variants_scanner", version=scanner_archive()[0]),
-            "index": url_for("variants_index", fingerprint=fingerprint) if fingerprint else "",
+            "index": (
+                url_for("variants_index", fingerprint=fingerprint, fmt=PORTABLE_FORMAT)
+                if fingerprint
+                else ""
+            ),
         }
         return render_template(
             "index.html",
@@ -643,19 +648,20 @@ def create_app() -> Flask:
         response.headers["X-Robots-Tag"] = "noindex, nofollow"
         return response
 
-    @app.get("/api/variants/index/<fingerprint>.json.gz")
-    def variants_index(fingerprint: str) -> Any:
-        """The ORF index for the browser scan, as gzipped JSON (``portable``).
+    @app.get("/api/variants/index/<fingerprint>/f<int:fmt>.bin.gz")
+    def variants_index(fingerprint: str, fmt: int) -> Any:
+        """The ORF index for the browser scan, in the packed binary ``portable`` file.
 
-        Addressed by a hash of the index file (``data.orf_index_fingerprint``), so a
-        URL's bytes never change and the response is cached as immutable: the
-        browser downloads it once per index build, and any rebuild gets a new URL.
-        A fingerprint this deployment does not hold is a 404, never a different
-        index — a scan must not silently resolve against data it did not ask for
-        (``scan_worker.js`` reads that 404 as "this page is out of date").
+        Addressed by a hash of the index file (``data.orf_index_fingerprint``) *and*
+        the file format, so a URL's bytes never change and the response is cached
+        as immutable: any rebuild gets a new URL, and a browser that cached an older
+        format can never be handed it for newer code. A fingerprint or format this
+        deployment does not hold is a 404, never a different index — a scan must not
+        silently resolve against data it did not ask for (``scan_worker.js`` reads
+        that 404 as "this page is out of date").
         """
         portable = portable_orf_index()
-        if portable is None or portable[0] != fingerprint:
+        if portable is None or portable[0] != fingerprint or fmt != PORTABLE_FORMAT:
             abort(404)
         response = make_response(portable[1])
         response.headers["Content-Type"] = "application/gzip"

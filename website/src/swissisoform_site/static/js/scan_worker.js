@@ -79,9 +79,9 @@ function boot(cfg) {
 async function ensureIndex(py, url) {
   if (loadedIndex === url) return;
   status("Loading the catalogue…");
-  py.FS.writeFile("/index.json.gz", new Uint8Array(await fetchBytes(url, true)));
-  py.runPython("INDEX = load_portable_index('/index.json.gz')");
-  py.FS.unlink("/index.json.gz");
+  py.FS.writeFile("/index.bin.gz", new Uint8Array(await fetchBytes(url, true)));
+  py.runPython("INDEX = load_portable_index('/index.bin.gz')");
+  py.FS.unlink("/index.bin.gz");
   loadedIndex = url;
 }
 

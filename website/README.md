@@ -114,7 +114,7 @@ the page predates a deploy, and the drop zone says to reload):
 | URL | What | Built from |
 |---|---|---|
 | `/api/variants/scanner/<hash>.zip` | the scan package | `browserscan.SCANNER_MODULES`, zipped from the modules this process imports |
-| `/api/variants/index/<fingerprint>.json.gz` | the ORF index (~2.8 MB for `full_catalog`) | `variantquery.portable`, from the loaded `orf_index.parquet`; keyed by a hash of that file (`data.orf_index_fingerprint`), so any rebuild gets a new URL |
+| `/api/variants/index/<fingerprint>/f<format>.bin.gz` | the ORF index, packed binary (~2.9 MB for `full_catalog`) | `variantquery.portable`, from the loaded `orf_index.parquet`; keyed by a hash of that file (`data.orf_index_fingerprint`), so any rebuild gets a new URL, and by the file format |
 
 Both are built once per gunicorn worker on first request; there is no extra
 deploy artifact for them.
