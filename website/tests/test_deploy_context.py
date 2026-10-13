@@ -35,11 +35,7 @@ ALIASES = {"Bio": "biopython", "yaml": "pyyaml", "PIL": "pillow", "sklearn": "sc
 #: Imported lazily inside functions the container never calls. Named individually
 #: rather than skipping lazy imports wholesale, so a lazy import that *is* reachable
 #: still trips this test.
-KNOWN_UNREACHABLE = {
-    # clinical/validate.py's genome readers. The scan hands the classifier the
-    # coding sequence out of orf_index.parquet, so no FASTA is ever opened.
-    "pysam": "clinical.validate genome readers; the CDS ships in orf_index.parquet",
-}
+KNOWN_UNREACHABLE: dict[str, str] = {}
 
 #: Imported directly but never pinned, because a pinned package guarantees them.
 #: Satisfied by proving the *parent* is installed, so removing the parent from the
@@ -127,14 +123,19 @@ def test_every_staged_import_is_installed_in_the_image() -> None:
     )
 
 
-@pytest.mark.parametrize("dist", ["biopython", "pandas", "pyarrow", "flask", "gunicorn"])
+@pytest.mark.parametrize("dist", ["pandas", "pyarrow", "flask", "gunicorn"])
 def test_dockerfile_pins_the_packages_the_site_needs(dist: str) -> None:
-    """Spot-check the ones whose absence is not obvious from the site's own imports.
-
-    ``biopython`` in particular arrives only transitively, through the vendored
-    ``clinical.validate`` — nothing under ``swissisoform_site`` mentions it.
-    """
+    """Spot-check the ones whose absence is not obvious from the site's own imports."""
     assert dist in _installed_distributions()
+
+
+def test_the_scan_classifier_is_vendored_without_its_pipeline_adapter() -> None:
+    """variantclass is stdlib-only (issue #33 item 2); validate.py would bring pandas
+    back onto the scan path and biopython back into the image."""
+    staged = {path.relative_to(REPO_ROOT).as_posix() for path in _staged_module_paths()}
+    assert "src/swissisoform/variantclass.py" in staged
+    assert "src/swissisoform/clinical/validate.py" not in staged
+    assert "biopython" not in _installed_distributions()
 
 
 def test_the_deploy_script_writes_no_fixed_path_under_tmp() -> None:

@@ -11,12 +11,14 @@ Railway image (the seam ``website/prepare_deploy.sh`` already uses for
 pyarrow read that materialises an index lives in :mod:`load`, not here.
 
 Consequence classification is **not** implemented here — it is
-:meth:`swissisoform.clinical.validate.ConsequenceValidator.classify_against_orf`,
-the pipeline's own classifier, called with the coding sequence the index carries.
-That is a deliberate dependency: this package pulls in ``clinical.validate`` and
-therefore pandas + biopython, and the image installs them. What stays local is
-what the pipeline has no counterpart for — resolving a bare coordinate to an ORF,
-and the sequence-free fallback for an index built without a genome.
+:mod:`swissisoform.variantclass`, the pipeline's own classifier (which
+``ConsequenceValidator`` delegates to), called with the coding sequence the index
+carries. That module needs only the standard library, and so does everything this
+package imports: the scan runs without pandas, Biopython or pyarrow, which is what
+lets it run in the browser under Pyodide (issue #33). Keep it that way — an import
+of either here would pull tens of MB into every browser that scans. What stays
+local is what the pipeline has no counterpart for — resolving a bare coordinate
+to an ORF, and the sequence-free fallback for an index built without a genome.
 
 Coordinate conventions, inherited from :mod:`swissisoform.coords` and
 ``io/parquet.py``:

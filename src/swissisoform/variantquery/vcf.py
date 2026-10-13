@@ -145,11 +145,7 @@ def iter_lines(
 
             total += len(chunk)
             if cap_total and total > cap_total:
-                raise VcfLimitExceeded(
-                    "decompressed_bytes",
-                    cap_total,
-                    f"VCF expands past the {_human_bytes(cap_total)} decompressed limit",
-                )
+                raise _too_large(cap_total)
 
             # split() rather than a find/slice loop: it is one C-level pass, and
             # the reader sits in front of every scanned record.
@@ -176,6 +172,36 @@ def iter_lines(
 
     if pending:
         yield _decode(pending)
+
+
+def check_size(n_bytes: int, *, max_bytes: int | None = None) -> None:
+    """Refuse a file whose size alone already passes the decompressed-byte cap.
+
+    Lets a caller that must copy the file somewhere first — the browser scan writes
+    it into Pyodide's in-memory filesystem — refuse it before the copy, with the
+    error :func:`iter_lines` would raise anyway. A gzipped file counts too: one
+    larger than the cap compressed decompresses past it.
+
+    Args:
+        n_bytes: The file's size on disk (compressed, if it is gzipped).
+        max_bytes: Decompressed-byte ceiling; ``None`` reads the environment,
+            ``0`` disables.
+
+    Raises:
+        VcfLimitExceeded: With ``kind="decompressed_bytes"``.
+    """
+    cap_total = default_max_bytes() if max_bytes is None else max_bytes
+    if cap_total and n_bytes > cap_total:
+        raise _too_large(cap_total)
+
+
+def _too_large(cap_total: int) -> VcfLimitExceeded:
+    """The decompressed-byte refusal, one message for both places that raise it."""
+    return VcfLimitExceeded(
+        "decompressed_bytes",
+        cap_total,
+        f"VCF expands past the {_human_bytes(cap_total)} decompressed limit",
+    )
 
 
 def _human_bytes(n: int) -> str:
