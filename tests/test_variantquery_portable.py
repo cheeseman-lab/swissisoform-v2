@@ -8,10 +8,12 @@ of one VCF would disagree.
 
 from __future__ import annotations
 
+import copy
 import gzip
 import json
 import struct
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -98,6 +100,13 @@ def test_a_none_survives_the_packed_integer_columns() -> None:
     assert record.canonical_x_offset_nt == -30
 
 
+def _written(damage) -> bytes:
+    """A file written from deliberately inconsistent columns, as a buggy writer would."""
+    columns = copy.deepcopy(_index().columns)
+    damage(columns)
+    return to_portable(SimpleNamespace(columns=columns, version="v-test"))
+
+
 def _malformed() -> dict[str, bytes]:
     good = to_portable(_index())
     body = gzip.decompress(good)
@@ -111,7 +120,18 @@ def _malformed() -> dict[str, bytes]:
 
     no_blob = dict(header, blobs={k: v for k, v in header["blobs"].items() if k != "cds_pool"})
     past_end = dict(header, blobs=dict(header["blobs"], cds_pool=[0, len(body) * 2]))
+    negative = dict(header, blobs=dict(header["blobs"], cds_pool=[-8, 8]))
+    corrupt_stream = bytearray(good)
+    for k in range(8):  # behind a valid gzip header: zlib.error, not OSError
+        corrupt_stream[20 + k] ^= 0xFF
     return {
+        "a corrupt deflate stream": bytes(corrupt_stream),
+        "a negative blob offset": with_header(negative),
+        "the wrong ORF count": with_header(dict(header, n=header["n"] + 1)),
+        "an integer column one short": _written(lambda c: c.ints["isoform_len"].pop()),
+        "offsets that decrease": _written(lambda c: c.offsets["orf_exons"].__setitem__(1, -1)),
+        "a sequence id out of range": _written(lambda c: c.cds_ids["orf_cds"].__setitem__(0, 99)),
+        "a string column one short": _written(lambda c: c.strings["gene_name"].pop()),
         "a list": gzip.compress(b"[]"),
         "truncated gzip": good[: len(good) // 2],
         "magic only": gzip.compress(MAGIC),

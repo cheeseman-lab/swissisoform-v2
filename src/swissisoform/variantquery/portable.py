@@ -31,6 +31,7 @@ import gzip
 import json
 import struct
 import sys
+import zlib
 from array import array
 
 from swissisoform.variantquery.index import (
@@ -40,6 +41,7 @@ from swissisoform.variantquery.index import (
     STRING_FIELDS,
     OrfColumns,
     OrfIndex,
+    interned,
 )
 
 #: Bump when the layout above changes; :func:`from_portable` refuses other values.
@@ -101,12 +103,15 @@ def from_portable(data: bytes) -> OrfIndex:
     """Rebuild the :class:`OrfIndex` from :func:`to_portable` output.
 
     Raises:
-        ValueError: If the bytes are not this format, or a format this code does
-            not know.
+        ValueError: If the bytes are not this format, a format this code does not
+            know, or a file whose parts disagree (checked here, so a bad file fails
+            at load rather than on whichever query first reaches the damage).
     """
     try:
         body = gzip.decompress(data)
-    except (OSError, EOFError) as exc:  # EOFError: a truncated download
+    # EOFError: a truncated download; zlib.error: a corrupt stream behind a valid
+    # header; OSError: a bad header or checksum.
+    except (OSError, EOFError, zlib.error) as exc:
         raise ValueError(f"not a portable ORF index: {exc}") from exc
     if not body.startswith(MAGIC):
         raise ValueError("not a portable ORF index: bad magic")
@@ -126,17 +131,13 @@ def from_portable(data: bytes) -> OrfIndex:
 
     def blob(name: str) -> memoryview:
         offset, length = header["blobs"][name]
-        if base + offset + length > len(body):
-            raise ValueError(f"blob {name} runs past the end of the file")
+        if offset < 0 or length < 0 or base + offset + length > len(body):
+            raise ValueError(f"blob {name} lies outside the file")
         return view[base + offset : base + offset + length]
 
     try:
-        strings = {}
-        for field in STRING_FIELDS:
-            pool: dict[str, str] = {}
-            strings[field] = [pool.setdefault(v, v) for v in header["strings"][field]]
         columns = OrfColumns(
-            strings=strings,
+            strings={field: interned(header["strings"][field]) for field in STRING_FIELDS},
             ints={field: _from_le(blob(f"ints.{field}")) for field in INT_FIELDS},
             bounds={field: _from_le(blob(f"bounds.{field}")) for field in INTERVAL_FIELDS},
             offsets={field: _from_le(blob(f"offsets.{field}")) for field in INTERVAL_FIELDS},
@@ -144,6 +145,9 @@ def from_portable(data: bytes) -> OrfIndex:
             cds_bounds=_from_le(blob("cds_bounds")),
             cds_ids={field: _from_le(blob(f"cds_ids.{field}")) for field in CDS_FIELDS},
         )
+        if header["n"] != columns.n:
+            raise ValueError(f"header says {header['n']} ORFs, the columns hold {columns.n}")
+        columns.check()
     except malformed as exc:
         raise ValueError(f"not a portable ORF index: {exc!r}") from exc
-    return OrfIndex.from_columns(columns, version=str(header.get("version") or ""))
+    return OrfIndex(columns, version=str(header.get("version") or ""))

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from array import array
 from bisect import bisect_left
+from collections import OrderedDict
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -66,6 +67,15 @@ DERIVED_COLUMNS = ("canonical_x_offset_nt",)
 OPTIONAL_COLUMNS = ("canonical_per_tid_length",)
 
 
+#: :class:`OrfRecord` field → parquet column, where the two names differ. The one
+#: copy: :meth:`OrfRecord.from_mapping` and the column loader (``load``) both read
+#: it, so the row path and the fast path cannot disagree on a column's name.
+PARQUET_COLUMN = {
+    "unique_intervals": "unique_genomic_intervals",
+    "shared_intervals": "shared_genomic_intervals",
+}
+
+
 def _as_intervals(raw: Any) -> tuple[Interval, ...]:
     """Coerce a nested list/array of pairs into a tuple of int 2-tuples."""
     if raw is None:
@@ -81,7 +91,12 @@ def _as_intervals(raw: Any) -> tuple[Interval, ...]:
     return tuple(out)
 
 
-def _int_or_none(raw: Any) -> int | None:
+def int_or_none(raw: Any) -> int | None:
+    """An integer field's value as the index stores it: ``int(raw)``, or ``None``.
+
+    ``None`` for a null and for anything ``int`` refuses (NaN, ``"x"``); floats
+    truncate. The row path and the column loader both coerce through this.
+    """
     if raw is None:
         return None
     try:
@@ -155,18 +170,18 @@ class OrfRecord:
             strand=str(row.get("strand") or ""),
             orf_exons=_as_intervals(row.get("orf_exons")),
             canonical_orf_exons=_as_intervals(row.get("canonical_orf_exons")),
-            unique_intervals=_as_intervals(row.get("unique_genomic_intervals")),
-            shared_intervals=_as_intervals(row.get("shared_genomic_intervals")),
-            canonical_len=_int_or_none(row.get("canonical_len")),
-            isoform_len=_int_or_none(row.get("isoform_len")),
+            unique_intervals=_as_intervals(row.get(PARQUET_COLUMN["unique_intervals"])),
+            shared_intervals=_as_intervals(row.get(PARQUET_COLUMN["shared_intervals"])),
+            canonical_len=int_or_none(row.get("canonical_len")),
+            isoform_len=int_or_none(row.get("isoform_len")),
             diff_space=str(row.get("diff_space") or ""),
             orf_type=str(row.get("orf_type") or ""),
             start_codon=str(row.get("start_codon") or ""),
             canonical_start_codon=str(row.get("canonical_start_codon") or ""),
             orf_cds=str(row.get("orf_cds") or ""),
             canonical_cds=str(row.get("canonical_cds") or ""),
-            canonical_x_offset_nt=_int_or_none(row.get("canonical_x_offset_nt")),
-            canonical_per_tid_length=_int_or_none(row.get("canonical_per_tid_length")),
+            canonical_x_offset_nt=int_or_none(row.get("canonical_x_offset_nt")),
+            canonical_per_tid_length=int_or_none(row.get("canonical_per_tid_length")),
         )
 
 
@@ -192,6 +207,16 @@ CDS_FIELDS = ("orf_cds", "canonical_cds")
 
 def _int_array(values: Iterable[int] = ()) -> array:
     return array("q", values)
+
+
+def interned(values: Iterable[str | None]) -> list[str]:
+    """One string column: ``None`` as ``""``, repeated values sharing one object.
+
+    Most string columns repeat heavily (strand, ORF type, start codons, a gene's
+    name per isoform), so sharing the objects is most of their memory saving.
+    """
+    pool: dict[str, str] = {}
+    return [pool.setdefault(v or "", v or "") for v in values]
 
 
 @dataclass
@@ -228,11 +253,7 @@ class OrfColumns:
     @classmethod
     def from_records(cls, records: Sequence[OrfRecord]) -> OrfColumns:
         """Pack ready-made records (the slow, general path; loaders build columns)."""
-        pools: dict[str, dict[str, str]] = {f: {} for f in STRING_FIELDS}
-        strings = {
-            f: [pools[f].setdefault(getattr(r, f), getattr(r, f)) for r in records]
-            for f in STRING_FIELDS
-        }
+        strings = {f: interned(getattr(r, f) for r in records) for f in STRING_FIELDS}
         ints = {
             f: _int_array(NULL_INT if getattr(r, f) is None else getattr(r, f) for r in records)
             for f in INT_FIELDS
@@ -252,6 +273,38 @@ class OrfColumns:
         )
         return cls(strings, ints, bounds, offsets, pool, cds_bounds, cds_ids)
 
+    def check(self) -> None:
+        """Raise ``ValueError`` unless the columns describe the same ``n`` ORFs.
+
+        For columns read from outside (``portable``): a file whose parts disagree
+        would otherwise load, then fail with an ``IndexError`` on whichever query
+        first reaches a short column. Linear passes using ``min``/``max``, so cheap
+        enough to run on every load, including in the browser.
+        """
+        n = self.n
+
+        def need(ok: bool, what: str) -> None:
+            if not ok:
+                raise ValueError(f"inconsistent ORF columns: {what}")
+
+        for f in STRING_FIELDS:
+            need(len(self.strings[f]) == n, f"{f} has {len(self.strings[f])} of {n} ORFs")
+        for f in INT_FIELDS:
+            need(len(self.ints[f]) == n, f"{f} has {len(self.ints[f])} of {n} ORFs")
+        for f in INTERVAL_FIELDS:
+            offs, flat = self.offsets[f], self.bounds[f]
+            need(len(offs) == n + 1 and offs[0] == 0, f"{f} offsets do not cover {n} ORFs")
+            need(_non_decreasing(offs), f"{f} offsets decrease")
+            need(offs[-1] * 2 == len(flat), f"{f} offsets do not match its bounds")
+        bounds = self.cds_bounds
+        need(len(bounds) >= 1 and bounds[0] == 0, "the sequence pool bounds do not start at 0")
+        need(_non_decreasing(bounds), "the sequence pool bounds decrease")
+        need(bounds[-1] == len(self.cds_pool), "the sequence pool bounds overrun the pool")
+        for f in CDS_FIELDS:
+            ids = self.cds_ids[f]
+            need(len(ids) == n, f"{f} has {len(ids)} of {n} ORFs")
+            need(not ids or (min(ids) >= 0 and max(ids) < len(bounds) - 1), f"{f} ids out of range")
+
     def intervals(self, f: str, i: int) -> tuple[Interval, ...]:
         """ORF ``i``'s intervals for field ``f``, as the record carries them."""
         flat, offs = self.bounds[f], self.offsets[f]
@@ -269,6 +322,10 @@ class OrfColumns:
             j = self.cds_ids[f][i]
             fields[f] = self.cds_pool[self.cds_bounds[j] : self.cds_bounds[j + 1]]
         return OrfRecord(**fields)
+
+
+def _non_decreasing(values: array) -> bool:
+    return all(a <= b for a, b in zip(values, values[1:]))
 
 
 def pool_sequences(per_field: Mapping[str, Sequence[str]]) -> tuple[str, array, dict[str, array]]:
@@ -345,40 +402,45 @@ class _Records(Sequence[OrfRecord]):
     def __len__(self) -> int:
         return self._index.n_isoforms
 
+    # Built straight from the columns, not through the query cache: one pass over
+    # every ORF would otherwise evict the scan's hot records and leave thousands
+    # of cold ones alive behind it.
     def __getitem__(self, i: Any) -> Any:
+        columns = self._index.columns
         if isinstance(i, slice):
-            return [self._index.record(j) for j in range(*i.indices(len(self)))]
+            return [columns.record(j) for j in range(*i.indices(len(self)))]
         if i < 0:
             i += len(self)
         if not 0 <= i < len(self):
             raise IndexError(i)
-        return self._index.record(i)
+        return columns.record(i)
 
     def __iter__(self) -> Iterator[OrfRecord]:
-        return (self._index.record(i) for i in range(len(self)))
+        columns = self._index.columns
+        return (columns.record(i) for i in range(len(self)))
 
 
 class OrfIndex:
     """Point/span membership over every annotated ORF exon.
 
-    Build with :meth:`from_records` (rows or records) or :meth:`from_columns`
-    (what the loaders produce); query with :meth:`lookup` (a single 1-based
+    Build with :meth:`from_records` (rows or records) or straight from packed
+    :class:`OrfColumns` (what the loaders produce); query with :meth:`lookup` (a single 1-based
     position) or :meth:`lookup_span` (an inclusive 1-based range, for indels).
     """
 
     __slots__ = ("_by_chrom", "_cache", "_columns", "_tis_index", "version")
 
-    #: Records kept built between queries. A scan returns the same few ORFs over
-    #: and over (every variant in a gene), so a small cache avoids rebuilding them
-    #: without growing back into one object per ORF.
+    #: Records kept built between queries, least recently used out. A scan returns
+    #: the same few ORFs over and over (every variant in a gene), so a small cache
+    #: avoids rebuilding them without growing back into one object per ORF.
     CACHE_SIZE = 4096
 
     def __init__(self, columns: OrfColumns, version: str = "") -> None:
-        """Index packed columns (see :meth:`from_records` / :meth:`from_columns`)."""
+        """Index packed columns, as the loaders build them (or :meth:`from_records`)."""
         self._columns = columns
         self._by_chrom = _chrom_index(columns)
         self._tis_index: dict[str, int] | None = None
-        self._cache: dict[int, OrfRecord] = {}
+        self._cache: OrderedDict[int, OrfRecord] = OrderedDict()
         self.version = version
 
     # ------------------------------------------------------------------
@@ -395,18 +457,14 @@ class OrfIndex:
         """Build the index from parquet-style rows or ready-made :class:`OrfRecord`s.
 
         Takes plain mappings rather than a DataFrame so this module stays free of
-        pandas. Rows without a chromosome are dropped. The loaders use the faster
-        :meth:`from_columns`; this is the general path (tests, small builds).
+        pandas. Rows without a chromosome are dropped. The loaders pack columns
+        directly and call the constructor; this is the general path (tests, small
+        builds).
         """
         records = [
             row if isinstance(row, OrfRecord) else OrfRecord.from_mapping(row) for row in rows
         ]
         return cls(OrfColumns.from_records([r for r in records if r.chrom]), version=version)
-
-    @classmethod
-    def from_columns(cls, columns: OrfColumns, *, version: str = "") -> OrfIndex:
-        """Build the index from already-packed columns (``load`` / ``portable``)."""
-        return cls(columns, version=version)
 
     @property
     def columns(self) -> OrfColumns:
@@ -414,12 +472,14 @@ class OrfIndex:
         return self._columns
 
     def record(self, i: int) -> OrfRecord:
-        """ORF ``i``'s record, built on demand and kept in a small cache."""
+        """ORF ``i``'s record, built on demand and kept in a small LRU cache."""
         cached = self._cache.get(i)
-        if cached is None:
-            if len(self._cache) >= self.CACHE_SIZE:
-                self._cache.clear()
-            cached = self._cache[i] = self._columns.record(i)
+        if cached is not None:
+            self._cache.move_to_end(i)
+            return cached
+        cached = self._cache[i] = self._columns.record(i)
+        if len(self._cache) > self.CACHE_SIZE:
+            self._cache.popitem(last=False)
         return cached
 
     # ------------------------------------------------------------------
