@@ -114,6 +114,7 @@ def client(tmp_path, monkeypatch):
         site_data.load_orf_index,
         site_data.orf_index_version,
         site_data.portable_orf_index,
+        site_data.orf_index_fingerprint,
     ):
         cached.cache_clear()
     app = create_app()
@@ -125,6 +126,7 @@ def client(tmp_path, monkeypatch):
         site_data.load_orf_index,
         site_data.orf_index_version,
         site_data.portable_orf_index,
+        site_data.orf_index_fingerprint,
     ):
         cached.cache_clear()
 
@@ -142,11 +144,11 @@ def test_the_scanner_is_served_by_version_and_immutable(client) -> None:
 
 @needs_run
 def test_the_drop_zone_names_all_three_downloads(client) -> None:
-    from swissisoform_site.data import load_orf_index
+    from swissisoform_site.data import orf_index_fingerprint
 
     page = client.get("/").data.decode()
     assert f'data-pyodide="{PYODIDE_URL}"' in page
     assert f'data-scanner="/api/variants/scanner/{scanner_archive()[0]}.zip"' in page
-    assert f'data-index="/api/variants/index/{load_orf_index().version}.json.gz"' in page
+    assert f'data-index="/api/variants/index/{orf_index_fingerprint()}.json.gz"' in page
     assert 'data-worker="/static/js/scan_worker.js"' in page
     assert "the file is not uploaded" in page

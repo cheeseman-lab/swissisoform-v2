@@ -8,8 +8,10 @@
  * Only when the browser cannot run the scanner at all (no Web Workers or
  * WebAssembly, or Pyodide failed to load) is the server offered — as a button the
  * user presses, never silently, because it means uploading the file. A file the
- * scanner refuses (too large once decompressed, a runaway line) is reported, not
- * retried on the server: the server would refuse it the same way.
+ * scanner refuses (too large, a runaway line, unreadable) is reported, not retried
+ * on the server: the server would refuse it the same way. Nor is a page left open
+ * across a deploy (its downloads are gone): reloading scans locally, so that is
+ * what it is told to do.
  *
  * The result is logged to the browser console, success or failure — the fastest
  * way to inspect what the scan produced, and it leaks nothing.
@@ -26,6 +28,8 @@
   var serverButton = document.getElementById("vq-server");
   if (!zone || !input || !status) return;
 
+  var STALE_MESSAGE =
+    "The site was updated while this page was open. Reload and try again.";
   var busy = false;
   var worker = null;
   var pendingFile = null; // offered to the server after a scanner failure
@@ -59,7 +63,7 @@
       // The page and the server disagree on the shape — a deploy landed between
       // loading this page and uploading.
       busy = false;
-      setState("is-error", "The site was updated while this page was open. Reload and try again.");
+      setState("is-error", STALE_MESSAGE);
       return;
     }
     var summary = Object.assign({}, payload, {
@@ -82,6 +86,11 @@
         " genes — opening results…"
     );
     window.location.href = "/variants";
+  }
+
+  function dropWorker() {
+    if (worker) worker.terminate();
+    worker = null;
   }
 
   /* The scanner could not run in this browser: say why and offer the server. */
@@ -131,7 +140,13 @@
         }
         keep(file, payload);
       } else if (msg.type === "failed") {
-        if (msg.infra) {
+        // The interpreter may be dead (out of memory, a fatal error) and would fail
+        // every later scan; the next drop starts a fresh worker.
+        dropWorker();
+        if (msg.stale) {
+          busy = false;
+          setState("is-error", STALE_MESSAGE);
+        } else if (msg.infra) {
           offerServer(file, msg.message);
         } else {
           busy = false;
@@ -141,8 +156,8 @@
       }
     };
     worker.onerror = function (event) {
+      dropWorker();
       offerServer(file, (event && event.message) || "the scan worker crashed");
-      worker = null;
     };
     worker.postMessage({
       file: file,

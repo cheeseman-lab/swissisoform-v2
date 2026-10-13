@@ -72,6 +72,27 @@ def test_an_unknown_format_is_refused() -> None:
         from_portable(b"not gzip")
 
 
+def _malformed() -> dict[str, bytes]:
+    good = to_portable(_index())
+    body = json.loads(gzip.decompress(good))
+    no_rows = {k: v for k, v in body.items() if k != "rows"}
+    short_row = dict(body, rows=[body["rows"][0][:-1]])
+    return {
+        "a list": gzip.compress(b"[]"),
+        "truncated gzip": good[: len(good) // 2],
+        "not json": gzip.compress(b"{"),
+        "no rows": gzip.compress(json.dumps(no_rows).encode()),
+        "a short row": gzip.compress(json.dumps(short_row).encode()),
+    }
+
+
+@pytest.mark.parametrize("case", sorted(_malformed()))
+def test_anything_malformed_is_a_value_error(case: str) -> None:
+    """The docstring's one exception type, so a caller needs one except clause."""
+    with pytest.raises(ValueError, match="not a portable"):
+        from_portable(_malformed()[case])
+
+
 @pytest.mark.skipif(not RUN_INDEX.is_file(), reason="needs the cheeseman_test orf_index")
 def test_a_real_index_round_trips_record_for_record() -> None:
     from swissisoform.variantquery.load import load_index

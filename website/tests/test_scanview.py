@@ -19,6 +19,7 @@ from swissisoform_site.scanview import (
     enrich_hits,
     hgvsp_from_hit,
     scan_file_json,
+    size_refusal,
     staged_upload,
     tis_slug,
     with_frame,
@@ -59,6 +60,24 @@ def test_an_unusable_temp_dir_is_a_staging_error(tmp_path: Path) -> None:
     with pytest.raises(StagingError):
         with staged_upload(io.BytesIO(VCF), directory=tmp_path / "missing"):
             pytest.fail("the block must not run")
+
+
+def test_a_file_too_large_is_refused_before_it_is_copied(tmp_path: Path, monkeypatch) -> None:
+    """Same error the scan gives after reading past the cap, decided from the size alone."""
+    import json
+
+    from swissisoform.variantquery.vcf import VcfLimitExceeded, iter_lines
+
+    monkeypatch.setenv("SWISSISOFORM_VCF_MAX_BYTES", "2000000")
+    assert size_refusal(2_000_000) == ""
+    refusal = json.loads(size_refusal(2_000_001))
+    assert refusal["error"] == "expands_too_large"
+
+    big = tmp_path / "big.vcf"
+    big.write_bytes(b"x\n" * 1_000_001)
+    with pytest.raises(VcfLimitExceeded) as raised:
+        list(iter_lines(big))
+    assert refusal["message"] == str(raised.value)
 
 
 class _Index:

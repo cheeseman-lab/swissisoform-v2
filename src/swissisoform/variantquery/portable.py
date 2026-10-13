@@ -71,12 +71,17 @@ def from_portable(data: bytes) -> OrfIndex:
     """
     try:
         body = json.loads(gzip.decompress(data))
-    except (OSError, ValueError) as exc:
+    except (OSError, EOFError, ValueError) as exc:  # EOFError: a truncated download
         raise ValueError(f"not a portable ORF index: {exc}") from exc
-    if not isinstance(body, dict) or body.get("format") != PORTABLE_FORMAT:
+    if not isinstance(body, dict):
+        raise ValueError("not a portable ORF index: the body is not an object")
+    if body.get("format") != PORTABLE_FORMAT:
         raise ValueError(f"unknown portable ORF index format: {body.get('format')!r}")
-    columns = body["columns"]
-    return OrfIndex.from_records(
-        (dict(zip(columns, row, strict=True)) for row in body["rows"]),
-        version=str(body.get("version") or ""),
-    )
+    try:
+        columns = body["columns"]
+        return OrfIndex.from_records(
+            (dict(zip(columns, row, strict=True)) for row in body["rows"]),
+            version=str(body.get("version") or ""),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"not a portable ORF index: {exc!r}") from exc

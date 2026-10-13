@@ -19,6 +19,7 @@ from __future__ import annotations
 import functools
 import itertools
 import logging
+from collections import OrderedDict
 from typing import Any
 
 from swissisoform import coords
@@ -105,26 +106,46 @@ class OrfClassifier:
     """Classify variants against ORFs whose coding sequence the caller holds.
 
     Caches one position map per ORF, so a scan that lands many variants in the
-    same ORF builds its map once. The pipeline's ``ConsequenceValidator`` keeps
-    the same cache shape; this is the dependency-free half of it.
+    same ORF builds its map once. The cache is bounded (least recently used out):
+    a map holds one entry per coding base, so an exome-scale VCF touching most of
+    the catalogue in both frames would otherwise keep ~1–2 GB of maps — past what
+    a browser tab's WebAssembly heap allows. VCFs are position-sorted, so the
+    variants for one ORF arrive together and a small cache loses nothing; an
+    unsorted file only rebuilds maps, which is cheap. ``ConsequenceValidator``
+    (the pipeline) classifies through one of these, so both share this cache.
     """
 
-    def __init__(self) -> None:
-        """Start with an empty position-map cache."""
-        self._position_maps: dict[Any, dict[int, int]] = {}
+    #: Position maps kept; see the class docstring.
+    MAX_CACHED_MAPS = 256
+
+    def __init__(self, max_cached_maps: int = MAX_CACHED_MAPS) -> None:
+        """Start with an empty position-map cache holding at most ``max_cached_maps``."""
+        self._position_maps: OrderedDict[Any, dict[int, int]] = OrderedDict()
+        self._max_cached_maps = max_cached_maps
 
     def build_position_map_from_orf(
         self, orf_exons: Any, strand: str, *, orf_key: Any = None
     ) -> dict[int, int]:
-        """:func:`position_map`, cached under ``orf_key`` (or the exons + strand)."""
+        """:func:`position_map`, cached under ``orf_key`` (or the exons + strand).
+
+        Args:
+            orf_exons: 0-based half-open plus-strand intervals in ascending
+                genomic order.
+            strand: ``"+"`` or ``"-"``.
+            orf_key: Optional hashable cache key; defaults to the exons + strand.
+        """
         if not orf_exons:
             return {}
         key = orf_key
         if key is None:
             key = (tuple((int(s), int(e)) for s, e in orf_exons), strand, "")
         cached = self._position_maps.get(key)
-        if cached is None:
-            cached = self._position_maps[key] = position_map(orf_exons, strand)
+        if cached is not None:
+            self._position_maps.move_to_end(key)
+            return cached
+        cached = self._position_maps[key] = position_map(orf_exons, strand)
+        if len(self._position_maps) > self._max_cached_maps:
+            self._position_maps.popitem(last=False)
         return cached
 
     def classify_against_orf(
