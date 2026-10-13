@@ -42,6 +42,8 @@ from swissisoform.site.evidence import p3_min_sse_length as _p3_min_sse_length
 from swissisoform.site.evidence import p3_min_sse_plddt as _p3_min_sse_plddt
 from swissisoform.site.evidence import use_scoring_config as _use_scoring_config
 
+from swissisoform_site.scanview import tis_slug  # noqa: F401 — re-exported
+
 logger = logging.getLogger(__name__)
 
 
@@ -620,6 +622,27 @@ def load_all() -> dict[str, GeneRecord]:
 
 
 @lru_cache(maxsize=1)
+def orf_index_version() -> str:
+    """The ORF index's version, read from the parquet footer alone.
+
+    Every page stamps this on ``<body>`` for ``scanstate.js``, so it must neither load
+    the whole index on a page that never scans nor fail the page when the index is
+    missing or unreadable — both read as "" (unversioned). Read by the same
+    ``read_index_version`` that :func:`load_orf_index` uses, so the two agree.
+    """
+    from swissisoform.variantquery.load import read_index_version
+
+    path = data_dir() / "orf_index.parquet"
+    if not path.is_file():
+        return ""
+    try:
+        return read_index_version(path)
+    except Exception as exc:  # a page render must not fail on this
+        logger.warning("could not read the ORF index version from %s: %s", path, exc)
+        return ""
+
+
+@lru_cache(maxsize=1)
 def load_orf_index():
     """Load ``orf_index.parquet`` for variant→ORF resolution.
 
@@ -766,11 +789,6 @@ def synthesis_tags_for_isoform(*, llm_dir: Path | None, tis_slug: str) -> list[s
     # Preserve vocab order for stable display/union across isoforms.
     present = {t for t in tags if t in _TAG_VOCAB_SET}
     return [t for t in ISOFORM_TAG_VOCAB if t in present]
-
-
-def tis_slug(tis_id: str) -> str:
-    """URL-safe form of a tis_id (replaces ``:`` and ``.`` with ``-``)."""
-    return re.sub(r"[:.]+", "-", tis_id or "unknown")
 
 
 def variant_url(variant_id: str, source: str, rs_id: str | None = None) -> str | None:

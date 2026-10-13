@@ -192,6 +192,17 @@ def test_a_new_row_lands_where_the_server_would_have_put_it() -> None:
     assert guide(out) == guide(reference)
 
 
+def test_the_first_row_on_a_gene_with_none_lands_where_the_server_would_put_it() -> None:
+    """No rows yet and no truncation guide: the headroom floor, not the rows, set y_hi."""
+    fig = build_gene_protein_figure(_view([]))
+    out = apply_uploaded_hits(fig, [_hit("missense_variant", x=0)])
+    reference = build_gene_protein_figure(_view([_clinvar("missense_variant", pos=1)]))
+
+    assert _row_y(out, "missense_variant")[0] == _row_y(reference, "missense_variant")[0]
+    assert out["layout"]["yaxis"]["range"] == reference["layout"]["yaxis"]["range"]
+    assert out["layout"]["height"] == reference["layout"]["height"]
+
+
 def test_an_unknown_consequence_gets_a_row_after_the_known_ones() -> None:
     fig = build_gene_protein_figure(_view([_clinvar("synonymous_variant")]))
     out = apply_uploaded_hits(fig, [_hit("reference_mismatch")])

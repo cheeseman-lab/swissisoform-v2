@@ -216,13 +216,21 @@ def record(ip: str) -> None:
         return
 
     bucket = _bucket(ip)
-    try:
-        bucket.mkdir(parents=True, exist_ok=True)
-        # Timestamp in the name is for reading the directory by eye; the count
-        # itself goes by mtime, which survives a copy the name would not.
-        (bucket / f"{int(time.time())}-{secrets.token_hex(4)}").touch()
-    except OSError as exc:
-        logger.warning("could not record a scan rate marker: %s", exc)
+    # Twice at most: a purge in another worker can remove this bucket, empty,
+    # between the mkdir and the touch.
+    for attempt in range(2):
+        try:
+            bucket.mkdir(parents=True, exist_ok=True)
+            # Timestamp in the name is for reading the directory by eye; the count
+            # itself goes by mtime, which survives a copy the name would not.
+            (bucket / f"{int(time.time())}-{secrets.token_hex(4)}").touch()
+            break
+        except FileNotFoundError as exc:
+            if attempt:
+                logger.warning("could not record a scan rate marker: %s", exc)
+        except OSError as exc:
+            logger.warning("could not record a scan rate marker: %s", exc)
+            break
     _maybe_purge()
 
 
@@ -231,7 +239,12 @@ def _maybe_purge() -> None:
 
     Driven from the upload path, so there is no scheduler. The marker's mtime is
     the clock; a missed purge only leaves stale markers that ``check`` already
-    ignores, since it counts by mtime inside its windows.
+    ignores, since it counts by mtime inside its windows. So a purge is never
+    allowed to fail the upload that ran it.
+
+    The marker is touched *before* purging, so a worker arriving a moment later
+    sees the slot taken and skips. Two workers can still both pass the check in
+    the same instant; :func:`purge` tolerates that.
     """
     marker = throttle_dir() / _PURGE_MARKER
     try:
@@ -239,11 +252,14 @@ def _maybe_purge() -> None:
             return
     except OSError:
         pass  # Never purged yet.
-    purge()
     try:
         marker.touch()
     except OSError:
         pass
+    try:
+        purge()
+    except OSError as exc:
+        logger.warning("throttle purge failed: %s", exc)
 
 
 def purge(max_age: float = DAY) -> int:
@@ -260,10 +276,19 @@ def purge(max_age: float = DAY) -> int:
 
     now = time.time()
     removed = 0
-    for bucket in root.iterdir():
+    try:
+        buckets = list(root.iterdir())
+    except OSError:
+        return 0
+    for bucket in buckets:
         if not bucket.is_dir():
             continue
-        for marker in bucket.iterdir():
+        # Another worker's purge may remove the bucket between the check and here.
+        try:
+            markers = list(bucket.iterdir())
+        except OSError:
+            continue
+        for marker in markers:
             try:
                 if now - marker.stat().st_mtime > max_age:
                     marker.unlink(missing_ok=True)

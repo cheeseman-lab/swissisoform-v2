@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -39,8 +40,9 @@ from swissisoform.variantquery.frame import plotly_x
 #: refuses a stored scan whose schema it does not know, so a deploy that changes
 #: these fields cannot have an old tab read new keys (or the reverse).
 #:
-#: **Bump this whenever the response's structure changes.**
-SCAN_SCHEMA = "c1"
+#: **Bump this whenever the response's structure changes.** ``c2``: hits carry
+#: ``tis_slug``.
+SCAN_SCHEMA = "c2"
 
 #: Hit fields no page reads. Dropped to keep a capped scan inside the browser's
 #: ~5 MB ``sessionStorage`` quota: ``vclass`` is derivable from ``ref``/``alt``, and
@@ -48,6 +50,8 @@ SCAN_SCHEMA = "c1"
 _DROPPED_HIT_FIELDS = frozenset({"vclass", "transcript_id"})
 
 _CHUNK = 1 << 20
+
+_SLUG_SEPARATORS = re.compile(r"[:.]+")
 
 
 class StagingError(Exception):
@@ -80,10 +84,14 @@ def staged_upload(
         directory: Where to stage; the platform temp dir when ``None``.
 
     Raises:
-        StagingError: If the copy fails. Raised before the block runs, so only a
+        StagingError: If the temp file cannot be created (an unwritable, missing or
+            full temp dir) or the copy fails. Raised before the block runs, so only a
             failure of the staging itself is reported as one.
     """
-    fd, name = tempfile.mkstemp(prefix="swissisoform-scan-", suffix=".vcf", dir=directory)
+    try:
+        fd, name = tempfile.mkstemp(prefix="swissisoform-scan-", suffix=".vcf", dir=directory)
+    except OSError as exc:
+        raise StagingError(f"could not stage upload: {exc}") from exc
     path = Path(name)
     try:
         digest = hashlib.sha256()
@@ -174,10 +182,23 @@ def hgvsp_from_hit(aa_ref: str, aa_alt: str, residue: int, consequence: str) -> 
     return f"p.{three(aa_ref)}{first}{three(aa_alt)}"
 
 
+def tis_slug(tis_id: str | None) -> str:
+    """URL-safe form of a tis_id: each run of ``:`` and ``.`` becomes ``-``.
+
+    The one copy of the rule for the site: ``data.tis_slug``, the ``slugify``
+    template filter and the hits' ``tis_slug`` (which ``variants.js`` puts in isoform
+    links) all call this. It must also agree with the LLM dispatcher's
+    ``swissisoform.site.llm._tis_slug``, which names the on-disk output directories.
+    Only ``:`` and ``.`` are replaced; a ``+`` strand is kept, since URLs carry it
+    fine in a path segment.
+    """
+    return _SLUG_SEPARATORS.sub("-", str(tis_id or "unknown"))
+
+
 def enrich_hits(hits: list[dict[str, Any]], index: Any) -> list[dict[str, Any]]:
     """Scan hits → the hits the browser stores, with what only the index can say.
 
-    Adds two fields to each hit:
+    Adds three fields to each hit:
 
     * ``x`` — the gene figure's x for this hit, in the figure's own coordinates
       (canonical residue 1 at x = 0), so the browser plots it as-is. ``None`` when
@@ -186,6 +207,8 @@ def enrich_hits(hits: list[dict[str, Any]], index: Any) -> list[dict[str, Any]]:
       results table; they just draw no marker.
     * ``protein_change`` — HGVS notation with its frame named, or a sentence saying
       why there is none. ``""`` when there is no residue at all.
+    * ``tis_slug`` — the isoform's URL slug (:func:`tis_slug`), so the browser links
+      to the isoform page without a copy of the rule.
 
     The residue is meaningless without the frame — a truncation's lost N-terminus is
     numbered against the canonical — which is why ``x`` comes from
@@ -217,6 +240,7 @@ def enrich_hits(hits: list[dict[str, Any]], index: Any) -> list[dict[str, Any]]:
             protein_change = with_frame(protein_change, frame)
         row["x"] = x
         row["protein_change"] = protein_change
+        row["tis_slug"] = tis_slug(hit.get("tis_id"))
         out.append(row)
     return out
 

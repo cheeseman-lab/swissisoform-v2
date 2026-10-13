@@ -13,6 +13,7 @@
   //: Hit rows drawn. The scan records up to 20,000; the full list is in the download.
   var PAGE_MAX_HITS = 1000;
 
+  var plural = window.SwissScan.plural;
   var config = JSON.parse(document.getElementById("vq-config").textContent);
   var known = {};
   config.known_genes.forEach(function (g) {
@@ -42,23 +43,15 @@
     return Number(n || 0).toLocaleString("en-US");
   }
 
-  function plural(n, word) {
-    return n + " " + word + (n === 1 ? "" : "s");
-  }
-
-  // Must match data.py::tis_slug and app.py's slugify filter: only ':' and '.'.
-  function slugify(value) {
-    return String(value || "unknown").replace(/[:.]+/g, "-");
-  }
-
   function geneUrl(gene) {
     return config.gene_url.replace("__GENE__", encodeURIComponent(gene));
   }
 
-  function isoformUrl(gene, tisId) {
+  // The slug comes with the hit (scanview.tis_slug), so the rule lives in one place.
+  function isoformUrl(gene, slug) {
     return config.isoform_url
       .replace("__GENE__", encodeURIComponent(gene))
-      .replace("__SLUG__", encodeURIComponent(slugify(tisId)));
+      .replace("__SLUG__", encodeURIComponent(slug));
   }
 
   function renderHeader(scan) {
@@ -100,7 +93,7 @@
       box.appendChild(el("p", { class: "vq-partial" }, [
         el("b", {}, ["This scan was too large to keep in full."]),
         s.hits_stored === "partial"
-          ? " This tab kept the first " + fmt(PAGE_MAX_HITS) + " of " + fmt(c.hits) +
+          ? " This tab kept the first " + fmt(scan.hits.length) + " of " + fmt(c.hits) +
             " hits; gene pages show markers for those only. Counts and the genes list " +
             "below are complete."
           : " No hits could be kept; counts and the genes list below are complete.",
@@ -222,7 +215,7 @@
       el("td", { class: "var-mono" }, [h.ref + "→" + h.alt]),
       el("td", {}, [h.gene]),
       el("td", { class: "var-mono" }, [
-        known[h.gene] ? el("a", { href: isoformUrl(h.gene, h.tis_id) }, [tisLabel]) : tisLabel,
+        known[h.gene] ? el("a", { href: isoformUrl(h.gene, h.tis_slug) }, [tisLabel]) : tisLabel,
       ]),
       el("td", {}, [el("span", { class: "orf-chip orf-" + h.orf_type }, [h.orf_type])]),
       // 0-based internally; +1 for display so it reads as p.N.
