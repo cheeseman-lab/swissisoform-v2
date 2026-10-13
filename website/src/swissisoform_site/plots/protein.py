@@ -81,6 +81,8 @@ _ROW_STEP = 0.26
 _ROW_BASE_ABOVE_CANON = 0.3
 _ROW_TOP_PAD = 0.22
 _Y_HI_PAD = 0.3
+# Least headroom above the canonical bar when there are no variant rows above it.
+_MIN_ABOVE_CANON = 0.2
 _HEIGHT_BASE = 90
 _HEIGHT_PER_Y = 118
 _ROW_LABEL_MAX = 14
@@ -483,7 +485,7 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
     # A single black dotted guide at the SHORTEST truncation's differential-region
     # end — the deepest N-terminal cut, where its lost region meets the retained
     # body. (Extensions' differential ends at x=0, marked by the axis zeroline.)
-    guide_top = max(mut_top, canon_y + 0.2)
+    guide_top = max(mut_top, canon_y + _MIN_ABOVE_CANON)
     trunc_ends = [
         b["diff_x1"] for b in bars if b.get("diff_on_canonical") and b.get("diff_x1") is not None
     ]
@@ -502,7 +504,7 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
             }
         )
 
-    y_hi = max(mut_top, canon_y + 0.2) + _Y_HI_PAD
+    y_hi = guide_top + _Y_HI_PAD
     y_lo = y_bottom - 0.2
     return {
         "data": traces,
@@ -565,7 +567,7 @@ def _variant_rows_meta(
         "step": _ROW_STEP,
         "top_pad": _ROW_TOP_PAD,
         "canon_y": canon_y,
-        "min_above_canon": 0.2,
+        "min_above_canon": _MIN_ABOVE_CANON,
         "y_hi_pad": _Y_HI_PAD,
         "height_base": _HEIGHT_BASE,
         "height_per_y": _HEIGHT_PER_Y,

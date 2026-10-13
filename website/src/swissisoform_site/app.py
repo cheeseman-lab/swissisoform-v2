@@ -20,6 +20,7 @@ import math
 import os
 import re
 import secrets
+import tempfile
 import types
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,7 @@ from swissisoform_site.data import (
     llm_synthesis_for_isoform,
     load_all,
     load_orf_index,
+    orf_index_version,
     portable_orf_index,
     sae_card_for_isoform,
     tis_slug,
@@ -175,6 +177,28 @@ def _log_scan(body: dict[str, Any]) -> None:
         )
 
 
+def _dir_writable(path: Path, *, create: bool = False) -> tuple[bool, str]:
+    """Whether a file can be written, read back and removed in ``path``.
+
+    For ``/api/variants/status``: a scan stages its upload in the temp dir and
+    charges the throttle in its own dir, and an unwritable one fails every upload
+    in a way the uploader cannot tell from any other failure.
+
+    Returns:
+        ``(writable, error)``; ``error`` is the OSError text, or "".
+    """
+    try:
+        if create:
+            path.mkdir(parents=True, exist_ok=True)
+        probe = path / f".writeprobe-{os.getpid()}"
+        probe.write_text("ok")
+        writable = probe.read_text() == "ok"
+        probe.unlink(missing_ok=True)
+    except OSError as exc:
+        return False, str(exc)
+    return writable, ""
+
+
 def _human_delay(seconds: int) -> str:
     """Render a retry delay the way a person would say it."""
     if seconds < 60:
@@ -225,20 +249,14 @@ def create_app() -> Flask:
         flagged instead of drawn at coordinates that may no longer be right. Read
         from the server so neither value has a second copy in the JS.
         """
-        index = load_orf_index()
-        return {"index_version": index.version if index else "", "scan_schema": SCAN_SCHEMA}
+        return {"index_version": orf_index_version(), "scan_schema": SCAN_SCHEMA}
 
-    # Slugify filter — must match data.py::tis_slug and the LLM dispatcher's
-    # _tis_slug so that landing-page dropdown links resolve to the right
-    # Flask route AND the right on-disk LLM output directory. Both call
-    # sites use ``re.sub(r"[:.]+", "-", ...)`` — replace ONLY ``:`` and ``.``.
-    # In particular DO NOT strip ``+`` (strand indicator on plus-strand
-    # isoforms); URLs handle literal ``+`` fine in path segments.
-    _slug_re = re.compile(r"[:.]+")
-
+    # Slugify filter: the site's one slug rule (scanview.tis_slug), so landing-page
+    # dropdown links resolve to the right Flask route AND the right on-disk LLM
+    # output directory.
     @app.template_filter("slugify")
     def slugify(value: Any) -> str:
-        return _slug_re.sub("-", str(value or "unknown"))
+        return tis_slug(value)
 
     # Linkify ``PMID:NNN`` citations in the gene mechanistic narrative. Match each
     # PMID token (not the enclosing bracket) so multi-PMID brackets like
@@ -286,16 +304,16 @@ def create_app() -> Flask:
     @app.get("/")
     def index() -> Any:
         genes = load_all()
-        orf_index = load_orf_index()
-        # What vcf_drop.js hands the scan worker. Empty index URL when no index is
-        # staged: the drop zone then goes straight to the server route, which
-        # reports the missing index itself.
+        # Footer only: the home page must not load the whole index to name its URL.
+        index_version = orf_index_version()
+        # What vcf_drop.js hands the scan worker. Empty index URL when no versioned
+        # index is staged: the drop zone then says scanning is unavailable.
         browser_scan = {
             "pyodide": PYODIDE_URL,
             "scanner": url_for("variants_scanner", version=scanner_archive()[0]),
             "index": (
-                url_for("variants_index", version=orf_index.version, fmt=PORTABLE_FORMAT)
-                if orf_index
+                url_for("variants_index", version=index_version, fmt=PORTABLE_FORMAT)
+                if index_version
                 else ""
             ),
         }
@@ -659,10 +677,15 @@ def create_app() -> Flask:
     def variants_status() -> Any:
         """Report whether the scan path is actually functional in this deployment.
 
-        Exists because whether ``orf_index.parquet`` was staged cannot be told apart
-        from a failed upload, and there is no shell into the container.
+        Exists because whether ``orf_index.parquet`` was staged, and whether the
+        disk a scan writes to is writable, cannot be told apart from a failed upload,
+        and there is no shell into the container.
         """
         index = load_orf_index()
+        tmp_dir = Path(tempfile.gettempdir())
+        tmp_writable, tmp_error = _dir_writable(tmp_dir)
+        throttle_dir = throttle.throttle_dir()
+        throttle_writable, throttle_error = _dir_writable(throttle_dir, create=True)
         return jsonify(
             {
                 "index_loaded": index is not None,
@@ -671,6 +694,12 @@ def create_app() -> Flask:
                 "catalog_isoforms": index.n_isoforms if index else 0,
                 "catalog_intervals": index.n_intervals if index else 0,
                 "displayed_genes": len(load_all()),
+                "tmp_dir": str(tmp_dir),
+                "tmp_dir_writable": tmp_writable,
+                "tmp_dir_error": tmp_error,
+                "throttle_dir": str(throttle_dir),
+                "throttle_dir_writable": throttle_writable,
+                "throttle_dir_error": throttle_error,
                 "max_upload_bytes": app.config.get("MAX_CONTENT_LENGTH"),
                 "scan_token_required": bool(os.environ.get("SWISSISOFORM_SCAN_TOKEN")),
                 "debug_logging": _scan_debug_enabled(),

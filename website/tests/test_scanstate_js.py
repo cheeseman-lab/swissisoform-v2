@@ -17,8 +17,9 @@ const src = fs.readFileSync(process.argv[1], "utf8");
 
 function makeStore(quota) {
   const store = new Map();
+  store.reads = 0;
   store.api = {
-    getItem: k => (store.has(k) ? store.get(k) : null),
+    getItem: k => { store.reads++; return store.has(k) ? store.get(k) : null; },
     removeItem: k => store.delete(k),
     setItem: (k, v) => {
       let used = 0;
@@ -32,12 +33,14 @@ function makeStore(quota) {
   return store;
 }
 
-/* A fresh page load: new window, same sessionStorage. */
-function page(store, attrs) {
+/* A fresh page load: new window, same sessionStorage. ``slots`` are the scan
+   breadcrumb / hit-count elements the page has (none on most pages). */
+function page(store, attrs, slots = []) {
   const document = {
     readyState: "complete",
     body: { getAttribute: n => attrs[n.replace("data-", "")] || null },
-    querySelectorAll: () => [],
+    querySelector: () => slots[0] || null,
+    querySelectorAll: () => slots,
     addEventListener() {},
   };
   const ctx = { window: {}, document, sessionStorage: store.api };
@@ -121,6 +124,32 @@ checks.over_quota_keeps_the_first_thousand = () => {
   assert.strictEqual(scan.hits.length, 1000);
   assert.strictEqual(scan.summary.hits_stored, "partial");
 };
+checks.summary_that_does_not_fit_after_full_hits_falls_back = () => {
+  // The full hits fit, but not the summary after them: keep the first 1,000 instead
+  // of losing the scan or leaving hits without a summary.
+  const api = page(makeStore(5e6), attrs);
+  const store = makeStore(JSON.stringify(api.pack(hits)).length + 10);
+  assert.strictEqual(page(store, attrs).save(summary, hits), "partial");
+  const scan = page(store, attrs).load();
+  assert.strictEqual(scan.hits.length, 1000);
+  assert.strictEqual(scan.summary.hits_stored, "partial");
+};
+checks.refused_storage_throws_and_leaves_nothing = () => {
+  const store = makeStore(10);
+  assert.throws(() => page(store, attrs).save(summary, hits));
+  assert.strictEqual(store.size, 0);
+};
+checks.a_page_without_scan_slots_does_not_read_the_scan = () => {
+  const store = makeStore(5e6);
+  page(store, attrs).save(summary, hits);
+  store.reads = 0;
+  page(store, attrs);
+  assert.strictEqual(store.reads, 0);
+  const crumb = { hidden: true, getAttribute: () => null };
+  page(store, attrs, [crumb]);
+  assert.ok(store.reads > 0);
+  assert.strictEqual(crumb.hidden, false);
+};
 checks.new_upload_replaces_the_old = () => {
   const store = makeStore(5e6);
   page(store, attrs).save(summary, hits);
@@ -184,6 +213,18 @@ def test_storage_in_the_old_unpacked_layout_is_discarded() -> None:
 
 def test_over_quota_keeps_the_first_thousand_hits() -> None:
     _check("over_quota_keeps_the_first_thousand")
+
+
+def test_a_summary_that_does_not_fit_after_the_hits_keeps_a_partial_scan() -> None:
+    _check("summary_that_does_not_fit_after_full_hits_falls_back")
+
+
+def test_storage_that_refuses_even_the_summary_throws_and_leaves_nothing() -> None:
+    _check("refused_storage_throws_and_leaves_nothing")
+
+
+def test_a_page_without_scan_slots_does_not_parse_the_scan() -> None:
+    _check("a_page_without_scan_slots_does_not_read_the_scan")
 
 
 def test_a_new_upload_replaces_the_old_scan() -> None:

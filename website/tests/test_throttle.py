@@ -211,3 +211,58 @@ def test_record_purges_aged_markers_at_most_hourly(root: Path) -> None:
     os.utime(marker, (expired, expired))
     throttle.record("1.2.3.4")
     assert not stale.exists()
+
+
+def _expire_purge_marker(root: Path) -> None:
+    marker = root / throttle._PURGE_MARKER
+    if marker.exists():
+        expired = time.time() - throttle.PURGE_INTERVAL_SECONDS - 60
+        os.utime(marker, (expired, expired))
+
+
+def test_a_bucket_removed_mid_purge_does_not_fail_the_upload(root: Path, monkeypatch) -> None:
+    """Another worker's purge can rmdir a bucket after this one's is_dir() check."""
+    throttle.record("1.2.3.4")
+    _expire_purge_marker(root)
+    listing = Path.iterdir
+
+    def vanished(self: Path):
+        if self.parent == root:
+            raise FileNotFoundError(self)
+        return listing(self)
+
+    monkeypatch.setattr(Path, "iterdir", vanished)
+    throttle.record("1.2.3.4")  # must not raise
+    monkeypatch.setattr(Path, "iterdir", listing)
+    assert len(list(_only_bucket(root).iterdir())) == 2
+
+
+def test_an_upload_still_counts_when_purge_removed_its_bucket(root: Path, monkeypatch) -> None:
+    """The bucket can vanish between record()'s mkdir and its touch; it retries once."""
+    touch = Path.touch
+    failed = []
+
+    def racy_touch(self: Path, *args, **kwargs):
+        if self.parent.parent == root and not failed:
+            failed.append(self)
+            raise FileNotFoundError(self)
+        return touch(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "touch", racy_touch)
+    throttle.record("1.2.3.4")
+    assert failed
+    assert len(list(_only_bucket(root).iterdir())) == 1
+
+
+def test_the_purge_slot_is_claimed_before_purging(root: Path, monkeypatch) -> None:
+    """A second worker must see the slot taken while the first is still purging."""
+    seen = []
+
+    def purge(max_age: float = throttle.DAY) -> int:
+        marker = root / throttle._PURGE_MARKER
+        seen.append(marker.exists() and time.time() - marker.stat().st_mtime < 5)
+        raise OSError("disk went away")  # and a failing purge must not fail the upload
+
+    monkeypatch.setattr(throttle, "purge", purge)
+    throttle.record("1.2.3.4")
+    assert seen == [True]

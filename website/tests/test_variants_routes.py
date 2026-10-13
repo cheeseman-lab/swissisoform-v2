@@ -59,6 +59,7 @@ def client(data_dir, tmp_path, monkeypatch):
     # actually read instead of a previous test's.
     site_data.load_all.cache_clear()
     site_data.load_orf_index.cache_clear()
+    site_data.orf_index_version.cache_clear()
 
     app = create_app()
     app.config["TESTING"] = True
@@ -67,6 +68,7 @@ def client(data_dir, tmp_path, monkeypatch):
 
     site_data.load_all.cache_clear()
     site_data.load_orf_index.cache_clear()
+    site_data.orf_index_version.cache_clear()
 
 
 def _post(client, body: bytes, name: str = "test.vcf"):
@@ -308,6 +310,7 @@ def test_forwarded_for_splits_buckets_when_the_proxy_is_trusted(
 
     site_data.load_all.cache_clear()
     site_data.load_orf_index.cache_clear()
+    site_data.orf_index_version.cache_clear()
     app = create_app()
     app.config["TESTING"] = True
 
@@ -327,3 +330,4 @@ def test_forwarded_for_splits_buckets_when_the_proxy_is_trusted(
     finally:
         site_data.load_all.cache_clear()
         site_data.load_orf_index.cache_clear()
+        site_data.orf_index_version.cache_clear()

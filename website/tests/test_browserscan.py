@@ -109,13 +109,23 @@ def client(tmp_path, monkeypatch):
     from swissisoform_site import data as site_data
     from swissisoform_site.app import create_app
 
-    for cached in (site_data.load_all, site_data.load_orf_index, site_data.portable_orf_index):
+    for cached in (
+        site_data.load_all,
+        site_data.load_orf_index,
+        site_data.orf_index_version,
+        site_data.portable_orf_index,
+    ):
         cached.cache_clear()
     app = create_app()
     app.config["TESTING"] = True
     with app.test_client() as test_client:
         yield test_client
-    for cached in (site_data.load_all, site_data.load_orf_index, site_data.portable_orf_index):
+    for cached in (
+        site_data.load_all,
+        site_data.load_orf_index,
+        site_data.orf_index_version,
+        site_data.portable_orf_index,
+    ):
         cached.cache_clear()
 
 
