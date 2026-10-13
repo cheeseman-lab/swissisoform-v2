@@ -47,6 +47,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from swissisoform import metrics
+from swissisoform.io.parquet import flat_frame
 from swissisoform.site.evidence import CRITERIA, CRITERIA_METRIC_LABELS
 
 HERE = Path(__file__).resolve().parent
@@ -333,7 +334,7 @@ def resolve_parquet(explicit: str | None) -> list[Path]:
 
 
 def read_flat(files: list[Path]) -> tuple[pd.DataFrame, dict[str, pa.DataType]]:
-    """Read the non-list columns, fully flattened, plus the leaf type map.
+    """Read the non-list columns, structs and maps flattened, plus the leaf type map.
 
     List columns are handled separately (:func:`list_lengths`) so the big hit
     lists are never materialised into pandas.
@@ -350,10 +351,16 @@ def read_flat(files: list[Path]) -> tuple[pd.DataFrame, dict[str, pa.DataType]]:
     for path in files:
         present = {f.name for f in pq.ParquetFile(path).schema_arrow}
         table = pq.read_table(path, columns=[c for c in non_list if c in present])
-        while any(pa.types.is_struct(f.type) for f in table.schema):
-            table = table.flatten()
-        frames.append(table.to_pandas())
-    return pd.concat(frames, ignore_index=True), types
+        frames.append(flat_frame(table))
+    df = pd.concat(frames, ignore_index=True)
+    # A map leaf expands into one column per key (flat_frame); each takes the
+    # map's value type, which the schema cannot name per key.
+    for name, t in list(types.items()):
+        if pa.types.is_map(t):
+            for col in df.columns:
+                if col.startswith(f"{name}."):
+                    types[col] = t.item_type
+    return df, types
 
 
 def list_lengths(files: list[Path], schema: pa.Schema) -> dict[str, pd.Series]:

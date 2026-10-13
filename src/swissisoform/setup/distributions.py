@@ -56,6 +56,7 @@ from swissisoform.distributions import (
     STRATUM_SEPARATE,
     SUMMARY_FILE,
 )
+from swissisoform.io.parquet import flat_frame
 from swissisoform.setup._common import ROOT, rel_to_root, resolve_parquet, sha256_file
 
 DEFAULT_CATALOG = ROOT / "figures" / "clustering_dims" / "feature_space" / "feature_catalog.csv"
@@ -102,7 +103,7 @@ def load_catalog(path: Path) -> pd.DataFrame:
 
 
 def read_flat(files: list[Path]) -> pd.DataFrame:
-    """Read every non-list column, structs fully flattened to dotted names.
+    """Read every non-list column, structs and maps flattened to dotted names.
 
     List columns are excluded here and handled by :func:`list_lengths` — the hit
     lists dominate the file (``canonical_clinical_hits`` alone is ~876 MB
@@ -116,10 +117,7 @@ def read_flat(files: list[Path]) -> pd.DataFrame:
             for f in schema
             if not (pa.types.is_list(f.type) or pa.types.is_large_list(f.type))
         ]
-        table = pq.read_table(path, columns=non_list)
-        while any(pa.types.is_struct(f.type) for f in table.schema):
-            table = table.flatten()
-        frames.append(table.to_pandas())
+        frames.append(flat_frame(pq.read_table(path, columns=non_list)))
     return pd.concat(frames, ignore_index=True)
 
 

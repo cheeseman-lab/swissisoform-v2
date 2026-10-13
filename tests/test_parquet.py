@@ -391,3 +391,63 @@ class TestStructureHashColumnsInParquet:
         assert back["isoform_structure_isoform_hash"].iloc[0] == protein_hash(
             gene.tis_sites[0].isoform_protein
         )
+
+
+class TestFlatFrame:
+    """Profilers read runs flattened; the clinical summaries are maps since b828ec4."""
+
+    @staticmethod
+    def _table() -> "pa.Table":
+        import pyarrow as pa
+
+        from swissisoform.io.parquet import CLINICAL_SUMMARY_TYPE
+
+        rows = [
+            {"total_variants": 3, "by_source": {"gnomAD": 2, "ClinVar": 1},
+             "by_consequence": {"missense_variant": 3}, "pathogenic_count": 1},
+            {"total_variants": 1, "by_source": {"COSMIC": 1},
+             "by_consequence": {}, "pathogenic_count": 0},
+            None,
+        ]
+        return pa.table({
+            "tis_id": ["a", "b", "c"],
+            "canonical_clinical_summary": pa.array(
+                [None if r is None else {**r, "by_source": list(r["by_source"].items()),
+                 "by_consequence": list(r["by_consequence"].items())} for r in rows],
+                type=CLINICAL_SUMMARY_TYPE,
+            ),
+        })
+
+    def test_map_keys_become_dotted_columns(self):
+        from swissisoform.io.parquet import flat_frame
+
+        df = flat_frame(self._table()).fillna(-1)  # an absent key is null, as a struct field was
+        assert list(df["canonical_clinical_summary.by_source.gnomAD"]) == [2, -1, -1]
+        assert list(df["canonical_clinical_summary.by_source.COSMIC"]) == [-1, 1, -1]
+        assert list(df["canonical_clinical_summary.by_consequence.missense_variant"]) == [3, -1, -1]
+        # Struct leaves still flatten, and the map column itself is gone.
+        assert list(df["canonical_clinical_summary.total_variants"]) == [3, 1, -1]
+        assert "canonical_clinical_summary.by_source" not in df.columns
+
+    def test_distributions_read_flat_sees_the_map_keys(self, tmp_path):
+        import pyarrow.parquet as pq
+
+        from swissisoform.setup.distributions import read_flat
+
+        path = tmp_path / "all_paired.parquet"
+        pq.write_table(self._table(), path)
+        df = read_flat([path])
+        assert "canonical_clinical_summary.by_consequence.missense_variant" in df.columns
+
+    def test_resolve_walks_the_same_name_into_the_runtime_frame(self):
+        """In memory a map is a dict; read back from Parquet, a list of pairs."""
+        from swissisoform import metrics
+
+        metric = "canonical_clinical_summary.by_source.gnomAD"
+        runtime = pd.DataFrame({"canonical_clinical_summary": [
+            {"by_source": {"gnomAD": 2}}, {"by_source": [("gnomAD", 5)]}, None, {"by_source": {}},
+        ]})
+        assert metrics.resolve(metric, runtime).tolist()[:2] == [2.0, 5.0]
+        assert metrics.resolve(metric, runtime).isna().tolist()[2:] == [True, True]
+        assert metrics.resolvable(metric, {"canonical_clinical_summary"})
+        assert not metrics.resolvable(metric, {"isoform_clinical_summary"})

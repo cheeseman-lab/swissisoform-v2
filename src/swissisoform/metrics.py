@@ -20,12 +20,13 @@ column that exists in the parquet.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
 
 from swissisoform.config import CELL_LINES
+from swissisoform.io.parquet import mapping_of
 
 PREFIX = "tx:"
 
@@ -329,7 +330,23 @@ def resolve(metric: str, df: pd.DataFrame) -> pd.Series | None:
             # Not-evaluable rather than inverted: see RATIO_SUFFIX.
             values = values.where(pd.to_numeric(df[shared], errors="coerce") > 0)
         return values
+    head, _, path = metric.partition(".")
+    if path and head in df.columns:
+        # The profiler flattens structs and maps to dotted columns (flat_frame);
+        # the runtime frame keeps them nested, so walk the same path into it or a
+        # tag cut on a leaf resolves to None for the whole run.
+        return pd.to_numeric(df[head].map(lambda v: _leaf(v, path.split("."))), errors="coerce")
     return None
+
+
+def _leaf(value: Any, path: list[str]) -> Any:
+    """Follow *path* through nested structs and maps; None where it is absent."""
+    for part in path:
+        node = mapping_of(value)
+        if node is None or part not in node:
+            return None
+        value = node[part]
+    return value
 
 
 def resolvable(metric: str, columns: set[str]) -> bool:
@@ -344,6 +361,9 @@ def resolvable(metric: str, columns: set[str]) -> bool:
     if metric.startswith(ABS_PREFIX):
         return metric[len(ABS_PREFIX):] in columns
     if metric in columns:
+        return True
+    head, _, path = metric.partition(".")
+    if path and head in columns:
         return True
     if metric.endswith(LEN_SUFFIX):
         return metric[: -len(LEN_SUFFIX)] in columns

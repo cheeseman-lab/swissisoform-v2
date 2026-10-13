@@ -69,6 +69,48 @@ def paired_schema(df: pd.DataFrame, overrides: dict[str, pa.DataType] | None = N
     return schema
 
 
+def mapping_of(value: Any) -> dict[str, Any] | None:
+    """A struct or map value as a dict, or None when it is neither.
+
+    A map read back from Parquet through pandas is a list of ``(key, value)``
+    pairs (or an ndarray of them), while the in-memory frame holds a dict; a
+    struct is a dict either way.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, (list, tuple)) or hasattr(value, "tolist"):
+        pairs = value.tolist() if hasattr(value, "tolist") else list(value)
+        if all(isinstance(p, (list, tuple)) and len(p) == 2 for p in pairs):
+            return {str(k): v for k, v in pairs}
+    return None
+
+
+def flat_frame(table: pa.Table) -> pd.DataFrame:
+    """*table* as a frame with every struct and map expanded into dotted columns.
+
+    Structs flatten natively (``isoform_massspec_summary.best_hyperscore``). Maps
+    have no fixed fields, so each key seen in this table becomes its own column
+    (``canonical_clinical_summary.by_consequence.missense_variant``), and a row
+    without that key is null — the same names and nulls a struct with one field
+    per key produced before :data:`CLINICAL_SUMMARY_TYPE` pinned the summaries to
+    maps. Every profiler that reads a run flattened goes through here, so the
+    feature space, the distributions and the tag sweep see one set of names.
+    """
+    while any(pa.types.is_struct(f.type) for f in table.schema):
+        table = table.flatten()
+    maps = [f.name for f in table.schema if pa.types.is_map(f.type)]
+    df = table.to_pandas()
+    for name in maps:
+        rows = [mapping_of(v) for v in df.pop(name)]
+        keys = sorted({k for r in rows if r for k in r})
+        expanded = pd.DataFrame(
+            {f"{name}.{k}": [r.get(k) if r else None for r in rows] for k in keys},
+            index=df.index,
+        )
+        df = pd.concat([df, expanded], axis=1)
+    return df
+
+
 # Columns that map directly to TIS identity/protein fields
 _IDENTITY_COLS = [
     "tis_id",
