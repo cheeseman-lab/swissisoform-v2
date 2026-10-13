@@ -73,6 +73,32 @@ def test_orf_classifier_caches_one_map_per_orf() -> None:
     assert first[101] == 0 and first[112] == 11
 
 
+def test_orf_classifier_keeps_a_bounded_cache_of_recent_maps() -> None:
+    """An exome-scale scan must not keep one map per ORF it ever touched."""
+    clf = OrfClassifier(max_cached_maps=3)
+    maps = [clf.build_position_map_from_orf([(i, i + 6)], "+", orf_key=i) for i in range(3)]
+    # Touching ORF 0 again makes ORF 1 the least recently used, so ORF 3 evicts it.
+    assert clf.build_position_map_from_orf([(0, 6)], "+", orf_key=0) is maps[0]
+    clf.build_position_map_from_orf([(3, 9)], "+", orf_key=3)
+    assert clf.build_position_map_from_orf([(0, 6)], "+", orf_key=0) is maps[0]
+    rebuilt = clf.build_position_map_from_orf([(1, 7)], "+", orf_key=1)
+    assert rebuilt is not maps[1] and rebuilt == maps[1]
+    assert len(clf._position_maps) == 3
+
+
+def test_the_pipeline_validator_classifies_through_the_scan_classifier() -> None:
+    """One cache and one code path for the ORF frame, so the two cannot drift."""
+    validate = pytest.importorskip("swissisoform.clinical.validate")
+    validator = validate.ConsequenceValidator()
+    assert isinstance(validator._orf, OrfClassifier)
+    kwargs = dict(orf_exons=[(100, 106)], strand="+", cds="ATGGCC", genomic_pos=105)
+    assert validator.classify_against_orf(**kwargs, ref="C", alt="A") == (
+        OrfClassifier().classify_against_orf(**kwargs, ref="C", alt="A")
+    )
+    pos_map = validator.build_position_map_from_orf([(100, 106)], "+")
+    assert validator._orf.build_position_map_from_orf([(100, 106)], "+") is pos_map
+
+
 def test_orf_classifier_calls_a_missense() -> None:
     """ATG GCC → ATG GAC at the second codon: Ala2Asp."""
     out = OrfClassifier().classify_against_orf(

@@ -78,10 +78,11 @@ class ConsequenceValidator:
         self._position_map_cache: dict[str, dict[int, int]] = {}
         self._coding_seq_cache: dict[str, str] = {}
         self._strand_cache: dict[str, str] = {}
-        # ORF-frame caches keyed by hashable orf_key (caller-supplied or
-        # derived from the exons + strand). Separate to avoid str/tuple
-        # key collisions with the canonical caches.
-        self._orf_position_map_cache: dict[Any, dict[int, int]] = {}
+        # ORF-frame position maps and classification: the scan's classifier, so
+        # the pipeline and the VCF scan share one (bounded) cache. Sequences stay
+        # here, keyed by hashable orf_key (caller-supplied or derived from the
+        # exons + strand + chrom): only this class reads them from the genome.
+        self._orf = variantclass.OrfClassifier()
         self._orf_coding_seq_cache: dict[Any, str] = {}
 
     # ------------------------------------------------------------------
@@ -227,18 +228,7 @@ class ConsequenceValidator:
             Dict mapping 1-based genomic positions (inclusive) to 0-based
             coding positions starting from 0 at the ORF's first base.
         """
-        if not orf_exons:
-            return {}
-        key = orf_key if orf_key is not None else self._orf_cache_key(orf_exons, strand)
-        if key in self._orf_position_map_cache:
-            return self._orf_position_map_cache[key]
-
-        # One traversal, shared with ``coords.coding_offset`` — which answers the same
-        # question for a single position without building the map. Materialising it
-        # here is worth it because the pipeline asks about many variants per ORF.
-        pos_map = variantclass.position_map(orf_exons, strand)
-        self._orf_position_map_cache[key] = pos_map
-        return pos_map
+        return self._orf.build_position_map_from_orf(orf_exons, strand, orf_key=orf_key)
 
     def build_coding_sequence_from_orf(
         self,
@@ -305,9 +295,7 @@ class ConsequenceValidator:
         (the VCF scan, whose ORF index ships ``orf_cds``) should use
         :meth:`classify_against_orf` instead and skip the FASTA entirely.
         """
-        coding_seq = self.build_coding_sequence_from_orf(
-            orf_exons, strand, chrom, orf_key=orf_key
-        )
+        coding_seq = self.build_coding_sequence_from_orf(orf_exons, strand, chrom, orf_key=orf_key)
         return self.classify_against_orf(
             orf_exons=orf_exons,
             strand=strand,
@@ -355,14 +343,14 @@ class ConsequenceValidator:
         Returns:
             The same dict as :meth:`_analyze_variant`.
         """
-        pos_map = self.build_position_map_from_orf(orf_exons, strand, orf_key=orf_key)
-        return self._analyze_variant(
-            pos_map=pos_map,
-            coding_seq=cds,
+        return self._orf.classify_against_orf(
+            orf_exons=orf_exons,
             strand=strand,
+            cds=cds,
             genomic_pos=genomic_pos,
             ref=ref,
             alt=alt,
+            orf_key=orf_key,
             context=context,
         )
 

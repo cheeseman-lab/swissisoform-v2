@@ -10,10 +10,15 @@
  *
  * Messages in:   {file, pyodide, scanner, index}  (URLs from the drop zone)
  * Messages out:  {type: "status", message}
- *                {type: "done", json}             the response body, as JSON text
- *                {type: "failed", infra, message} infra = the scanner could not
- *                                                 run here (offer the server);
- *                                                 otherwise the scan itself failed
+ *                {type: "done", json}             the response body, or a refusal
+ *                                                 ({error, message}), as JSON text
+ *                {type: "failed", infra, stale, message}
+ *                    stale = a download of ours is gone (404): the site was
+ *                            redeployed under this page, so reload it;
+ *                    infra = the scanner could not run here (offer the server);
+ *                    neither = the scan itself failed. vcf_drop.js discards this
+ *                            worker on any failure, since the interpreter may be
+ *                            dead (e.g. out of memory).
  *
  * The VCF bytes exist only in this worker's memory and are unlinked after the
  * scan; nothing here sends anything anywhere — it only fetches the downloads.
@@ -27,11 +32,23 @@ function status(message) {
   self.postMessage({ type: "status", message: message });
 }
 
-function fetchBytes(url) {
+/* ``stale``: our own URLs are content-keyed, so a 404 means this page predates a
+   deploy. Pyodide's CDN is not ours; its failures stay infrastructure. */
+function fetchBytes(url, ours) {
   return fetch(url).then(function (response) {
-    if (!response.ok) throw new Error("HTTP " + response.status + " for " + url);
+    if (!response.ok) {
+      var err = new Error("HTTP " + response.status + " for " + url);
+      err.stale = Boolean(ours) && response.status === 404;
+      throw err;
+    }
     return response.arrayBuffer();
   });
+}
+
+/* A Python exception's message is its whole traceback; the page shows a line. */
+function lastLine(err) {
+  var text = String((err && err.message) || err).trim();
+  return text.split("\n").pop();
 }
 
 function boot(cfg) {
@@ -40,14 +57,14 @@ function boot(cfg) {
       status("Loading the scanner — first time only, a few seconds…");
       var pyodideModule = await import(cfg.pyodide + "pyodide.mjs");
       var py = await pyodideModule.loadPyodide({ indexURL: cfg.pyodide });
-      py.unpackArchive(await fetchBytes(cfg.scanner), "zip", { extractDir: "/scanner" });
+      py.unpackArchive(await fetchBytes(cfg.scanner, true), "zip", { extractDir: "/scanner" });
       // The classifier warns per REF mismatch; on a wrong-assembly file that is one
       // console line per variant, so warnings stay off here.
       py.runPython(
         "import sys, logging\n" +
           "sys.path.insert(0, '/scanner')\n" +
           "logging.disable(logging.WARNING)\n" +
-          "from swissisoform_site.scanview import load_portable_index, scan_file_json\n"
+          "from swissisoform_site.scanview import load_portable_index, scan_file_json, size_refusal\n"
       );
       return py;
     })();
@@ -62,7 +79,7 @@ function boot(cfg) {
 async function ensureIndex(py, url) {
   if (loadedIndex === url) return;
   status("Loading the catalogue…");
-  py.FS.writeFile("/index.bin.gz", new Uint8Array(await fetchBytes(url)));
+  py.FS.writeFile("/index.bin.gz", new Uint8Array(await fetchBytes(url, true)));
   py.runPython("INDEX = load_portable_index('/index.bin.gz')");
   py.FS.unlink("/index.bin.gz");
   loadedIndex = url;
@@ -92,7 +109,20 @@ self.onmessage = async function (event) {
     py = await boot(cfg);
     await ensureIndex(py, cfg.index);
   } catch (err) {
-    self.postMessage({ type: "failed", infra: true, message: String((err && err.message) || err) });
+    self.postMessage({
+      type: "failed",
+      infra: !err.stale,
+      stale: Boolean(err.stale),
+      message: lastLine(err),
+    });
+    return;
+  }
+
+  // Before the copy: a file past the size cap would otherwise fill the tab's
+  // memory before the scan could refuse it.
+  var refusal = py.runPython("size_refusal(" + Number(cfg.file.size) + ")");
+  if (refusal) {
+    self.postMessage({ type: "done", json: refusal });
     return;
   }
 
@@ -103,7 +133,7 @@ self.onmessage = async function (event) {
     var json = py.runPython("scan_file_json('" + path + "', INDEX)");
     self.postMessage({ type: "done", json: json });
   } catch (err) {
-    self.postMessage({ type: "failed", infra: false, message: String((err && err.message) || err) });
+    self.postMessage({ type: "failed", infra: false, stale: false, message: lastLine(err) });
   } finally {
     try {
       py.FS.unlink(path);

@@ -108,12 +108,13 @@ Dropping a VCF on the landing page scans it **in the browser** (issue #33, step
 2): `static/js/scan_worker.js` runs Pyodide in a module Web Worker (Pyodide 314
 refuses classic workers) and calls the same Python the server would — `variantquery` + `variantclass` +
 `scanview`, all stdlib-only — so the file never leaves the user's machine. It
-fetches two version-keyed downloads, cached as immutable:
+fetches two content-keyed downloads, cached as immutable (a 404 on either means
+the page predates a deploy, and the drop zone says to reload):
 
 | URL | What | Built from |
 |---|---|---|
 | `/api/variants/scanner/<hash>.zip` | the scan package | `browserscan.SCANNER_MODULES`, zipped from the modules this process imports |
-| `/api/variants/index/<index_version>/f<format>.bin.gz` | the ORF index, packed binary (~2.9 MB for `full_catalog`) | `variantquery.portable`, from the loaded `orf_index.parquet` |
+| `/api/variants/index/<fingerprint>/f<format>.bin.gz` | the ORF index, packed binary (~2.9 MB for `full_catalog`) | `variantquery.portable`, from the loaded `orf_index.parquet`; keyed by a hash of that file (`data.orf_index_fingerprint`), so any rebuild gets a new URL, and by the file format |
 
 Both are built once per gunicorn worker on first request; there is no extra
 deploy artifact for them.

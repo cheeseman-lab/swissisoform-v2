@@ -19,6 +19,7 @@ Missing files degrade gracefully (the page renders with a placeholder).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -673,18 +674,48 @@ def load_orf_index():
 
 @lru_cache(maxsize=1)
 def portable_orf_index() -> tuple[str, bytes] | None:
-    """``(index_version, portable file bytes)`` for the browser scan, or None.
+    """``(fingerprint, portable file bytes)`` for the browser scan, or None.
 
     Built once per worker from the index :func:`load_orf_index` already holds
     (~1.7 s and ~2.8 MB for ``full_catalog``), so there is no second deploy
-    artifact to fall out of step with the parquet.
+    artifact to fall out of step with the parquet. Keyed by
+    :func:`orf_index_fingerprint`, which names the bytes it is built from.
     """
     from swissisoform.variantquery.portable import to_portable
 
     index = load_orf_index()
     if index is None:
         return None
-    return index.version, to_portable(index)
+    return orf_index_fingerprint(), to_portable(index)
+
+
+@lru_cache(maxsize=1)
+def orf_index_fingerprint() -> str:
+    """A hash of ``orf_index.parquet``'s bytes, naming the browser's index download.
+
+    The download is cached by browsers for a year, so its URL must change whenever
+    its bytes would. The index *version* cannot do that: it fingerprints the ORF
+    coordinates only, and a rebuild that adds coding sequences, fixes lengths or
+    moves x-offsets keeps it — leaving browsers scanning against the old data.
+    Hashing the file does change with any of those, and reads it once without
+    loading the index, so a page can name the URL cheaply. A change to how the
+    download is *encoded* is ``portable.PORTABLE_FORMAT``'s to signal, not this.
+
+    Returns:
+        16 hex characters, or "" when no index is staged or it cannot be read.
+    """
+    path = data_dir() / "orf_index.parquet"
+    if not path.is_file():
+        return ""
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            while chunk := handle.read(1 << 20):
+                digest.update(chunk)
+    except OSError as exc:
+        logger.warning("could not fingerprint %s: %s", path, exc)
+        return ""
+    return digest.hexdigest()[:16]
 
 
 @dataclass(frozen=True)

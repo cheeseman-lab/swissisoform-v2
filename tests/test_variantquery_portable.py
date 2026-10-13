@@ -98,6 +98,37 @@ def test_a_none_survives_the_packed_integer_columns() -> None:
     assert record.canonical_x_offset_nt == -30
 
 
+def _malformed() -> dict[str, bytes]:
+    good = to_portable(_index())
+    body = gzip.decompress(good)
+    (header_len,) = struct.unpack_from("<I", body, len(MAGIC))
+    start = len(MAGIC) + 4
+    header = json.loads(body[start : start + header_len])
+
+    def with_header(new: object) -> bytes:
+        raw = json.dumps(new).encode()
+        return gzip.compress(MAGIC + struct.pack("<I", len(raw)) + raw + body[start + header_len :])
+
+    no_blob = dict(header, blobs={k: v for k, v in header["blobs"].items() if k != "cds_pool"})
+    past_end = dict(header, blobs=dict(header["blobs"], cds_pool=[0, len(body) * 2]))
+    return {
+        "a list": gzip.compress(b"[]"),
+        "truncated gzip": good[: len(good) // 2],
+        "magic only": gzip.compress(MAGIC),
+        "header not json": gzip.compress(MAGIC + struct.pack("<I", 1) + b"{"),
+        "header a list": with_header([]),
+        "a missing blob": with_header(no_blob),
+        "a blob past the end": with_header(past_end),
+    }
+
+
+@pytest.mark.parametrize("case", sorted(_malformed()))
+def test_anything_malformed_is_a_value_error(case: str) -> None:
+    """The docstring's one exception type, so a caller needs one except clause."""
+    with pytest.raises(ValueError, match="not a portable"):
+        from_portable(_malformed()[case])
+
+
 def _boundaries(index: OrfIndex):
     """Every exon edge of every ORF, plus a point just outside each one."""
     for record in index.records:

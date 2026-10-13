@@ -66,6 +66,7 @@ from swissisoform_site.data import (
     llm_synthesis_for_isoform,
     load_all,
     load_orf_index,
+    orf_index_fingerprint,
     orf_index_version,
     portable_orf_index,
     sae_card_for_isoform,
@@ -79,9 +80,11 @@ from swissisoform_site.plots.protein import CONSEQ_COLOR, CONSEQ_SHORT
 from swissisoform_site.scanview import (
     LIMIT_RESPONSES,
     SCAN_SCHEMA,
+    UNREADABLE,
     StagingError,
     build_response,
     staged_upload,
+    unreadable_message,
     with_frame,
 )
 
@@ -304,16 +307,17 @@ def create_app() -> Flask:
     @app.get("/")
     def index() -> Any:
         genes = load_all()
-        # Footer only: the home page must not load the whole index to name its URL.
-        index_version = orf_index_version()
-        # What vcf_drop.js hands the scan worker. Empty index URL when no versioned
-        # index is staged: the drop zone then says scanning is unavailable.
+        # A hash of the file, not the loaded index: the home page must not load the
+        # whole index just to name its URL.
+        fingerprint = orf_index_fingerprint()
+        # What vcf_drop.js hands the scan worker. Empty index URL when no index is
+        # staged: the drop zone then says scanning is unavailable.
         browser_scan = {
             "pyodide": PYODIDE_URL,
             "scanner": url_for("variants_scanner", version=scanner_archive()[0]),
             "index": (
-                url_for("variants_index", version=index_version, fmt=PORTABLE_FORMAT)
-                if index_version
+                url_for("variants_index", fingerprint=fingerprint, fmt=PORTABLE_FORMAT)
+                if fingerprint
                 else ""
             ),
         }
@@ -610,6 +614,11 @@ def create_app() -> Flask:
             logger.info("scan refused kind=%s", exc.kind)
             error, status = LIMIT_RESPONSES[exc.kind]
             return jsonify({"error": error, "message": str(exc)}), status
+        except UNREADABLE as exc:
+            # A truncated or corrupt gzip, or bytes that do not parse: the
+            # uploader's file to fix, so a 422 that says so, not a 500.
+            logger.info("scan refused: unreadable file (%s)", type(exc).__name__)
+            return jsonify({"error": "unreadable", "message": unreadable_message(exc)}), 422
 
         # The staged file is already gone; everything below works from the result.
         body = build_response(result, index=index, vcf_sha256=staged.vcf_sha256)
@@ -639,18 +648,20 @@ def create_app() -> Flask:
         response.headers["X-Robots-Tag"] = "noindex, nofollow"
         return response
 
-    @app.get("/api/variants/index/<version>/f<int:fmt>.bin.gz")
-    def variants_index(version: str, fmt: int) -> Any:
+    @app.get("/api/variants/index/<fingerprint>/f<int:fmt>.bin.gz")
+    def variants_index(fingerprint: str, fmt: int) -> Any:
         """The ORF index for the browser scan, in the packed binary ``portable`` file.
 
-        Addressed by index version *and* file format, so a URL's bytes never change
-        and the response is cached as immutable: a browser that cached an older
-        format can never be handed it for newer code. A version or format this
-        deployment does not hold is a 404, never a different index — a scan must
-        not silently resolve against coordinates it did not ask for.
+        Addressed by a hash of the index file (``data.orf_index_fingerprint``) *and*
+        the file format, so a URL's bytes never change and the response is cached
+        as immutable: any rebuild gets a new URL, and a browser that cached an older
+        format can never be handed it for newer code. A fingerprint or format this
+        deployment does not hold is a 404, never a different index — a scan must not
+        silently resolve against data it did not ask for (``scan_worker.js`` reads
+        that 404 as "this page is out of date").
         """
         portable = portable_orf_index()
-        if portable is None or portable[0] != version or fmt != PORTABLE_FORMAT:
+        if portable is None or portable[0] != fingerprint or fmt != PORTABLE_FORMAT:
             abort(404)
         response = make_response(portable[1])
         response.headers["Content-Type"] = "application/gzip"

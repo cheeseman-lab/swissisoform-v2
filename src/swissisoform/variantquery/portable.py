@@ -106,33 +106,44 @@ def from_portable(data: bytes) -> OrfIndex:
     """
     try:
         body = gzip.decompress(data)
-    except (OSError, EOFError) as exc:
+    except (OSError, EOFError) as exc:  # EOFError: a truncated download
         raise ValueError(f"not a portable ORF index: {exc}") from exc
     if not body.startswith(MAGIC):
         raise ValueError("not a portable ORF index: bad magic")
-    (header_len,) = struct.unpack_from("<I", body, len(MAGIC))
-    start = len(MAGIC) + 4
-    header = json.loads(body[start : start + header_len])
-    if header.get("format") != PORTABLE_FORMAT:
-        raise ValueError(f"unknown portable ORF index format: {header.get('format')!r}")
+    # Any malformed layout is the one documented error, not whatever the parse hit.
+    malformed = (KeyError, TypeError, ValueError, IndexError, struct.error)
+    try:
+        (header_len,) = struct.unpack_from("<I", body, len(MAGIC))
+        start = len(MAGIC) + 4
+        header = json.loads(body[start : start + header_len])
+        format_ = header.get("format")
+    except (*malformed, AttributeError) as exc:
+        raise ValueError(f"not a portable ORF index: {exc!r}") from exc
+    if format_ != PORTABLE_FORMAT:
+        raise ValueError(f"unknown portable ORF index format: {format_!r}")
     base = start + header_len
     view = memoryview(body)
 
     def blob(name: str) -> memoryview:
         offset, length = header["blobs"][name]
+        if base + offset + length > len(body):
+            raise ValueError(f"blob {name} runs past the end of the file")
         return view[base + offset : base + offset + length]
 
-    strings = {}
-    for field in STRING_FIELDS:
-        pool: dict[str, str] = {}
-        strings[field] = [pool.setdefault(v, v) for v in header["strings"][field]]
-    columns = OrfColumns(
-        strings=strings,
-        ints={field: _from_le(blob(f"ints.{field}")) for field in INT_FIELDS},
-        bounds={field: _from_le(blob(f"bounds.{field}")) for field in INTERVAL_FIELDS},
-        offsets={field: _from_le(blob(f"offsets.{field}")) for field in INTERVAL_FIELDS},
-        cds_pool=str(blob("cds_pool"), "utf-8"),
-        cds_bounds=_from_le(blob("cds_bounds")),
-        cds_ids={field: _from_le(blob(f"cds_ids.{field}")) for field in CDS_FIELDS},
-    )
+    try:
+        strings = {}
+        for field in STRING_FIELDS:
+            pool: dict[str, str] = {}
+            strings[field] = [pool.setdefault(v, v) for v in header["strings"][field]]
+        columns = OrfColumns(
+            strings=strings,
+            ints={field: _from_le(blob(f"ints.{field}")) for field in INT_FIELDS},
+            bounds={field: _from_le(blob(f"bounds.{field}")) for field in INTERVAL_FIELDS},
+            offsets={field: _from_le(blob(f"offsets.{field}")) for field in INTERVAL_FIELDS},
+            cds_pool=str(blob("cds_pool"), "utf-8"),
+            cds_bounds=_from_le(blob("cds_bounds")),
+            cds_ids={field: _from_le(blob(f"cds_ids.{field}")) for field in CDS_FIELDS},
+        )
+    except malformed as exc:
+        raise ValueError(f"not a portable ORF index: {exc!r}") from exc
     return OrfIndex.from_columns(columns, version=str(header.get("version") or ""))
