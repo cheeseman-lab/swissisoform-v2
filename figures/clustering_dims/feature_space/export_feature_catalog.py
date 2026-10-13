@@ -177,9 +177,6 @@ SCORED_LEVERS: dict[str, list[str]] = {
     ],
     "M1_pathogenic_variant_enrichment": [
         "isoform_plm_vep_constraint_delta",
-        # The full_catalog run predates the rename; carry both so a re-run
-        # doesn't silently drop the dimension.
-        "isoform_plm_vep_constraint_enrichment",
         "isoform_variant_intersection_gnomad_depletion_ratio",
     ],
     "M2_clinical_variant_overlap": ["isoform_variant_intersection_disease_enrichment_ratio"],

@@ -97,21 +97,13 @@ CRITERION_SEEDS: tuple[CriterionSeed, ...] = (
         "Categorical; the cmp_signalp/targetp booleans carry it.",
     ),
     CriterionSeed(
-        "M1_pathogenic_variant_enrichment", "isoform_plm_vep_constraint_enrichment",
+        "M1_pathogenic_variant_enrichment", "isoform_plm_vep_constraint_delta",
         ">=", "m1_constraint_delta_min", "Unique region is constraint-enriched",
         "M1 is either-or over two independent signals; the gnomAD branch is a "
-        "separate candidate. On extensions BOTH are uninformative — the region "
-        "was never coding.",
-        blocked=(
-            "stale metric: PLMVEPModule emits constraint_delta (unique minus shared "
-            "mean logP, cutoff 0.0) but full_catalog carries only "
-            "isoform_plm_vep_constraint_enrichment, whose values are strictly "
-            "positive and span orders of magnitude — a ratio, not a difference. "
-            "The genome-wide run predates the rename, so the frozen distribution "
-            "describes a different quantity than the scorer computes and no cutoff "
-            "may be derived from it. M1 rests on its gnomAD branch until the run "
-            "is regenerated."
-        ),
+        "separate candidate. constraint_delta is unique minus shared mean logP(wt), "
+        "higher = more constrained (2a48f89). On extensions and separate ORFs both "
+        "branches are uninformative — the region was never coding — so validity "
+        "keeps them to CANONICAL_BASELINE_ORF_TYPES.",
     ),
     CriterionSeed(
         "M1_pathogenic_variant_enrichment", "isoform_variant_intersection_gnomad_depletion_ratio",
@@ -282,7 +274,6 @@ VALIDITY_OVERRIDES: dict[str, tuple[str, ...]] = {
     **{
         m: CANONICAL_BASELINE_ORF_TYPES
         for m in (
-            "isoform_plm_vep_constraint_enrichment",
             "isoform_plm_vep_constraint_delta",
             "isoform_plm_vep_n_constrained_positions_unique",
             "isoform_variant_intersection_gnomad_depletion_ratio",
@@ -417,7 +408,7 @@ TAG_LABELS: dict[tuple[str, str], str] = {
     ("isoform_variant_intersection_disease_enrichment_ratio", ">="): (
         "Disease variants concentrated"
     ),
-    ("isoform_plm_vep_constraint_enrichment", ">="): "Unique region constraint-enriched",
+    ("isoform_plm_vep_constraint_delta", ">="): "Unique region constraint-enriched",
     ("isoform_plm_vep_n_constrained_positions_unique", ">="): "Constrained residues gained",
     ("isoform_plm_vep_n_constrained_positions_shared", "<"): "Few constrained residues in core",
     ("isoform_plm_vep_mean_llr_unique_region", "<"): "Unique region poorly predicted",
