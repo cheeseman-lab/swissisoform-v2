@@ -142,7 +142,9 @@ class TestRegistry:
 
         assert build_mod.DEFAULT_DIST_VERSION == dist_mod.DEFAULT_VERSION
         assert grounding.DEFAULT_DIST_VERSION == dist_mod.DEFAULT_VERSION
-        assert dist_mod.DEFAULT_VERSION in dist_mod.PROVISIONAL_VERSIONS
+        # The default is the re-frozen version, not a provisional one.
+        assert dist_mod.DEFAULT_VERSION not in dist_mod.PROVISIONAL_VERSIONS
+        assert reg_mod.DEFAULT_VERSION not in reg_mod.PROVISIONAL_VERSIONS
 
 
 # ---------------------------------------------------------------------------

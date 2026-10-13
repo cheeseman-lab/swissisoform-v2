@@ -68,9 +68,10 @@ REF_DIR = ROOT / "data" / "reference" / "tags"
 # reproducible — building `--version v1` against today's table yields today's
 # vocabulary under the v1 name — so the on-disk v1 is a historical artifact, not
 # a rebuildable one.
-DEFAULT_VERSION = "v3"
-# v3 is cut from the provisional v3 distributions (see
-# `distributions.PROVISIONAL_VERSIONS`); rebuild it after the re-freeze.
+DEFAULT_VERSION = "v4"
+# v4 is cut from distributions v4 (full_catalog_20261009) with per-ORF-type
+# cutoffs. v3 is cut from the provisional v3 distributions (see
+# `distributions.PROVISIONAL_VERSIONS`) and stays marked provisional.
 PROVISIONAL_VERSIONS: dict[str, str] = {
     "v3": (
         "cut from the provisional v3 distributions (Aug-12 full_catalog); "
