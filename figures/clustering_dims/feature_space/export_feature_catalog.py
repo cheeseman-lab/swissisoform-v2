@@ -245,9 +245,10 @@ STATUS_PATTERNS = (
     r"backend$",
 )
 
-# Scoring roll-ups are computed FROM these features; as dimensions they would
-# double-count and leak the label. Kept in the catalog as stratifiers.
-DERIVED_PATTERNS = (r"^isoform_scoring_",)
+# Scoring roll-ups and the tag layer are computed FROM these features; as
+# dimensions they would double-count and leak the label (a tag's citation is the
+# very number its test cut on). Kept in the catalog as stratifiers.
+DERIVED_PATTERNS = (r"^isoform_scoring_", r"^isoform_tags_")
 
 # ---------------------------------------------------------------------------
 # Schema flattening

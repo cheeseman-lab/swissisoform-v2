@@ -125,6 +125,33 @@ def test_a_rare_isoform_of_an_anchor_gene_is_never_picked(anchors):
     assert picks["gene_name"].is_unique
 
 
+def test_two_extreme_isoforms_of_one_gene_take_one_rare_slot(anchors):
+    """Two uoorfs of one gene, one at each end of PC1 (RPS6KA5 on full_catalog_20261009).
+
+    Y takes the first; Z's first choice is the same gene, so it must fall through
+    to the next-best gene (``rank_used`` > 0) instead of aborting the build.
+    """
+    pool = _pool(anchors)
+    twins = [
+        {"gene_name": "RPS6KA5", "tis_id": f"chr14:{i}:-:CTG:ENSTRPS", "orf_type": "uoorf"}
+        for i in (1, 2)
+    ]
+    pool = pd.concat([pool, pd.DataFrame(twins)], ignore_index=True)
+    results = _results(pool)
+    for i, twin in enumerate(twins):
+        row = int(np.flatnonzero(pool["tis_id"] == twin["tis_id"])[0])
+        results["all-ORF"].scores[row, 0] = 1e6 if i == 0 else -1e6  # Y's and Z's first choice
+
+    picks, final = bc.build_coreset(results, anchors)
+
+    rare = picks[(picks["stage"] == "rare_fill") & (picks["orf_type"] == "uoorf")]
+    assert list(rare["gene_name"]).count("RPS6KA5") == 1
+    assert int(rare.loc[rare["set"] == "Z", "rank_used"].iloc[0]) == 1
+    assert picks["gene_name"].is_unique
+    assert len(final) == bc.TARGET
+    assert bc.verify(picks, final, anchors, results) == []
+
+
 @pytest.mark.parametrize("orf_type", ["uorf", "truncated"])
 def test_a_chry_isoform_is_never_picked(anchors, orf_type):
     """A PAR gene on chrY, at the far end of PC1 in its own space, stays out."""
@@ -169,3 +196,14 @@ def test_failed_verify_writes_nothing(anchors, monkeypatch, tmp_path):
     with pytest.raises(SystemExit, match="nothing written"):
         bc.main([])
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "name", ["isoform_tags_citations.s3_sae", "isoform_scoring_criteria.C1_primate_conservation"]
+)
+def test_tag_and_scoring_outputs_are_not_feature_dimensions(name):
+    """They are computed from the features; as dimensions they double-count."""
+    import export_feature_catalog as efc
+
+    include, reason, _ = efc.classify(name, "float", 1.0, 500)
+    assert (include, reason) == (False, "derived_from_features")
