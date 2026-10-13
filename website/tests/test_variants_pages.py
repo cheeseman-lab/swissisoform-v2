@@ -61,12 +61,14 @@ def client(data_dir, tmp_path, monkeypatch):
 
     site_data.load_all.cache_clear()
     site_data.load_orf_index.cache_clear()
+    site_data.orf_index_version.cache_clear()
     app = create_app()
     app.config["TESTING"] = True
     with app.test_client() as test_client:
         yield test_client
     site_data.load_all.cache_clear()
     site_data.load_orf_index.cache_clear()
+    site_data.orf_index_version.cache_clear()
 
 
 def _post(client, name: str = "test.vcf", **kwargs):

@@ -69,6 +69,7 @@ def client(data_dir, tmp_path, monkeypatch, stage_dir):
     site_data.load_all.cache_clear()
     site_data.load_orf_index.cache_clear()
     site_data.portable_orf_index.cache_clear()
+    site_data.orf_index_version.cache_clear()
     app = create_app()
     app.config["TESTING"] = True
     with app.test_client() as test_client:
@@ -76,6 +77,7 @@ def client(data_dir, tmp_path, monkeypatch, stage_dir):
     site_data.load_all.cache_clear()
     site_data.load_orf_index.cache_clear()
     site_data.portable_orf_index.cache_clear()
+    site_data.orf_index_version.cache_clear()
 
 
 def _post(client, body: bytes, name: str = "mine.vcf"):
@@ -144,6 +146,13 @@ def test_a_refused_upload_leaves_nothing_either(client, stage_dir, monkeypatch) 
     assert list(stage_dir.iterdir()) == []
 
 
+def test_an_unusable_temp_dir_is_a_507_not_a_500(client, stage_dir, monkeypatch) -> None:
+    monkeypatch.setattr(tempfile, "tempdir", str(stage_dir / "missing"))
+    response = _post(client, VCF)
+    assert response.status_code == 507
+    assert response.get_json()["error"] == "storage_failed"
+
+
 def test_gzipped_upload_resolves_identically(client) -> None:
     plain = _post(client, VCF).get_json()
     packed = _post(client, gzip.compress(VCF)).get_json()
@@ -171,6 +180,25 @@ def test_status_no_longer_reports_a_store(client) -> None:
     assert status["index_loaded"] is True
     for key in ("scan_dir", "scan_dir_writable", "ttl_hours", "budget_bytes"):
         assert key not in status
+
+
+def test_status_probes_the_dirs_a_scan_writes(client, stage_dir, tmp_path) -> None:
+    """Staging and the throttle still need disk, and there is no shell into the container."""
+    status = client.get("/api/variants/status").get_json()
+    assert status["tmp_dir"] == str(stage_dir)
+    assert status["tmp_dir_writable"] is True and status["tmp_dir_error"] == ""
+    assert status["throttle_dir"] == str(tmp_path / "throttle")
+    assert status["throttle_dir_writable"] is True
+    assert list(stage_dir.iterdir()) == []  # the probe cleans up after itself
+
+
+def test_status_names_an_unwritable_temp_dir(client, stage_dir, monkeypatch) -> None:
+    blocker = stage_dir / "file"
+    blocker.write_text("")
+    monkeypatch.setattr(tempfile, "tempdir", str(blocker / "sub"))
+    status = client.get("/api/variants/status").get_json()
+    assert status["tmp_dir_writable"] is False
+    assert status["tmp_dir_error"]
 
 
 def test_every_page_states_the_index_version(client) -> None:

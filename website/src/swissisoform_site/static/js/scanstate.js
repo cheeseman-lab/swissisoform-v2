@@ -104,27 +104,37 @@
     });
   }
 
-  /* Store one scan. Hits first and the summary last, so a hits write that fails
-     part-way can never leave a summary claiming a full list. Returns
-     "full" or "partial"; throws if even the summary cannot be stored. */
+  /* Store one scan, as much of it as fits: all hits, else the first PARTIAL_HITS,
+     else none. Each try writes the hits first and the summary last, so a write
+     that fails part-way never leaves a summary claiming more hits than are
+     stored; a summary that does not fit after the hits (a scan just under the
+     quota) falls through to the next, smaller try instead of losing the scan.
+     Returns "full", "partial" or "none"; throws if even the summary alone cannot
+     be stored. */
   function save(summary, hits) {
-    remove();
-    var stored = "full";
-    try {
-      sessionStorage.setItem(HITS_KEY, JSON.stringify(pack(hits)));
-    } catch (e) {
-      // QuotaExceededError (~5 MB per origin): keep what the results table shows.
-      stored = "partial";
+    var tries = [["full", hits]];
+    if (hits.length > PARTIAL_HITS) tries.push(["partial", hits.slice(0, PARTIAL_HITS)]);
+    tries.push(["none", null]);
+    for (var t = 0; t < tries.length; t++) {
+      var stored = tries[t][0];
+      var kept = tries[t][1];
+      remove();
       try {
-        sessionStorage.setItem(HITS_KEY, JSON.stringify(pack(hits.slice(0, PARTIAL_HITS))));
-      } catch (e2) {
-        stored = "none";
+        if (kept) sessionStorage.setItem(HITS_KEY, JSON.stringify(pack(kept)));
+        var record = Object.assign({}, summary, { hits_stored: stored });
+        sessionStorage.setItem(SUMMARY_KEY, JSON.stringify(record));
+        cached = undefined;
+        return stored;
+      } catch (e) {
+        // QuotaExceededError (~5 MB per origin): try keeping less. The last try
+        // stores no hits, so its failure means storage itself is refused.
+        if (t === tries.length - 1) {
+          remove();
+          cached = undefined;
+          throw e;
+        }
       }
     }
-    var record = Object.assign({}, summary, { hits_stored: stored });
-    sessionStorage.setItem(SUMMARY_KEY, JSON.stringify(record));
-    cached = undefined;
-    return stored;
   }
 
   /* The stored scan as {summary, hits, stale}, or null. Parsed once per page. */
@@ -178,6 +188,9 @@
   }
 
   function fillChrome() {
+    // Most pages have neither slot: do not parse a stored scan (up to ~3 MB at the
+    // hit cap) on a page that shows nothing about it.
+    if (!document.querySelector(".js-scan-crumb, .js-scan-hits")) return;
     var scan = load();
     if (!scan) return;
     document.querySelectorAll(".js-scan-crumb").forEach(function (el) {
@@ -210,6 +223,7 @@
       return hitsWhere("tis_id", tisId);
     },
     countVariants: countVariants,
+    plural: plural,
     // Exposed for tests: the storage layout is the one thing here with a format.
     pack: pack,
     unpack: unpack,
