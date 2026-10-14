@@ -15,9 +15,9 @@
 #                  sampled in its own paired-ORF MFA space (every feature,
 #                  unique-vs-shared contrasts included), one isoform per gene.
 #
-# Built 2026-10-13T15:20:25+00:00 at commit 74e0a02ad850+dirty from:
-#   data/output/full_catalog_20261009/all_paired.parquet  sha256 cabe0a4b0c23d780
-#   figures/clustering_dims/feature_space/feature_catalog.csv  sha256 bb3a2ffda17919f2
+# Built 2026-10-14T18:41:31+00:00 at commit 85d6107b8eb0+dirty from:
+#   /lab/barcheese01/ating/swissisoform-v2/data/output/full_catalog_20261009/all_paired.parquet  sha256 d4ca114eb3143fdd
+#   figures/clustering_dims/feature_space/feature_catalog.csv  sha256 ddb1270363c73505
 # Full record: figures/clustering_dims/principled_sampling/coreset_provenance.json
 #
 # ORF types: Extended 20, Truncated 17, uoORF 4, uORF 3, internal out-of-frame 3, 3'UTR ORF 3
@@ -217,9 +217,9 @@ genome_pos = "chr4:102632056-102690598:-"
 start_codon = "AAG"  # Truncated — per-type sampler
 
 [[isoforms]]
-gene = "NUCKS1"
-tid = "ENST00000367142.5"
-genome_pos = "chr1:205718279-205719587:-"
+gene = "MECP2"
+tid = "ENST00000303391.11"
+genome_pos = "chrX:154030366-154031305:-"
 start_codon = "AAG"  # Truncated — per-type sampler
 
 [[isoforms]]
