@@ -256,7 +256,17 @@ class TagRegistry:
 
     @property
     def provisional(self) -> str:
-        """Why this version must be rebuilt, or ``""`` for a settled one."""
+        """Why this build must be rebuilt, or ``""`` for a settled one.
+
+        Read from the build's own sidecar (``_setup.json``), which
+        ``setup.tags.write_sidecar`` stamps from the distributions it was cut
+        against, so a registry rebuilt in place, or a new version cut from
+        provisional distributions, reports what it actually is. The name-keyed
+        ``PROVISIONAL_VERSIONS`` is only the fallback for builds whose sidecar
+        predates the field (v3).
+        """
+        if "provisional" in self.provenance:
+            return str(self.provenance["provisional"] or "")
         return PROVISIONAL_VERSIONS.get(self.version, "")
 
     def __len__(self) -> int:

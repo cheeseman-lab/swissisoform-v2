@@ -22,6 +22,7 @@ from swissisoform.models import (
     Gene,
     ORFType,
     TranslationInitiationSite,
+    is_separate_orf,
 )
 
 # The clinical summaries hold Counters over open key sets — variant sources and
@@ -405,6 +406,8 @@ def _genomic_unique_shared(
     orf_type: Any,
     orf_exons: list[tuple[int, int]] | None,
     canonical_orf_exons: list[tuple[int, int]] | None,
+    *,
+    separate_orf: bool = False,
 ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
     r"""Compute the genomic unique and shared interval sets per ORF type.
 
@@ -426,7 +429,9 @@ def _genomic_unique_shared(
 
     if not orf_exons or not canonical_orf_exons:
         return [], []
-    return unique_shared_intervals(orf_type == ORFType.TRUNCATED, orf_exons, canonical_orf_exons)
+    return unique_shared_intervals(
+        orf_type == ORFType.TRUNCATED, orf_exons, canonical_orf_exons, separate_orf=separate_orf
+    )
 
 
 def _diff_location(diff: Any) -> tuple[int | None, int | None, str | None]:
@@ -497,7 +502,10 @@ def paired_tis_dataframe(genes: list[Gene]) -> pd.DataFrame:
             orf_exons = [list(t) for t in (site.orf_exons or [])]
             canonical_orf_exons = [list(t) for t in (site.canonical_orf_exons or [])]
             unique_genomic_intervals, shared_genomic_intervals = _genomic_unique_shared(
-                site.orf_type, site.orf_exons, site.canonical_orf_exons
+                site.orf_type,
+                site.orf_exons,
+                site.canonical_orf_exons,
+                separate_orf=is_separate_orf(site),
             )
             row: dict[str, Any] = {
                 "gene_name": gene.gene_name,

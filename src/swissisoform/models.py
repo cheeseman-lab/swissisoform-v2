@@ -230,6 +230,27 @@ class TranslationInitiationSite:
     comparison: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
+
+def is_separate_orf(site: TranslationInitiationSite) -> bool:
+    """True when the ORF shares no reading frame, and so no region, with the canonical.
+
+    The one rule every unique/shared split uses (``coords.unique_shared_intervals``
+    callers): a separate ORF's whole ORF is its unique region, even where its
+    nucleotides overlap canonical CDS in another frame. A uoORF can still
+    sequence-match the canonical as an in-frame extension or truncation
+    (``compute_diff_region`` checks); that case keeps a shared region.
+    """
+    if site.orf_type in (ORFType.ANNOTATED, ORFType.EXTENDED, ORFType.TRUNCATED):
+        return False
+    dr = site.diff_region
+    if dr is not None:
+        if dr.canonical_end is not None:
+            return False
+        iso_len = len((site.isoform_protein or "").rstrip("*"))
+        if dr.isoform_end is not None and dr.isoform_end < iso_len:
+            return False
+    return True
+
 @dataclass
 class Gene:
     """A gene with its canonical transcript and associated TIS sites.

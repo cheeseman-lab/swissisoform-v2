@@ -324,3 +324,26 @@ class TestSourceSeparation:
         assert out["n_gnomad_in_unique_region"] == 1
         assert out["n_disease_in_shared_region"] == 1
         assert out["n_gnomad_in_shared_region"] == 1
+
+
+def test_every_split_agrees_on_a_separate_orf():
+    """The parquet writer and the variant module take one split (#44 review, finding 7).
+
+    The writer used to report the overlap with canonical CDS as a shared region
+    while this module reported none, so one isoform carried two splits.
+    """
+    from swissisoform.io.parquet import _genomic_unique_shared
+    from swissisoform.models import is_separate_orf
+
+    site = _site(orf_exons=[(1010, 1020)], canonical_orf_exons=[(1000, 1030)])
+    site.orf_type = ORFType.INTERNAL_OUT_OF_FRAME
+    site.isoform_protein = "MXX"
+    site.diff_region = DifferentialRegion(isoform_start=0, isoform_end=3, sequence="MXX")
+
+    assert is_separate_orf(site)
+    unique, shared = _genomic_unique_shared(
+        site.orf_type, site.orf_exons, site.canonical_orf_exons, separate_orf=is_separate_orf(site)
+    )
+    assert (unique, shared) == ([(1010, 1020)], [])
+    out = VariantIntersectionModule().annotate_site(site)
+    assert out["unique_region_nt"] == 10 and out["shared_region_nt"] == 0

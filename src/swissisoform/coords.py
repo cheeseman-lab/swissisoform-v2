@@ -219,6 +219,8 @@ def unique_shared_intervals(
     is_truncation: bool,
     orf_exons: Sequence[tuple[int, int]] | None,
     canonical_orf_exons: Sequence[tuple[int, int]] | None,
+    *,
+    separate_orf: bool = False,
 ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
     r"""Genomic ``(unique, shared)`` interval sets for one ORF pair.
 
@@ -227,14 +229,20 @@ def unique_shared_intervals(
     truncation *loses* canonical sequence (``canonical \ isoform``). The shared set is
     the intersection either way. Empty when either skeleton is missing.
 
-    Takes a bool rather than an ``ORFType`` so this module stays importable in the
-    website image; callers pass ``orf_type == ORFType.TRUNCATED``.
+    Takes bools rather than an ``ORFType`` so this module stays importable in the
+    website image; callers pass ``orf_type == ORFType.TRUNCATED`` and
+    ``separate_orf=models.is_separate_orf(site)``. A separate ORF reads in its own
+    frame, so its whole ORF is unique and nothing is shared, even where its
+    nucleotides overlap canonical CDS. Every caller passes the same flag, so one
+    isoform cannot get two different splits.
 
     Pure set algebra: a missing skeleton is *not* special-cased here, because the two
     callers mean different things by it. The parquet writer reports empty sets ("we
     cannot say"), while the scoring pass treats an ORF with no canonical counterpart
     as entirely unique — so each guards before calling.
     """
+    if separate_orf:
+        return [tuple(e) for e in (orf_exons or [])], []
     a, b = (canonical_orf_exons, orf_exons) if is_truncation else (orf_exons, canonical_orf_exons)
     unique = interval_difference(list(a or []), list(b or []))
     shared = interval_intersection(list(orf_exons or []), list(canonical_orf_exons or []))

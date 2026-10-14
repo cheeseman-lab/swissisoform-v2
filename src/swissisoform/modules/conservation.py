@@ -29,12 +29,11 @@ from typing import Any
 
 from swissisoform.config import PipelineConfig
 from swissisoform.coords import (
-    interval_difference,
-    interval_intersection,
     interval_length,
     normalize_chrom,
+    unique_shared_intervals,
 )
-from swissisoform.models import TranslationInitiationSite
+from swissisoform.models import TranslationInitiationSite, is_separate_orf
 
 logger = logging.getLogger(__name__)
 
@@ -262,17 +261,14 @@ class ConservationModule:
             region_status = "no_skeleton"
             unique_space = "none"
         else:
-            if site.orf_type == ORFType.TRUNCATED:
-                unique_intervals = interval_difference(
-                    site.canonical_orf_exons, site.orf_exons
-                )
-                unique_space = "canonical"
-            else:
-                unique_intervals = interval_difference(
-                    site.orf_exons, site.canonical_orf_exons
-                )
-                unique_space = "isoform"
-            shared_intervals = interval_intersection(site.orf_exons, site.canonical_orf_exons)
+            is_truncation = site.orf_type == ORFType.TRUNCATED
+            unique_intervals, shared_intervals = unique_shared_intervals(
+                is_truncation,
+                site.orf_exons,
+                site.canonical_orf_exons,
+                separate_orf=is_separate_orf(site),
+            )
+            unique_space = "canonical" if is_truncation else "isoform"
             region_status = "ok"
 
         phylop_unique = self._mean_over_intervals(self._phylop_bw, chrom, unique_intervals)
