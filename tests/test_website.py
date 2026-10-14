@@ -57,8 +57,10 @@ def test_healthz(client):
 def test_index_lists_a_known_gene(client):
     r = client.get("/")
     assert r.status_code == 200
-    body = r.data.decode()
-    assert "TRNT1" in body
+    # The table's rows come from the landing JSON; the page itself links examples.
+    assert "/genes/" in r.data.decode()
+    names = {g["n"] for g in json.loads(client.get("/api/landing.json").data)["genes"]}
+    assert "TRNT1" in names
 
 
 def test_gene_page_renders_combined_protein_figure_and_isoform_cards(client):
@@ -184,15 +186,17 @@ def test_gene_page_404(client):
     assert r.status_code == 404
 
 
-def test_index_page_shows_isoform_dropdown(client):
-    """Landing page must render the per-gene isoform dropdown."""
-    r = client.get("/")
+def test_index_table_lists_isoforms_with_their_links(client):
+    """The landing table's data names every gene and the isoforms it expands to.
+
+    Rows are built client-side from /api/landing.json (tests/test_landing.py holds
+    it to the cards' contents); the isoform links are /genes/<gene>/isoforms/<slug>.
+    """
+    r = client.get("/api/landing.json")
     assert r.status_code == 200
-    body = r.data
-    assert b"TRNT1" in body
-    # Dropdown markup and a link into the V2 isoform route.
-    assert b"iso-dropdown" in body
-    assert b"/isoforms/chr" in body
+    payload = json.loads(r.data)
+    trnt1 = next(g for g in payload["genes"] if g["n"] == "TRNT1")
+    assert trnt1["i"] and all(i["t"].startswith("chr") for i in trnt1["i"])
 
 
 def test_api_data_json(client):

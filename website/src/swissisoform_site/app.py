@@ -62,8 +62,6 @@ from swissisoform_site.data import (
     CRITERIA_BY_ID,
     CRITERIA_FOR_PAGE,
     CRITERION_ABOUT,
-    EXISTENCE_CRITERIA,
-    FUNCTIONAL_CRITERIA,
     Isoform,
     _isoform_view,
     _region_noun,
@@ -80,6 +78,7 @@ from swissisoform_site.data import (
     variant_url,
 )
 from swissisoform_site.genomics import interval_intersection
+from swissisoform_site.landing import landing_index
 from swissisoform_site.plots import build_gene_protein_figure
 from swissisoform_site.plots.protein import CONSEQ_COLOR, CONSEQ_SHORT
 from swissisoform_site.scanstore import ScanStoreError
@@ -457,14 +456,45 @@ def create_app() -> Flask:
 
     @app.get("/")
     def index() -> Any:
-        genes = load_all()
+        """The gene table shell; rows come from ``/api/landing.json``.
+
+        Reads only the landing index (a column-projected payload), never
+        ``load_all()``, so the page costs the same at catalogue scale.
+        """
+        idx = landing_index()
+        token, _digest = resolve_scan()
         return render_template(
             "index.html",
-            genes=list(genes.values()),
-            n_genes=len(genes),
-            existence_criteria=EXISTENCE_CRITERIA,
-            functional_criteria=FUNCTIONAL_CRITERIA,
+            # The table builds its links in JS from bases rendered without the
+            # token, so it is carried separately (as gene.html does).
+            scan_qs=f"?vcf={token}" if token else "",
+            n_genes=idx.n_genes,
+            n_isoforms=idx.n_isoforms,
+            examples=idx.examples,
+            landing_etag=idx.etag,
         )
+
+    @app.get("/api/landing.json")
+    def api_landing() -> Any:
+        """The landing table's data: genes, isoforms, CDLMPS lineups, fired tags.
+
+        Built once per process and held as JSON + gzip bytes; served gzipped when
+        the client accepts it, with an ETag so a reload revalidates for free.
+        """
+        idx = landing_index()
+        etag = f'"{idx.etag}"'
+        if etag in (request.headers.get("If-None-Match") or ""):
+            resp = make_response("", 304)
+        else:
+            gz = "gzip" in (request.headers.get("Accept-Encoding") or "")
+            resp = make_response(idx.body_gz if gz else idx.body)
+            resp.headers["Content-Type"] = "application/json"
+            if gz:
+                resp.headers["Content-Encoding"] = "gzip"
+        resp.headers["ETag"] = etag
+        resp.headers["Vary"] = "Accept-Encoding"
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
 
     @app.get("/about")
     def about() -> Any:
@@ -995,6 +1025,9 @@ def create_app() -> Flask:
     # Startup coverage summary — one log line so missing LLM JSONs are obvious
     # before any clicking through tiles.
     _log_llm_coverage(load_all(), data_dir() / "llm")
+    # Build the landing table's payload now rather than on the first visitor's
+    # request: at catalogue scale it takes seconds (a cached no-op afterwards).
+    landing_index()
 
     return app
 

@@ -67,6 +67,13 @@ else
     echo "  note: no scoring_config.json in $SRC (pre-sidecar run) — site uses defaults"
 fi
 
+# Tag metadata (category / kind) for the landing table's fired-tag chips, for the
+# registry version this run's tags were fired with. The site cannot import
+# swissisoform.tags (not vendored below), so it reads this JSON instead.
+echo "[prepare_deploy] exporting the tag registry for data/all_paired.parquet"
+python ../scripts/export/export_site_tag_registry.py \
+    --parquet data/all_paired.parquet --out data/tag_registry.json
+
 echo "[prepare_deploy] staging ORF index from $INDEX_SRC"
 cp -L "$INDEX_SRC/orf_index.parquet"     data/orf_index.parquet
 # llm/ + structures/ are optional — the site degrades to placeholders without
