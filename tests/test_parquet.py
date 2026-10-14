@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pyarrow as pa
 
 from swissisoform.io.parquet import (
     dataframe_to_tis,
@@ -397,9 +398,7 @@ class TestFlatFrame:
     """Profilers read runs flattened; the clinical summaries are maps since b828ec4."""
 
     @staticmethod
-    def _table() -> "pa.Table":
-        import pyarrow as pa
-
+    def _table() -> pa.Table:
         from swissisoform.io.parquet import CLINICAL_SUMMARY_TYPE
 
         rows = [
@@ -419,15 +418,31 @@ class TestFlatFrame:
         })
 
     def test_map_keys_become_dotted_columns(self):
+        """A key a present count map lacks is 0; only a missing summary is null."""
         from swissisoform.io.parquet import flat_frame
 
-        df = flat_frame(self._table()).fillna(-1)  # an absent key is null, as a struct field was
-        assert list(df["canonical_clinical_summary.by_source.gnomAD"]) == [2, -1, -1]
-        assert list(df["canonical_clinical_summary.by_source.COSMIC"]) == [-1, 1, -1]
-        assert list(df["canonical_clinical_summary.by_consequence.missense_variant"]) == [3, -1, -1]
+        df = flat_frame(self._table()).fillna(-1)
+        assert list(df["canonical_clinical_summary.by_source.gnomAD"]) == [2, 0, -1]
+        assert list(df["canonical_clinical_summary.by_source.COSMIC"]) == [0, 1, -1]
+        # An empty map is present: no missense variants is a 0, not unknown.
+        assert list(df["canonical_clinical_summary.by_consequence.missense_variant"]) == [3, 0, -1]
         # Struct leaves still flatten, and the map column itself is gone.
         assert list(df["canonical_clinical_summary.total_variants"]) == [3, 1, -1]
         assert "canonical_clinical_summary.by_source" not in df.columns
+
+    def test_a_key_one_file_never_saw_is_still_zero_there(self, tmp_path):
+        """read_flat expands over every file at once, not per file."""
+        import pyarrow.parquet as pq
+
+        from swissisoform.setup.distributions import read_flat
+
+        table = self._table()
+        a, b = tmp_path / "a.parquet", tmp_path / "b.parquet"
+        pq.write_table(table.slice(0, 1), a)  # holds gnomAD/ClinVar, no COSMIC
+        pq.write_table(table.slice(1, 1), b)  # holds COSMIC only
+        df = read_flat([a, b])
+        assert list(df["canonical_clinical_summary.by_source.COSMIC"]) == [0, 1]
+        assert list(df["canonical_clinical_summary.by_source.gnomAD"]) == [2, 0]
 
     def test_distributions_read_flat_sees_the_map_keys(self, tmp_path):
         import pyarrow.parquet as pq
@@ -447,7 +462,39 @@ class TestFlatFrame:
         runtime = pd.DataFrame({"canonical_clinical_summary": [
             {"by_source": {"gnomAD": 2}}, {"by_source": [("gnomAD", 5)]}, None, {"by_source": {}},
         ]})
-        assert metrics.resolve(metric, runtime).tolist()[:2] == [2.0, 5.0]
-        assert metrics.resolve(metric, runtime).isna().tolist()[2:] == [True, True]
-        assert metrics.resolvable(metric, {"canonical_clinical_summary"})
-        assert not metrics.resolvable(metric, {"isoform_clinical_summary"})
+        # A present map without the key counts 0; a missing summary is not evaluable.
+        values = metrics.resolve(metric, runtime)
+        assert values.tolist()[:2] == [2.0, 5.0]
+        assert values.iloc[3] == 0
+        assert pd.isna(values.iloc[2])
+
+    def test_resolvable_needs_a_real_leaf_not_just_its_column(self):
+        from swissisoform import metrics
+        from swissisoform.io.parquet import schema_paths
+
+        paths = schema_paths(self._table().schema)
+        assert metrics.resolvable("canonical_clinical_summary.by_source.gnomAD", paths)
+        assert metrics.resolvable("canonical_clinical_summary.total_variants", paths)
+        # A typo'd struct leaf used to pass because its first segment is a column.
+        assert not metrics.resolvable("canonical_clinical_summary.total_variant", paths)
+        assert not metrics.resolvable("isoform_clinical_summary.by_source.gnomAD", paths)
+
+    def test_a_map_key_with_a_dot_resolves_at_runtime(self):
+        from swissisoform import metrics
+
+        runtime = pd.DataFrame({"canonical_clinical_summary": [{"by_source": {"gnomAD.v4": 7}}]})
+        metric = "canonical_clinical_summary.by_source.gnomAD.v4"
+        assert metrics.resolve(metric, runtime).tolist() == [7.0]
+
+    def test_mapping_of_takes_only_pairs_and_never_a_scalar(self):
+        import numpy as np
+
+        from swissisoform.io.parquet import mapping_of
+
+        assert mapping_of([("a", 1)]) == {"a": 1}
+        rows = np.empty(1, dtype=object)
+        rows[0] = ("a", 1)
+        assert mapping_of(rows) == {"a": 1}  # an object ndarray of pairs, as pandas may hand back
+        assert mapping_of(np.float64(1.5)) is None
+        assert mapping_of([[1, 2], [3, 4]]) is None
+        assert mapping_of([]) == {}

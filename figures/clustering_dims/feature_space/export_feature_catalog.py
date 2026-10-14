@@ -47,7 +47,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from swissisoform import metrics
-from swissisoform.io.parquet import flat_frame
+from swissisoform.io.parquet import expand_maps, flatten_structs
 from swissisoform.site.evidence import CRITERIA, CRITERIA_METRIC_LABELS
 
 HERE = Path(__file__).resolve().parent
@@ -346,18 +346,22 @@ def read_flat(files: list[Path]) -> tuple[pd.DataFrame, dict[str, pa.DataType]]:
     ]
 
     frames = []
+    maps: set[str] = set()
     for path in files:
         present = {f.name for f in pq.ParquetFile(path).schema_arrow}
         table = pq.read_table(path, columns=[c for c in non_list if c in present])
-        frames.append(flat_frame(table))
-    df = pd.concat(frames, ignore_index=True)
-    # A map leaf expands into one column per key (flat_frame); each takes the
-    # map's value type, which the schema cannot name per key.
-    for name, t in list(types.items()):
-        if pa.types.is_map(t):
-            for col in df.columns:
-                if col.startswith(f"{name}."):
-                    types[col] = t.item_type
+        df, file_maps = flatten_structs(table)
+        frames.append(df)
+        maps.update(file_maps)
+    # Expanded once over every file (a key one file never saw is still a 0 there).
+    df = expand_maps(pd.concat(frames, ignore_index=True), sorted(maps))
+    # A map leaf becomes one column per key, each typed as the map's values; the
+    # map itself is no longer a column, so it is no longer a feature either.
+    for name in maps:
+        item = types.pop(name).item_type
+        for col in df.columns:
+            if col.startswith(f"{name}."):
+                types[col] = item
     return df, types
 
 

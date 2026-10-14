@@ -18,7 +18,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
-import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -53,7 +52,7 @@ from swissisoform.evidence.l2_targeting import (
     precompute_targetp,
 )
 from swissisoform.evidence.s1_domains import InterProScanModule, precompute_interproscan
-from swissisoform.io.parquet import paired_schema, paired_tis_dataframe
+from swissisoform.io.parquet import paired_schema, paired_tis_dataframe, write_table_atomic
 from swissisoform.io.rnaseq import load_sample_manifest
 from swissisoform.modules.biophysics import BiophysicsModule
 from swissisoform.modules.conservation import ConservationModule
@@ -849,12 +848,7 @@ def _write_parquet_atomic(df: pd.DataFrame, path: Path, schema: pa.Schema) -> No
     file or the complete one — a plain ``to_parquet`` into the final path leaves
     a truncated file behind when the job is killed mid-write (Slurm timeout, OOM).
     """
-    tmp = path.with_name(f".{path.name}.tmp")
-    try:
-        pq.write_table(pa.Table.from_pandas(df, schema=schema, preserve_index=False), tmp)
-        os.replace(tmp, path)
-    finally:
-        tmp.unlink(missing_ok=True)
+    write_table_atomic(pa.Table.from_pandas(df, schema=schema, preserve_index=False), path)
 
 
 def _write_population_sidecar(

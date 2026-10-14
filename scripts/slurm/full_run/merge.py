@@ -40,8 +40,6 @@ import shutil
 from pathlib import Path
 
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
 
 OUTPUT_ROOT = Path("data/output")
 
@@ -94,45 +92,57 @@ def shard_status(shard_dir: Path, shard_list: Path) -> tuple[str, pd.DataFrame |
     return status, df
 
 
-def _summary_with_maps(value: object) -> object:
-    """A clinical summary read back through pandas, with its maps as dicts again.
-
-    Parquet maps come back from ``read_parquet`` as lists of ``(key, value)``
-    tuples, which Arrow cannot write back as a map.
-    """
-    if not isinstance(value, dict):
-        return value
-    return {k: dict(v) if isinstance(v, list) else v for k, v in value.items()}
-
-
 def write_merged(df: pd.DataFrame, target: Path) -> None:
-    """Write the merged frame to *target* against the schema the shards were written with.
+    """Write the merged frame to *target*, pinned to the types the shards were written with.
 
     Not a bare ``df.to_parquet``: the shards pin the clinical summaries to map
-    types (``paired_schema``), and pandas reads a map back as a list of
-    ``(key, value)`` tuples that inference cannot turn back into one ("Expected
-    bytes, got a 'int' object" on ``canonical_clinical_summary``, which killed
-    the first full_catalog_20261009 merge). The maps are restored and the frame
-    written against ``paired_schema`` plus the tag-struct pins, exactly as
-    ``runner.run`` writes each shard. Everything else is inferred from the
-    concatenated frame, which is what reconciles the shards' per-frame types
-    (an int column that is float in a shard with a NaN, an all-null column).
-    A temp file plus ``os.replace`` means a killed job leaves no truncated file.
+    types and the tag structs to the registry's fields (``paired_schema``), and
+    pandas reads a map back as ``(key, value)`` tuples that inference cannot type
+    ("Expected bytes, got a 'int' object" on ``canonical_clinical_summary`` killed
+    the first full_catalog_20261009 merge). ``paired_table`` converts the pinned
+    columns straight to their declared types and infers the rest from the
+    concatenated frame, which reconciles the shards' per-frame types (an int
+    column that is float in a shard with a NaN, an all-null column) — in one
+    conversion, written atomically.
+
+    The tag pins come from the registry build on disk, so the caller must first
+    check that it is the build the shards were tagged with (:func:`tag_drift`):
+    against a different build, Arrow silently drops tag fields and null-fills
+    others.
     """
-    from swissisoform.io.parquet import CLINICAL_SUMMARY_COLUMNS, paired_schema
+    from swissisoform.io.parquet import paired_table, write_table_atomic
     from swissisoform.modules.tags import schema_overrides
 
-    for col in CLINICAL_SUMMARY_COLUMNS:
-        if col in df.columns:
-            df[col] = [_summary_with_maps(v) for v in df[col]]
-    schema = paired_schema(df, schema_overrides(df))
-    table = pa.Table.from_pandas(df, schema=schema, preserve_index=False)
-    tmp = target.with_name(f".{target.name}.tmp")
+    write_table_atomic(paired_table(df, schema_overrides(df)), target)
+
+
+def registry_sha(version: str) -> str | None:
+    """Content hash of the registry *version* on disk, or None when it is absent."""
+    from swissisoform.tags.registry import TagRegistryError, load
+
     try:
-        pq.write_table(table, tmp)
-        os.replace(tmp, target)
-    finally:
-        tmp.unlink(missing_ok=True)
+        return load(version).sha256
+    except TagRegistryError:
+        return None
+
+
+def tag_drift(version: str, sha: str) -> str | None:
+    """Why the shards' tag build differs from the one on disk, or None if it matches.
+
+    The merged parquet's tag structs are typed from the registry on disk. If that
+    version was rebuilt in place after the shards were tagged, its fields differ
+    from the shards' and pinning to it would drop and null-fill tags. A registry
+    absent from disk is not drift: nothing is pinned, so the structs are inferred.
+    """
+    on_disk = registry_sha(version)
+    if on_disk is None or on_disk == sha:
+        return None
+    return (
+        f"shards were tagged with registry {version} build {sha[:12]}, but {version} "
+        f"on disk is build {on_disk[:12]}: it was rebuilt after the campaign was "
+        "tagged, and writing against it would drop and null-fill tag fields. Re-fire "
+        "the shards under the current build, or restore the build they were tagged with."
+    )
 
 
 def gpu_hole_fractions(df: pd.DataFrame) -> dict[str, float | str]:
@@ -309,6 +319,11 @@ def merge_campaign(
                     "against one build."
                 )
                 return 1, report
+            if versions and len(hashes) == 1:
+                drift = tag_drift(versions[0], hashes[0])
+                if drift:
+                    print(f"ERROR: {drift}")
+                    return 1, report
         if n_untagged:
             print(
                 f"ERROR: {n_untagged} of {len(df)} rows carry no tag-registry version "

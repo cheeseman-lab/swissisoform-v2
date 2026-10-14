@@ -263,7 +263,8 @@ def test_tag_registry_rebuilt_between_shards_is_fatal(campaign: Path) -> None:
     assert not (campaign / CAMPAIGN / "all_paired.parquet").exists()
 
 
-def test_one_tag_registry_build_merges(campaign: Path) -> None:
+def test_one_tag_registry_build_merges(campaign: Path, monkeypatch) -> None:
+    monkeypatch.setattr(merge, "registry_sha", lambda version: "a" * 64)
     write_all(
         campaign,
         statuses={
@@ -310,7 +311,8 @@ def test_map_typed_clinical_summary_survives_the_merge(campaign: Path) -> None:
         df["n_species"] = [None] * len(genes) if k == 1 else list(range(len(genes)))
         df["gravy_enriched"] = [None] * len(genes) if k == 2 else [True, False]
         path = campaign / f"{CAMPAIGN}_shard_{k}" / "all_paired.parquet"
-        pq.write_table(pa.Table.from_pandas(df, schema=paired_schema(df), preserve_index=False), path)
+        table = pa.Table.from_pandas(df, schema=paired_schema(df), preserve_index=False)
+        pq.write_table(table, path)
 
     code, _ = merge.merge_campaign(CAMPAIGN, campaign)
 
@@ -323,3 +325,36 @@ def test_map_typed_clinical_summary_survives_the_merge(campaign: Path) -> None:
     assert dict(rows[0]["canonical_clinical_summary"]["by_source"]) == {"clinvar": 2, "gnomad": 1}
     assert merged.schema.field("gravy_enriched").type == pa.bool_()
     assert not list((campaign / CAMPAIGN).glob(".*.tmp"))
+
+
+def test_registry_rebuilt_after_tagging_is_fatal(campaign: Path, monkeypatch) -> None:
+    """One build across the shards, but not the build on disk the pins come from.
+
+    Writing against it would drop the shards' tag fields and null-fill the new
+    ones, which reads downstream as not-evaluable.
+    """
+    monkeypatch.setattr(merge, "registry_sha", lambda version: "b" * 64)
+    write_all(
+        campaign,
+        statuses={
+            merge.TAG_VERSION_COLUMN: ["v4", "v4"],
+            merge.TAG_SHA256_COLUMN: ["a" * 64] * 2,
+        },
+    )
+    code, _ = run(campaign)
+    assert code == 1
+    assert not (campaign / CAMPAIGN / "all_paired.parquet").exists()
+
+
+def test_a_registry_absent_from_disk_is_not_drift(campaign: Path, monkeypatch) -> None:
+    """Nothing is pinned then, so the tag structs are inferred as the shards wrote them."""
+    monkeypatch.setattr(merge, "registry_sha", lambda version: None)
+    write_all(
+        campaign,
+        statuses={
+            merge.TAG_VERSION_COLUMN: ["vgone", "vgone"],
+            merge.TAG_SHA256_COLUMN: ["a" * 64] * 2,
+        },
+    )
+    code, _ = run(campaign)
+    assert code == 0

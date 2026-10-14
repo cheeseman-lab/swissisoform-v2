@@ -207,3 +207,27 @@ def test_tag_and_scoring_outputs_are_not_feature_dimensions(name):
 
     include, reason, _ = efc.classify(name, "float", 1.0, 500)
     assert (include, reason) == (False, "derived_from_features")
+
+
+def test_a_map_column_is_its_keys_not_a_feature_of_its_own(tmp_path):
+    """read_flat types each map key; the map itself must not linger as a phantom feature."""
+    import export_feature_catalog as efc
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from swissisoform.io.parquet import CLINICAL_SUMMARY_TYPE
+
+    summary = {"total_variants": 1, "by_source": [("ClinVar", 1)],
+               "by_consequence": [], "pathogenic_count": 0}
+    path = tmp_path / "all_paired.parquet"
+    pq.write_table(pa.table({
+        "tis_id": ["a"],
+        "canonical_clinical_summary": pa.array([summary], type=CLINICAL_SUMMARY_TYPE),
+    }), path)
+
+    df, types = efc.read_flat([path])
+
+    assert "canonical_clinical_summary.by_source" not in types
+    assert "canonical_clinical_summary.by_consequence" not in types
+    assert pa.types.is_integer(types["canonical_clinical_summary.by_source.ClinVar"])
+    assert set(types) - {"tis_id"} <= set(df.columns) | {"canonical_clinical_summary"}

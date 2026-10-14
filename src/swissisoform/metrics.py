@@ -26,7 +26,7 @@ import numpy as np
 import pandas as pd
 
 from swissisoform.config import CELL_LINES
-from swissisoform.io.parquet import mapping_of
+from swissisoform.io.parquet import COUNT_MAP_PATHS, mapping_of
 
 PREFIX = "tx:"
 
@@ -335,17 +335,31 @@ def resolve(metric: str, df: pd.DataFrame) -> pd.Series | None:
         # The profiler flattens structs and maps to dotted columns (flat_frame);
         # the runtime frame keeps them nested, so walk the same path into it or a
         # tag cut on a leaf resolves to None for the whole run.
-        return pd.to_numeric(df[head].map(lambda v: _leaf(v, path.split("."))), errors="coerce")
+        return pd.to_numeric(df[head].map(lambda v: _leaf(v, head, path)), errors="coerce")
     return None
 
 
-def _leaf(value: Any, path: list[str]) -> Any:
-    """Follow *path* through nested structs and maps; None where it is absent."""
-    for part in path:
+def _leaf(value: Any, head: str, path: str) -> Any:
+    """Follow dotted *path* from column *head* through nested structs and maps.
+
+    Matches the names :func:`~swissisoform.io.parquet.expand_maps` produces: a
+    map key may itself contain dots, so each step takes the longest key the node
+    holds. A key a present count map lacks is 0 (``COUNT_MAP_PATHS``); anything
+    else missing — the summary itself, a struct field — is None.
+    """
+    parts = path.split(".")
+    where, i = head, 0
+    while i < len(parts):
         node = mapping_of(value)
-        if node is None or part not in node:
+        if node is None:
             return None
-        value = node[part]
+        for j in range(len(parts), i, -1):
+            key = ".".join(parts[i:j])
+            if key in node:
+                value, where, i = node[key], f"{where}.{key}", j
+                break
+        else:
+            return 0 if where in COUNT_MAP_PATHS else None
     return value
 
 
@@ -362,8 +376,10 @@ def resolvable(metric: str, columns: set[str]) -> bool:
         return metric[len(ABS_PREFIX):] in columns
     if metric in columns:
         return True
-    head, _, path = metric.partition(".")
-    if path and head in columns:
+    # A dotted name resolves only to a real leaf. *columns* from
+    # io.parquet.schema_paths lists every struct leaf by name, but a map's keys
+    # are data, so under a map path it can only say "<map path>.*".
+    if any(metric.startswith(p[:-1]) for p in columns if p.endswith(".*")):
         return True
     if metric.endswith(LEN_SUFFIX):
         return metric[: -len(LEN_SUFFIX)] in columns

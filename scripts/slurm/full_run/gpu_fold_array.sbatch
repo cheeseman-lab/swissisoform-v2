@@ -26,8 +26,13 @@ eval "$(conda shell.bash hook)"
 # Pick the env by what it can import, not by name — an env that exists but lacks
 # ESMFold2 would otherwise be activated and fail mid-array.
 # Under Slurm $0 is the spooled copy in /var/spool, not this file, so its
-# directory has no helper; the job has already cd'd to the repo root.
-source scripts/slurm/full_run/activate_gpu_env.sh
+# directory has no helper. Resolve the repo root from the submit directory
+# instead (every path below is repo-relative), and say so plainly when the job
+# was submitted from outside the checkout.
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+HELPER=scripts/slurm/full_run/activate_gpu_env.sh
+[[ -f "$HELPER" ]] || { echo "ERROR: $HELPER not found under $PWD — submit from inside the swissisoform-v2 checkout" >&2; exit 1; }
+source "$HELPER"
 activate_gpu_env "fold" "swissisoform-v2-fold,swissisoform-v2" esm.models.esmfold2
 
 export TORCH_HOME="$PWD/.torch_cache"

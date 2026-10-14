@@ -6,11 +6,15 @@ Parquet storage, enabling efficient columnar I/O for large TIS datasets.
 
 from __future__ import annotations
 
+import os
 import re
+from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pyarrow as pa
+import pyarrow.parquet as pq
 
 from swissisoform.models import (
     CellLineExpression,
@@ -69,46 +73,132 @@ def paired_schema(df: pd.DataFrame, overrides: dict[str, pa.DataType] | None = N
     return schema
 
 
+# The map-typed fields of the clinical summaries, as dotted paths. Their values are
+# counts over an open key set, so a key a PRESENT map lacks is a count of 0 — only
+# a missing summary is not-evaluable.
+COUNT_MAP_PATHS: frozenset[str] = frozenset(
+    f"{col}.{CLINICAL_SUMMARY_TYPE.field(i).name}"
+    for col in CLINICAL_SUMMARY_COLUMNS
+    for i in range(CLINICAL_SUMMARY_TYPE.num_fields)
+    if pa.types.is_map(CLINICAL_SUMMARY_TYPE.field(i).type)
+)
+
+
+def paired_table(df: pd.DataFrame, overrides: dict[str, pa.DataType] | None = None) -> pa.Table:
+    """*df* as an Arrow table, inferred except for the pinned columns.
+
+    The table :func:`paired_schema` describes, built in ONE conversion: the
+    unpinned columns are inferred, and the pinned ones (the clinical summaries
+    plus *overrides*) are converted straight to their declared types. Converting
+    to infer a schema and again to apply it holds two Arrow copies of a
+    genome-wide frame at once; and a pinned map read back from Parquet arrives as
+    ``(key, value)`` pairs that inference cannot type, but its declared map type
+    accepts as they are.
+    """
+    pins: dict[str, pa.DataType] = {n: CLINICAL_SUMMARY_TYPE for n in CLINICAL_SUMMARY_COLUMNS}
+    pins.update(overrides or {})
+    pinned = [c for c in df.columns if c in pins]
+    table = pa.Table.from_pandas(df.drop(columns=pinned), preserve_index=False)
+    for col in pinned:  # df order, so each insert lands at its original position
+        array = pa.array(df[col], type=pins[col], from_pandas=True)
+        table = table.add_column(df.columns.get_loc(col), pa.field(col, pins[col]), array)
+    return table
+
+
+def write_table_atomic(table: pa.Table, path: Path) -> None:
+    """Write *table* to *path* so that it is never observable half-finished.
+
+    A same-directory temp file plus ``os.replace`` means a reader sees either no
+    file or the complete one — a plain write into the final path leaves a
+    truncated file behind when the job is killed mid-write (Slurm timeout, OOM).
+    """
+    tmp = path.with_name(f".{path.name}.tmp")
+    try:
+        pq.write_table(table, tmp)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def mapping_of(value: Any) -> dict[str, Any] | None:
     """A struct or map value as a dict, or None when it is neither.
 
-    A map read back from Parquet through pandas is a list of ``(key, value)``
-    pairs (or an ndarray of them), while the in-memory frame holds a dict; a
-    struct is a dict either way.
+    A map read back from Parquet through pandas is a list (or object ndarray) of
+    ``(key, value)`` tuples, while the in-memory frame holds a dict; a struct is a
+    dict either way. Only tuples count as pairs: a list of 2-element lists is a
+    list, not a map, and a scalar (numpy included) is never a mapping.
     """
     if isinstance(value, dict):
         return value
-    if isinstance(value, (list, tuple)) or hasattr(value, "tolist"):
-        pairs = value.tolist() if hasattr(value, "tolist") else list(value)
-        if all(isinstance(p, (list, tuple)) and len(p) == 2 for p in pairs):
+    if isinstance(value, (list, tuple, np.ndarray)):
+        pairs = list(value)
+        if all(isinstance(p, tuple) and len(p) == 2 for p in pairs):
             return {str(k): v for k, v in pairs}
     return None
+
+
+def flatten_structs(table: pa.Table) -> tuple[pd.DataFrame, list[str]]:
+    """*table* with its structs flattened to dotted columns, and the map columns left.
+
+    Maps stay one column each until :func:`expand_maps`, which needs every file's
+    rows at once: a key one file never saw is still a 0 there, not a gap.
+    """
+    while any(pa.types.is_struct(f.type) for f in table.schema):
+        table = table.flatten()
+    maps = [f.name for f in table.schema if pa.types.is_map(f.type)]
+    return table.to_pandas(), maps
+
+
+def expand_maps(df: pd.DataFrame, maps: list[str]) -> pd.DataFrame:
+    """Replace each map column in *maps* with one dotted column per key seen.
+
+    The names are those the struct-typed summaries produced before
+    :data:`CLINICAL_SUMMARY_TYPE` pinned them to maps. A row whose map is null
+    stays null on every key (not evaluable). A row whose map is present but lacks
+    a key reads 0 under a count map (:data:`COUNT_MAP_PATHS`), null otherwise.
+    """
+    blocks: dict[str, list[Any]] = {}
+    for name in maps:
+        if name not in df.columns:
+            continue
+        rows = [mapping_of(v) for v in df.pop(name)]
+        absent = 0 if name in COUNT_MAP_PATHS else None
+        for key in sorted({k for r in rows if r for k in r}):
+            blocks[f"{name}.{key}"] = [None if r is None else r.get(key, absent) for r in rows]
+    if not blocks:
+        return df
+    return pd.concat([df, pd.DataFrame(blocks, index=df.index)], axis=1)
 
 
 def flat_frame(table: pa.Table) -> pd.DataFrame:
     """*table* as a frame with every struct and map expanded into dotted columns.
 
-    Structs flatten natively (``isoform_massspec_summary.best_hyperscore``). Maps
-    have no fixed fields, so each key seen in this table becomes its own column
-    (``canonical_clinical_summary.by_consequence.missense_variant``), and a row
-    without that key is null — the same names and nulls a struct with one field
-    per key produced before :data:`CLINICAL_SUMMARY_TYPE` pinned the summaries to
-    maps. Every profiler that reads a run flattened goes through here, so the
-    feature space, the distributions and the tag sweep see one set of names.
+    One table's worth of :func:`flatten_structs` + :func:`expand_maps`. A reader
+    over several files flattens each and expands once over the concatenation.
     """
-    while any(pa.types.is_struct(f.type) for f in table.schema):
-        table = table.flatten()
-    maps = [f.name for f in table.schema if pa.types.is_map(f.type)]
-    df = table.to_pandas()
-    for name in maps:
-        rows = [mapping_of(v) for v in df.pop(name)]
-        keys = sorted({k for r in rows if r for k in r})
-        expanded = pd.DataFrame(
-            {f"{name}.{k}": [r.get(k) if r else None for r in rows] for k in keys},
-            index=df.index,
-        )
-        df = pd.concat([df, expanded], axis=1)
-    return df
+    df, maps = flatten_structs(table)
+    return expand_maps(df, maps)
+
+
+def schema_paths(schema: pa.Schema) -> set[str]:
+    """Every name a flattened read of *schema* can produce, for name-level checks.
+
+    Top-level columns, every dotted struct leaf, and ``<map path>.*`` for each
+    map — whose keys are data, so the schema can only say "a key under here".
+    """
+    out: set[str] = set()
+
+    def walk(name: str, t: pa.DataType) -> None:
+        out.add(name)
+        if pa.types.is_struct(t):
+            for i in range(t.num_fields):
+                walk(f"{name}.{t.field(i).name}", t.field(i).type)
+        elif pa.types.is_map(t):
+            out.add(f"{name}.*")
+
+    for field in schema:
+        walk(field.name, field.type)
+    return out
 
 
 # Columns that map directly to TIS identity/protein fields
