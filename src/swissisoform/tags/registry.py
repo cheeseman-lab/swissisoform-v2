@@ -40,7 +40,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from dataclasses import asdict, dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -48,7 +47,7 @@ from typing import Any
 
 import pandas as pd
 
-from swissisoform.distributions import SEPARATE_ORF_TYPES
+from swissisoform.contract import stratum_label
 
 ROOT = Path(__file__).resolve().parents[3]
 REF_DIR = ROOT / "data" / "reference" / "tags"
@@ -77,15 +76,6 @@ PROVISIONAL_VERSIONS: dict[str, str] = {
         "cut from the provisional v3 distributions (Aug-12 full_catalog); "
         "rebuild after the next genome-wide run and distributions re-freeze"
     ),
-}
-
-# How a label names the unique region, and what it reads as per ORF type
-# (``Tag.label_for``) — the nouns the category prompts tell the model to use.
-_UNIQUE_REGION = re.compile(r"\b[Uu]nique region\b")
-_REGION_NOUN: dict[str, str] = {
-    "extended": "extension",
-    "truncated": "lost region",
-    **dict.fromkeys(SEPARATE_ORF_TYPES, "ORF"),
 }
 
 REGISTRY_FILE = "registry.parquet"
@@ -211,15 +201,9 @@ class Tag:
         proteins, not something about the region. An unknown ORF type keeps the
         label as written.
         """
-        noun = _REGION_NOUN.get(orf_type or "")
-        if noun is None or "_sae_" in self.metric:
+        if "_sae_" in self.metric:
             return self.label
-        label = _UNIQUE_REGION.sub(
-            lambda m: noun[0].upper() + noun[1:] if m.group(0)[0] == "U" else noun, self.label
-        )
-        if orf_type == "truncated" and label.endswith(" gained"):
-            label = label[: -len(" gained")] + " lost"
-        return label
+        return stratum_label(self.label, orf_type)
 
     @property
     def test(self) -> str:

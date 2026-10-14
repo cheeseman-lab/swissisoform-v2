@@ -1,11 +1,12 @@
-"""Build the protein-track Plotly figure for the V2 per-isoform page.
+"""Build the gene-page protein-track Plotly figure.
 
-Two left-aligned length bars on separate y-lanes — canonical (y=1.0) and
-isoform (y=0.5) — make the length delta legible. The differential region is
-shaded on the relevant bar (extensions → isoform residues green; truncations →
-canonical residues red). Clinical variants render as lollipops coloured by
-significance; motifs as spans; domains as boxes. A horizontal legend names
-every visual class.
+One canonical bar, drawn identically on every gene, with one row per isoform
+beneath it on the canonical residue axis. Each isoform row carries its own
+difference: an extension's gained N-terminus (green), a truncation's lost
+N-terminus (red, the canonical residues it lacks) or a separate ORF's whole body
+(green), named by the stratum's noun (``contract.region_noun``). Clinical
+variants render as dots coloured by significance; motifs as spans; domains as
+boxes.
 """
 
 from __future__ import annotations
@@ -87,9 +88,9 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
 
     Args:
         view: duck-typed adapter with ``canonical_len``, ``bars`` (per isoform:
-            ``label``/``x0``/``x1``/``is_trunc``/``diff_x0``/``diff_x1``/
-            ``diff_on_canonical``), ``variants`` (``variant_id``/``pos``/
-            ``consequence``/``significance``/``protein_change``/``source``/``in_unique``),
+            ``label``/``x0``/``x1``/``is_trunc``/``region``/``diff_x0``/``diff_x1``/
+            ``diff_is_lost``/``slug``), ``variants`` (``variant_id``/``pos``/
+            ``consequence``/``significance``/``protein_change``/``source``),
             ``domains`` (``name``/``interpro_id``/``x0``/``x1``/``isoforms``),
             ``disorder``/``coiled_coil`` (``x0``/``x1``), ``motifs`` (``name``/
             ``x0``/``x1``), ``cell_lines`` (``sample`` + ``marks`` of
@@ -149,56 +150,114 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
         )
 
     # ── Bars: canonical on top (y=0), isoforms stacked below ──
+    # The canonical bar is the same plain reference on every gene. Each isoform
+    # row carries its OWN difference — an extension's gained N-terminus (green),
+    # a truncation's lost N-terminus (red: the canonical residues it lacks), a
+    # separate ORF's whole body (green) — so rows differ only where isoforms do.
     bar_gap = 0.34
     canon_y = 0.0
-    traces.append(_length_bar(0, can_len - 1, canon_y, _CANON_COLOR, "Canonical"))
+    canon = _segment(
+        0,
+        can_len - 1,
+        canon_y,
+        _CANON_COLOR,
+        "Canonical",
+        [f"<b>Canonical</b> · {can_len} aa"],
+        residue_hover=True,
+    )
+    canon["showlegend"] = True
+    traces.append(canon)
     _left_label("canonical", canon_y)
+    legend_shown: set[str] = set()
+
+    def _legend(trace: dict[str, Any], name: str) -> dict[str, Any]:
+        trace["name"] = name
+        trace["legendgroup"] = name
+        trace["showlegend"] = name not in legend_shown
+        legend_shown.add(name)
+        return trace
+
     for i, b in enumerate(bars):
         by = -bar_gap * (i + 1)
         b["_y"] = by
-        # Blue spans only the SHARED region so it aligns with the canonical start.
-        # Extensions/uORFs carry their differential in green on this same bar, so
-        # blue begins just after it (at the canonical start, x=0); truncations have
-        # no differential on their own bar, so blue spans the whole retained body.
-        if b.get("diff_on_canonical") or b.get("diff_x1") is None:
-            shared_x0 = int(b["x0"])
-        else:
-            shared_x0 = int(b["diff_x1"]) + 1
-        if shared_x0 <= int(b["x1"]):
-            bar_trace = _length_bar(shared_x0, int(b["x1"]), by, _ISO_COLOR, b["label"])
-            # Carry the isoform slug so a click on the bar navigates to its page.
-            if b.get("slug"):
-                bar_trace["customdata"] = [b["slug"]] * len(bar_trace["x"])
-            traces.append(bar_trace)
-        _left_label(b["label"], by, size=9)
-    lowest_bar = -bar_gap * len(bars)
-
-    # ── Differential-region shading (extension → isoform bar, green; truncation
-    #    → canonical bar, red; uORF/altORF → whole isoform bar, green) ──
-    legend_ext = legend_trunc = False
-    for b in bars:
+        x0, x1 = int(b["x0"]), int(b["x1"])
+        label, slug = b["label"], b.get("slug")
+        region = b.get("region") or "differential region"
+        open_hint = "<br><i>click to open</i>" if slug else ""
         d0, d1 = b.get("diff_x0"), b.get("diff_x1")
-        if d0 is None or d1 is None or d1 < d0:
-            continue
-        if b.get("diff_on_canonical"):
-            ov = _diff_overlay(int(d0), int(d1), canon_y, _TRUNC_FILL)
-            ov["showlegend"] = not legend_trunc
-            ov["name"] = "Lost region (truncation)"
-            legend_trunc = True
-        else:
-            # Extend the green up to where the blue shared region begins so the
-            # extension sits flush against the canonical start (no white gap
-            # between the last extension residue and x=0). Capped at the bar end
-            # so a whole-isoform uORF/altORF doesn't overshoot its C-terminus.
-            ext_end = min(int(d1) + 1, int(b["x1"]))
-            ov = _diff_overlay(int(d0), ext_end, b["_y"], _EXT_FILL)
-            ov["showlegend"] = not legend_ext
-            ov["name"] = "Differential region"
-            legend_ext = True
-            # Extension shading sits on the isoform's own row → clickable too.
-            if b.get("slug"):
-                ov["customdata"] = [b["slug"]] * len(ov["x"])
-        traces.append(ov)
+        has_diff = d0 is not None and d1 is not None and int(d1) >= int(d0)
+        lost = bool(b.get("diff_is_lost")) and has_diff
+
+        if lost:
+            n_lost = int(d1) - int(d0) + 1
+            # Drawn up to x0 (not d1) so it meets the blue body flush, the way an
+            # extension's green meets x=0; the hover still reports d0..d1.
+            seg = _segment(
+                int(d0),
+                min(int(d1) + 1, x1),
+                by,
+                _TRUNC_FILL,
+                "",
+                [
+                    f"<b>{label}</b><br>{region}: canonical residues {int(d0) + 1}–{int(d1) + 1}"
+                    f" ({n_lost} aa){open_hint}"
+                ],
+                slug=slug,
+                opacity=0.55,
+            )
+            traces.append(_legend(seg, region[0].upper() + region[1:]))
+        elif has_diff:
+            # Extensions end their gained region at x=0 (the canonical start) so
+            # it sits flush against the shared body; a whole-isoform separate ORF
+            # is capped at its own C-terminus.
+            g1 = min(int(d1) + 1, x1)
+            n_gained = g1 - int(d0)
+            seg = _segment(
+                int(d0),
+                g1,
+                by,
+                _EXT_FILL,
+                "",
+                [f"<b>{label}</b><br>{region}: {max(n_gained, 1)} aa{open_hint}"],
+                slug=slug,
+            )
+            traces.append(_legend(seg, region[0].upper() + region[1:]))
+
+        # Blue spans what the isoform shares with the canonical.
+        shared_x0 = x0 if lost or not has_diff else int(d1) + 1
+        if shared_x0 <= x1:
+            seg = _segment(
+                shared_x0,
+                x1,
+                by,
+                _ISO_COLOR,
+                "",
+                [f"<b>{label}</b><br>shared with canonical{open_hint}"],
+                slug=slug,
+            )
+            traces.append(_legend(seg, "Isoform"))
+
+        annotations.append(
+            {
+                "x": x_left,
+                "y": by,
+                "xref": "x",
+                "yref": "y",
+                "xanchor": "right",
+                "xshift": -6,
+                "text": label,
+                "showarrow": False,
+                "font": {"size": 9, "color": "#1d4ed8" if slug else "#475569"},
+                # A clickable row label: gene.html listens for plotly_clickannotation
+                # and reads the slug from ``name``.
+                **(
+                    {"name": slug, "captureevents": True, "hovertext": "open isoform"}
+                    if slug
+                    else {}
+                ),
+            }
+        )
+    lowest_bar = -bar_gap * len(bars)
 
     # ── Variant rows ABOVE the canonical bar, one row per consequence ──
     mut_base = canon_y + 0.3
@@ -225,20 +284,20 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                 up_xs.append(v["pos"])
                 up_hover.append(
                     f"<b>From your VCF</b><br>{v.get('uploaded_detail') or ''}<br>"
-                    f"{v.get('protein_change') or ''}<br>"
-                    f"{c} · {'unique' if v.get('in_unique') else 'shared'} region"
+                    f"{v.get('protein_change') or ''}<br>{c}"
                 )
                 continue
+            # Styled by significance only. Whether a variant is in an isoform's
+            # differential region depends on the isoform, so the gene view makes
+            # no such claim (the isoform pages do).
             is_path = is_pathogenic(v.get("significance"))
-            in_unique = bool(v.get("in_unique"))
             xs.append(v["pos"])
             cols.append("#d62728" if is_path else CONSEQ_COLOR.get(c, "#94a3b8"))
-            sizes.append((9 if is_path else 6) if in_unique else (7 if is_path else 4))
-            opac.append(1.0 if in_unique else 0.4)
+            sizes.append(8 if is_path else 5)
+            opac.append(1.0 if is_path else 0.7)
             hover.append(
                 f"{v.get('variant_id', '?')}<br>{v.get('protein_change') or ''}<br>"
-                f"{c} · {'unique' if in_unique else 'shared'} region<br>"
-                f"{v.get('significance') or '—'} · {v.get('source') or ''}"
+                f"{c}<br>{v.get('significance') or '—'} · {v.get('source') or ''}"
             )
         if xs:
             traces.append(
@@ -493,26 +552,6 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
             _left_label(t["sample"].replace("_", " "), ly)
         y_bottom = lane_base - (len(cell_lines) - 1) * lane_gap - 0.3
 
-    # A single black dotted guide at the SHORTEST truncation's differential-region
-    # end — the deepest N-terminal cut, where its lost region meets the retained
-    # body. (Extensions' differential ends at x=0, marked by the axis zeroline.)
-    guide_top = max(mut_top, canon_y + 0.2)
-    trunc_ends = [
-        b["diff_x1"] for b in bars if b.get("diff_on_canonical") and b.get("diff_x1") is not None
-    ]
-    if trunc_ends:
-        x_guide = max(trunc_ends)  # largest x0 = fewest residues retained = shortest protein
-        shapes.append(
-            {
-                "type": "line",
-                "x0": x_guide,
-                "x1": x_guide,
-                "y0": y_bottom,
-                "y1": guide_top,
-                "line": {"color": "#111827", "width": 1, "dash": "dot"},
-            }
-        )
-
     y_hi = max(mut_top, canon_y + 0.2) + 0.3
     y_lo = y_bottom - 0.2
     return {
@@ -597,37 +636,37 @@ def _bar_samples(x0: int, x1: int, cap: int = 400) -> list[float]:
     return xs
 
 
-def _length_bar(x0: int, x1: int, y: float, color: str, name: str) -> dict[str, Any]:
+def _segment(
+    x0: int,
+    x1: int,
+    y: float,
+    color: str,
+    name: str,
+    hover: list[str],
+    slug: str | None = None,
+    opacity: float = 1.0,
+    residue_hover: bool = False,
+) -> dict[str, Any]:
+    """One bar segment on a row: a thick line densified so its whole length hovers.
+
+    ``hover`` is one string for the segment (``residue_hover`` appends the
+    canonical-frame residue under the cursor, x=0 → residue 1). ``slug`` rides
+    as ``customdata`` so a click opens that isoform's page (``gene.html``).
+    """
     xs = _bar_samples(x0, x1)
-    length = int(abs(x1 - x0)) + 1
-    base = min(x0, x1)
-    hover = [f"<b>{name}</b><br>residue {int(x - base) + 1} / {length} aa" for x in xs]
-    return {
+    text = hover[0]
+    trace: dict[str, Any] = {
         "type": "scatter",
         "name": name,
         "mode": "lines",
         "x": xs,
         "y": [y] * len(xs),
         "line": {"color": color, "width": 12},
-        "hovertext": hover,
+        "opacity": opacity,
+        "hovertext": [f"{text}<br>residue {int(x) + 1}" if residue_hover else text for x in xs],
         "hoverinfo": "text",
-        "showlegend": True,
+        "showlegend": False,
     }
-
-
-def _diff_overlay(x0: int, x1: int, y: float, color: str) -> dict[str, Any]:
-    xs = _bar_samples(x0, x1)
-    length = int(abs(x1 - x0)) + 1
-    base = min(x0, x1)
-    hover = [f"<b>Differential region</b><br>residue {int(x - base) + 1} / {length} aa" for x in xs]
-    return {
-        "type": "scatter",
-        "name": "Differential region",
-        "mode": "lines",
-        "x": xs,
-        "y": [y] * len(xs),
-        "line": {"color": color, "width": 12},
-        "hovertext": hover,
-        "hoverinfo": "text",
-        "showlegend": True,
-    }
+    if slug:
+        trace["customdata"] = [slug] * len(xs)
+    return trace

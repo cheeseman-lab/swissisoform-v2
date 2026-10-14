@@ -50,7 +50,7 @@
 <div class="folding-legend">
   <span>Coloured by ESMFold2 pLDDT confidence (blue = high, orange/red = low).</span>
   {% if has_diff %}
-  <span>Differential region — residues {{ hi_lo_label }} ({{ 'lost from canonical' if diff_space == 'canonical' else 'added in isoform' }}) — recoloured on a yellow→purple pLDDT ramp so it stands out.</span>
+  <span>{{ region_name_cap }} — residues {{ hi_lo_label }} ({{ 'lost from canonical' if diff_space == 'canonical' else 'only in the isoform' }}) — recoloured on a yellow→purple pLDDT ramp so it stands out.</span>
   {% endif %}
   <span class="folding-explore">Drag to rotate · scroll to zoom · download a CIF to explore in your own viewer.</span>
 </div>
@@ -84,7 +84,7 @@
 </div>
 <div class="folding-legend">
   <span>Predicted aligned error: expected Cα error (Å) at residue <em>j</em> when the fold is superposed on residue <em>i</em>. Dark = confident relative placement; bright = uncertain.
-  {% if has_diff %}The dashed outline marks the differential region ({{ hi_lo_label }}).{% endif %}</span>
+  {% if has_diff %}The dashed outline marks the {{ region_name }} ({{ hi_lo_label }}).{% endif %}</span>
 </div>
 
 <script>

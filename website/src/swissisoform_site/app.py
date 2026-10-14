@@ -40,6 +40,7 @@ from markupsafe import Markup, escape
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from swissisoform.clinical.significance import is_pathogenic
+from swissisoform.contract import region_noun
 from swissisoform.site.evidence import (
     CRITERIA_METRIC_LABELS,
     format_metric,
@@ -66,6 +67,7 @@ from swissisoform_site.data import (
     FUNCTIONAL_CRITERIA,
     Isoform,
     _isoform_view,
+    _region_noun,
     biophysics_card_for_isoform,
     criterion_evidence_for,
     data_dir,
@@ -623,6 +625,8 @@ def create_app() -> Flask:
             diff_start=iso.diff_start,
             diff_end=iso.diff_end,
             diff_space=iso.diff_space,
+            region_name=_region_noun(iso),
+            region_name_cap=_region_noun(iso, cap=True),
             canonical_length_aa=iso.canonical_len,
             isoform_length_aa=iso.isoform_len,
         )
@@ -1419,8 +1423,9 @@ def _make_gene_protein_view(
     (Using ``diff_end`` instead would misplace truncation variants by a residue,
     because the initiator-Met boundary makes ``iso_len + diff_end`` one past
     ``canonical_len``.) Extensions then reach left of residue 1; a truncation's
-    lost N-terminus shades the canonical bar. uORF / altORF isoforms have no
-    shared region (``offset = 0``, whole isoform shaded).
+    lost N-terminus (``diff_is_lost``) is drawn on the truncation's own row, so
+    the canonical bar reads the same on every gene. uORF / altORF isoforms have
+    no shared region (``offset = 0``, whole isoform shaded).
 
     Variants / domains / disorder / coil / motifs / cell-line starts are mapped
     into that frame and deduplicated across isoforms.
@@ -1460,15 +1465,17 @@ def _make_gene_protein_view(
         if has_shared and is_trunc:
             # Lost N-terminus = canonical residues [1, x0-1]; residue x0 is the
             # FIRST retained (shared-core) residue where the isoform body begins,
-            # so the lost-region overlay ends at x0-1 and does not bleed one
-            # residue into the shared core on the canonical bar.
-            diff_x0, diff_x1, diff_on_canon = 1, x0 - 1, True
+            # so the lost region ends at x0-1 and does not bleed one residue into
+            # the shared core. (The -1 shift below puts residue 1 at x=0.)
+            diff_x0, diff_x1, diff_is_lost = 1, x0 - 1, True
         elif has_shared:
-            diff_x0, diff_x1, diff_on_canon = x0, 0, False  # extension left of residue 1
+            diff_x0, diff_x1, diff_is_lost = x0, 0, False  # extension left of residue 1
         else:  # uORF / altORF — no shared region, so the whole isoform is differential
-            diff_x0, diff_x1, diff_on_canon = x0, x1, False
+            diff_x0, diff_x1, diff_is_lost = x0, x1, False
 
-        label = f"{iso.orf_type} · {iso.start_codon}"
+        # Length disambiguates two isoforms of one type and codon (CBX1 has two
+        # extended · CTG); it is also the first thing a reader compares.
+        label = f"{iso.orf_type} · {iso.start_codon} · {iso_len} aa"
         bars.append(
             {
                 "label": label,
@@ -1476,9 +1483,10 @@ def _make_gene_protein_view(
                 "x1": x1,
                 "orf_type": iso.orf_type,
                 "is_trunc": is_trunc,
+                "region": region_noun(iso.orf_type) or "differential region",
                 "diff_x0": diff_x0,
                 "diff_x1": diff_x1,
-                "diff_on_canonical": diff_on_canon,
+                "diff_is_lost": diff_is_lost,
                 "slug": tis_slug(iso.tis_id),
             }
         )
@@ -1556,20 +1564,16 @@ def _make_gene_protein_view(
                 # the x above came from the isoform-frame position.
                 "protein_change": with_frame(v.get("hgvsp"), "canonical"),
                 "source": v.get("source"),
-                "in_unique": bool(v.get("in_isoform_unique")),
             }
+            # No unique/shared flag at the gene level: one variant can sit in one
+            # isoform's differential region and another's shared core, so any
+            # single flag here would assert a membership the gene view can't
+            # make. The isoform pages carry that call.
             prev = var_by_id.get(vid)
             if prev is None:
                 var_by_id[vid] = rec
-            else:
-                # A variant shows up as "unique" if it lies in ANY isoform's
-                # differential region. Preserve that across the pathogenic
-                # upgrade below — ``prev.update(rec)`` would otherwise clobber it
-                # with the current isoform's (possibly shared) flag.
-                merged_unique = prev["in_unique"] or rec["in_unique"]
-                if _pathogenic(rec["significance"]) and not _pathogenic(prev["significance"]):
-                    prev.update(rec)
-                prev["in_unique"] = merged_unique
+            elif _pathogenic(rec["significance"]) and not _pathogenic(prev["significance"]):
+                prev.update(rec)
 
         # Cell-line initiation: each isoform's start sits at its bar's left edge.
         for sample in _CELL_LINE_SAMPLES:
