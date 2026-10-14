@@ -91,6 +91,9 @@
 .kw-option:hover { background: #eef2ff; }
 .kw-option-count { color: #94a3b8; font-size: 12px; font-variant-numeric: tabular-nums; }
 
+/* The facet controls toggle with the `hidden` attribute, but their own display
+   rules (.kw-controls / .kw-mode are flex) would otherwise override it. */
+.search-and-refine [hidden] { display: none !important; }
 .kw-controls {
   display: flex;
   align-items: center;
@@ -169,6 +172,25 @@
   color: #fff;
 }
 
+.orf-filter { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.orf-toggles { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.orf-toggle {
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  background: #fff;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.orf-toggle .orf-n { margin-left: 4px; color: #94a3b8; font-weight: 500; font-variant-numeric: tabular-nums; }
+.orf-toggle:hover { border-color: #a5b4fc; color: #4f46e5; }
+.orf-toggle.active { background: #4f46e5; border-color: #4f46e5; color: #fff; }
+.orf-toggle.active .orf-n { color: #c7d2fe; }
+
 #sort-mode {
   font-size: 13px;
   padding: 5px 8px;
@@ -180,8 +202,7 @@
 }
 #sort-mode:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15); }
 
-/* Per-card keyword chips (clickable — adds the term to the filter). */
-.gene-card-kw { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+/* Keyword chips on gene rows (clickable — adds the term to the filter). */
 .kw-chip {
   border: 1px solid #e2e8f0;
   background: #f8fafc;
@@ -207,7 +228,107 @@
 .landing-examples { font-size: 13px; color: #64748b; margin: 0; }
 .landing-examples a { color: #4f46e5; text-decoration: none; }
 .landing-examples a:hover { text-decoration: underline; }
-#no-results { display: none; color: #64748b; font-size: 14px; padding: 24px 0; }
+#no-results { color: #64748b; font-size: 14px; padding: 24px 0; }
+#no-results[hidden] { display: none; }
+
+/* ----- Landing gene table (landing_table.js) --------------------------- */
+/* One grid for every row so columns line up; isoform rows span the gene/UniProt
+   and tags/keywords tracks. Rows are absolutely placed by the virtualiser. */
+.gt { --gt-cols: 30px minmax(84px, 1fr) 86px minmax(140px, 1.1fr) 116px minmax(130px, 1.1fr) minmax(220px, 2.6fr);
+      margin-top: 18px; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; }
+.gt-head, .gt-row { display: grid; grid-template-columns: var(--gt-cols); align-items: center;
+  border-left: 4px solid transparent; }
+.gt-head { position: sticky; top: 0; z-index: 3; background: #f8fafc; border-bottom: 1px solid #e2e8f0;
+  border-radius: 10px 10px 0 0; font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .04em; color: #64748b; }
+.gt-head .gt-c { padding: 8px 8px; }
+/* Column headers that explain themselves on hover — marked so it is discoverable. */
+.gt-tip { text-decoration: underline dotted #94a3b8; text-underline-offset: 3px; cursor: help; }
+.gt-body { position: relative; }
+.gt-row { position: absolute; left: 0; right: 0; border-bottom: 1px solid #f1f5f9; }
+.gt-c { padding: 7px 8px; min-width: 0; font-size: 13px; }
+.gt-loading, .gt-noscript { padding: 18px; color: #64748b; font-size: 14px; margin: 0; }
+
+.gt-gene { background-color: #fff; }
+.gt-gene:hover { background-color: #fafbff; }
+/* An expanded gene is one block: its row heads it, its isoform rows hang under
+   it on a grey tint, a slate rail runs down the left of all of them, and a gap
+   closes it off from the next gene. */
+.gt-gene.is-open { background-color: #eef1f5; border-bottom-color: #d5dbe3; }
+.gt-gene.is-open .gt-toggle { color: #334155; }
+.gt-gene .gt-c-gene a { font-weight: 600; color: #0f172a; text-decoration: none; }
+.gt-gene .gt-c-gene a:hover { color: #1d4ed8; }
+.gt-c-uniprot a { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #64748b; text-decoration: none; }
+.gt-c-uniprot a:hover { color: #1d4ed8; }
+.gt-toggle { width: 22px; height: 22px; border: 0; border-radius: 4px; background: transparent; color: #475569;
+  cursor: pointer; font-size: 13px; line-height: 1; }
+.gt-toggle:hover, .gt-toggle:focus-visible { background: #e2e8f0; outline: none; }
+.gt-c-iso { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.gt-c-iso .chip-orf { margin-right: 0; font-size: 10.5px; padding: 1px 7px; }
+.gt-n { font-weight: 600; color: #334155; margin-right: 2px; font-variant-numeric: tabular-nums; }
+.gt-c-kw { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.gt-none { color: #94a3b8; font-size: 12px; }
+
+/* Isoform rows: indented under their gene, the whole row is the link. */
+.gt-subhead, .gt-iso, .gt-more { border-bottom-color: #e7ebf0; }
+/* The rail: a 4px stripe painted as part of each row's own background, over
+   the left gutter every row reserves (so columns line up open or closed). */
+.gt-gene.is-open, .gt-subhead, .gt-iso, .gt-more {
+  background-image: linear-gradient(#94a3b8, #94a3b8);
+  background-size: 4px 100%; background-repeat: no-repeat; background-origin: border-box; }
+.gt-subhead { background-color: #f3f5f8; font-size: 10.5px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .04em; color: #94a3b8; }
+.gt-subhead .gt-c-tis, .gt-iso .gt-c-tis, .gt-more .gt-c-wide { padding-left: 18px; }
+.gt-gap { height: 14px; background-color: #fff; border-bottom: 1px solid #e2e8f0; }
+.gt-subhead .gt-c { padding: 5px 8px; font-size: 10.5px; }
+.gt-c-tis { grid-column: 2 / 4; display: flex; align-items: center; gap: 4px; min-width: 0; }
+.gt-c-len { grid-column: 4; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.gt-c-fired { grid-column: 6 / 8; display: flex; flex-wrap: wrap; align-items: center; }
+.gt-c-wide { grid-column: 2 / 8; }
+.gt-iso { background-color: #f8f9fb; }
+.gt-iso:hover { background-color: #eef1f5; }
+.gt-iso.is-match { background-color: #fefce8; }  /* matches the filter, shown among all */
+.gt-iso.is-match:hover { background-color: #fef9c3; }
+.gt-iso-link { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #1e293b;
+  text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gt-iso-link::after { content: ""; position: absolute; inset: 0; }  /* whole row clicks through */
+.gt-iso-link:hover { color: #1d4ed8; }
+.gt-iso .iso-chip { margin-right: 2px; }
+/* Interactive / hover-titled bits sit above the row-wide link. */
+.gt-iso .cdlmps, .gt-chip, .gt-more-chips, .gt-iso .iso-tag-chip { position: relative; z-index: 1; }
+.gt-aa { color: #475569; font-variant-numeric: tabular-nums; font-size: 12px; }
+.gt-more { background-color: #f8f9fb; }
+.gt-showall { border: 0; background: transparent; color: #4f46e5; font-size: 12px; font-weight: 600;
+  cursor: pointer; padding: 0; }
+.gt-showall:hover { text-decoration: underline; }
+
+/* Fired-tag chips — filled in their CDLMPS category colour (.cat-X sets
+   --cat-accent / --cat-accent-bg), every kind of tag alike. */
+.gt-chip { display: inline-block; font-size: 11px; line-height: 1.35; padding: 1px 7px; margin: 2px 4px 2px 0;
+  border-radius: 999px; border: 1px solid var(--cat-accent, #94a3b8); color: var(--cat-accent, #475569);
+  background: var(--cat-accent-bg, #f1f5f9); font-weight: 600; white-space: nowrap; }
+.gt-chip-uncat { --cat-accent: #64748b; --cat-accent-bg: #f1f5f9; }
+.gt-more-chips { border: 0; background: transparent; color: #4f46e5; font-size: 11px; font-weight: 600;
+  cursor: pointer; padding: 1px 4px; }
+.gt-more-chips:hover { text-decoration: underline; }
+.gt-catcount { display: inline-flex; align-items: baseline; gap: 2px; margin: 1px 4px 1px 0; padding: 1px 6px;
+  border-radius: 4px; font-size: 11px; font-weight: 600; color: var(--cat-accent, #475569);
+  background: var(--cat-accent-bg, #f1f5f9); }
+.gt-catcount b { font-weight: 700; font-variant-numeric: tabular-nums; }
+.gt-badge { display: inline-block; min-width: 16px; margin-right: 5px; padding: 0 4px; border-radius: 3px;
+  font-size: 10px; font-weight: 700; text-align: center; color: #fff; background: var(--cat-accent, #64748b); }
+.gt-badge-ai { background: #475569; }
+
+/* Narrow screens: stack each row instead of scrolling sideways. */
+@media (max-width: 760px) {
+  .gt-head { display: none; }
+  .gt-row { grid-template-columns: 30px 1fr auto; grid-auto-rows: auto; }
+  .gt-gene .gt-c-gene { grid-column: 2; }
+  .gt-gene .gt-c-uniprot { grid-column: 3; text-align: right; }
+  .gt-gene .gt-c-iso, .gt-gene .gt-c-flags, .gt-gene .gt-c-tags, .gt-gene .gt-c-kw { grid-column: 2 / 4; padding-top: 0; }
+  .gt-c-tis, .gt-c-len, .gt-iso .gt-c-flags, .gt-c-fired, .gt-c-wide { grid-column: 2 / 4; padding-top: 2px; }
+  .gt-subhead { display: none; }
+}
 
 /* ----- Evidence grid cells ------------------------------------------- */
 

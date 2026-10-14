@@ -1,11 +1,7 @@
 {% extends "base.html" %}
-{% import "_cdlmps.html" as sc %}
 {% block title %}SwissIsoform v2 — {{ n_genes }} genes{% endblock %}
 
 {% block content %}
-
-{% set stats = namespace(iso=0) %}
-{% for g in genes %}{% set stats.iso = stats.iso + g.isoforms|length %}{% endfor %}
 
 <section class="landing-hero">
   <h1 class="landing-title">Alternative protein isoforms</h1>
@@ -20,7 +16,7 @@
 
   <div class="landing-stats">
     <div class="stat"><span class="stat-num">{{ n_genes }}</span><span class="stat-lbl">genes</span></div>
-    <div class="stat"><span class="stat-num">{{ stats.iso }}</span><span class="stat-lbl">isoforms</span></div>
+    <div class="stat"><span class="stat-num">{{ n_isoforms }}</span><span class="stat-lbl">isoforms</span></div>
   </div>
 
   <div class="search-and-refine">
@@ -50,19 +46,19 @@
         <button type="button" id="kw-clear" class="kw-clear">clear</button>
       </div>
 
-      {# Isoform-change facet — same typeahead pattern as "Filter by function",
-         but over the controlled synthesis tags. A gene matches when ANY of its
-         isoforms carries the selected tag (vocab derived from data-iso-tags). #}
+      {# Isoform tag facet — same typeahead pattern as "Filter by function", over
+         the fired pipeline tags plus the AI synthesis tags. Matched per isoform: an
+         isoform must carry the selection; a gene shows when any isoform does. #}
       <div class="kw-facet">
-        <input type="text" id="tag-input" placeholder="Filter by isoform change… (e.g. Localization conflict, Domain loss)"
-               autocomplete="off" spellcheck="false" aria-label="Filter by isoform change"
-               title="Filter genes by an isoform-specific functional change from the AI synthesis (Localization conflict, Domain loss, Core refold…). Type to pick from the tags present in the catalogue.">
+        <input type="text" id="tag-input" placeholder="Filter by isoform tag… (e.g. Lost region under selection, Domain loss)"
+               autocomplete="off" spellcheck="false" aria-label="Filter by isoform tag"
+               title="Filter isoforms by a tag that fired for them (the pipeline's evidence tags, coloured by category) or an AI-synthesis change tag. Type to pick from the tags present in the catalogue.">
         <div id="tag-dropdown" class="kw-dropdown" hidden></div>
       </div>
 
       <div id="tag-controls" class="kw-controls" hidden>
         <div id="tag-selected" class="kw-selected"></div>
-        <div class="kw-mode" title="all = gene must have isoform(s) covering every selected tag; any = at least one">
+        <div class="kw-mode" title="all = an isoform must carry every selected tag; any = at least one">
           match
           <label><input type="radio" name="tagmode" value="and" checked> all</label>
           <label><input type="radio" name="tagmode" value="or"> any</label>
@@ -79,13 +75,19 @@
         <div id="cat-toggles" class="cat-toggles">
           {% for group in CARD_GROUPS %}
           <button type="button" class="cat-toggle" data-cat="{{ group.letter }}"
-                  title="{{ group.name }} — keep genes whose Best isoform fires {{ group.name }}">{{ group.letter }}</button>
+                  title="{{ group.name }} — keep isoforms that fire {{ group.name }}">{{ group.letter }}</button>
           {% endfor %}
         </div>
-        <span id="cat-mode" class="kw-mode" hidden title="all = Best isoform must fire every selected category; any = at least one">
+        <span id="cat-mode" class="kw-mode" hidden title="all = an isoform must fire every selected category; any = at least one">
           <label><input type="radio" name="catmode" value="and" checked> all</label>
           <label><input type="radio" name="catmode" value="or"> any</label>
         </span>
+      </div>
+      {# Filled by landing_table.js from the ORF types present in the data. An
+         isoform has exactly one type, so several selected means any of them. #}
+      <div class="orf-filter">
+        <span class="refine-label" title="Keep isoforms of the selected ORF types (any of them)">ORF type</span>
+        <div id="orf-toggles" class="orf-toggles"></div>
       </div>
       <label class="sort-control">
         <span class="refine-label">Sort</span>
@@ -118,462 +120,52 @@
     </div>
   </div>
 
-  {% if genes %}
+  {% if examples %}
   <p class="landing-examples">
-    Examples:{% for g in genes[:6] %}
-      <a href="{{ url_for('gene_page', gene_name=g.name) }}">{{ g.name }}</a>{% if not loop.last %} ·{% endif %}
+    Examples:{% for name in examples %}
+      <a href="{{ url_for('gene_page', gene_name=name) }}">{{ name }}</a>{% if not loop.last %} ·{% endif %}
     {% endfor %}
   </p>
   {% endif %}
 </section>
 
-{% if not genes %}
+{% if not n_genes %}
   <div class="rounded border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
     No data loaded. Make sure <code>SWISSISOFORM_DATA_DIR</code> points at a directory
     containing <code>all_paired.parquet</code>.
   </div>
 {% else %}
 
-<div id="gene-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-  {% for gene in genes %}
-
-  {% set extensions = gene.isoforms|selectattr("orf_type", "equalto", "extended")|list %}
-  {% set truncations = gene.isoforms|selectattr("orf_type", "equalto", "truncated")|list %}
-  {% set others = gene.isoforms|rejectattr("orf_type", "equalto", "extended")|rejectattr("orf_type", "equalto", "truncated")|list %}
-  {% set n_ext = extensions|length %}
-  {% set n_trunc = truncations|length %}
-  {% set n_other = others|length %}
-
-  {% set best = gene.best_isoform %}
-  <div class="gene-card block bg-white border border-slate-200 rounded-lg p-4 hover:border-slate-400 hover:shadow-sm transition"
-       data-gene="{{ gene.name|lower }}" data-uniprot="{{ (gene.uniprot_id or '')|lower }}"
-       data-keywords="{{ gene.keywords|join(';') }}"
-       data-iso-tags="{{ gene.iso_tags|join(';') }}"
-       data-fires="{{ best.fired_categories|join('') if best else '' }}"
-       data-net-score="{{ best.net_score if best else 0 }}"
-       data-fire-interesting="{{ best.n_interesting if best else 0 }}">
-
-    <div class="flex items-baseline justify-between mb-2">
-      <div class="flex items-baseline gap-2">
-        <a href="{{ url_for('gene_page', gene_name=gene.name) }}"
-           class="text-lg font-semibold tracking-tight hover:text-blue-700">{{ gene.name }}</a>
-        {% if gene.uniprot_id %}
-          <a href="{{ gene.uniprot_url }}" target="_blank" rel="noopener"
-             class="text-xs text-slate-500 font-mono hover:text-blue-700">{{ gene.uniprot_id }}</a>
-        {% endif %}
-      </div>
-      <span class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
-        {{ gene.isoforms|length }} TIS
-      </span>
-    </div>
-
-    {# Headline CDLMPS lineup — the highest net-score isoform (best set above). #}
-    {% if best %}
-    <div class="gene-card-best mb-2">{{ sc.cdlmps(best.category_flags, label='Best:') }}</div>
-    {% endif %}
-
-    {# UniProt keyword chips — clickable adds the term to the functional filter;
-       "+N more" expands to reveal every assigned keyword (lazily injected). #}
-    {% if gene.keywords %}
-    <div class="gene-card-kw mb-3" data-expanded="0">
-      {% for kw in gene.keywords[:6] %}
-        <button type="button" class="kw-chip" data-kw="{{ kw }}" title="Add “{{ kw }}” to the function filter">{{ kw }}</button>
-      {% endfor %}
-      {% if gene.keywords|length > 6 %}
-        <button type="button" class="kw-toggle" data-n="{{ gene.keywords|length - 6 }}">+{{ gene.keywords|length - 6 }} more</button>
-      {% endif %}
-    </div>
-    {% endif %}
-
-    {# Isoform dropdown — native <details> element, no JS. #}
-    <details class="iso-dropdown">
-      <summary>
-        {% if n_ext %}
-          <span class="chip-orf chip-extended">{{ n_ext }} extension{{ '' if n_ext == 1 else 's' }}</span>
-        {% endif %}
-        {% if n_trunc %}
-          <span class="chip-orf chip-truncated">{{ n_trunc }} truncation{{ '' if n_trunc == 1 else 's' }}</span>
-        {% endif %}
-        {% if n_other %}
-          <span class="chip-orf chip-other">{{ n_other }} other</span>
-        {% endif %}
-      </summary>
-      <ul>
-        {% for iso in extensions %}{% include "_isoform_card.html" %}{% endfor %}
-        {% for iso in truncations %}{% include "_isoform_card.html" %}{% endfor %}
-        {% for iso in others %}{% include "_isoform_card.html" %}{% endfor %}
-      </ul>
-    </details>
-
+{# The gene table. Rows are built client-side from /api/landing.json and only the
+   ones on screen are in the DOM (landing_table.js), so the page costs the same at
+   catalogue scale. Link bases are rendered WITHOUT the scan token and the token
+   is carried separately, as gene.html does, so the script can append paths. #}
+<div id="gene-table" class="gt" role="table" aria-label="Genes and their isoforms"
+     aria-rowcount="-1"
+     data-src="{{ url_for('api_landing', v=landing_etag, vcf=None) }}"
+     data-gene-base="{{ url_for('gene_page', gene_name='__GENE__', vcf=None) }}"
+     data-scan-qs="{{ scan_qs }}">
+  <div class="gt-head" role="row">
+    <span class="gt-c gt-c-toggle" role="columnheader"><span class="sr-only">Expand</span></span>
+    <span class="gt-c gt-c-gene" role="columnheader">Gene</span>
+    <span class="gt-c gt-c-uniprot" role="columnheader">UniProt</span>
+    <span class="gt-c gt-c-iso" role="columnheader">Isoforms</span>
+    <span class="gt-c gt-c-flags" role="columnheader"><span class="gt-tip" title="The CDLMPS lineup of the gene's Best isoform: the one with the highest net score (+1 for each category with at least one criterion met). Ties go to more categories met, then the existence score, then the longer isoform. Hover a gene's lineup to see which isoform it is; expand the gene to see every isoform's own lineup.">Best</span></span>
+    <span class="gt-c gt-c-tags" role="columnheader"><span class="gt-tip" title="Per category: how many different tags fired across ALL of the gene's isoforms (each tag counted once, however many isoforms fire it). Expand the gene for per-isoform tags.">Fired tags</span></span>
+    <span class="gt-c gt-c-kw" role="columnheader">Keywords</span>
   </div>
-  {% endfor %}
+  <div class="gt-body" role="rowgroup"></div>
+  <p class="gt-loading">Loading {{ n_genes }} genes…</p>
 </div>
 
-<p id="no-results">No gene matches your search.</p>
+<p id="no-results" hidden>No gene matches your filters.</p>
+<noscript><p class="gt-noscript">The gene table needs JavaScript. Every gene is also reachable from its page, e.g. the examples above.</p></noscript>
 
 {% endif %}
 
 {% endblock %}
 
 {% block scripts %}
-{# Variant drop zone — separate file because it is the only thing on this page
-   that talks to the server; the IIFE below is purely client-side grid filtering. #}
+<script src="{{ url_for('static', filename='js/landing_table.js') }}" defer></script>
 <script src="{{ url_for('static', filename='js/vcf_drop.js') }}" defer></script>
-<script>
-  (function () {
-    var nameInput = document.getElementById("gene-search");
-    var kwInput = document.getElementById("kw-input");
-    if (!nameInput) return;
-    var cards = Array.prototype.slice.call(document.querySelectorAll(".gene-card"));
-    var none = document.getElementById("no-results");
-    var dropdown = document.getElementById("kw-dropdown");
-    var controls = document.getElementById("kw-controls");
-    var selectedBox = document.getElementById("kw-selected");
-    var clearBtn = document.getElementById("kw-clear");
-    var tagInput = document.getElementById("tag-input");
-    var tagDropdown = document.getElementById("tag-dropdown");
-    var tagControls = document.getElementById("tag-controls");
-    var tagSelectedBox = document.getElementById("tag-selected");
-    var tagClearBtn = document.getElementById("tag-clear");
-    var countEl = document.getElementById("result-count");
-
-    // --- Inverted index: keyword(lowercase) -> {name, cards[]}. One pass. ---
-    // Each card carries its own lowercased keyword set for O(1) membership.
-    var index = {};
-    cards.forEach(function (c) {
-      var raw = c.dataset.keywords || "";
-      c._kw = {};
-      (raw ? raw.split(";") : []).forEach(function (k) {
-        k = k.trim();
-        if (!k) return;
-        var key = k.toLowerCase();
-        c._kw[key] = true;
-        if (!index[key]) index[key] = { name: k, cards: [] };
-        index[key].cards.push(c);
-      });
-    });
-    var vocab = Object.keys(index).map(function (key) {
-      return { key: key, name: index[key].name, count: index[key].cards.length };
-    });
-    vocab.sort(function (a, b) { return b.count - a.count || a.name.localeCompare(b.name); });
-
-    // --- Inverted index for isoform-change tags: tag(lowercase) -> {name, cards[]}.
-    // Same typeahead machinery as keywords; membership via each card's _tags set. ---
-    var tagIndex = {};
-    cards.forEach(function (c) {
-      c._tags = {};
-      (c.dataset.isoTags || "").split(";").forEach(function (t) {
-        t = t.trim();
-        if (!t) return;
-        var key = t.toLowerCase();
-        c._tags[key] = true;
-        if (!tagIndex[key]) tagIndex[key] = { name: t, cards: [] };
-        tagIndex[key].cards.push(c);
-      });
-    });
-    var tagVocab = Object.keys(tagIndex).map(function (key) {
-      return { key: key, name: tagIndex[key].name, count: tagIndex[key].cards.length };
-    });
-    tagVocab.sort(function (a, b) { return b.count - a.count || a.name.localeCompare(b.name); });
-
-    // --- CDLMPS firing: per-card fired-letter set + original DOM order. ---
-    var grid = document.getElementById("gene-grid");
-    cards.forEach(function (c, i) {
-      c._order = i;
-      c._fires = {};
-      (c.dataset.fires || "").split("").forEach(function (L) { if (L.trim()) c._fires[L] = true; });
-      c._net = parseInt(c.dataset.netScore || "0", 10) || 0;
-      c._int = parseInt(c.dataset.fireInteresting || "0", 10) || 0;
-    });
-
-    var selected = [];            // array of keyword keys (lowercase)
-    var mode = "and";             // "and" | "or" — keyword match mode
-    var selectedCats = [];        // array of category letters, e.g. ["C","D"]
-    var catMode = "and";          // "and" | "or" — category match mode
-    var selectedTags = [];        // array of isoform-change tag names
-    var tagMode = "and";          // "and" | "or" — tag match mode
-    var sortMode = "name";        // "name" | "firing"
-
-    function currentMode() {
-      var r = document.querySelector('input[name="kwmode"]:checked');
-      return r ? r.value : "and";
-    }
-    function currentCatMode() {
-      var r = document.querySelector('input[name="catmode"]:checked');
-      return r ? r.value : "and";
-    }
-    function currentTagMode() {
-      var r = document.querySelector('input[name="tagmode"]:checked');
-      return r ? r.value : "and";
-    }
-
-    // --- Filtering: name ∩ keywords ∩ fired-categories. ---
-    function apply() {
-      var q = (nameInput.value || "").trim().toLowerCase();
-      var shown = 0;
-      cards.forEach(function (c) {
-        var nameMatch = !q ||
-          ((c.dataset.gene || "") + " " + (c.dataset.uniprot || "")).indexOf(q) !== -1;
-        var kwMatch = true;
-        if (selected.length) {
-          kwMatch = (mode === "and")
-            ? selected.every(function (k) { return c._kw[k]; })
-            : selected.some(function (k) { return c._kw[k]; });
-        }
-        var catMatch = true;
-        if (selectedCats.length) {
-          catMatch = (catMode === "and")
-            ? selectedCats.every(function (L) { return c._fires[L]; })
-            : selectedCats.some(function (L) { return c._fires[L]; });
-        }
-        var tagMatch = true;
-        if (selectedTags.length) {
-          tagMatch = (tagMode === "and")
-            ? selectedTags.every(function (t) { return c._tags[t]; })
-            : selectedTags.some(function (t) { return c._tags[t]; });
-        }
-        var match = nameMatch && kwMatch && catMatch && tagMatch;
-        c.style.display = match ? "" : "none";
-        if (match) shown++;
-      });
-      if (none) none.style.display = shown ? "none" : "block";
-      if (countEl) {
-        var active = q || selected.length || selectedCats.length || selectedTags.length;
-        countEl.hidden = !active;
-        countEl.textContent = active ? shown + " gene" + (shown === 1 ? "" : "s") : "";
-      }
-    }
-
-    // --- Sorting: net CDLMPS score (firing) or original order (name). ---
-    function applySort() {
-      var arr = cards.slice();
-      if (sortMode === "firing") {
-        arr.sort(function (a, b) {
-          return (b._net - a._net) || (b._int - a._int) ||
-                 (a.dataset.gene || "").localeCompare(b.dataset.gene || "");
-        });
-      } else {
-        arr.sort(function (a, b) { return a._order - b._order; });
-      }
-      arr.forEach(function (c) { grid.appendChild(c); });
-    }
-
-    // --- Selected-keyword chips. ---
-    function renderSelected() {
-      selectedBox.innerHTML = "";
-      selected.forEach(function (key) {
-        var chip = document.createElement("span");
-        chip.className = "kw-tag";
-        chip.textContent = index[key] ? index[key].name : key;
-        var x = document.createElement("button");
-        x.type = "button";
-        x.className = "kw-tag-x";
-        x.setAttribute("aria-label", "Remove");
-        x.textContent = "×";
-        x.addEventListener("click", function () { removeKeyword(key); });
-        chip.appendChild(x);
-        selectedBox.appendChild(chip);
-      });
-      if (controls) controls.hidden = selected.length === 0;
-    }
-
-    function addKeyword(key) {
-      key = (key || "").toLowerCase();
-      if (!index[key] || selected.indexOf(key) !== -1) return;
-      selected.push(key);
-      kwInput.value = "";
-      hideDropdown();
-      renderSelected();
-      apply();
-    }
-    function removeKeyword(key) {
-      selected = selected.filter(function (k) { return k !== key; });
-      renderSelected();
-      apply();
-    }
-
-    // --- Autocomplete dropdown over the vocabulary. ---
-    function hideDropdown() { dropdown.hidden = true; dropdown.innerHTML = ""; }
-    function showDropdown() {
-      var q = (kwInput.value || "").trim().toLowerCase();
-      // Show every matching keyword (the list scrolls); cap only guards against
-      // a pathological DOM on a huge genome-wide vocabulary. Type to narrow.
-      var matches = vocab.filter(function (v) {
-        return selected.indexOf(v.key) === -1 && (!q || v.key.indexOf(q) !== -1);
-      }).slice(0, 500);
-      if (!matches.length) { hideDropdown(); return; }
-      dropdown.innerHTML = "";
-      matches.forEach(function (v) {
-        var row = document.createElement("button");
-        row.type = "button";
-        row.className = "kw-option";
-        row.innerHTML = '<span class="kw-option-name"></span>' +
-                        '<span class="kw-option-count"></span>';
-        row.querySelector(".kw-option-name").textContent = v.name;
-        row.querySelector(".kw-option-count").textContent = v.count;
-        row.addEventListener("mousedown", function (e) { e.preventDefault(); addKeyword(v.key); });
-        dropdown.appendChild(row);
-      });
-      dropdown.hidden = false;
-    }
-
-    // --- Wiring. ---
-    nameInput.addEventListener("input", apply);
-    if (kwInput) {
-      kwInput.addEventListener("input", showDropdown);
-      kwInput.addEventListener("focus", showDropdown);
-      kwInput.addEventListener("blur", function () { setTimeout(hideDropdown, 120); });
-      kwInput.addEventListener("keydown", function (e) {
-        if (e.key === "Enter") {
-          var first = dropdown.querySelector(".kw-option");
-          if (first) { e.preventDefault(); first.dispatchEvent(new MouseEvent("mousedown")); }
-        } else if (e.key === "Escape") {
-          hideDropdown();
-        }
-      });
-    }
-    Array.prototype.forEach.call(document.querySelectorAll('input[name="kwmode"]'), function (r) {
-      r.addEventListener("change", function () { mode = currentMode(); apply(); });
-    });
-    if (clearBtn) clearBtn.addEventListener("click", function () {
-      selected = []; renderSelected(); apply();
-    });
-
-    // --- CDLMPS category toggles + all/any + sort. ---
-    var catModeBox = document.getElementById("cat-mode");
-    Array.prototype.forEach.call(document.querySelectorAll(".cat-toggle"), function (btn) {
-      btn.addEventListener("click", function () {
-        var L = btn.dataset.cat;
-        var on = btn.classList.toggle("active");
-        if (on) { if (selectedCats.indexOf(L) === -1) selectedCats.push(L); }
-        else { selectedCats = selectedCats.filter(function (x) { return x !== L; }); }
-        if (catModeBox) catModeBox.hidden = selectedCats.length < 2;
-        apply();
-      });
-    });
-    Array.prototype.forEach.call(document.querySelectorAll('input[name="catmode"]'), function (r) {
-      r.addEventListener("change", function () { catMode = currentCatMode(); apply(); });
-    });
-
-    // --- Isoform-change tag facet: typeahead over the controlled vocab. ---
-    // Same shape as the keyword facet; selectedTags holds lowercase keys and a
-    // gene matches when ANY of its isoforms carries the tag (c._tags membership).
-    function renderTagSelected() {
-      if (!tagSelectedBox) return;
-      tagSelectedBox.innerHTML = "";
-      selectedTags.forEach(function (key) {
-        var chip = document.createElement("span");
-        chip.className = "kw-tag";
-        chip.textContent = tagIndex[key] ? tagIndex[key].name : key;
-        var x = document.createElement("button");
-        x.type = "button";
-        x.className = "kw-tag-x";
-        x.setAttribute("aria-label", "Remove");
-        x.textContent = "×";
-        x.addEventListener("click", function () { removeTag(key); });
-        chip.appendChild(x);
-        tagSelectedBox.appendChild(chip);
-      });
-      if (tagControls) tagControls.hidden = selectedTags.length === 0;
-    }
-    function addTag(key) {
-      key = (key || "").toLowerCase();
-      if (!tagIndex[key] || selectedTags.indexOf(key) !== -1) return;
-      selectedTags.push(key);
-      if (tagInput) tagInput.value = "";
-      hideTagDropdown();
-      renderTagSelected();
-      apply();
-    }
-    function removeTag(key) {
-      selectedTags = selectedTags.filter(function (k) { return k !== key; });
-      renderTagSelected();
-      apply();
-    }
-    function hideTagDropdown() {
-      if (!tagDropdown) return;
-      tagDropdown.hidden = true; tagDropdown.innerHTML = "";
-    }
-    function showTagDropdown() {
-      if (!tagDropdown || !tagInput) return;
-      var q = (tagInput.value || "").trim().toLowerCase();
-      var matches = tagVocab.filter(function (v) {
-        return selectedTags.indexOf(v.key) === -1 && (!q || v.key.indexOf(q) !== -1);
-      }).slice(0, 500);
-      if (!matches.length) { hideTagDropdown(); return; }
-      tagDropdown.innerHTML = "";
-      matches.forEach(function (v) {
-        var row = document.createElement("button");
-        row.type = "button";
-        row.className = "kw-option";
-        row.innerHTML = '<span class="kw-option-name"></span>' +
-                        '<span class="kw-option-count"></span>';
-        row.querySelector(".kw-option-name").textContent = v.name;
-        row.querySelector(".kw-option-count").textContent = v.count;
-        row.addEventListener("mousedown", function (e) { e.preventDefault(); addTag(v.key); });
-        tagDropdown.appendChild(row);
-      });
-      tagDropdown.hidden = false;
-    }
-    if (tagInput) {
-      tagInput.addEventListener("input", showTagDropdown);
-      tagInput.addEventListener("focus", showTagDropdown);
-      tagInput.addEventListener("blur", function () { setTimeout(hideTagDropdown, 120); });
-      tagInput.addEventListener("keydown", function (e) {
-        if (e.key === "Enter") {
-          var first = tagDropdown && tagDropdown.querySelector(".kw-option");
-          if (first) { e.preventDefault(); first.dispatchEvent(new MouseEvent("mousedown")); }
-        } else if (e.key === "Escape") {
-          hideTagDropdown();
-        }
-      });
-    }
-    Array.prototype.forEach.call(document.querySelectorAll('input[name="tagmode"]'), function (r) {
-      r.addEventListener("change", function () { tagMode = currentTagMode(); apply(); });
-    });
-    if (tagClearBtn) tagClearBtn.addEventListener("click", function () {
-      selectedTags = []; renderTagSelected(); apply();
-    });
-    var sortSelect = document.getElementById("sort-mode");
-    if (sortSelect) sortSelect.addEventListener("change", function () {
-      sortMode = sortSelect.value; applySort();
-    });
-    // Card keyword interactions: "+N more" reveals every keyword; a chip
-    // click adds that term to the functional filter.
-    document.getElementById("gene-grid").addEventListener("click", function (e) {
-      var toggle = e.target.closest(".kw-toggle");
-      if (toggle) {
-        e.preventDefault();
-        var box = toggle.parentNode;                 // .gene-card-kw
-        if (box.dataset.expanded === "1") {
-          Array.prototype.slice.call(box.querySelectorAll(".kw-extra"))
-            .forEach(function (el) { el.remove(); });
-          box.dataset.expanded = "0";
-          toggle.textContent = "+" + toggle.dataset.n + " more";
-        } else {
-          var all = (toggle.closest(".gene-card").dataset.keywords || "")
-            .split(";").map(function (s) { return s.trim(); }).filter(Boolean);
-          all.slice(6).forEach(function (kw) {
-            var b = document.createElement("button");
-            b.type = "button";
-            b.className = "kw-chip kw-extra";
-            b.dataset.kw = kw;
-            b.title = "Add “" + kw + "” to the function filter";
-            b.textContent = kw;
-            box.insertBefore(b, toggle);
-          });
-          box.dataset.expanded = "1";
-          toggle.textContent = "show less";
-        }
-        return;
-      }
-      var chip = e.target.closest(".kw-chip");
-      if (chip) { e.preventDefault(); addKeyword(chip.dataset.kw); }
-    });
-
-    renderSelected();
-    apply();
-    applySort();
-  })();
-</script>
 {% endblock %}
