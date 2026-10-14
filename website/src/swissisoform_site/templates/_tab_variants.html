@@ -46,7 +46,7 @@
         </td>
         <td data-sort="{{ v.am_pathogenicity|float if v.am_pathogenicity is not none else '' }}">
           {% if v.am_class %}{{ v.am_class }}{% if v.am_pathogenicity is not none %} ({{ '%.2f'|format(v.am_pathogenicity|float) }}){% endif %}
-          {% elif region == 'unique' and diff_space == 'isoform' and not is_lof %}<span class="am-na" title="AlphaMissense is computed in the canonical transcript frame; this extension region is non-canonical, so AlphaMissense cannot score it. Use ESM-C ΔLLR.">N/A</span>
+          {% elif region == 'unique' and diff_space == 'isoform' and not is_lof %}<span class="am-na" title="AlphaMissense is computed in the canonical transcript frame; this {{ region_name }} is non-canonical, so AlphaMissense cannot score it. Use ESM-C ΔLLR.">N/A</span>
           {% else %}—{% endif %}
         </td>
         <td class="var-num" data-sort="{{ v.plm_delta_llr|float if v.plm_delta_llr is not none else '' }}">
@@ -64,15 +64,15 @@
 
 {% set has_any = variant_rows_unique or variant_rows_shared %}
 {% if has_any %}
-  {% set diff_label = 'lost N-terminus (canonical-only)' if diff_space == 'canonical' else 'N-terminal extension (isoform-unique)' %}
+  {% set diff_label = 'N-terminus present only in the canonical' if diff_space == 'canonical' else ('a separate ORF — no sequence shared with the canonical' if region_name == 'ORF' else 'N-terminus present only in the isoform') %}
 
   <div class="variants-subsection">
-    <h3 class="variants-subhead">Differential region <span class="variants-subnote">— {{ diff_label }}</span></h3>
+    <h3 class="variants-subhead">{{ region_name_cap }} <span class="variants-subnote">— {{ diff_label }}</span></h3>
     {% if variant_rows_unique %}
       {{ variant_table(variant_rows_unique, 'unique') }}
-      <p class="var-count">{{ variant_rows_unique|length }} variant{{ '' if variant_rows_unique|length == 1 else 's' }} in the differential region.</p>
+      <p class="var-count">{{ variant_rows_unique|length }} variant{{ '' if variant_rows_unique|length == 1 else 's' }} in the {{ region_name }}.</p>
     {% else %}
-      <p class="empty">No clinical variants intersect the differential region.</p>
+      <p class="empty">No clinical variants intersect the {{ region_name }}.</p>
     {% endif %}
   </div>
 
@@ -91,7 +91,7 @@
     flagged by consequence (AlphaMissense and ESM-C score only missense/substitutions, so they are
     blank here by design, not by absence of impact). <strong>AlphaMissense</strong> is computed in the
     canonical reading frame, so it scores the shared core but reads <em>N/A</em> across an isoform-unique
-    extension — use <strong>ESM-C ΔLLR</strong> there.
+    {{ region_name }} — use <strong>ESM-C ΔLLR</strong> there.
   </p>
 {% else %}
 <p class="empty">No clinical variants intersect this isoform's coding region.</p>

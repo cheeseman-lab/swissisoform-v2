@@ -40,8 +40,9 @@
     <h2 class="iso-panel-h">Isoform tracks</h2>
     <p class="protein-caption">
       Protein-residue axis (canonical frame). Top bar = canonical; each bar below is an
-      isoform aligned on its shared region — extensions reach left of residue 1 (green), the
-      lost region of a truncation is shaded on the canonical bar (red). Variant rows sit
+      isoform aligned on its shared region, and each row shows its own difference: an
+      extension reaches left of residue 1 (green), a truncation's lost region is the red stretch
+      it lacks, a separate ORF is green throughout. Click a row or its label to open the isoform. Variant rows sit
       above (ClinVar/gnomAD/COSMIC, red = pathogenic, one row per consequence); below the
       bars are InterPro domains, disorder / coiled-coil / motifs, and per-cell-line
       initiation efficiency (dot size). Features are deduplicated across isoforms; hover any
@@ -110,12 +111,18 @@
   function swissWireGeneClick() {
     const gd = document.getElementById("graph-gene");
     if (!gd || !gd.on) return;
-    gd.on("plotly_click", function (e) {
-      const pt = e && e.points && e.points[0];
-      const slug = pt && pt.customdata;
+    function open(slug) {
       if (slug) {
         window.location = GENE_PATH + "/isoforms/" + encodeURIComponent(slug) + SCAN_QS;
       }
+    }
+    gd.on("plotly_click", function (e) {
+      const pt = e && e.points && e.points[0];
+      open(pt && pt.customdata);
+    });
+    // Row labels are annotations carrying the slug as their ``name``.
+    gd.on("plotly_clickannotation", function (e) {
+      open(e && e.annotation && e.annotation.name);
     });
   }
   function swissInitGeneProtein() {

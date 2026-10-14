@@ -20,6 +20,7 @@ Differential-region spaces by ORF type:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 
@@ -53,6 +54,50 @@ NO_CANONICAL_BASELINE_ORFS = frozenset(
         ORFType.ALT_ORF,
     }
 )
+
+# ORF types read as a separate protein: they share no reading frame with the CDS,
+# so the whole isoform is unique and there is no shared region.
+SEPARATE_ORF_TYPES: tuple[str, ...] = (
+    ORFType.UORF.value,
+    ORFType.UOORF.value,
+    ORFType.INTERNAL_OUT_OF_FRAME.value,
+    ORFType.THREE_UTR_ORF.value,
+    ORFType.ALT_ORF.value,
+)
+
+# What the unique region is called per ORF type — the nouns the category prompts
+# use, the tag labels carry (``Tag.label_for``) and the site renders. An extension
+# adds it, a truncation lost it (canonical-space), a separate ORF is wholly unique.
+REGION_NOUN: dict[str, str] = {
+    ORFType.EXTENDED.value: "extension",
+    ORFType.TRUNCATED.value: "lost region",
+    **dict.fromkeys(SEPARATE_ORF_TYPES, "ORF"),
+}
+_UNIQUE_REGION = re.compile(r"\b[Uu]nique region\b")
+
+
+def region_noun(orf_type: str | None) -> str | None:
+    """The unique region's name for one ORF type, or None for an unknown type."""
+    return REGION_NOUN.get((orf_type or "").lower())
+
+
+def stratum_label(text: str, orf_type: str | None) -> str:
+    """Rewrite a generic "unique region" phrase the way it reads for one ORF type.
+
+    "Unique region more basic" → "Extension more basic" / "Lost region more
+    basic" / "ORF more basic", keeping the capital when the phrase had one. On a
+    truncation a trailing " gained" reads " lost" ("Constrained residues gained"
+    → "Constrained residues lost"). An unknown ORF type returns ``text`` as is.
+    """
+    noun = region_noun(orf_type)
+    if noun is None:
+        return text
+    out = _UNIQUE_REGION.sub(
+        lambda m: noun[0].upper() + noun[1:] if m.group(0)[0] == "U" else noun, text
+    )
+    if (orf_type or "").lower() == ORFType.TRUNCATED.value and out.endswith(" gained"):
+        out = out[: -len(" gained")] + " lost"
+    return out
 
 
 # Codons that can initiate translation: ATG plus the near-cognate starts — its

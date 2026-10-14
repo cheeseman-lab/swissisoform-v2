@@ -137,9 +137,10 @@ def test_p3_modal_splits_unique_and_shared() -> None:
         _el("helix", 60, 75, "shared"),
     )))
     summary, listing = ce["sections"][0], ce["sections"][1]
-    assert summary["cmp_headers"] == ["Metric", "Differential", "Shared"]
-    # helices: 1 unique / 1 shared;  strands: 0 unique / 1 shared
-    assert [r["cols"] for r in summary["compare_rows"]][:2] == [["1", "1"], ["0", "1"]]
+    # House grammar: reference (shared) left, the stratum's region right, ratio last.
+    assert summary["cmp_headers"] == ["Metric", "Shared", "Extension", "Ratio"]
+    # helices: 1 shared / 1 unique;  strands: 1 shared / 0 unique
+    assert [r["cols"] for r in summary["compare_rows"]][:2] == [["1", "1", "1×"], ["1", "0", "0×"]]
     assert [r["label"] for r in summary["compare_rows"]][:2] == ["Alpha helices", "Beta strands"]
     # One row per element, padded to the longer side.
     assert len(listing["pairs"]) == 2
@@ -150,13 +151,14 @@ def test_p3_modal_splits_unique_and_shared() -> None:
 def test_p3_modal_relabels_the_unique_column_for_truncations() -> None:
     """On a truncation the region exists only in the canonical protein, so
     calling that column "isoform-unique" would name the one protein lacking it.
+    Both tables name it the way the stratum does.
     """
     ce = _p3(_Iso(_sse_raw(_el("helix", 13, 31, "unique")),
                   orf_type="truncated", diff_space="canonical"))
-    # The compare table follows the house Differential|Shared convention; the
-    # ORF-aware wording is on the paired listing.
-    assert ce["sections"][0]["cmp_headers"][1] == "Differential"
-    assert ce["sections"][1]["pair_headers"][0] == "Removed (canonical)"
+    assert ce["sections"][0]["cmp_headers"][2] == "Lost region"
+    assert ce["sections"][1]["pair_headers"][0] == "Lost region"
+    uorf = _p3(_Iso(_sse_raw(_el("helix", 13, 31, "unique")), orf_type="uorf"))
+    assert uorf["sections"][1]["pair_headers"][0] == "ORF"
 
 
 def test_p3_modal_counts_a_boundary_spanning_element_for_the_isoform() -> None:
@@ -166,7 +168,7 @@ def test_p3_modal_counts_a_boundary_spanning_element_for_the_isoform() -> None:
     """
     ce = _p3(_Iso(_sse_raw(_el("helix", 13, 35, "spans"))))
     summary, listing = ce["sections"][0], ce["sections"][1]
-    assert [r["cols"] for r in summary["compare_rows"]][0] == ["1", "0"]  # alpha helices
+    assert [r["cols"] for r in summary["compare_rows"]][0] == ["0", "1", "—"]  # alpha helices
     cell = listing["pairs"][0]["left"]
     assert cell["span"] == "13–35"
     assert "note" not in cell
@@ -216,7 +218,7 @@ def test_p3_modal_moves_sub_threshold_elements_to_their_own_section() -> None:
     )))
     summary, good, weak = ce["sections"]
     # Summary counts the qualifying set only: 0 helices / 1 strand on the unique side.
-    assert [r["cols"] for r in summary["compare_rows"]][:2] == [["0", "0"], ["1", "0"]]
+    assert [r["cols"] for r in summary["compare_rows"]][:2] == [["0", "0", "—"], ["0", "1", "—"]]
     assert good["title"] == "Elements and coordinates"
     assert good["pairs"][0]["left"]["span"] == "7–12"
     assert weak["title"] == "Below threshold"
@@ -227,6 +229,6 @@ def test_p3_modal_moves_sub_threshold_elements_to_their_own_section() -> None:
 def test_p3_modal_omits_the_below_threshold_section_when_empty() -> None:
     ce = _p3(_Iso(_sse_raw(_el("helix", 16, 32, "unique"))))
     assert [s["title"] for s in ce["sections"]] == [
-        "Secondary structure · differential vs shared region",
+        "Secondary structure · extension vs shared",
         "Elements and coordinates",
     ]

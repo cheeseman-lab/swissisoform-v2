@@ -37,7 +37,9 @@ from markupsafe import escape
 # backend evidence module (which the LLM per-category pass also consumes) and is
 # copied into the site package by prepare_deploy.sh, so UI and LLM never drift.
 from swissisoform.clinical.significance import is_pathogenic
+from swissisoform.contract import region_noun, stratum_label
 from swissisoform.site.evidence import CATEGORIES as _CATEGORIES
+from swissisoform.site.evidence import active_scoring as _active_scoring
 from swissisoform.site.evidence import p3_min_sse_length as _p3_min_sse_length
 from swissisoform.site.evidence import p3_min_sse_plddt as _p3_min_sse_plddt
 from swissisoform.site.evidence import use_scoring_config as _use_scoring_config
@@ -980,46 +982,59 @@ _BIOPHYSICS_FEATURES = [
     ("Shannon entropy", "shannon_entropy"),
     ("Normalized complexity", "normalized_complexity"),
 ]
-_BIOPHYSICS_COL_CLASSES = ["", "dm-shared", "dm-ratio"]  # differential | shared | enrichment
+# Whole-protein levers the S2 scorer tests: |isoform − canonical| ≥ its cutoff.
+_S2_LEVERS = [
+    ("Hydropathy (GRAVY)", "gravy", "s2_gravy_delta_min"),
+    ("Fraction charged", "fraction_charged", "s2_fraction_charged_delta_min"),
+    ("Disorder fraction", "disorder", "s2_disorder_delta_min"),
+]
 
 
 def biophysics_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
-    """Standalone Biophysics card data (was a sub-section of the P1 modal).
+    """Standalone Biophysics card data (the S2 popup).
 
-    Descriptive, not scored — reads the ``cmp_biophysics_*`` columns already on
-    ``iso.raw`` (differential/shared/ratio + enriched flag per property) and returns
-    a ``ce``-shaped payload the shared ``_criterion_evidence.html`` renderer consumes.
-    Returns ``None`` when no biophysics comparison columns are present.
+    Two tables in the house grammar: the whole-protein canonical-vs-isoform
+    levers S2 scores (GRAVY / charge / disorder deltas), then the descriptive
+    per-region profile (``cmp_biophysics_*_unique`` vs ``_shared``). Returns a
+    ``ce``-shaped payload the shared ``_criterion_evidence.html`` renderer
+    consumes, or ``None`` when no biophysics columns are present.
     """
     raw = getattr(iso, "raw", None) or {}
     g = raw.get
-    rows = []
-    for label, feat in _BIOPHYSICS_FEATURES:
-        cols = [
-            _fmt_num(g(f"cmp_biophysics_{feat}_unique")),
-            _fmt_num(g(f"cmp_biophysics_{feat}_shared")),
-            _fmt_num(g(f"cmp_biophysics_{feat}_ratio")),
-        ]
-        if all(c is None for c in cols):
+    orf_type = getattr(iso, "orf_type", None)
+    cfg = _active_scoring()
+
+    lever_rows = []
+    for label, feat, cut_field in _S2_LEVERS:
+        can, alt = g(f"canonical_biophysics_{feat}"), g(f"isoform_biophysics_{feat}")
+        if _fmt_num(can) is None and _fmt_num(alt) is None:
             continue
-        rows.append(
-            {
-                "label": label,
-                "cols": [c if c is not None else "—" for c in cols],
-                "hot": bool(g(f"cmp_biophysics_{feat}_enriched")),
-                **_term(label),
-            }
+        delta = _maybe_float(g(f"cmp_biophysics_{feat}_delta"))
+        lever_rows.append(
+            _cmp_row(
+                label,
+                can,
+                alt,
+                orf_type=orf_type,
+                drives=True,
+                passes=delta is not None and abs(delta) >= getattr(cfg, cut_field),
+            )
         )
-    if not rows:
+
+    region_rows = []
+    for label, feat in _BIOPHYSICS_FEATURES:
+        shared, unique = g(f"cmp_biophysics_{feat}_shared"), g(f"cmp_biophysics_{feat}_unique")
+        if _fmt_num(shared) is None and _fmt_num(unique) is None:
+            continue
+        region_rows.append(_cmp_row(label, shared, unique, orf_type=orf_type))
+    if not lever_rows and not region_rows:
         return None
 
     # Directional headline: how the differential region compares to the shared
-    # core for the three properties P1 keys off. Number = (differential − core);
+    # core for the three properties S2 keys off. Number = (differential − core);
     # the sign gives the direction word. Region-vs-core (not the whole-protein
     # isoform−canonical delta) so small regions aren't diluted and truncations
     # read the same way as extensions.
-    import math
-
     headline_segments: list[dict[str, Any]] = []
     plain_bits: list[str] = []
     for feat, adjective, noun, eps in (
@@ -1046,29 +1061,164 @@ def biophysics_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
         if num:
             headline_segments.append({"t": num, "strong": False})
         plain_bits.append(word + num)
-    headline = " · ".join(plain_bits) if plain_bits else f"{len(rows)} properties"
+    headline = " · ".join(plain_bits) if plain_bits else f"{len(region_rows)} properties"
 
+    region = _region_noun(iso)
+    sections = []
+    if lever_rows:
+        sections.append(
+            _cmp_section(
+                "Biophysics · canonical vs isoform (whole protein)",
+                "Property",
+                _PROTEIN_SIDES,
+                lever_rows,
+                subtitle="the S2 levers: a shift in hydropathy, charge or disorder",
+            )
+        )
+    if region_rows:
+        sections.append(
+            _cmp_section(
+                f"Biophysics · {region} vs shared",
+                "Property",
+                ("Shared", _region_noun(iso, cap=True)),
+                region_rows,
+                subtitle="descriptive profile of each region",
+            )
+        )
+    _mark_driving_rows(sections, iso, "S2_biophysics")
     return {
         "headline": headline,
         "headline_segments": headline_segments or None,
         "evidence": {
             "about": (
-                "Biophysical character of the isoform-differential region versus the "
-                "shared canonical core — pI, hydropathy, charge, disorder and related "
-                "properties. Descriptive; the folding (P1) score keys off the GRAVY / "
-                "charge / disorder deltas."
+                "Biophysical character of the isoform versus the canonical — pI, "
+                "hydropathy, charge, disorder and related properties. S2 scores the "
+                "whole-protein GRAVY / charge / disorder shifts; the per-region table "
+                f"below profiles the {region} against the shared core."
             ),
-            "sections": [
-                {
-                    "title": "Biophysics · differential vs shared region",
-                    "subtitle": "highlighted rows are enriched in the differential region",
-                    "cmp_headers": ["Property", "Differential", "Shared", "Enrichment"],
-                    "col_classes": _BIOPHYSICS_COL_CLASSES,
-                    "compare_rows": rows,
-                }
-            ],
+            "sections": sections,
         },
     }
+
+
+# ── One comparison grammar for every evidence table ─────────────────────────
+#
+# Label | reference | subject | Ratio. The reference (Canonical, or the Shared
+# core) is muted on the left, the subject (the Isoform, or the stratum's own
+# region) on the right, and Ratio = subject / reference is always present ("—"
+# when it does not read as a ratio). A row is highlighted only when it is a row
+# the criterion's scorer tests, the criterion fired, and that row passed.
+
+_CMP_COL_CLASSES = ["dm-shared", "", "dm-ratio"]  # reference (muted) | subject | ratio
+_PROTEIN_SIDES = ("Canonical", "Isoform")
+_AUTO = object()  # sentinel: compute the ratio from the two sides
+_REGION_PHRASE = re.compile(r"\b(?:[Dd]ifferential|[Dd]iff|[Uu]nique)[ -]region\b")
+
+
+def _region_noun(iso: Any, cap: bool = False) -> str:
+    """The stratum's name for the differential region (``contract.region_noun``)."""
+    noun = region_noun(getattr(iso, "orf_type", None)) or "differential region"
+    return noun[0].upper() + noun[1:] if cap else noun
+
+
+def _regionize(text: str, orf_type: str | None) -> str:
+    """Name the differential region in ``text`` the way this ORF type does.
+
+    Normalises the site's spellings ("differential region", "diff region",
+    "unique-region") onto the pipeline's "unique region", then defers to
+    ``contract.stratum_label`` — the same rewrite the tag labels use.
+    """
+    if region_noun(orf_type) is None:
+        return text
+    norm = _REGION_PHRASE.sub(
+        lambda m: "Unique region" if m.group(0)[0].isupper() else "unique region", text
+    )
+    return stratum_label(norm, orf_type)
+
+
+def _ratio(subject: Any, reference: Any) -> float | None:
+    """subject / reference, or None where that does not read as a ratio.
+
+    Undefined for a non-numeric side, a reference ≤ 0 (a negative denominator
+    inverts it) or a negative subject — the same guard the tag layer applies to
+    ``*_ratio`` metrics.
+    """
+    s, r = _maybe_float(subject), _maybe_float(reference)
+    if s is None or r is None or not (math.isfinite(s) and math.isfinite(r)):
+        return None
+    if r <= 0 or s < 0:
+        return None
+    return s / r
+
+
+def _fmt_ratio(r: float | None) -> str:
+    return f"{r:.2g}×" if r is not None else "—"
+
+
+def _cmp_row(
+    label: str,
+    reference: Any,
+    subject: Any,
+    ratio: Any = _AUTO,
+    *,
+    orf_type: str | None = None,
+    term: str | None = None,
+    drives: bool = False,
+    passes: bool = True,
+    fmt: Any = None,
+) -> dict[str, Any]:
+    """One comparison row: ``[reference, subject, ratio]`` display cells.
+
+    ``reference`` / ``subject`` are raw values (formatted with ``fmt``, default
+    ``_fmt_num``; a str passes through). ``ratio`` defaults to subject /
+    reference; pass a float to use a precomputed one, or ``None`` for a row
+    where a ratio means nothing (categorical, ordinal, single-sided).
+    ``drives`` marks a row the criterion's scorer tests and ``passes`` whether
+    this row met its own cutoff; ``_mark_driving_rows`` turns them into ``hot``.
+    """
+    fmt = fmt or _fmt_num
+    if ratio is _AUTO:
+        ratio = _ratio(subject, reference)
+    return {
+        "label": label,
+        "cols": [fmt(reference) or "—", fmt(subject) or "—", _fmt_ratio(ratio)],
+        "drives": drives,
+        "passes": bool(passes),
+        **_term(term or label, orf_type),
+    }
+
+
+def _cmp_section(
+    title: str,
+    label_header: str,
+    sides: tuple[str, str],
+    rows: list[dict[str, Any]],
+    **extra: Any,
+) -> dict[str, Any]:
+    """A render-ready comparison section in the house grammar."""
+    return {
+        "title": title,
+        "cmp_headers": [label_header, sides[0], sides[1], "Ratio"],
+        "col_classes": _CMP_COL_CLASSES,
+        "compare_rows": rows,
+        **extra,
+    }
+
+
+def _mark_driving_rows(sections: list[dict[str, Any]], iso: Any, cid: str) -> None:
+    """Resolve each row's ``drives``/``passes`` into the one ``hot`` flag.
+
+    Hot = the criterion fired (``iso.criteria[cid] is True``) AND the row is one
+    its scorer tests AND that row passed — so a highlight always reads "this is
+    why the criterion fired". The verdict itself is the scorer's, never redone
+    here; per-row ``passes`` only picks out which of several drivers carried it.
+    """
+    fired = (getattr(iso, "criteria", None) or {}).get(cid) is True
+    for s in sections:
+        for r in s.get("compare_rows") or []:
+            drives = r.pop("drives", False)
+            passes = r.pop("passes", True)
+            r["hot"] = bool(fired and drives and passes)
 
 
 def _fmt_num(v, pct=False):
@@ -1250,6 +1400,7 @@ METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
     "Shared-region Cα RMSD": ("m-structure", "Backbone RMSD over the shared (identical) residues only, after superposing on them — 0 ≈ identical fold, high = the retained region refolds."),
     "Shared-region TM-score": ("m-structure", "Length-normalized fold similarity (0–1) of the shared region between isoform and canonical."),
     "Shared region length": ("m-structure", "Number of residues shared (identical) between the isoform and canonical proteins."),
+    "Shared-region pLDDT": ("m-structure", "Mean ESMFold2 confidence over the shared residues, in each protein's own fold."),
     "Min shared-region pLDDT": ("m-structure", "Lower of the two mean shared-region ESMFold2 confidences; the RMSD is only trusted (scored) when this is high."),
     # Localization / targeting
     "Predicted location": ("m-localization", "DeepLoc predicted subcellular compartment."),
@@ -1262,12 +1413,15 @@ METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
     "Short linear motifs": ("m-domains", "Count of short linear motifs on the canonical vs the isoform protein."),
     "InterPro domains in diff region": ("m-domains", "Annotated InterPro domains overlapping the differential region."),
     "Motifs in diff region": ("m-domains", "Short linear motifs in the differential region."),
+    "Domains changed in region": ("m-domains", "Real (InterPro) domains gained, lost or cut by the differential region — the S1 basis."),
     "Tryptic peptides (in-silico)": ("m-massspec", "Predicted tryptic peptides from each protein (in-silico digest, not MS-detected)."),
     "Validated by mass-spec": ("m-massspec", "Peptides confirmed against real spectra by PepQuery."),
     "Isoform-unique peptides": ("m-massspec", "Peptides that map only to the isoform — direct existence evidence."),
+    "Validated isoform-unique peptides": ("m-massspec", "Isoform-unique peptides PepQuery confirmed against real spectra — the D3 basis."),
     "Mass-spec peptides in diff region": ("m-massspec", "Detected tryptic peptides unique to the differential region."),
     # Constraint / variant effect
     "ESM-C mean LLR": ("m-esm2", "Mean ESM-C masked-marginal log-likelihood ratio; lower = more constrained."),
+    "Constraint Δ": ("m-esm2", "How much more constrained (ESM-C) the differential region is than the shared core."),
     "Constrained positions": ("m-esm2", "Count of residues the language model flags as highly constrained."),
     "Mean ΔLLR — unique-region variants": ("m-esm2", "Mean ESM-C ΔLLR across variants in the unique region."),
     "Min ΔLLR — unique-region variants": ("m-esm2", "Most-constrained ESM-C ΔLLR among unique-region variants."),
@@ -1315,69 +1469,66 @@ METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
 _SSE_LABEL = {"helix": "alpha helix", "strand": "beta strand"}
 
 
-def _term(label: str) -> dict[str, str]:
-    """Glossary tip + about-page anchor for a metric label (empty if unknown)."""
+def _term(label: str, orf_type: str | None = None) -> dict[str, str]:
+    """Glossary tip + about-page anchor for a metric label (empty if unknown).
+
+    The tip names the differential region the way ``orf_type`` does.
+    """
     ent = METRIC_GLOSSARY.get(label)
     if not ent:
         return {}
     anchor, tip = ent
-    return {"tip": tip, "anchor": anchor}
+    return {"tip": _regionize(tip, orf_type), "anchor": anchor}
 
 
 def criterion_evidence_for(iso) -> dict:
-    """Per-criterion differential evidence for the score modals (C1–D3, P1–P2).
+    """Per-criterion differential evidence for the score modals (C1–D3, L, M, P, S1).
 
-    Pulls the conservation / structure / biophysics / localization / PLM-VEP /
-    function / clinical evidence off the parquet row, sliced finer than a flat
-    modality grouping (primate vs mammalian frame, DeepLoc vs targeting) and
-    keyed by criterion id so each score popup hosts exactly its own evidence +
-    a plain-English descriptor.
+    Pulls the conservation / structure / localization / PLM-VEP / function /
+    clinical evidence off the parquet row, sliced finer than a flat modality
+    grouping (primate vs mammalian frame, DeepLoc vs targeting) and keyed by
+    criterion id so each score popup hosts exactly its own evidence + a
+    plain-English descriptor.
+
+    Every comparison table uses the one house grammar (``_cmp_section``):
+    ``Label | Canonical | Isoform | Ratio`` for whole-protein / per-start
+    comparisons, ``Label | Shared | <region> | Ratio`` for region comparisons,
+    where <region> is the stratum's own name (Extension / Lost region / ORF).
+    Rows the criterion's scorer tests are highlighted when it fired.
 
     Returns ``{criterion_id: {"about": str, "sections": [section, ...]}}`` where
     every section is render-ready for ``_criterion_evidence.html``.
     """
     raw = getattr(iso, "raw", None) or {}
     g = raw.get
+    orf_type = getattr(iso, "orf_type", None)
     diff_space = getattr(iso, "diff_space", "") or ""
-    is_trunc = diff_space == "canonical" or (getattr(iso, "orf_type", "") or "") == "truncated"
+    is_trunc = diff_space == "canonical" or (orf_type or "") == "truncated"
+    cfg = _active_scoring()
+    region = _region_noun(iso)  # "extension" / "lost region" / "ORF"
+    REGION_SIDES = ("Shared", _region_noun(iso, cap=True))
 
-    def rows(specs, pct_keys=()):
-        out = []
-        for label, key in specs:
-            val = _fmt_num(g(key), pct=key in pct_keys)
-            if val is not None:
-                out.append({"label": label, "value": val, **_term(label)})
-        return out
+    def row(label, reference, subject, ratio=_AUTO, **kw):
+        return _cmp_row(label, reference, subject, ratio, orf_type=orf_type, **kw)
 
-    def compare(specs):
-        """Generic N-column compare table.
+    def keyed(label, ref_key, subj_key, ratio=_AUTO, **kw):
+        """A row read off two columns, or None when both sides are missing."""
+        ref = g(ref_key) if ref_key else None
+        subj = g(subj_key) if subj_key else None
+        if _fmt_num(ref) is None and _fmt_num(subj) is None:
+            return None
+        if ratio is not _AUTO and isinstance(ratio, str):
+            ratio = _maybe_float(g(ratio))
+        return row(label, ref, subj, ratio, **kw)
 
-        Each spec is ``(label, [key, key, ...], hot_key?)``. A ``None`` key
-        renders ``—``. Rows where every column is missing are dropped. Pairs
-        with a ``hot_key`` flag rows for visual emphasis (enriched biophysics).
-        """
-        out = []
-        for spec in specs:
-            label, keys = spec[0], spec[1]
-            hot_key = spec[2] if len(spec) > 2 else None
-            vals = [_fmt_num(g(k)) if k else None for k in keys]
-            if all(v is None for v in vals):
-                continue
-            out.append(
-                {
-                    "label": label,
-                    "cols": [v if v is not None else "—" for v in vals],
-                    "hot": bool(g(hot_key)) if hot_key else False,
-                    **_term(label),
-                }
-            )
-        return out
+    def section(title, label_header, sides, rows, **extra):
+        rows = [r for r in rows if r]
+        if not rows:
+            return None
+        return _cmp_section(title, label_header, sides, rows, **extra)
 
-    # Per-column CSS classes for the two comparison framings. First entry styles
-    # the column *after* the row-label column.
-    DIFF_SHARED_3 = ["", "dm-shared", "dm-ratio"]  # differential | shared | enrichment
-    DIFF_SHARED_2 = ["", "dm-shared"]  # differential | shared
-    CANON_ISO = ["dm-shared", ""]  # canonical (muted) | isoform (focus)
+    def pct(v):
+        return _fmt_num(v, pct=True)
 
     # ---- modality section builders (each → section dict or None) ----------
 
@@ -1387,195 +1538,190 @@ def criterion_evidence_for(iso) -> dict:
         # ORF; the bare columns score the isoform-unique region only.
         pre = f"isoform_conservation_frame_{clade}"
         specs = [
-            ("Mean AA identity", "mean_pident", True),
-            ("Frame intact (fraction of species)", "frac_intact", True),
-            ("Species aligned", "n_species_aligned", False),
-            ("Species frame-intact", "n_species_intact_frame", False),
-            ("Start codon conserved", "start_codon_conserved", True),
-            ("Deepest intact species", "deepest_species", False),
-            ("Phylo depth (MRCA)", "max_depth", False),
+            # (label, suffix, percent, ratio meaningful, drives)
+            ("Mean AA identity", "mean_pident", True, True, True),
+            ("Frame intact (fraction of species)", "frac_intact", True, True, False),
+            ("Species aligned", "n_species_aligned", False, True, False),
+            ("Species frame-intact", "n_species_intact_frame", False, True, False),
+            ("Start codon conserved", "start_codon_conserved", True, True, False),
+            ("Deepest intact species", "deepest_species", False, False, False),
+            ("Phylo depth (MRCA)", "max_depth", False, False, False),
         ]
-        compare_rows = []
-        for label, suf, pct in specs:
-            can = _fmt_num(g(f"{pre}_canonical_{suf}"), pct=pct)
-            iso = _fmt_num(g(f"{pre}_{suf}"), pct=pct)
-            if can is None and iso is None:
-                continue
-            compare_rows.append(
-                {
-                    "label": label,
-                    "cols": [can or "—", iso or "—"],
-                    "hot": False,
-                    **_term(label),
-                }
+        rows = [
+            keyed(
+                label,
+                f"{pre}_canonical_{suf}",
+                f"{pre}_{suf}",
+                _AUTO if has_ratio else None,
+                fmt=pct if is_pct else None,
+                drives=drives,
             )
-        if not compare_rows:
-            return None
-        return {
-            "title": f"Sequence conservation · {clade}",
-            "subtitle": (
-                "mean AA identity over the differential ORF is the score basis; "
-                "frame intactness across the clade is context"
+            for label, suf, is_pct, has_ratio, drives in specs
+        ]
+        return section(
+            f"Sequence conservation · {clade}",
+            "Conservation metric",
+            _PROTEIN_SIDES,
+            rows,
+            subtitle=_regionize(
+                "canonical ORF vs the isoform's differential ORF — mean AA identity is "
+                "the score basis; frame intactness across the clade is context",
+                orf_type,
             ),
-            "cmp_headers": ["Conservation metric", "Canonical ORF", "Differential ORF"],
-            "col_classes": CANON_ISO,
-            "compare_rows": compare_rows,
-        }
+        )
 
     def sec_phylop():
-        # Baseline comparison: differential region vs conserved core (the column
-        # convention used across every tile), one row per track.
-        compare_rows = compare(
-            [
-                (
-                    "phyloP mean",
-                    [
-                        "isoform_conservation_phylop_unique_region_mean",
-                        "isoform_conservation_phylop_shared_region_mean",
-                        "isoform_conservation_phylop_enrichment",
-                    ],
-                ),
-                (
-                    "phastCons mean",
-                    [
-                        "isoform_conservation_phastcons_unique_region_mean",
-                        "isoform_conservation_phastcons_shared_region_mean",
-                        None,
-                    ],
-                ),
-            ]
-        )
-        if not compare_rows:
-            return None
-        return {
-            "title": "Per-base conservation · differential region",
-            "subtitle": (
-                "absolute mean phyloP over the differential region is the score "
-                "basis (high = strong purifying selection); the shared column and "
-                "enrichment are context, not the claim"
+        rows = [
+            keyed(
+                "phyloP mean",
+                "isoform_conservation_phylop_shared_region_mean",
+                "isoform_conservation_phylop_unique_region_mean",
+                drives=True,
             ),
-            "cmp_headers": ["Track", "Differential", "Shared", "vs shared"],
-            "col_classes": DIFF_SHARED_3,
-            "compare_rows": compare_rows,
-        }
+            keyed(
+                "phastCons mean",
+                "isoform_conservation_phastcons_shared_region_mean",
+                "isoform_conservation_phastcons_unique_region_mean",
+            ),
+        ]
+        return section(
+            f"Per-base conservation · {region} vs shared",
+            "Track",
+            REGION_SIDES,
+            rows,
+            subtitle=(
+                f"absolute mean phyloP over the {region} is the score basis (high = "
+                "strong purifying selection); the shared column and ratio are context"
+            ),
+        )
 
     def sec_start_site():
         # Canonical-start vs alternative-start: initiation context + per-base
         # conservation at each start codon. The canonical column reads
         # ``canonical_*`` mirrors. One row per property.
         specs = [
-            ("Start codon", "canonical_start_codon", "start_codon"),
+            ("Start codon", "canonical_start_codon", "start_codon", False),
             (
                 "Kozak context (−9..+4)",
                 "canonical_initiation_context_kozak_context",
                 "isoform_initiation_context_kozak_context",
+                False,
             ),
             (
                 "phyloP at start codon",
                 "canonical_conservation_phylop_at_tis",
                 "isoform_conservation_phylop_at_tis",
+                True,
             ),
             (
                 "phastCons at start codon",
                 "canonical_conservation_phastcons_at_tis",
                 "isoform_conservation_phastcons_at_tis",
+                True,
             ),
             (
                 "phyloP over Kozak window",
                 "canonical_conservation_phylop_kozak_mean",
                 "isoform_conservation_phylop_kozak_mean",
+                True,
             ),
             (
                 "phastCons over Kozak window",
                 "canonical_conservation_phastcons_kozak_mean",
                 "isoform_conservation_phastcons_kozak_mean",
+                True,
             ),
             (
                 "Kozak mismatch — full consensus",
                 "canonical_initiation_context_kozak_hamming_full",
                 "isoform_initiation_context_kozak_hamming_full",
+                False,
             ),
             (
                 "Kozak window GC content",
                 "canonical_initiation_context_kozak_window_gc_content",
                 "isoform_initiation_context_kozak_window_gc_content",
+                True,
             ),
         ]
-        compare_rows = []
-        any_alt = False
-        for label, can_key, alt_key in specs:
-            can = _fmt_num(g(can_key))
-            alt = _fmt_num(g(alt_key))
-            if alt is not None:
-                any_alt = True
-            compare_rows.append(
-                {"label": label, "cols": [can or "—", alt or "—"], "hot": False, **_term(label)}
-            )
-        if not any_alt:
+        if all(_fmt_num(g(alt_key)) is None for _, _, alt_key, _ in specs):
             return None
-        return {
-            "title": "Start site · canonical vs isoform",
-            "subtitle": "initiation context + per-base conservation at each start codon",
-            "cmp_headers": ["Property", "Canonical", "Isoform"],
-            "col_classes": CANON_ISO,
-            "compare_rows": compare_rows,
-        }
+        rows = [
+            row(label, g(can_key), g(alt_key), _AUTO if has_ratio else None)
+            for label, can_key, alt_key, has_ratio in specs
+        ]
+        return section(
+            "Start site · canonical vs isoform",
+            "Property",
+            _PROTEIN_SIDES,
+            rows,
+            subtitle="initiation context + per-base conservation at each start codon",
+        )
 
     CELL_LINES = ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen")
 
     def sec_cell_lines():
-        # Canonical-start vs alternative-start usage (CPM) per cell line — the
-        # differential is the alternative start; p-value is the significance of
-        # the alternative-TIS call in that cell line.
-        cell_rows = []
+        # Canonical-start vs alternative-start usage (CPM) per cell line. A line
+        # counts toward D1 when the alternative start was called there (it carries
+        # a p-value) — the p-value rides in the Isoform cell.
+        rows = []
         for cl in CELL_LINES:
-            can_cpm = _fmt_num(g(f"canonical_expr_{cl}_cpm"))
-            alt_cpm = _fmt_num(g(f"expr_{cl}_cpm"))
+            can_cpm, alt_cpm = g(f"canonical_expr_{cl}_cpm"), g(f"expr_{cl}_cpm")
             pval = _fmt_num(g(f"expr_{cl}_p_value"))
-            if can_cpm is not None or alt_cpm is not None or pval is not None:
-                cell_rows.append(
-                    {
-                        "label": cl.replace("_", " "),
-                        "cols": [can_cpm or "—", alt_cpm or "—", pval or "—"],
-                        "hot": False,
-                    }
+            if _fmt_num(can_cpm) is None and _fmt_num(alt_cpm) is None and pval is None:
+                continue
+            alt_cell = _fmt_num(alt_cpm) or "—"
+            if pval is not None:
+                alt_cell = f"{alt_cell} (p {pval})"
+            rows.append(
+                row(
+                    cl.replace("_", " "),
+                    can_cpm,
+                    alt_cell,
+                    _ratio(alt_cpm, can_cpm),
+                    drives=True,
+                    passes=pval is not None,
                 )
-        if not cell_rows:
-            return None
+            )
         q = _fmt_num(g("fisher_qvalue"))
-        return {
-            "title": "Per-cell-line usage · canonical vs isoform",
-            "subtitle": f"Fisher q = {q}" if q else "canonical vs isoform-start CPM per cell line",
-            "cmp_headers": ["Cell line", "Canonical", "Isoform", "p-value"],
-            "col_classes": ["dm-shared", "", ""],
-            "compare_rows": cell_rows,
-        }
+        return section(
+            "Per-cell-line usage · canonical vs isoform",
+            "Cell line",
+            _PROTEIN_SIDES,
+            rows,
+            subtitle=(
+                "start CPM per cell line; p = the alternative-start call in that line"
+                + (f" · Fisher q = {q}" if q else "")
+            ),
+        )
 
     def sec_efficiency():
         # Canonical-start vs this alternative-start initiation efficiency, per
         # cell line. Canonical efficiency comes from the per-Tid Annotated row
         # (``canonical_expr_*``); the alternative start from ``expr_*``.
-        eff_rows = []
+        cut = cfg.initiation_efficiency_min
+        rows = []
         for cl in CELL_LINES:
-            can = _fmt_num(g(f"canonical_expr_{cl}_initiation_efficiency"))
-            alt = _fmt_num(g(f"expr_{cl}_initiation_efficiency"))
-            if can is None and alt is None:
-                continue
-            eff_rows.append(
-                {"label": cl.replace("_", " "), "cols": [can or "—", alt or "—"], "hot": False}
+            alt = _maybe_float(g(f"expr_{cl}_initiation_efficiency"))
+            rows.append(
+                keyed(
+                    cl.replace("_", " "),
+                    f"canonical_expr_{cl}_initiation_efficiency",
+                    f"expr_{cl}_initiation_efficiency",
+                    drives=True,
+                    passes=alt is not None and alt >= cut,
+                )
             )
-        if not eff_rows:
-            return None
-        return {
-            "title": "Start-Site Usage · canonical vs isoform",
-            "subtitle": (
+        return section(
+            "Start-Site Usage · canonical vs isoform",
+            "Cell line",
+            _PROTEIN_SIDES,
+            rows,
+            subtitle=(
                 "ribosome initiation efficiency at the canonical start vs this "
                 "alternative start, per cell line"
             ),
-            "cmp_headers": ["Cell line", "Canonical", "Isoform"],
-            "col_classes": CANON_ISO,
-            "compare_rows": eff_rows,
-        }
+        )
 
     def sec_structure():
         # Whole-protein pLDDT, canonical vs isoform. Global fold-similarity
@@ -1583,19 +1729,6 @@ def criterion_evidence_for(iso) -> dict:
         # they are the canonical-vs-isoform comparison expressed as one number —
         # so they ride along in the caption rather than a Details list.
         status = g("isoform_structure_status")
-        compare_rows = compare(
-            [
-                (
-                    "pLDDT (whole protein)",
-                    [
-                        "isoform_structure_plddt_canonical_mean",
-                        "isoform_structure_plddt_isoform_mean",
-                    ],
-                ),
-            ]
-        )
-        if not compare_rows:
-            return None
         bits = []
         tm = _fmt_num(g("isoform_structure_tm_score"))
         rmsd = _fmt_num(g("isoform_structure_rmsd_global"))
@@ -1613,47 +1746,39 @@ def criterion_evidence_for(iso) -> dict:
                 "Structure metrics are a uniform-pLDDT placeholder for this "
                 "isoform — treat the per-residue confidence as unreliable."
             )
-        return {
-            "title": "Structure (ESMFold2) · canonical vs isoform",
-            "subtitle": sub,
-            "cmp_headers": ["Metric", "Canonical", "Isoform"],
-            "col_classes": CANON_ISO,
-            "compare_rows": compare_rows,
-            "warn": warn,
-        }
+        return section(
+            "Structure (ESMFold2) · canonical vs isoform",
+            "Metric",
+            _PROTEIN_SIDES,
+            [
+                keyed(
+                    "pLDDT (whole protein)",
+                    "isoform_structure_plddt_canonical_mean",
+                    "isoform_structure_plddt_isoform_mean",
+                )
+            ],
+            subtitle=sub,
+            warn=warn,
+        )
 
     def sec_structure_region():
-        # Per-region fold confidence: differential region vs shared core. The
-        # shared-region pLDDT isn't stored, but Δ (= diff − shared) is, so we
-        # recover it (no pipeline change). Enrichment = differential / shared.
-        diff_raw = g("isoform_structure_plddt_diffregion_mean")
-        delta_raw = g("isoform_structure_plddt_delta_shared")
-        if diff_raw is None or (isinstance(diff_raw, float) and not math.isfinite(diff_raw)):
+        # Per-region fold confidence: differential region vs shared core — the P1
+        # basis. The shared-region pLDDT isn't stored, but Δ (= diff − shared) is,
+        # so we recover it (no pipeline change).
+        diff_raw = _maybe_float(g("isoform_structure_plddt_diffregion_mean"))
+        if diff_raw is None or not math.isfinite(diff_raw):
             return None
-        shared_raw = None
-        try:
-            if delta_raw is not None and math.isfinite(float(delta_raw)):
-                shared_raw = float(diff_raw) - float(delta_raw)
-        except (TypeError, ValueError):
-            shared_raw = None
-        enr = (float(diff_raw) / shared_raw) if (shared_raw and shared_raw != 0) else None
-        row = {
-            "label": "pLDDT",
-            "cols": [
-                _fmt_num(diff_raw) or "—",
-                _fmt_num(shared_raw) or "—",
-                f"{enr:.2g}" if enr is not None else "—",
-            ],
-            "hot": False,
-            **_term("pLDDT — differential region"),
-        }
-        return {
-            "title": "Fold confidence · differential vs shared region",
-            "subtitle": "mean ESMFold2 pLDDT in each region",
-            "cmp_headers": ["Metric", "Differential", "Shared", "Enrichment"],
-            "col_classes": DIFF_SHARED_3,
-            "compare_rows": [row],
-        }
+        delta_raw = _maybe_float(g("isoform_structure_plddt_delta_shared"))
+        shared_raw = (
+            diff_raw - delta_raw if delta_raw is not None and math.isfinite(delta_raw) else None
+        )
+        return section(
+            f"Fold confidence · {region} vs shared",
+            "Metric",
+            REGION_SIDES,
+            [row("pLDDT", shared_raw, diff_raw, term="pLDDT — differential region", drives=True)],
+            subtitle="mean ESMFold2 pLDDT in each region",
+        )
 
     def _sse_split():
         """Whole-protein SSE elements split into (unique, shared) lists.
@@ -1692,12 +1817,6 @@ def criterion_evidence_for(iso) -> dict:
         vals = [e["plddt_mean"] for e in els if e.get("plddt_mean") is not None]
         return sum(vals) / len(vals) if vals else None
 
-    def _sse_unique_label():
-        # On a truncation the differential region exists only in the canonical
-        # protein — calling that column "isoform-unique" would name the one
-        # protein that does not contain it.
-        return "Removed (canonical)" if is_trunc else "Isoform-unique"
-
     def sec_sse_summary():
         if g("isoform_structure_sse_status") != "ok":
             return None
@@ -1713,39 +1832,29 @@ def criterion_evidence_for(iso) -> dict:
         unique = [e for e in unique if _sse_qualifies(e)]
         shared = [e for e in shared if _sse_qualifies(e)]
 
-        def row(label, fn, fmt=str):
+        def sse_row(label, fn, drives=False):
             u, s = fn(unique), fn(shared)
-            return {
-                "label": label,
-                "cols": [fmt(u) if u is not None else "—", fmt(s) if s is not None else "—"],
-                "hot": False,
-                **_term(label),
-            }
+            return row(label, s, u, drives=drives, passes=bool(u))
 
-        rows = [
-            row("Alpha helices", lambda e: _sse_stat(e, "helix")),
-            row("Beta strands", lambda e: _sse_stat(e, "strand")),
-            row("Longest element (aa)", _sse_longest),
-            row("Mean pLDDT", _sse_mean_plddt, lambda v: f"{v:.2f}"),
-        ]
-        return {
-            "title": "Secondary structure · differential vs shared region",
-            "subtitle": "helices and strands assigned from the predicted coordinates (P-SEA)",
-            # Differential | Shared is one of the two house header flavors every
-            # comparison table uses (test_comparison_tables_use_two_standard_flavors);
-            # the ORF-type-aware wording lives on the paired listing below, which
-            # is a different kind of table and not bound by that convention.
-            "cmp_headers": ["Metric", "Differential", "Shared"],
-            "col_classes": DIFF_SHARED_2,
-            "compare_rows": rows,
-        }
+        return section(
+            f"Secondary structure · {region} vs shared",
+            "Metric",
+            REGION_SIDES,
+            [
+                sse_row("Alpha helices", lambda e: _sse_stat(e, "helix"), drives=True),
+                sse_row("Beta strands", lambda e: _sse_stat(e, "strand"), drives=True),
+                sse_row("Longest element (aa)", _sse_longest),
+                sse_row("Mean pLDDT", _sse_mean_plddt),
+            ],
+            subtitle="helices and strands assigned from the predicted coordinates (P-SEA)",
+        )
 
     def sec_sse_list(qualifying=True):
         """Elements with their coordinates, in two columns.
 
         Split into two sections so every count on the card agrees: the first
         lists what the headline and P3 count, the second the ones that fall
-        short. Both keep the differential | shared layout.
+        short. Both keep the region | shared layout.
         """
         if g("isoform_structure_sse_status") != "ok":
             return None
@@ -1777,9 +1886,7 @@ def criterion_evidence_for(iso) -> dict:
             {"left": cell(u), "right": cell(s)}
             for u, s in zip_longest(unique, shared, fillvalue=None)
         ]
-        counts = (
-            f"{len(unique)} in the differential region, {len(shared)} in the shared core"
-        )
+        counts = f"{len(unique)} in the {region}, {len(shared)} in the shared core"
         if qualifying:
             title = "Elements and coordinates"
             subtitle = f"{counts} — residue numbering is 1-based on the protein holding the region"
@@ -1797,59 +1904,39 @@ def criterion_evidence_for(iso) -> dict:
         return {
             "title": title,
             "subtitle": subtitle,
-            "pair_headers": [_sse_unique_label(), "Shared core"],
+            # On a truncation the region exists only in the canonical protein, so
+            # the column is named for the stratum, never "isoform-unique".
+            "pair_headers": [_region_noun(iso, cap=True), "Shared core"],
             "pairs": pairs,
         }
 
     def sec_shared_rmsd():
         # P2 — strict shared-region Cα RMSD (Kabsch-superposed on the shared
-        # residues only). Global TM/RMSD ride in the caption; the shared-region
-        # metrics are the score basis. When not evaluable, surface the status so
-        # the modal explains itself rather than rendering blank.
+        # residues only), the score basis, gated by shared length and pLDDT. RMSD
+        # is single-valued (it IS the comparison), so it sits in the Isoform
+        # column with no canonical side; shared pLDDT is genuinely two-sided.
         status = g("isoform_structure_rmsd_shared_status")
-        rmsd = _fmt_num(g("isoform_structure_rmsd_shared"))
+        rows = [
+            keyed(
+                "Shared-region Cα RMSD",
+                None,
+                "isoform_structure_rmsd_shared",
+                None,
+                drives=True,
+            ),
+            keyed(
+                "Shared-region pLDDT",
+                "isoform_structure_plddt_shared_mean_canonical",
+                "isoform_structure_plddt_shared_mean_isoform",
+            ),
+        ]
+        bits = []
         tm = _fmt_num(g("isoform_structure_tm_score_shared"))
         n = g("isoform_structure_shared_region_len")
-        pmin = None
-        try:
-            pvals = [
-                float(x)
-                for x in (
-                    g("isoform_structure_plddt_shared_mean_isoform"),
-                    g("isoform_structure_plddt_shared_mean_canonical"),
-                )
-                if x is not None and math.isfinite(float(x))
-            ]
-            pmin = min(pvals) if pvals else None
-        except (TypeError, ValueError):
-            pmin = None
-
-        # Only the per-side shared-region pLDDT is genuinely two-sided, so it is the
-        # comparison table. RMSD / TM-score / region length describe the comparison
-        # itself (single-valued), so per the Details-box contract they ride in the
-        # caption rather than as key/value rows.
-        compare_rows = compare(
-            [
-                (
-                    "Shared-region pLDDT",
-                    [
-                        "isoform_structure_plddt_shared_mean_canonical",
-                        "isoform_structure_plddt_shared_mean_isoform",
-                    ],
-                ),
-            ]
-        )
-
-        bits = []
-        if rmsd is not None:
-            bits.append(f"shared-region Cα RMSD {rmsd} Å")
         if tm is not None:
             bits.append(f"shared TM-score {tm}")
         if n is not None:
             bits.append(f"shared region {int(n)} aa")
-        pmin_fmt = _fmt_num(pmin)
-        if pmin_fmt is not None:
-            bits.append(f"min shared pLDDT {pmin_fmt}")
         gtm = _fmt_num(g("isoform_structure_tm_score"))
         grmsd = _fmt_num(g("isoform_structure_rmsd_global"))
         if gtm is not None:
@@ -1857,7 +1944,7 @@ def criterion_evidence_for(iso) -> dict:
         if grmsd is not None:
             bits.append(f"global RMSD {grmsd} Å")
 
-        if not bits and not compare_rows:
+        if not bits and not any(rows):
             if status and status != "ok":
                 _why = {
                     "no_shared_region": "no shared region (uORF/altORF, or region too short)",
@@ -1869,89 +1956,68 @@ def criterion_evidence_for(iso) -> dict:
                     "subtitle": f"not evaluable — {_why}",
                 }
             return None
-        sub = "Cα RMSD superposed on the shared residues only; TM-score is length-normalized"
+        sub = "Cα RMSD (Å) superposed on the shared residues only; TM-score is length-normalized"
         if bits:
             sub += " · " + " · ".join(bits)
-        sec = {"title": "Shared-region structural change", "subtitle": sub}
-        if compare_rows:
-            sec["cmp_headers"] = ["Property", "Canonical", "Isoform"]
-            sec["col_classes"] = CANON_ISO
-            sec["compare_rows"] = compare_rows
-        return sec
+        sec = section(
+            "Shared-region structural change", "Property", _PROTEIN_SIDES, rows, subtitle=sub
+        )
+        return sec or {"title": "Shared-region structural change", "subtitle": sub}
 
     def sec_deeploc():
-        compare_rows = compare(
-            [
-                (
-                    "Predicted location",
-                    [
-                        "cmp_localization_deeploc_prediction_canonical",
-                        "cmp_localization_deeploc_prediction_isoform",
-                    ],
-                ),
-                (
-                    "Sorting signals",
-                    [
-                        "cmp_localization_deeploc_signals_canonical",
-                        "cmp_localization_deeploc_signals_isoform",
-                    ],
-                ),
-                (
-                    "Membrane",
-                    [
-                        "cmp_localization_deeploc_membrane_canonical",
-                        "cmp_localization_deeploc_membrane_isoform",
-                    ],
-                ),
-            ]
+        rows = [
+            keyed(
+                label,
+                f"cmp_localization_deeploc_{feat}_canonical",
+                f"cmp_localization_deeploc_{feat}_isoform",
+                None,
+                drives=True,
+                passes=bool(g(f"cmp_localization_deeploc_{feat}_changed")),
+            )
+            for label, feat in (
+                ("Predicted location", "prediction"),
+                ("Sorting signals", "signals"),
+                ("Membrane", "membrane"),
+            )
+        ]
+        changed = any(
+            bool(g(f"cmp_localization_deeploc_{feat}_changed"))
+            for feat in ("prediction", "signals", "membrane")
         )
-        if not compare_rows:
-            return None
-        changed = (
-            bool(g("cmp_localization_deeploc_signals_changed"))
-            or bool(g("cmp_localization_deeploc_prediction_changed"))
-            or bool(g("cmp_localization_deeploc_membrane_changed"))
-        )
-        return {
-            "title": "Subcellular localization (DeepLoc)",
-            "subtitle": (
+        return section(
+            "Subcellular localization (DeepLoc)",
+            "Property",
+            _PROTEIN_SIDES,
+            rows,
+            subtitle=(
                 "localization features changed (prediction/signals/membrane)"
                 if changed
                 else "no localization-feature change"
             ),
-            "cmp_headers": ["Property", "Canonical", "Isoform"],
-            "col_classes": CANON_ISO,
-            "compare_rows": compare_rows,
-            "highlight": changed,
-        }
+        )
 
     def sec_targeting():
-        compare_rows = compare(
-            [
-                (
-                    "TargetP",
-                    ["canonical_targetp_targetp_prediction", "isoform_targetp_targetp_prediction"],
-                ),
-                (
-                    "SignalP",
-                    ["canonical_signalp_signalp_prediction", "isoform_signalp_signalp_prediction"],
-                ),
-            ]
+        rows = [
+            keyed(
+                label,
+                f"canonical_{tool}_{tool}_prediction",
+                f"isoform_{tool}_{tool}_prediction",
+                None,
+                drives=True,
+                passes=bool(g(f"cmp_{tool}_{tool}_prediction_changed")),
+            )
+            for label, tool in (("TargetP", "targetp"), ("SignalP", "signalp"))
+        ]
+        changed = any(
+            bool(g(f"cmp_{tool}_{tool}_prediction_changed")) for tool in ("targetp", "signalp")
         )
-        if not compare_rows:
-            return None
-        changed = (
-            bool(g("cmp_targetp_targetp_prediction_changed"))
-            or bool(g("cmp_signalp_signalp_prediction_changed"))
+        return section(
+            "N-terminal targeting (SignalP / TargetP)",
+            "Predictor",
+            _PROTEIN_SIDES,
+            rows,
+            subtitle="sorting signal changed" if changed else "no sorting-signal change",
         )
-        return {
-            "title": "N-terminal targeting (SignalP / TargetP)",
-            "subtitle": "sorting signal changed" if changed else "no sorting-signal change",
-            "cmp_headers": ["Predictor", "Canonical", "Isoform"],
-            "col_classes": CANON_ISO,
-            "compare_rows": compare_rows,
-            "highlight": changed,
-        }
 
     def _named_features(col, kind):
         """{signature_name: display_label} for an interproscan / motifs column."""
@@ -1970,21 +2036,24 @@ def criterion_evidence_for(iso) -> dict:
         iso_dom = _named_features("isoform_interproscan_hits", "domain")
         can_mot = _named_features("canonical_motifs_hits", "motif")
         iso_mot = _named_features("isoform_motifs_hits", "motif")
-        if not (can_dom or iso_dom or can_mot or iso_mot):
+        n_changed = _maybe_int(g("cmp_interproscan_n_real_domains_changed_in_diff_region"))
+        if not (can_dom or iso_dom or can_mot or iso_mot) and n_changed is None:
             return None
-        compare_rows = [
-            {
-                "label": "InterPro domains",
-                "cols": [str(len(can_dom)), str(len(iso_dom))],
-                "hot": len(iso_dom) != len(can_dom),
-                **_term("InterPro domains"),
-            },
-            {
-                "label": "Short linear motifs",
-                "cols": [str(len(can_mot)), str(len(iso_mot))],
-                "hot": len(iso_mot) != len(can_mot),
-                **_term("Short linear motifs"),
-            },
+        rows = [
+            # The S1 basis: real domains gained, lost or cut by the region. One
+            # number describing the comparison, so it has no canonical side.
+            row(
+                f"Domains changed in {region}",
+                None,
+                n_changed,
+                None,
+                term="Domains changed in region",
+                drives=True,
+            )
+            if n_changed is not None
+            else None,
+            row("InterPro domains", len(can_dom), len(iso_dom)),
+            row("Short linear motifs", len(can_mot), len(iso_mot)),
         ]
         hits = []
         for nm in sorted(set(iso_dom) - set(can_dom)):
@@ -1995,42 +2064,37 @@ def criterion_evidence_for(iso) -> dict:
             hits.append({"kind": "gained", "name": iso_mot[nm], "span": "motif"})
         for nm in sorted(set(can_mot) - set(iso_mot)):
             hits.append({"kind": "lost", "name": can_mot[nm], "span": "motif"})
-        return {
-            "title": "Domains & motifs (canonical vs isoform)",
-            "subtitle": "gained = only in the isoform; lost = only in the canonical",
-            "cmp_headers": ["Feature", "Canonical", "Isoform"],
-            "col_classes": CANON_ISO,
-            "compare_rows": compare_rows,
-            "hits": hits,
-        }
+        return section(
+            "Domains & motifs · canonical vs isoform",
+            "Feature",
+            _PROTEIN_SIDES,
+            rows,
+            subtitle="gained = only in the isoform; lost = only in the canonical",
+            hits=hits,
+        )
 
     def sec_massspec():
         can = _to_record_list(g("canonical_massspec_hits"))
-        iso = _to_record_list(g("isoform_massspec_hits"))
-        if not can and not iso:
+        iso_hits = _to_record_list(g("isoform_massspec_hits"))
+        if not can and not iso_hits:
             return None
         can_val = sum(1 for p in can if p.get("validated"))
-        iso_val = sum(1 for p in iso if p.get("validated"))
-        iso_unique = [p for p in iso if p.get("unique_to_isoform")]
-        compare_rows = [
-            {
-                "label": "Tryptic peptides (in-silico)",
-                "cols": [str(len(can)), str(len(iso))],
-                "hot": False,
-                **_term("Tryptic peptides (in-silico)"),
-            },
-            {
-                "label": "Validated by mass-spec",
-                "cols": [str(can_val), str(iso_val)],
-                "hot": bool(iso_val),
-                **_term("Validated by mass-spec"),
-            },
-            {
-                "label": "Isoform-unique peptides",
-                "cols": ["—", str(len(iso_unique))],
-                "hot": bool(iso_unique),
-                **_term("Isoform-unique peptides"),
-            },
+        iso_val = sum(1 for p in iso_hits if p.get("validated"))
+        iso_unique = [p for p in iso_hits if p.get("unique_to_isoform")]
+        unique_val = sum(1 for p in iso_unique if p.get("validated"))
+        rows = [
+            row("Tryptic peptides (in-silico)", len(can), len(iso_hits)),
+            row("Validated by mass-spec", can_val, iso_val),
+            row("Isoform-unique peptides", None, len(iso_unique), None),
+            # The D3 basis: isoform-unique AND spectrum-validated.
+            row(
+                "Validated isoform-unique peptides",
+                None,
+                unique_val,
+                None,
+                drives=True,
+                passes=unique_val > 0,
+            ),
         ]
         hits = []
         for p in iso_unique[:20]:
@@ -2038,182 +2102,171 @@ def criterion_evidence_for(iso) -> dict:
             span = f"{pos}–{end}" if pos is not None and end is not None else ""
             kind = "validated" if p.get("validated") else "peptide"
             hits.append({"kind": kind, "name": str(p.get("peptide") or "?")[:40], "span": span})
-        return {
-            "title": "Peptide Evidence (canonical vs isoform)",
-            "subtitle": "isoform-unique peptides are direct evidence the alternative protein exists",
-            "cmp_headers": ["Feature", "Canonical", "Isoform"],
-            "col_classes": CANON_ISO,
-            "compare_rows": compare_rows,
-            "hits": hits,
-        }
+        return section(
+            "Peptide evidence · canonical vs isoform",
+            "Feature",
+            _PROTEIN_SIDES,
+            rows,
+            subtitle="isoform-unique peptides are direct evidence the alternative protein exists",
+            hits=hits,
+        )
 
-    def sec_germline_tolerance():
-        # gnomAD = germline population variation, a *tolerance* readout. Depletion
-        # in the differential region vs the shared core = healthy human variation
-        # avoids it = the region is constrained. Depletion ratio < 1× =
-        # constrained; > 1× = tolerated. (Disease variants live in M2.)
-        # Density denominator is the nt length of each region (emitted by the
-        # variant_intersection module), not AA length — fall back to the AA-len
-        # ratio only when the nt columns predate this row.
+    def _region_lengths_nt():
+        """(unique, shared) region lengths in nt for density ratios.
+
+        Emitted by the variant_intersection module; falls back to AA length × 3
+        only when the nt columns predate the row. The shared region is whichever
+        whole protein the region is shared with (canonical for extensions,
+        isoform for truncations).
+        """
         unique_nt = _maybe_int(g("isoform_variant_intersection_unique_region_nt"))
         shared_nt = _maybe_int(g("isoform_variant_intersection_shared_region_nt"))
-        depletion = _maybe_float(g("isoform_variant_intersection_gnomad_depletion_ratio"))
-
         unique_len = unique_nt or (
             (getattr(iso, "diff_end", None) or len(getattr(iso, "differential_sequence", "") or ""))
             * 3
         )
-        shared_len = shared_nt or (
-            ((getattr(iso, "isoform_len", None) if is_trunc
-              else getattr(iso, "canonical_len", None)) or 0) * 3
+        shared_aa = (
+            getattr(iso, "isoform_len", None) if is_trunc else getattr(iso, "canonical_len", None)
         )
+        shared_len = shared_nt or ((shared_aa or 0) * 3)
+        return unique_len, shared_len
 
-        def _enrich(nu, ns):
-            if nu is None or ns is None or not unique_len or not shared_len or ns == 0:
-                return None
-            du, ds = nu / unique_len, ns / shared_len
-            return None if ds == 0 else du / ds
+    def _density_ratio(n_unique, n_shared, lengths):
+        """Per-length density ratio, region ÷ shared (None when undefined)."""
+        unique_len, shared_len = lengths
+        if n_unique is None or n_shared is None or not unique_len or not shared_len:
+            return None
+        return _ratio(n_unique / unique_len, n_shared / shared_len)
 
-        diff = _fmt_num(g("isoform_variant_intersection_n_gnomad_in_unique_region"))
-        cons = _fmt_num(g("isoform_variant_intersection_n_gnomad_in_shared_region"))
-        if diff is None and cons is None and depletion is None:
+    def sec_germline_tolerance():
+        # gnomAD = germline population variation, a *tolerance* readout. Depletion
+        # in the region vs the shared core = healthy human variation avoids it =
+        # the region is constrained. Ratio < 1× = constrained; > 1× = tolerated.
+        # (Disease variants live in M2.)
+        n_u = _maybe_float(g("isoform_variant_intersection_n_gnomad_in_unique_region"))
+        n_s = _maybe_float(g("isoform_variant_intersection_n_gnomad_in_shared_region"))
+        depletion = _maybe_float(g("isoform_variant_intersection_gnomad_depletion_ratio"))
+        if n_u is None and n_s is None and depletion is None:
             return None
         if depletion is None:
-            try:
-                depletion = _enrich(
-                    float(diff) if diff is not None else None,
-                    float(cons) if cons is not None else None,
+            depletion = _density_ratio(n_u, n_s, _region_lengths_nt())
+        return section(
+            f"Germline variants · {region} vs shared",
+            "Variant set",
+            REGION_SIDES,
+            [
+                row(
+                    "gnomAD variants",
+                    n_s,
+                    n_u,
+                    depletion,
+                    drives=True,
+                    passes=depletion is not None and depletion < cfg.m1_depletion_ratio_max,
                 )
-            except (TypeError, ValueError):
-                depletion = None
-        row = {
-            "label": "gnomAD variants",
-            "cols": [
-                diff or "—",
-                cons or "—",
-                f"{depletion:.2g}×" if depletion is not None else "—",
             ],
-            "hot": bool(depletion is not None and depletion < 1),
-            **_term("gnomAD variants"),
-        }
-        return {
-            "title": "Germline Variants · differential vs shared region",
-            "subtitle": (
-                "gnomAD (population) variant density per nucleotide — depletion "
-                "ratio < 1× means healthy human variation avoids the region "
-                "(constrained), the M1 basis alongside ESM-C constraint"
+            subtitle=(
+                "gnomAD (population) variants; ratio = density per nucleotide, "
+                f"{region} ÷ shared — below {cfg.m1_depletion_ratio_max:g}× means "
+                "healthy human variation avoids the region (constrained), an M1 basis"
             ),
-            "cmp_headers": ["Variant set", "Differential", "Shared", "Depletion ratio"],
-            "col_classes": DIFF_SHARED_3,
-            "compare_rows": [row],
-        }
+        )
 
     def sec_constraint():
-        # Region-resolved sequence constraint (ESM-C): is the differential region
-        # more constrained than the shared region?
-        compare_rows = compare(
+        # Region-resolved sequence constraint (ESM-C): is the region more
+        # constrained than the shared core? The Δ is the M1 lever; LLRs are
+        # negative, so their ratio is undefined and shows "—".
+        delta = _maybe_float(g("isoform_plm_vep_constraint_delta"))
+        return section(
+            f"Sequence constraint (ESM-C) · {region} vs shared",
+            "Property",
+            REGION_SIDES,
             [
-                (
+                keyed(
                     "ESM-C mean LLR",
-                    [
-                        "isoform_plm_vep_mean_llr_unique_region",
-                        "isoform_plm_vep_mean_llr_shared_region",
-                        "isoform_plm_vep_constraint_delta",
-                    ],
+                    "isoform_plm_vep_mean_llr_shared_region",
+                    "isoform_plm_vep_mean_llr_unique_region",
                 ),
-                (
+                row(
+                    "Constraint Δ",
+                    None,
+                    delta,
+                    None,
+                    drives=True,
+                    passes=delta is not None and delta >= cfg.m1_constraint_delta_min,
+                )
+                if delta is not None
+                else None,
+                keyed(
                     "Constrained positions",
-                    [
-                        "isoform_plm_vep_n_constrained_positions_unique",
-                        "isoform_plm_vep_n_constrained_positions_shared",
-                        None,
-                    ],
+                    "isoform_plm_vep_n_constrained_positions_shared",
+                    "isoform_plm_vep_n_constrained_positions_unique",
                 ),
-            ]
+            ],
+            subtitle=(
+                f"lower LLR = more constrained; Δ = how much more constrained the {region} "
+                f"is than the shared core (an M1 basis at ≥ {cfg.m1_constraint_delta_min:g})"
+            ),
         )
-        if not compare_rows:
-            return None
-        return {
-            "title": "Sequence constraint (ESM-C) · differential vs shared region",
-            "subtitle": "lower LLR = more constrained; enrichment = differential / conserved",
-            "cmp_headers": ["Property", "Differential", "Shared", "Enrichment"],
-            "col_classes": DIFF_SHARED_3,
-            "compare_rows": compare_rows,
-        }
 
     def sec_variant_burden(source, pool_label):
         # Predicted-damaging variant counts for one source pool (§4): gnomad
         # (germline → M1) or disease (ClinVar+COSMIC → M2). The predictors are
-        # source-independent; this counts their calls over the chosen pool,
-        # differential vs shared, length-normalized enrichment.
-        unique_len = getattr(iso, "diff_end", None) or len(
+        # source-independent; this counts their calls over the chosen pool, region
+        # vs shared, with a length-normalized ratio. Context, not a score basis.
+        unique_aa = getattr(iso, "diff_end", None) or len(
             getattr(iso, "differential_sequence", "") or ""
         )
-        shared_len = (getattr(iso, "isoform_len", None) if is_trunc
-                      else getattr(iso, "canonical_len", None))
-
-        def _enrich(nu, ns):
-            if nu is None or ns is None or not unique_len or not shared_len or ns == 0:
-                return None
-            du, ds = nu / unique_len, ns / shared_len
-            return None if ds == 0 else du / ds
-
+        shared_aa = (
+            getattr(iso, "isoform_len", None) if is_trunc else getattr(iso, "canonical_len", None)
+        )
         metrics = [
             ("Scorable variants", "n_scorable_in"),
             ("Damaging variants", "n_damaging_in"),
             ("— of which loss-of-function", "n_lof_in"),
             ("AlphaMissense-pathogenic", "n_am_pathogenic_in"),
         ]
-        compare_rows = []
-        any_diff = False
-        for label, stem in metrics:
-            diff = _fmt_num(g(f"isoform_varianteffect_{stem}_unique_{source}"))
-            cons = _fmt_num(g(f"isoform_varianteffect_{stem}_shared_{source}"))
-            if diff is not None:
-                any_diff = True
-            try:
-                r = _enrich(float(diff) if diff is not None else None,
-                            float(cons) if cons is not None else None)
-            except (TypeError, ValueError):
-                r = None
-            compare_rows.append(
-                {
-                    "label": label,
-                    "cols": [diff or "—", cons or "—", f"{r:.2g}×" if r is not None else "—"],
-                    "hot": bool(r is not None and r > 1),
-                    **_term(label),
-                }
-            )
-        if not any_diff:
+        if all(
+            _fmt_num(g(f"isoform_varianteffect_{stem}_unique_{source}")) is None
+            for _, stem in metrics
+        ):
             return None
-        return {
-            "title": f"Predicted-damaging variants · {pool_label}",
-            "subtitle": "AlphaMissense / ESM-C / LoF calls per region (length-normalized)",
-            "cmp_headers": ["Variant set", "Differential", "Shared", "Enrichment"],
-            "col_classes": DIFF_SHARED_3,
-            "compare_rows": compare_rows,
-        }
+        rows = []
+        for label, stem in metrics:
+            n_u = _maybe_float(g(f"isoform_varianteffect_{stem}_unique_{source}"))
+            n_s = _maybe_float(g(f"isoform_varianteffect_{stem}_shared_{source}"))
+            rows.append(row(label, n_s, n_u, _density_ratio(n_u, n_s, (unique_aa, shared_aa))))
+        return section(
+            f"Predicted-damaging variants · {pool_label}",
+            "Variant set",
+            REGION_SIDES,
+            rows,
+            subtitle=(
+                f"AlphaMissense / ESM-C / LoF calls per region; ratio = density, "
+                f"{region} ÷ shared"
+            ),
+        )
 
     def sec_variant_scores(source, pool_label):
-        # Per-variant predictor scores for one source pool (§4), differential vs
-        # shared. Predictor coverage (overall #scored) rides in the caption.
+        # Per-variant predictor scores for one source pool (§4), region vs shared.
+        # Predictor coverage (overall #scored) rides in the caption.
         metrics = [
             ("Mean ΔLLR (ESM-C)", "mean_delta_llr"),
             ("Min ΔLLR (ESM-C)", "min_delta_llr"),
             ("Mean AlphaMissense", "mean_am_pathogenicity"),
         ]
-        compare_rows = []
-        any_diff = False
-        for label, stem in metrics:
-            diff = _fmt_num(g(f"isoform_varianteffect_{stem}_unique_{source}"))
-            shared = _fmt_num(g(f"isoform_varianteffect_{stem}_shared_{source}"))
-            if diff is not None:
-                any_diff = True
-            compare_rows.append(
-                {"label": label, "cols": [diff or "—", shared or "—"], "hot": False, **_term(label)}
-            )
-        if not any_diff:
+        if all(
+            _fmt_num(g(f"isoform_varianteffect_{stem}_unique_{source}")) is None
+            for _, stem in metrics
+        ):
             return None
+        rows = [
+            row(
+                label,
+                g(f"isoform_varianteffect_{stem}_shared_{source}"),
+                g(f"isoform_varianteffect_{stem}_unique_{source}"),
+            )
+            for label, stem in metrics
+        ]
         cov = []
         plm = _fmt_num(g("isoform_varianteffect_n_scored_plm"))
         am = _fmt_num(g("isoform_varianteffect_n_scored_am"))
@@ -2221,94 +2274,45 @@ def criterion_evidence_for(iso) -> dict:
             cov.append(f"{plm} ESM-C")
         if am is not None:
             cov.append(f"{am} AlphaMissense")
-        sub = "scored: " + " · ".join(cov) if cov else f"{pool_label} variants"
-        return {
-            "title": f"Predictor scores · {pool_label}",
-            "subtitle": sub,
-            "cmp_headers": ["Property", "Differential", "Shared"],
-            "col_classes": DIFF_SHARED_2,
-            "compare_rows": compare_rows,
-        }
+        return section(
+            f"Predictor scores · {pool_label}",
+            "Property",
+            REGION_SIDES,
+            rows,
+            subtitle="scored: " + " · ".join(cov) if cov else f"{pool_label} variants",
+        )
 
     def sec_clinical_burden():
-        # Region lengths (nt) for length-normalized density — emitted by the
-        # variant_intersection module. The differential region is the unique
-        # N-terminus; the shared region is whichever whole protein it is shared
-        # with (canonical for extensions, isoform for truncations). Fall back to
-        # AA-length×3 only when the nt columns predate this row.
-        unique_nt = _maybe_int(g("isoform_variant_intersection_unique_region_nt"))
-        shared_nt = _maybe_int(g("isoform_variant_intersection_shared_region_nt"))
-        unique_len = unique_nt or (
-            (getattr(iso, "diff_end", None) or len(getattr(iso, "differential_sequence", "") or ""))
-            * 3
-        )
-        can_len = getattr(iso, "canonical_len", None)
-        iso_len = getattr(iso, "isoform_len", None)
-        shared_len = shared_nt or (((iso_len if is_trunc else can_len) or 0) * 3)
-        disease_ratio = _maybe_float(
-            g("isoform_variant_intersection_disease_enrichment_ratio")
-        )
-
-        def _n(key):
-            v = _fmt_num(g(key))
-            try:
-                return float(v) if v is not None else None
-            except (TypeError, ValueError):
-                return None
-
-        def _enrich(nu, ns):
-            if nu is None or ns is None or not unique_len or not shared_len or ns == 0:
-                return None
-            du, ds = nu / unique_len, ns / shared_len
-            return None if ds == 0 else du / ds
-
-        crows = []
-        for label, uk, sk in [
-            (
-                "Disease variants",
-                "isoform_variant_intersection_n_disease_in_unique_region",
-                "isoform_variant_intersection_n_disease_in_shared_region",
-            ),
-            (
-                "Pathogenic",
-                "isoform_variant_intersection_n_pathogenic_in_unique_region",
-                "isoform_variant_intersection_n_pathogenic_in_shared_region",
-            ),
+        disease_ratio = _maybe_float(g("isoform_variant_intersection_disease_enrichment_ratio"))
+        lengths = _region_lengths_nt()
+        rows = []
+        for label, stem, drives in [
+            ("Disease variants", "disease", True),
+            ("Pathogenic", "pathogenic", False),
         ]:
-            nu, ns = _n(uk), _n(sk)
-            if nu is None and ns is None:
+            n_u = _maybe_float(g(f"isoform_variant_intersection_n_{stem}_in_unique_region"))
+            n_s = _maybe_float(g(f"isoform_variant_intersection_n_{stem}_in_shared_region"))
+            if n_u is None and n_s is None:
                 continue
-            # Prefer the module's disease enrichment ratio for the disease row
-            # (it is the M2 basis); fall back to the locally-computed density.
-            if label == "Disease variants" and disease_ratio is not None:
-                r = disease_ratio
-            else:
-                r = _enrich(nu, ns)
-            crows.append(
-                {
-                    "label": label,
-                    "cols": [
-                        _fmt_num(nu) or "—",
-                        _fmt_num(ns) or "—",
-                        f"{r:.2g}×" if r is not None else "—",
-                    ],
-                    "hot": bool(r is not None and r > 1),
-                    **_term(label),
-                }
+            # The module's disease enrichment ratio is the M2 basis; the other
+            # rows use the locally computed density ratio.
+            r = (
+                disease_ratio
+                if drives and disease_ratio is not None
+                else _density_ratio(n_u, n_s, lengths)
             )
-        if not crows:
-            return None
-        return {
-            "title": "Clinical-variant burden · differential vs shared region",
-            "subtitle": (
-                "counts per region; ratio is density-normalized (variants per "
-                "nucleotide, differential ÷ shared — ≥1× = disease variants "
-                "concentrate in the differential region, the M2 basis)"
+            rows.append(row(label, n_s, n_u, r, drives=drives))
+        return section(
+            f"Clinical-variant burden · {region} vs shared",
+            "Variant set",
+            REGION_SIDES,
+            rows,
+            subtitle=(
+                f"counts per region; ratio = density per nucleotide, {region} ÷ shared — "
+                f"≥ {cfg.m2_disease_enrichment_min:g}× means disease variants concentrate "
+                f"in the {region}, the M2 basis"
             ),
-            "cmp_headers": ["Variant set", "Differential", "Shared", "Enrichment"],
-            "col_classes": DIFF_SHARED_3,
-            "compare_rows": crows,
-        }
+        )
 
     # ---- assign sections to criteria --------------------------------------
     assignments = {
@@ -2343,9 +2347,13 @@ def criterion_evidence_for(iso) -> dict:
 
     out = {}
     for cid, secs in assignments.items():
+        secs = [s for s in secs if s]
+        _mark_driving_rows(secs, iso, cid)
         out[cid] = {
+            # Left generic: it describes the criterion across every stratum
+            # ("scored only on truncations"), so per-isoform nouns would misread.
             "about": CRITERION_ABOUT.get(cid, ""),
-            "sections": [s for s in secs if s],
+            "sections": secs,
         }
     return out
 
