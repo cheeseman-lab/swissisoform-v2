@@ -40,13 +40,12 @@
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
     });
   }
-  function slugOf(tisId) { return String(tisId || "unknown").replace(/[:.]+/g, "-"); }
   function geneHref(name) {
     return GENE_BASE.replace("__GENE__", encodeURIComponent(name)) + SCAN_QS;
   }
-  function isoHref(name, tisId) {
+  function isoHref(name, slug) { // slug from the payload (data.tis_slug), never re-derived
     return GENE_BASE.replace("__GENE__", encodeURIComponent(name)) + "/isoforms/" +
-      encodeURIComponent(slugOf(tisId)) + SCAN_QS;
+      encodeURIComponent(slug) + SCAN_QS;
   }
   function store(fn) { try { return fn(); } catch (e) { return null; } }
 
@@ -95,7 +94,7 @@
         ISO.push(iso);
         iso._gi = gi; iso._ii = ii; iso._x = x;
         var mask = 0;
-        for (var k = 0; k < 6; k++) {
+        for (var k = 0; k < data.groups.length; k++) {
           if (STATE_FIRES[iso.f.charAt(3 * k)]) mask |= 1 << k;
         }
         isoCats[x] = mask;
@@ -233,6 +232,7 @@
     }
     body.style.height = offsets[rows.length] + "px";
     table.setAttribute("aria-rowcount", String(rows.length + 1));
+    dirty = true;
     schedule();
   }
 
@@ -378,7 +378,7 @@
     return '<div class="gt-row gt-iso' + (row.hl ? " is-match" : "") + '" role="row" data-key="' + esc(row.key) + '">' +
       '<span class="gt-c gt-c-toggle" role="cell"></span>' +
       '<span class="gt-c gt-c-tis" role="cell">' + orfChip(iso.o) +
-        '<a class="gt-iso-link" href="' + esc(isoHref(g.n, iso.t)) + '" title="' + esc(iso.t) + '">' +
+        '<a class="gt-iso-link" href="' + esc(isoHref(g.n, iso.s)) + '" title="' + esc(iso.t) + '">' +
         esc(iso.t) + "</a></span>" +
       '<span class="gt-c gt-c-len" role="cell"><span class="gt-aa">' + iso.a + " aa</span>" + ai + "</span>" +
       '<span class="gt-c gt-c-flags" role="cell">' + flagsHtml(iso.f) + "</span>" +
@@ -402,19 +402,44 @@
 
   var RENDER = { g: geneRowHtml, h: subHeadHtml, i: isoRowHtml, m: moreRowHtml, e: gapRowHtml };
   var pending = false;
+  var dirty = true; // rows or layout changed since the last draw
+  var drawn0 = -1, drawn1 = -1; // the row range currently in the DOM
   function schedule() {
     if (pending) return;
     pending = true;
     requestAnimationFrame(function () { pending = false; render(0); });
   }
 
+  // Which control has focus, as (row key, index among the row's controls), so a
+  // redraw that replaces the row's elements can put focus back on its twin.
+  function focusSpot() {
+    var a = document.activeElement;
+    if (!a || !body.contains(a)) return null;
+    var rowEl = a.closest("[data-key]");
+    if (!rowEl) return null;
+    var ctl = Array.prototype.indexOf.call(rowEl.querySelectorAll("a,button"), a);
+    return ctl < 0 ? null : { key: rowEl.getAttribute("data-key"), ctl: ctl };
+  }
+  function restoreFocus(spot) {
+    if (!spot) return;
+    for (var e = 0; e < body.children.length; e++) {
+      if (body.children[e].getAttribute("data-key") !== spot.key) continue;
+      var el = body.children[e].querySelectorAll("a,button")[spot.ctl];
+      if (el) el.focus({ preventScroll: true });
+      return;
+    }
+  }
+
   function render(pass) {
-    if (!rows.length) { body.innerHTML = ""; return; }
+    if (!rows.length) { body.innerHTML = ""; drawn0 = drawn1 = -1; dirty = false; return; }
     var top = body.getBoundingClientRect().top + window.scrollY;
     var y0 = Math.max(0, window.scrollY - top - OVERSCAN);
     var y1 = window.scrollY - top + window.innerHeight + OVERSCAN;
     var r0 = firstRowAt(y0), r1 = r0;
     while (r1 < rows.length && offsets[r1] < y1) r1++;
+    // Scrolling within the drawn window changes nothing: keep the DOM (and focus).
+    if (!dirty && r0 === drawn0 && r1 === drawn1) return;
+    var spot = focusSpot();
     var html = "";
     for (var r = r0; r < r1; r++) {
       html += RENDER[rows[r].t](rows[r]).replace(
@@ -422,6 +447,8 @@
       );
     }
     body.innerHTML = html;
+    drawn0 = r0; drawn1 = r1; dirty = false;
+    restoreFocus(spot);
     // Measure what was drawn; if any row's real height differs from the cached
     // one, re-layout and draw again (at most twice per frame).
     var changed = false;
@@ -437,12 +464,28 @@
         offsets[k + 1] = offsets[k] + (heights.get(rows[k].key) || EST[rows[k].t]);
       }
       body.style.height = offsets[rows.length] + "px";
+      dirty = true;
       render(pass + 1);
     }
   }
 
   window.addEventListener("scroll", schedule, { passive: true });
-  window.addEventListener("resize", function () { heights.clear(); if (G) rebuildRows(); });
+  // Phones resize on scroll (the URL bar shows and hides): only a width change
+  // re-wraps rows, so only then are the measured heights thrown away.
+  var lastWidth = window.innerWidth, resizeTimer = 0;
+  window.addEventListener("resize", function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () {
+      if (!G) return;
+      if (window.innerWidth !== lastWidth) {
+        lastWidth = window.innerWidth;
+        heights.clear();
+        rebuildRows();
+      } else {
+        schedule();
+      }
+    }, 150);
+  });
 
   // ---------------------------------------------------------- row actions
   body.addEventListener("click", function (ev) {
@@ -719,8 +762,8 @@
       readUrl();
       var saved = readSession();
       wireControls();
-      loading.remove();
       applyFilters();
+      loading.remove(); // only once the table is built, so a failure above still shows
       var nav = store(function () { return performance.getEntriesByType("navigation")[0].type; });
       if (saved && nav === "back_forward" && saved.y) {
         if ("scrollRestoration" in history) history.scrollRestoration = "manual";
@@ -731,6 +774,7 @@
       }
     })
     .catch(function (e) {
+      if (!loading.isConnected) body.after(loading);
       loading.textContent = "Could not load the gene table (" + e.message + "). Reload to try again.";
     });
 })();

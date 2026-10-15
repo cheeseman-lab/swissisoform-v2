@@ -21,7 +21,6 @@ import os
 import re
 import secrets
 import types
-from pathlib import Path
 from typing import Any
 
 from flask import (
@@ -100,37 +99,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def _log_llm_coverage(genes: dict, llm_dir: Path) -> None:
-    """Print one summary line — easier to spot missing LLM JSONs than per-request logs."""
-    log = logging.getLogger("swissisoform_site.coverage")
-    n_iso = sum(len(g.isoforms) for g in genes.values())
-    n_syn = 0
-    n_category_files = 0
-    n_category_cells = 0
-    for gene in genes.values():
-        for iso in gene.isoforms:
-            slug = tis_slug(iso.tis_id)
-            if (llm_dir / slug / "synthesis.json").exists():
-                n_syn += 1
-            cat_path = llm_dir / slug / "categories.json"
-            if cat_path.exists():
-                n_category_files += 1
-                try:
-                    payload = json.loads(cat_path.read_text())
-                    if isinstance(payload, dict):
-                        n_category_cells += len(payload)
-                except Exception:
-                    pass
-    log.warning(
-        "%d isoforms loaded; LLM coverage: categories %d/%d (%d/%d cells), synthesis %d/%d",
-        n_iso,
-        n_category_files,
-        n_iso,
-        n_category_cells,
-        n_iso * 6,
-        n_syn,
-        n_iso,
-    )
 
 
 #: Endpoints that participate in the variant-scan breadcrumb, and so should keep
@@ -482,16 +450,17 @@ def create_app() -> Flask:
         the client accepts it, with an ETag so a reload revalidates for free.
         """
         idx = landing_index()
-        etag = f'"{idx.etag}"'
-        if etag in (request.headers.get("If-None-Match") or ""):
+        gz = request.accept_encodings.quality("gzip") > 0
+        # One ETag per representation: the gzip and identity bodies differ.
+        etag = idx.etag + ("-gz" if gz else "")
+        if request.if_none_match.contains(etag):
             resp = make_response("", 304)
         else:
-            gz = "gzip" in (request.headers.get("Accept-Encoding") or "")
             resp = make_response(idx.body_gz if gz else idx.body)
             resp.headers["Content-Type"] = "application/json"
             if gz:
                 resp.headers["Content-Encoding"] = "gzip"
-        resp.headers["ETag"] = etag
+        resp.set_etag(etag)
         resp.headers["Vary"] = "Accept-Encoding"
         resp.headers["Cache-Control"] = "no-cache"
         return resp
@@ -1022,11 +991,10 @@ def create_app() -> Flask:
     def not_found(e: Any) -> tuple[Any, int]:
         return render_template("404.html", message=str(e)), 404
 
-    # Startup coverage summary — one log line so missing LLM JSONs are obvious
-    # before any clicking through tiles.
-    _log_llm_coverage(load_all(), data_dir() / "llm")
     # Build the landing table's payload now rather than on the first visitor's
-    # request: at catalogue scale it takes seconds (a cached no-op afterwards).
+    # request: at catalogue scale it takes seconds (a cached no-op afterwards). It
+    # also logs the LLM coverage line. ``load_all()`` is not called here: the full
+    # records load on the first gene or isoform page a worker serves.
     landing_index()
 
     return app

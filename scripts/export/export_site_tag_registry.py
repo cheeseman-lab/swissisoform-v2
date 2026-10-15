@@ -9,7 +9,9 @@ the registry's own content hash so the site can tell when the staged metadata an
 the parquet's tags came from different builds.
 
 The version is read from the parquet's ``isoform_tags_registry_version`` (one
-column, projected), so the export always matches what the rows were fired with.
+column, projected), so the export always matches what the rows were fired with;
+the registry's content hash must equal the parquet's
+``isoform_tags_registry_sha256``, or nothing is written.
 
 Usage:
     python scripts/export/export_site_tag_registry.py \
@@ -26,23 +28,26 @@ from pathlib import Path
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
+from swissisoform.modules.tags import SHA256_COLUMN, VERSION_COLUMN
 from swissisoform.tags import registry as tag_registry
 
 logger = logging.getLogger("export_site_tag_registry")
 
-VERSION_COLUMN = "isoform_tags_registry_version"
+
+def _single(parquet: Path, column: str) -> str | None:
+    """The one non-null value of ``column`` across the run, or None if absent."""
+    if column not in pq.read_schema(parquet).names:
+        return None
+    col = pq.read_table(parquet, columns=[column]).column(column)
+    values = [v for v in pc.unique(col).to_pylist() if v]
+    if len(values) > 1:
+        raise SystemExit(f"{parquet} mixes {column} values {values}")
+    return values[0] if values else None
 
 
 def run_version(parquet: Path) -> str | None:
     """The single registry version the run's tags were fired with, or None."""
-    names = pq.read_schema(parquet).names
-    if VERSION_COLUMN not in names:
-        return None
-    col = pq.read_table(parquet, columns=[VERSION_COLUMN]).column(VERSION_COLUMN)
-    versions = [v for v in pc.unique(col).to_pylist() if v]
-    if len(versions) > 1:
-        raise SystemExit(f"{parquet} mixes tag registry versions {versions}")
-    return versions[0] if versions else None
+    return _single(parquet, VERSION_COLUMN)
 
 
 def site_payload(reg: tag_registry.TagRegistry) -> dict:
@@ -80,6 +85,14 @@ def main() -> None:
         logger.info("no %s in %s — no tag registry staged", VERSION_COLUMN, args.parquet)
         return
     reg = tag_registry.load(version)
+    run_sha = _single(args.parquet, SHA256_COLUMN)
+    if run_sha and run_sha != reg.sha256:
+        # Same version name, different definitions: the categories exported here
+        # would not be the ones the rows were fired with.
+        raise SystemExit(
+            f"registry {version} on disk (sha {reg.sha256[:12]}…) is not the build that "
+            f"fired {args.parquet} (sha {run_sha[:12]}…) — rebuild or restage the registry"
+        )
     args.out.write_text(json.dumps(site_payload(reg), indent=1), encoding="utf-8")
     logger.info(
         "wrote %s (registry %s, %d tags, sha %s…)", args.out, version, len(reg), reg.sha256[:12]
