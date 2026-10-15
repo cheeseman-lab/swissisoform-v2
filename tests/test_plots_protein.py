@@ -266,3 +266,16 @@ def test_variant_dots_carry_their_outbound_link():
     assert dots[0]["customdata"] == [{"href": url}, None]
     assert "click to open the database page" in dots[0]["hovertext"][0]
     assert "click to open" not in dots[0]["hovertext"][1]
+
+
+def test_isoform_rows_hover_their_own_residue_numbers():
+    """Every isoform segment reports the isoform residue under the cursor (PR #56 review)."""
+    fig = pplot.build_gene_protein_figure(_gene_view())
+    labels = {a.get("text", "").split(" ")[0]: a["y"] for a in fig["layout"]["annotations"]}
+    ext_y = labels["extended"]
+    texts = [h for t in _row_traces(fig, ext_y) for h in t["hovertext"]]
+    # extended · 225 aa starting at x=-40: residue 1 at x=-40, 225 at x=184 (x1 185 incl.).
+    assert any("residue 1 / 226 aa" in h for h in texts)
+    trunc = [h for t in _row_traces(fig, labels["truncated"]) for h in t["hovertext"]]
+    lost = [h for h in trunc if "canonical residue" in h]
+    assert lost and "canonical residue 1" in lost[0]

@@ -113,7 +113,7 @@
   function swissWireGeneClick() {
     const gd = document.getElementById("graph-gene");
     if (!gd || !gd.on) return;
-    function open(slug) {
+    function openIsoform(slug) {
       if (slug) {
         window.location = GENE_PATH + "/isoforms/" + encodeURIComponent(slug) + SCAN_QS;
       }
@@ -125,11 +125,11 @@
         if (cd.href) window.open(cd.href, "_blank", "noopener");
         return;
       }
-      open(cd);
+      openIsoform(cd);
     });
     // Row labels are annotations carrying the slug as their ``name``.
     gd.on("plotly_clickannotation", function (e) {
-      open(e && e.annotation && e.annotation.name);
+      openIsoform(e && e.annotation && e.annotation.name);
     });
   }
   function swissInitGeneProtein() {

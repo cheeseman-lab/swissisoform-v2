@@ -317,3 +317,54 @@ def test_c1_table_never_calls_a_lost_region_the_isoform() -> None:
     sec = criterion_evidence_for(iso)["C1_primate_conservation"]["sections"][0]
     assert sec["cmp_headers"][1:3] == ["Canonical ORF", "Lost region"]
     assert "lost region" in sec["subtitle"]
+
+
+# ── PR #56 third review: highlights read what each scorer reads ───────────
+
+
+def _rows_for(raw, cid, fired=True, **iso_kw):
+    from swissisoform_site.data import criterion_evidence_for
+
+    iso = _Iso(raw, **iso_kw)
+    iso.criteria = {cid: fired}
+    return {r["label"]: r for s in criterion_evidence_for(iso)[cid]["sections"]
+            for r in s.get("compare_rows") or []}
+
+
+def test_d3_counts_only_validated_is_true() -> None:
+    hits = [
+        {"peptide": "AAK", "unique_to_isoform": True, "validated": "false"},  # truthy, not True
+        {"peptide": "CCK", "unique_to_isoform": True, "validated": True},
+    ]
+    rows = _rows_for({"isoform_massspec_hits": hits}, "D3_mass_spec")
+    assert rows["Validated isoform-unique peptides"]["cols"][1] == "1"
+    assert rows["Validated isoform-unique peptides"]["hot"] is True
+
+
+def test_l1_nan_change_flag_is_not_a_change() -> None:
+    rows = _rows_for({
+        "cmp_localization_deeploc_signals_canonical": "SP", "cmp_localization_deeploc_signals_isoform": "-",
+        "cmp_localization_deeploc_signals_changed": True,
+        "cmp_localization_deeploc_membrane_canonical": "M", "cmp_localization_deeploc_membrane_isoform": "M",
+        "cmp_localization_deeploc_membrane_changed": float("nan"),  # not evaluated
+    }, "L1_localization_change")
+    assert rows["Sorting signals"]["hot"] is True
+    assert rows["Membrane"]["hot"] is False
+
+
+def test_c3_ratio_is_the_modules_enrichment() -> None:
+    rows = _rows_for({
+        "isoform_conservation_phylop_unique_region_mean": -0.5,
+        "isoform_conservation_phylop_shared_region_mean": -1.0,
+        "isoform_conservation_phylop_enrichment": 0.5,
+    }, "C3_phylop_coding_selection", fired=False)
+    assert rows["phyloP mean"]["cols"][2] == "0.5×"
+
+
+def test_d1_counts_a_line_with_an_expression_record() -> None:
+    rows = _rows_for({
+        "expr_HeLa_raw_count": 12, "expr_HeLa_cpm": 3.0,  # called, no p-value stored
+        "canonical_expr_K562_cpm": 5.0,  # K562: canonical only, not called
+    }, "D1_multi_cell_line")
+    assert rows["HeLa"]["hot"] is True
+    assert rows["K562"]["hot"] is False

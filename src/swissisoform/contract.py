@@ -20,6 +20,7 @@ Differential-region spaces by ORF type:
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -75,7 +76,8 @@ REGION_NOUN: dict[str, str] = {
 }
 # What a reader calls the region when the ORF type is unknown.
 DEFAULT_REGION_NOUN = "differential region"
-_UNIQUE_REGION = re.compile(r"\b[Uu]nique region\b")
+# Not after a hyphen: "isoform-unique region" is a compound, not the region's name.
+_UNIQUE_REGION = re.compile(r"(?<![\w-])[Uu]nique region\b")
 
 
 def region_noun(
@@ -259,3 +261,31 @@ def diff_region_rule(orf_type: ORFType) -> DiffRegionRule:
         the entire isoform is unique.
     """
     return _DIFF_REGION_RULES[orf_type]
+
+
+def ratio(subject: float | None, reference: float | None) -> float | None:
+    """``subject / reference``, or None where that does not read as a ratio.
+
+    Undefined for a missing or non-finite side, a reference ≤ 0 (a negative
+    denominator inverts it) or a negative subject. The pipeline's region ratios
+    and the site's comparison tables both use this, so they cannot disagree.
+    """
+    if subject is None or reference is None:
+        return None
+    if not (math.isfinite(subject) and math.isfinite(reference)):
+        return None
+    if reference <= 0 or subject < 0:
+        return None
+    return subject / reference
+
+
+def density_ratio(
+    n_unique: float, unique_len: float, n_shared: float, shared_len: float
+) -> float | None:
+    """Per-length density ratio ``(n_unique / unique_len) / (n_shared / shared_len)``.
+
+    None when either length is ≤ 0 or the shared density is 0 (see :func:`ratio`).
+    """
+    if not unique_len or not shared_len or unique_len <= 0 or shared_len <= 0:
+        return None
+    return ratio(n_unique / unique_len, n_shared / shared_len)
