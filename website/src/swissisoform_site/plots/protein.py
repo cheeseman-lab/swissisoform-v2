@@ -11,6 +11,7 @@ boxes.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from swissisoform.clinical.significance import is_pathogenic
@@ -191,59 +192,65 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
     for i, b in enumerate(bars):
         by = -bar_gap * (i + 1)
         b["_y"] = by
-        x0, x1 = int(b["x0"]), int(b["x1"])
+        # Rounded, not truncated: an offset bar's ends can be fractional, and int()
+        # rounds the two ends of a bar crossing x=0 in opposite directions.
+        x0, x1 = _residue_x(b["x0"]), _residue_x(b["x1"])
         label, slug = b["label"], b.get("slug")
         # The bar carries its resolved noun (``_region_noun`` in app.py); the legend
         # only capitalises it.
         region = b.get("region") or region_noun(b.get("orf_type"), default=DEFAULT_REGION_NOUN)
-        region_cap = region_noun(None, cap=True, default=region)
+        region_cap = region[:1].upper() + region[1:]
         # Isoform residue 1 sits at x0, so hover numbers the isoform's own residues.
-        iso_res = {"residue_base": x0, "residue_of": x1 - x0 + 1}
+        iso_res = {"residue_base": x0, "residue_of": b.get("aa_len") or x1 - x0 + 1}
         open_hint = "<br><i>click to open</i>" if slug else ""
         d0, d1 = b.get("diff_x0"), b.get("diff_x1")
-        has_diff = d0 is not None and d1 is not None and int(d1) >= int(d0)
+        if d0 is not None and d1 is not None:
+            d0, d1 = _residue_x(d0), _residue_x(d1)
+        has_diff = d0 is not None and d1 is not None and d1 >= d0
         lost = bool(b.get("diff_is_lost")) and has_diff
 
         if lost:
-            n_lost = int(d1) - int(d0) + 1
+            n_lost = d1 - d0 + 1
             # Drawn up to x0 (not d1) so it meets the blue body flush, the way an
             # extension's green meets x=0; the hover still reports d0..d1.
             seg = _segment(
-                int(d0),
-                min(int(d1) + 1, x1),
+                d0,
+                min(d1 + 1, x1),
                 by,
                 _TRUNC_FILL,
                 "",
-                f"<b>{label}</b><br>{region}: canonical residues {int(d0) + 1}–{int(d1) + 1}"
+                f"<b>{label}</b><br>{region}: canonical residues {d0 + 1}–{d1 + 1}"
                 f" ({n_lost} aa){open_hint}",
                 slug=slug,
                 opacity=0.55,
                 residue_base=0,  # canonical residues: the isoform has none here
                 residue_word="canonical residue",
+                residue_last=d1,
             )
             traces.append(_legend(seg, region_cap))
         elif has_diff:
             # Extensions end their gained region at x=0 (the canonical start) so
             # it sits flush against the shared body; a whole-isoform separate ORF
             # is capped at its own C-terminus.
-            g1 = min(int(d1) + 1, x1)
+            g1 = min(d1 + 1, x1)
             # Counted off d0..d1 (inclusive), not the drawn span: a separate ORF's
             # cap at x1 would read one residue short.
-            n_gained = int(d1) - int(d0) + 1
+            n_gained = d1 - d0 + 1
             seg = _segment(
-                int(d0),
+                d0,
                 g1,
                 by,
                 _EXT_FILL,
                 "",
                 f"<b>{label}</b><br>{region}: {max(n_gained, 1)} aa{open_hint}",
                 slug=slug,
+                residue_last=d1,
                 **iso_res,
             )
             traces.append(_legend(seg, region_cap))
 
         # Blue spans what the isoform shares with the canonical.
-        shared_x0 = x0 if lost or not has_diff else int(d1) + 1
+        shared_x0 = x0 if lost or not has_diff else d1 + 1
         if shared_x0 <= x1:
             seg = _segment(
                 shared_x0,
@@ -639,6 +646,15 @@ def _feature_box(
     }
 
 
+def _residue_x(x: float) -> int:
+    """A display coordinate rounded to the nearest residue, halves rounded up.
+
+    ``floor(x + 0.5)`` rather than ``round``: banker's rounding sends -98.5 and 0.5
+    different ways, so a bar's two ends could come out one residue apart.
+    """
+    return math.floor(float(x) + 0.5)
+
+
 def _bar_samples(x0: int, x1: int, cap: int = 400) -> list[float]:
     """Evenly sample display coords across ``[x0, x1]`` (endpoints included).
 
@@ -669,13 +685,16 @@ def _segment(
     residue_base: int | None = None,
     residue_of: int | None = None,
     residue_word: str = "residue",
+    residue_last: int | None = None,
 ) -> dict[str, Any]:
     """One bar segment on a row: a thick line densified so its whole length hovers.
 
     ``hover`` is one string for the segment. With ``residue_base`` the residue
     under the cursor is appended, numbered from ``residue_base`` = residue 1 (and
-    "/ N aa" with ``residue_of``). ``slug`` rides as ``customdata`` so a click
-    opens that isoform's page (``gene.html``).
+    "/ N aa" with ``residue_of``). ``residue_last`` caps that number at the region's
+    own last residue, for a segment drawn one past it to meet its neighbour.
+    ``slug`` rides as ``customdata`` so a click opens that isoform's page
+    (``gene.html``).
     """
     xs = _bar_samples(x0, x1)
     of = f" / {residue_of} aa" if residue_of else ""
@@ -683,7 +702,8 @@ def _segment(
     def text_at(x: float) -> str:
         if residue_base is None:
             return hover
-        return f"{hover}<br>{residue_word} {int(x) - residue_base + 1}{of}"
+        xi = int(x) if residue_last is None else min(int(x), residue_last)
+        return f"{hover}<br>{residue_word} {xi - residue_base + 1}{of}"
 
     trace: dict[str, Any] = {
         "type": "scatter",

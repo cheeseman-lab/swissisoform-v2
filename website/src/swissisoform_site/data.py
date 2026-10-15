@@ -38,7 +38,13 @@ from markupsafe import escape
 # backend evidence module (which the LLM per-category pass also consumes) and is
 # copied into the site package by prepare_deploy.sh, so UI and LLM never drift.
 from swissisoform.clinical.significance import is_pathogenic
-from swissisoform.contract import DEFAULT_REGION_NOUN, density_ratio, region_noun, stratum_label
+from swissisoform.contract import (
+    DEFAULT_REGION_NOUN,
+    SEPARATE_ORF_TYPES,
+    density_ratio,
+    region_noun,
+    stratum_label,
+)
 from swissisoform.contract import ratio as _contract_ratio
 from swissisoform.site.evidence import CATEGORIES as _CATEGORIES
 from swissisoform.site.evidence import active_scoring as _active_scoring
@@ -1101,9 +1107,31 @@ _CANONICAL_ORF = "Canonical ORF"  # reference side of the C1/C2 frame tables
 _AUTO = object()  # sentinel: compute the ratio from the two sides
 
 
+def has_shared_region(iso: Any) -> bool:
+    """True when the isoform shares a region with the canonical protein.
+
+    A truncation always does (it keeps the canonical's C-terminal core); otherwise
+    the differential region must end before the isoform does. A separate ORF type
+    that sequence-matched the canonical in frame (``models.is_separate_orf``) keeps
+    one too, which is why this reads the row's shape, not its ORF type.
+    """
+    orf_type = (getattr(iso, "orf_type", "") or "").lower()
+    if (getattr(iso, "diff_space", "") or "").lower() == "canonical" or orf_type == "truncated":
+        return True
+    diff_end = getattr(iso, "diff_end", 0) or 0
+    return 0 < diff_end < (getattr(iso, "isoform_len", 0) or 0)
+
+
 def _region_noun(iso: Any, cap: bool = False) -> str:
-    """The stratum's name for the differential region (``contract.region_noun``)."""
-    return region_noun(getattr(iso, "orf_type", None), cap=cap, default=DEFAULT_REGION_NOUN)
+    """The stratum's name for the differential region (``contract.region_noun``).
+
+    "ORF" claims the whole isoform is unique, so a separate ORF type that keeps a
+    shared region (``has_shared_region``) gets the generic noun instead.
+    """
+    orf_type = getattr(iso, "orf_type", None)
+    if (orf_type or "").lower() in SEPARATE_ORF_TYPES and has_shared_region(iso):
+        orf_type = None
+    return region_noun(orf_type, cap=cap, default=DEFAULT_REGION_NOUN)
 
 
 def _ratio(subject: Any, reference: Any) -> float | None:
@@ -1557,8 +1585,18 @@ def criterion_evidence_for(iso) -> dict:
                 "isoform_conservation_phylop_shared_region_mean",
                 "isoform_conservation_phylop_unique_region_mean",
                 # The module's own enrichment, the value C3's reason and the API
-                # report: phyloP is signed, so a site-side ratio would differ.
-                _maybe_float(g("isoform_conservation_phylop_enrichment")),
+                # report: phyloP is signed, so a site-side ratio would differ. Shown
+                # only where unique/shared reads as a ratio (``contract.ratio``): a
+                # negative mean on either side flips it into a misleading multiple.
+                (
+                    _maybe_float(g("isoform_conservation_phylop_enrichment"))
+                    if _ratio(
+                        g("isoform_conservation_phylop_unique_region_mean"),
+                        g("isoform_conservation_phylop_shared_region_mean"),
+                    )
+                    is not None
+                    else None
+                ),
                 drives=True,
             ),
             keyed(
@@ -2214,12 +2252,7 @@ def criterion_evidence_for(iso) -> dict:
         # (germline → M1) or disease (ClinVar+COSMIC → M2). The predictors are
         # source-independent; this counts their calls over the chosen pool, region
         # vs shared, with a length-normalized ratio. Context, not a score basis.
-        unique_aa = getattr(iso, "diff_end", None) or len(
-            getattr(iso, "differential_sequence", "") or ""
-        )
-        shared_aa = (
-            getattr(iso, "isoform_len", None) if is_trunc else getattr(iso, "canonical_len", None)
-        )
+        lengths = _region_lengths_nt()
         metrics = [
             ("Scorable variants", "n_scorable_in"),
             ("Damaging variants", "n_damaging_in"),
@@ -2235,7 +2268,7 @@ def criterion_evidence_for(iso) -> dict:
         for label, stem in metrics:
             n_u = _maybe_float(g(f"isoform_varianteffect_{stem}_unique_{source}"))
             n_s = _maybe_float(g(f"isoform_varianteffect_{stem}_shared_{source}"))
-            rows.append(row(label, n_s, n_u, _density_ratio(n_u, n_s, (unique_aa, shared_aa))))
+            rows.append(row(label, n_s, n_u, _density_ratio(n_u, n_s, lengths)))
         return section(
             f"Predicted-damaging variants · {pool_label}",
             "Variant set",

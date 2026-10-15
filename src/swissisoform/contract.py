@@ -56,14 +56,38 @@ NO_CANONICAL_BASELINE_ORFS = frozenset(
     }
 )
 
+
+@dataclass(frozen=True)
+class DiffRegionRule:
+    """Where an ORF type's isoform-unique region lives.
+
+    Attributes:
+        space: Coordinate space of the differential region —
+            ``"isoform"``, ``"canonical"``, or ``"none"``.
+        whole_isoform: ``True`` when the entire isoform is unique (no shared
+            region with the canonical protein).
+    """
+
+    space: str  # "isoform" | "canonical" | "none"
+    whole_isoform: bool
+
+
+_DIFF_REGION_RULES: dict[ORFType, DiffRegionRule] = {
+    ORFType.ANNOTATED: DiffRegionRule(space="none", whole_isoform=False),
+    ORFType.EXTENDED: DiffRegionRule(space="isoform", whole_isoform=False),
+    ORFType.TRUNCATED: DiffRegionRule(space="canonical", whole_isoform=False),
+    ORFType.UORF: DiffRegionRule(space="isoform", whole_isoform=True),
+    ORFType.UOORF: DiffRegionRule(space="isoform", whole_isoform=True),
+    ORFType.INTERNAL_OUT_OF_FRAME: DiffRegionRule(space="isoform", whole_isoform=True),
+    ORFType.THREE_UTR_ORF: DiffRegionRule(space="isoform", whole_isoform=True),
+    ORFType.ALT_ORF: DiffRegionRule(space="isoform", whole_isoform=True),
+}
+
+
 # ORF types read as a separate protein: they share no reading frame with the CDS,
 # so the whole isoform is unique and there is no shared region.
-SEPARATE_ORF_TYPES: tuple[str, ...] = (
-    ORFType.UORF.value,
-    ORFType.UOORF.value,
-    ORFType.INTERNAL_OUT_OF_FRAME.value,
-    ORFType.THREE_UTR_ORF.value,
-    ORFType.ALT_ORF.value,
+SEPARATE_ORF_TYPES: tuple[str, ...] = tuple(
+    t.value for t, rule in _DIFF_REGION_RULES.items() if rule.whole_isoform
 )
 
 # What the unique region is called per ORF type — the nouns the category prompts
@@ -223,33 +247,6 @@ def orf_type_from_ribotish(tis_type: str) -> ORFType:
     return ORFType.ALT_ORF
 
 
-@dataclass(frozen=True)
-class DiffRegionRule:
-    """Where an ORF type's isoform-unique region lives.
-
-    Attributes:
-        space: Coordinate space of the differential region —
-            ``"isoform"``, ``"canonical"``, or ``"none"``.
-        whole_isoform: ``True`` when the entire isoform is unique (no shared
-            region with the canonical protein).
-    """
-
-    space: str  # "isoform" | "canonical" | "none"
-    whole_isoform: bool
-
-
-_DIFF_REGION_RULES: dict[ORFType, DiffRegionRule] = {
-    ORFType.ANNOTATED: DiffRegionRule(space="none", whole_isoform=False),
-    ORFType.EXTENDED: DiffRegionRule(space="isoform", whole_isoform=False),
-    ORFType.TRUNCATED: DiffRegionRule(space="canonical", whole_isoform=False),
-    ORFType.UORF: DiffRegionRule(space="isoform", whole_isoform=True),
-    ORFType.UOORF: DiffRegionRule(space="isoform", whole_isoform=True),
-    ORFType.INTERNAL_OUT_OF_FRAME: DiffRegionRule(space="isoform", whole_isoform=True),
-    ORFType.THREE_UTR_ORF: DiffRegionRule(space="isoform", whole_isoform=True),
-    ORFType.ALT_ORF: DiffRegionRule(space="isoform", whole_isoform=True),
-}
-
-
 def diff_region_rule(orf_type: ORFType) -> DiffRegionRule:
     """Return the differential-region rule for an ORF type.
 
@@ -286,6 +283,6 @@ def density_ratio(
 
     None when either length is ≤ 0 or the shared density is 0 (see :func:`ratio`).
     """
-    if not unique_len or not shared_len or unique_len <= 0 or shared_len <= 0:
+    if unique_len <= 0 or shared_len <= 0:
         return None
     return ratio(n_unique / unique_len, n_shared / shared_len)
