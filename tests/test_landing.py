@@ -88,7 +88,7 @@ def test_payload_carries_everything_the_gene_cards_showed(staged, payload):
         assert (g["ns"], g["ni"]) == (best.net_score, best.n_interesting)
 
         for iso, card in zip(g["i"], order, strict=True):
-            assert tis_slug(iso["t"]) == tis_slug(card.tis_id)
+            assert iso["s"] == tis_slug(card.tis_id)  # the page URL, as the cards linked
             assert iso["o"] == card.orf_type
             assert iso["a"] == card.aa_len
             assert [payload["llm_tags"][k] for k in iso["y"]] == card.tags
@@ -145,16 +145,58 @@ def test_missing_registry_degrades_to_uncategorised(staged, tmp_path):
 
 def test_landing_route_serves_gzip_with_etag(client, staged):
     idx = staged.landing_index()
-    r = client.get("/api/landing.json", headers={"Accept-Encoding": "gzip"})
+    gz = {"Accept-Encoding": "gzip"}
+    r = client.get("/api/landing.json", headers=gz)
     assert r.status_code == 200
     assert r.headers["Content-Encoding"] == "gzip"
     assert json.loads(gzip.decompress(r.data)) == json.loads(idx.body)
     etag = r.headers["ETag"]
-    again = client.get("/api/landing.json", headers={"If-None-Match": etag})
+    again = client.get("/api/landing.json", headers={**gz, "If-None-Match": etag})
     assert again.status_code == 304
     plain = client.get("/api/landing.json")
     assert "Content-Encoding" not in plain.headers
     assert json.loads(plain.data)["n_genes"] == idx.n_genes
+    # Each representation has its own ETag, so the gzip one never validates plain.
+    assert plain.headers["ETag"] != etag
+    stale = client.get("/api/landing.json", headers={"If-None-Match": etag})
+    assert stale.status_code == 200 and "Content-Encoding" not in stale.headers
+
+
+def test_landing_route_honours_a_refused_gzip(client):
+    """``gzip;q=0`` means "not gzip" — a substring test would have sent it anyway."""
+    r = client.get("/api/landing.json", headers={"Accept-Encoding": "gzip;q=0, identity"})
+    assert r.status_code == 200
+    assert "Content-Encoding" not in r.headers
+    assert json.loads(r.data)["n_genes"]
+
+
+def test_null_gene_names_are_dropped_like_load_all(staged, tmp_path):
+    """A row with no gene name is skipped, not listed as a gene called "None"."""
+    import pandas as pd
+
+    df = pd.read_parquet(WEBSITE_DATA / "all_paired.parquet", columns=list(staged.COLUMNS))
+    orphan = df.iloc[[0]].copy()
+    orphan["gene_name"] = None
+    orphan["tis_id"] = "orphan"
+    pd.concat([df, orphan]).to_parquet(tmp_path / "all_paired.parquet")
+    payload = json.loads(staged.build_landing_index(tmp_path).body)
+    names = {g["n"] for g in payload["genes"]}
+    assert not names & {"None", "nan", ""}
+    assert payload["n_isoforms"] == len(df)
+
+
+def test_a_fired_registry_tag_keeps_its_category_even_if_not_code_fired(staged):
+    registry = {"tags": [{"tag_id": "llm_x", "category": "M", "kind": "bool",
+                          "code_fired": False}]}
+    vocab = staged._tag_vocab(registry, {"llm_x"})
+    assert [(t["id"], t["category"]) for t in vocab] == [("llm_x", "M")]
+    assert staged._tag_vocab(registry, set()) == []  # never fired: not listed
+
+
+def test_index_logs_llm_coverage_without_load_all(staged):
+    idx = staged.landing_index()
+    assert 0 <= idx.n_categories <= idx.n_isoforms
+    assert 0 <= idx.n_synthesis <= idx.n_isoforms
 
 
 def test_index_is_a_table_shell_fed_by_the_landing_route(client, staged):
@@ -167,3 +209,36 @@ def test_index_is_a_table_shell_fed_by_the_landing_route(client, staged):
     assert "gene-card" not in body
     idx = staged.landing_index()
     assert f'<span class="stat-num">{idx.n_isoforms}</span>' in body
+
+
+def test_registry_export_refuses_a_different_build(tmp_path):
+    """Same version name, other definitions: no export rather than wrong categories."""
+    import subprocess
+
+    import pandas as pd
+
+    if not (WEBSITE_DATA / "all_paired.parquet").exists():
+        pytest.skip("website/data/all_paired.parquet not present — populate per README")
+    cols = ["isoform_tags_registry_version", "isoform_tags_registry_sha256"]
+    df = pd.read_parquet(WEBSITE_DATA / "all_paired.parquet", columns=cols)
+    script = REPO_ROOT / "scripts" / "export" / "export_site_tag_registry.py"
+
+    def export(frame):
+        frame.to_parquet(tmp_path / "run.parquet")
+        out = tmp_path / "tag_registry.json"
+        out.unlink(missing_ok=True)
+        r = subprocess.run(
+            [sys.executable, str(script), "--parquet", str(tmp_path / "run.parquet"),
+             "--out", str(out)],
+            capture_output=True, text=True,
+        )
+        return r, out
+
+    ok, out = export(df)
+    if ok.returncode != 0:
+        pytest.skip(f"registry not provisioned here: {ok.stderr.strip()[-200:]}")
+    assert json.loads(out.read_text())["sha256"] == df[cols[1]].iloc[0]
+
+    bad, out = export(df.assign(isoform_tags_registry_sha256="0" * 64))
+    assert bad.returncode != 0 and "not the build" in bad.stderr
+    assert not out.exists()

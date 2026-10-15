@@ -88,6 +88,10 @@ class LandingIndex:
     n_genes: int
     n_isoforms: int
     examples: tuple[str, ...]
+    # LLM coverage, counted while the build reads each isoform's files anyway.
+    n_categories: int = 0  # isoforms with a categories.json
+    n_category_cells: int = 0  # category reads across them
+    n_synthesis: int = 0  # isoforms with a synthesis.json
 
 
 def _load_registry(root: Path) -> dict[str, Any] | None:
@@ -105,14 +109,14 @@ def _load_registry(root: Path) -> dict[str, Any] | None:
 def _tag_vocab(registry: dict[str, Any] | None, fired_ids: set[str]) -> list[dict[str, Any]]:
     """Every tag that can appear, ordered C→S then registry order.
 
-    From the registry when staged (code-fired tags only — LLM-kind tags carry no
-    state and so never fire here); tags seen firing but absent from it are kept,
-    uncategorised, rather than dropped.
+    From the registry when staged: every code-fired tag, plus any other registry
+    tag the run was seen firing, so it keeps its category. Tags seen firing but
+    absent from the registry are kept, uncategorised, rather than dropped.
     """
     vocab: list[dict[str, Any]] = []
     known: set[str] = set()
     for pos, t in enumerate((registry or {}).get("tags") or []):
-        if not t.get("code_fired"):
+        if not t.get("code_fired") and t["tag_id"] not in fired_ids:
             continue
         vocab.append(
             {
@@ -159,6 +163,10 @@ def _encode_flags(flags: dict[str, dict[str, Any]]) -> str:
     return "".join(out)
 
 
+def _is_null(v: Any) -> bool:
+    return v is None or (isinstance(v, float) and v != v)
+
+
 def _struct(v: Any) -> dict[str, Any]:
     return v if isinstance(v, dict) else {}
 
@@ -177,7 +185,9 @@ def build_landing_index(root: Path | None = None) -> LandingIndex:
         frame = pd.read_parquet(parquet, columns=[c for c in COLUMNS if c in present])
 
     registry = _load_registry(root)
-    rows = frame.to_dict("records")
+    # A row without a gene name has no gene to sit under; ``load_all``'s groupby
+    # drops it the same way.
+    rows = [r for r in frame.to_dict("records") if not _is_null(r.get("gene_name"))]
 
     fired_ids: set[str] = set()
     for r in rows:
@@ -203,7 +213,7 @@ def build_landing_index(root: Path | None = None) -> LandingIndex:
 
     keywords: dict[str, int] = {}
     genes_out: list[dict[str, Any]] = []
-    n_isoforms = 0
+    n_isoforms = n_categories = n_category_cells = n_synthesis = 0
     for gene_name in sorted(by_gene):
         grp = by_gene[gene_name]
         head = grp[0]
@@ -216,6 +226,11 @@ def build_landing_index(root: Path | None = None) -> LandingIndex:
             verdicts = (
                 category_verdicts_for_isoform(llm_dir=llm_dir, tis_slug=slug) if llm_dir else {}
             )
+            if llm_dir:
+                if (llm_dir / slug / "categories.json").exists():
+                    n_categories += 1
+                    n_category_cells += len(verdicts)
+                n_synthesis += (llm_dir / slug / "synthesis.json").exists()
             flags = cdlmps_flags(_criteria_dict(r.get("isoform_scoring_criteria")), verdicts)
             n_green, n_red, _ = flag_counts(flags)
             states = _struct(r.get("isoform_tags_states"))
@@ -223,6 +238,7 @@ def build_landing_index(root: Path | None = None) -> LandingIndex:
             fired = sorted((tag_idx[k] for k, v in states.items() if v is True and k in tag_idx))
             iso: dict[str, Any] = {
                 "t": tis_id,
+                "s": slug,  # the page URL's slug, so the client never re-derives it
                 "o": orf,
                 "a": aa,
                 "f": _encode_flags(flags),
@@ -303,6 +319,9 @@ def build_landing_index(root: Path | None = None) -> LandingIndex:
         n_genes=len(genes_out),
         n_isoforms=n_isoforms,
         examples=tuple(g["n"] for g in genes_out[:6]),
+        n_categories=n_categories,
+        n_category_cells=n_category_cells,
+        n_synthesis=n_synthesis,
     )
 
 
@@ -316,5 +335,16 @@ def landing_index() -> LandingIndex:
         idx.n_isoforms,
         len(idx.body) / 1024,
         len(idx.body_gz) / 1024,
+    )
+    # One line so missing LLM JSONs are obvious before clicking through tiles.
+    logging.getLogger("swissisoform_site.coverage").warning(
+        "%d isoforms loaded; LLM coverage: categories %d/%d (%d/%d cells), synthesis %d/%d",
+        idx.n_isoforms,
+        idx.n_categories,
+        idx.n_isoforms,
+        idx.n_category_cells,
+        idx.n_isoforms * len(CARD_GROUPS),
+        idx.n_synthesis,
+        idx.n_isoforms,
     )
     return idx
