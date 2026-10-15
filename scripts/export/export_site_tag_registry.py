@@ -11,7 +11,10 @@ the parquet's tags came from different builds.
 The version is read from the parquet's ``isoform_tags_registry_version`` (one
 column, projected), so the export always matches what the rows were fired with;
 the registry's content hash must equal the parquet's
-``isoform_tags_registry_sha256``, or nothing is written.
+``isoform_tags_registry_sha256``, or nothing is written and it exits non-zero.
+The registry is optional for the site (chips render uncoloured without it), so
+a registry that is simply not provisioned on this machine is a warning, not a
+failure: nothing is staged and the deploy goes on.
 
 Usage:
     python scripts/export/export_site_tag_registry.py \
@@ -83,6 +86,17 @@ def main() -> None:
         # one describing some other run's tags.
         args.out.unlink(missing_ok=True)
         logger.info("no %s in %s — no tag registry staged", VERSION_COLUMN, args.parquet)
+        return
+    reg_path = tag_registry.version_dir(version) / tag_registry.REGISTRY_FILE
+    if not reg_path.exists():
+        args.out.unlink(missing_ok=True)
+        logger.warning(
+            "WARNING: tag registry %s is not provisioned here (%s) — no %s staged; the "
+            "site's fired-tag chips will render uncoloured",
+            version,
+            reg_path,
+            args.out.name,
+        )
         return
     reg = tag_registry.load(version)
     run_sha = _single(args.parquet, SHA256_COLUMN)

@@ -212,17 +212,6 @@ class GeneRecord:
             ),
         )
 
-    @property
-    def iso_tags(self) -> list[str]:
-        """Vocab-ordered union of the gene's isoforms' change tags.
-
-        Drives the landing-page "Isoform change" filter facet (a gene matches when
-        ANY of its isoforms carries the selected tag). Displayed per-isoform in the
-        dropdown, not on the gene card itself.
-        """
-        present = {t for iso in self.isoforms for t in iso.tags}
-        return [t for t in ISOFORM_TAG_VOCAB if t in present]
-
 
 # --------------------------------------------------------------------------- #
 # Helpers
@@ -748,16 +737,30 @@ def llm_synthesis_for_isoform(*, llm_dir: Path, tis_slug: str) -> dict | None:
     return data
 
 
+def read_llm_json(llm_dir: Path | None, tis_slug: str, name: str) -> dict | None:
+    """One isoform's ``<llm_dir>/<tis_slug>/<name>`` as a dict, or None when absent.
+
+    None also for an unreadable or non-object file, so a caller that counts
+    coverage and a caller that renders agree on what "present" means.
+    """
+    if llm_dir is None:
+        return None
+    p = Path(llm_dir) / tis_slug / name
+    try:
+        blob = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return blob if isinstance(blob, dict) else None
+
+
 def synthesis_tags_for_isoform(*, llm_dir: Path | None, tis_slug: str) -> list[str]:
     """Vocab-whitelisted isoform-change tags for one isoform (empty if none/absent)."""
-    if llm_dir is None:
-        return []
-    p = Path(llm_dir) / tis_slug / "synthesis.json"
-    if not p.exists():
-        return []
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
+    return synthesis_tags_from(read_llm_json(llm_dir, tis_slug, "synthesis.json"))
+
+
+def synthesis_tags_from(data: dict | None) -> list[str]:
+    """The vocab-whitelisted tags in a parsed ``synthesis.json`` (empty if None)."""
+    if not data:
         return []
     tags = data.get("tags")
     if not isinstance(tags, list):
@@ -2635,11 +2638,4 @@ def category_verdicts_for_isoform(*, llm_dir: Path, tis_slug: str) -> dict:
     files a ``verdict``. Returns ``{}`` when the file is absent or unreadable, so
     the front end falls back to a placeholder reasoning line.
     """
-    p = Path(llm_dir) / tis_slug / "categories.json"
-    if not p.exists():
-        return {}
-    try:
-        blob = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return blob if isinstance(blob, dict) else {}
+    return read_llm_json(llm_dir, tis_slug, "categories.json") or {}

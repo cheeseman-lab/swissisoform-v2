@@ -99,8 +99,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-
-
 #: Endpoints that participate in the variant-scan breadcrumb, and so should keep
 #: ``?vcf=`` alive when one is active. Deliberately a whitelist: appending the token
 #: to ``static`` or the structure-file routes would bust asset caching and write the
@@ -453,7 +451,8 @@ def create_app() -> Flask:
         gz = request.accept_encodings.quality("gzip") > 0
         # One ETag per representation: the gzip and identity bodies differ.
         etag = idx.etag + ("-gz" if gz else "")
-        if request.if_none_match.contains(etag):
+        # Weak comparison, as RFC 9110 requires for If-None-Match (a proxy may weaken it).
+        if request.if_none_match.contains_weak(etag):
             resp = make_response("", 304)
         else:
             resp = make_response(idx.body_gz if gz else idx.body)
@@ -866,7 +865,7 @@ def create_app() -> Flask:
         # Only genes the *displayed* catalogue knows about can be linked. The scan
         # index deliberately covers the whole catalogue, so a hit in a gene this
         # build has no page for is expected, not an error.
-        known_genes = set(load_all().keys())
+        known_genes = landing_index().gene_names  # names only: no full-record load
         return _private_scan(
             make_response(
                 render_template(
@@ -931,7 +930,7 @@ def create_app() -> Flask:
                 "catalog_genes": index.n_genes if index else 0,
                 "catalog_isoforms": index.n_isoforms if index else 0,
                 "catalog_intervals": index.n_intervals if index else 0,
-                "displayed_genes": len(load_all()),
+                "displayed_genes": landing_index().n_genes,
                 "scan_dir": str(probe_dir),
                 "scan_dir_writable": writable,
                 "scan_dir_error": write_error,

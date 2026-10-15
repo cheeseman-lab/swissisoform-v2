@@ -186,8 +186,7 @@ def test_null_gene_names_are_dropped_like_load_all(staged, tmp_path):
 
 
 def test_a_fired_registry_tag_keeps_its_category_even_if_not_code_fired(staged):
-    registry = {"tags": [{"tag_id": "llm_x", "category": "M", "kind": "bool",
-                          "code_fired": False}]}
+    registry = {"tags": [{"tag_id": "llm_x", "category": "M", "kind": "bool", "code_fired": False}]}
     vocab = staged._tag_vocab(registry, {"llm_x"})
     assert [(t["id"], t["category"]) for t in vocab] == [("llm_x", "M")]
     assert staged._tag_vocab(registry, set()) == []  # never fired: not listed
@@ -228,9 +227,16 @@ def test_registry_export_refuses_a_different_build(tmp_path):
         out = tmp_path / "tag_registry.json"
         out.unlink(missing_ok=True)
         r = subprocess.run(
-            [sys.executable, str(script), "--parquet", str(tmp_path / "run.parquet"),
-             "--out", str(out)],
-            capture_output=True, text=True,
+            [
+                sys.executable,
+                str(script),
+                "--parquet",
+                str(tmp_path / "run.parquet"),
+                "--out",
+                str(out),
+            ],
+            capture_output=True,
+            text=True,
         )
         return r, out
 
@@ -241,4 +247,48 @@ def test_registry_export_refuses_a_different_build(tmp_path):
 
     bad, out = export(df.assign(isoform_tags_registry_sha256="0" * 64))
     assert bad.returncode != 0 and "not the build" in bad.stderr
+    assert not out.exists()
+
+
+def test_a_weakened_etag_still_revalidates(client):
+    """If-None-Match compares weakly, so a proxy-weakened tag still gets a 304."""
+    etag = client.get("/api/landing.json", headers={"Accept-Encoding": "gzip"}).headers["ETag"]
+    r = client.get(
+        "/api/landing.json", headers={"Accept-Encoding": "gzip", "If-None-Match": f"W/{etag}"}
+    )
+    assert r.status_code == 304
+
+
+def test_gene_names_match_the_full_records(staged):
+    from swissisoform_site.data import load_all
+
+    assert staged.landing_index().gene_names == set(load_all())
+
+
+def test_registry_export_warns_when_the_registry_is_not_provisioned(tmp_path):
+    """No registry on this machine: no export, exit 0, so a deploy is not blocked."""
+    import subprocess
+
+    import pandas as pd
+
+    pd.DataFrame({"isoform_tags_registry_version": ["v_not_provisioned"]}).to_parquet(
+        tmp_path / "run.parquet"
+    )
+    out = tmp_path / "tag_registry.json"
+    out.write_text("{}")  # a stale export from another run must not survive
+    script = REPO_ROOT / "scripts" / "export" / "export_site_tag_registry.py"
+    r = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--parquet",
+            str(tmp_path / "run.parquet"),
+            "--out",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "not provisioned" in r.stderr
     assert not out.exists()

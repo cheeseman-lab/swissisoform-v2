@@ -11,7 +11,8 @@ pre-gzipped from memory.
 Everything the gene cards showed is carried over (see
 ``docs/plans/landing_table.md``), computed by the same helpers the cards use —
 :func:`data.cdlmps_flags`, :func:`data.flag_counts`, :func:`data.best_isoform_key`,
-:func:`data.synthesis_tags_for_isoform` — so the two can never disagree.
+:func:`data.read_llm_json` / :func:`data.synthesis_tags_from` — so the two can never
+disagree.
 """
 
 from __future__ import annotations
@@ -35,13 +36,14 @@ from swissisoform_site.data import (
     _criteria_dict,
     _maybe_int,
     _maybe_str,
+    _none_if_nan,
     _split_terms,
     best_isoform_key,
-    category_verdicts_for_isoform,
     cdlmps_flags,
     data_dir,
     flag_counts,
-    synthesis_tags_for_isoform,
+    read_llm_json,
+    synthesis_tags_from,
     tis_slug,
 )
 
@@ -88,6 +90,7 @@ class LandingIndex:
     n_genes: int
     n_isoforms: int
     examples: tuple[str, ...]
+    gene_names: frozenset[str] = frozenset()  # every gene listed, for name lookups
     # LLM coverage, counted while the build reads each isoform's files anyway.
     n_categories: int = 0  # isoforms with a categories.json
     n_category_cells: int = 0  # category reads across them
@@ -163,10 +166,6 @@ def _encode_flags(flags: dict[str, dict[str, Any]]) -> str:
     return "".join(out)
 
 
-def _is_null(v: Any) -> bool:
-    return v is None or (isinstance(v, float) and v != v)
-
-
 def _struct(v: Any) -> dict[str, Any]:
     return v if isinstance(v, dict) else {}
 
@@ -187,7 +186,7 @@ def build_landing_index(root: Path | None = None) -> LandingIndex:
     registry = _load_registry(root)
     # A row without a gene name has no gene to sit under; ``load_all``'s groupby
     # drops it the same way.
-    rows = [r for r in frame.to_dict("records") if not _is_null(r.get("gene_name"))]
+    rows = [r for r in frame.to_dict("records") if _none_if_nan(r.get("gene_name")) is not None]
 
     fired_ids: set[str] = set()
     for r in rows:
@@ -223,14 +222,14 @@ def build_landing_index(root: Path | None = None) -> LandingIndex:
             slug = tis_slug(tis_id)
             orf = _maybe_str(r.get("orf_type")) or ""
             aa = _maybe_int(r.get("aa_len")) or 0
-            verdicts = (
-                category_verdicts_for_isoform(llm_dir=llm_dir, tis_slug=slug) if llm_dir else {}
-            )
-            if llm_dir:
-                if (llm_dir / slug / "categories.json").exists():
-                    n_categories += 1
-                    n_category_cells += len(verdicts)
-                n_synthesis += (llm_dir / slug / "synthesis.json").exists()
+            # Read once each; "present" here is what the cards render from.
+            categories = read_llm_json(llm_dir, slug, "categories.json")
+            synthesis = read_llm_json(llm_dir, slug, "synthesis.json")
+            verdicts = categories or {}
+            if categories is not None:
+                n_categories += 1
+                n_category_cells += len(categories)
+            n_synthesis += synthesis is not None
             flags = cdlmps_flags(_criteria_dict(r.get("isoform_scoring_criteria")), verdicts)
             n_green, n_red, _ = flag_counts(flags)
             states = _struct(r.get("isoform_tags_states"))
@@ -243,9 +242,7 @@ def build_landing_index(root: Path | None = None) -> LandingIndex:
                 "a": aa,
                 "f": _encode_flags(flags),
                 "g": fired,
-                "y": [
-                    llm_idx[t] for t in synthesis_tags_for_isoform(llm_dir=llm_dir, tis_slug=slug)
-                ],
+                "y": [llm_idx[t] for t in synthesis_tags_from(synthesis)],
                 "ns": n_green - n_red,
                 "ni": n_green,
             }
@@ -319,6 +316,7 @@ def build_landing_index(root: Path | None = None) -> LandingIndex:
         n_genes=len(genes_out),
         n_isoforms=n_isoforms,
         examples=tuple(g["n"] for g in genes_out[:6]),
+        gene_names=frozenset(g["n"] for g in genes_out),
         n_categories=n_categories,
         n_category_cells=n_category_cells,
         n_synthesis=n_synthesis,
