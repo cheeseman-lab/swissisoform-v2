@@ -98,6 +98,15 @@ REGION_NOUN: dict[str, str] = {
     ORFType.TRUNCATED.value: "lost region",
     **dict.fromkeys(SEPARATE_ORF_TYPES, "ORF"),
 }
+# The tag layer's output columns (``modules/tags.py`` writes them). Spelled here
+# because this module ships with the website, which reads them without importing
+# the pipeline's tag code.
+TAG_STATES_COLUMN = "isoform_tags_states"
+TAG_CITATIONS_COLUMN = "isoform_tags_citations"
+TAG_LABELS_COLUMN = "isoform_tags_labels"
+TAG_VERSION_COLUMN = "isoform_tags_registry_version"
+TAG_SHA256_COLUMN = "isoform_tags_registry_sha256"
+
 # What a reader calls the region when the ORF type is unknown.
 DEFAULT_REGION_NOUN = "differential region"
 # Not after a hyphen: "isoform-unique region" is a compound, not the region's name.

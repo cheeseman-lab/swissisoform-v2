@@ -720,12 +720,8 @@ def llm_synthesis_for_isoform(*, llm_dir: Path, tis_slug: str) -> dict | None:
     ``function_relevance``) to ``*_html``; falls back to the legacy ``narrative``
     field so pre-reframe synthesis.json files still display.
     """
-    p = Path(llm_dir) / tis_slug / "synthesis.json"
-    if not p.exists():
-        return None
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
+    data = read_llm_json(llm_dir, tis_slug, "synthesis.json")  # None unless a JSON object
+    if data is None:
         return None
     for field_name in ("divergence_hypothesis", "function_relevance"):
         if data.get(field_name):

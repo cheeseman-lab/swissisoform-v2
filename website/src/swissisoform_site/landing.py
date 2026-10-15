@@ -29,6 +29,12 @@ from typing import Any
 import pandas as pd
 import pyarrow.parquet as pq
 
+from swissisoform.contract import (
+    TAG_LABELS_COLUMN,
+    TAG_SHA256_COLUMN,
+    TAG_STATES_COLUMN,
+    TAG_VERSION_COLUMN,
+)
 from swissisoform_site.data import (
     CARD_GROUPS,
     ISOFORM_TAG_VOCAB,
@@ -61,10 +67,10 @@ COLUMNS = (
     "aa_len",
     "isoform_scoring_existence_score",
     "isoform_scoring_criteria",
-    "isoform_tags_states",
-    "isoform_tags_labels",
-    "isoform_tags_registry_version",
-    "isoform_tags_registry_sha256",
+    TAG_STATES_COLUMN,
+    TAG_LABELS_COLUMN,
+    TAG_VERSION_COLUMN,
+    TAG_SHA256_COLUMN,
 )
 # Display order of isoforms within a gene — the order the card dropdown used.
 _ORF_ORDER = {"extended": 0, "truncated": 1}
@@ -102,11 +108,20 @@ def _load_registry(root: Path) -> dict[str, Any] | None:
     path = root / REGISTRY_FILE
     if not path.is_file():
         return None
+    # Optional, and read at app import: anything wrong with it degrades to
+    # uncoloured chips rather than an app that cannot start.
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as e:
+        reg = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:  # ValueError covers bad JSON and bad UTF-8
         logger.warning("unreadable %s: %s — tag chips render uncategorised", path, e)
         return None
+    tags = reg.get("tags") if isinstance(reg, dict) else None
+    if not isinstance(tags, list) or not all(
+        isinstance(t, dict) and isinstance(t.get("tag_id"), str) for t in tags
+    ):
+        logger.warning("malformed %s — tag chips render uncategorised", path)
+        return None
+    return reg
 
 
 def _tag_vocab(registry: dict[str, Any] | None, fired_ids: set[str]) -> list[dict[str, Any]]:
@@ -190,14 +205,14 @@ def build_landing_index(root: Path | None = None) -> LandingIndex:
 
     fired_ids: set[str] = set()
     for r in rows:
-        fired_ids.update(k for k, v in _struct(r.get("isoform_tags_states")).items() if v is True)
+        fired_ids.update(k for k, v in _struct(r.get(TAG_STATES_COLUMN)).items() if v is True)
     tags = _tag_vocab(registry, fired_ids)
     tag_idx = {t["id"]: i for i, t in enumerate(tags)}
     llm_idx = {t: i for i, t in enumerate(ISOFORM_TAG_VOCAB)}
 
     # The parquet stamps each row with the registry build that fired it; flag a
     # staged export from a different build, since its categories may not match.
-    run_shas = {r.get("isoform_tags_registry_sha256") for r in rows} - {None}
+    run_shas = {r.get(TAG_SHA256_COLUMN) for r in rows} - {None}
     if registry and run_shas and run_shas != {registry.get("sha256")}:
         logger.warning(
             "staged %s (sha %s) is not the build that fired this run's tags (%s)",
@@ -213,6 +228,7 @@ def build_landing_index(root: Path | None = None) -> LandingIndex:
     keywords: dict[str, int] = {}
     genes_out: list[dict[str, Any]] = []
     n_isoforms = n_categories = n_category_cells = n_synthesis = 0
+    label_drift: set[tuple[str, str]] = set()
     for gene_name in sorted(by_gene):
         grp = by_gene[gene_name]
         head = grp[0]
@@ -232,8 +248,8 @@ def build_landing_index(root: Path | None = None) -> LandingIndex:
             n_synthesis += synthesis is not None
             flags = cdlmps_flags(_criteria_dict(r.get("isoform_scoring_criteria")), verdicts)
             n_green, n_red, _ = flag_counts(flags)
-            states = _struct(r.get("isoform_tags_states"))
-            labels = _struct(r.get("isoform_tags_labels"))
+            states = _struct(r.get(TAG_STATES_COLUMN))
+            labels = _struct(r.get(TAG_LABELS_COLUMN))
             fired = sorted((tag_idx[k] for k, v in states.items() if v is True and k in tag_idx))
             iso: dict[str, Any] = {
                 "t": tis_id,
@@ -246,18 +262,16 @@ def build_landing_index(root: Path | None = None) -> LandingIndex:
                 "ns": n_green - n_red,
                 "ni": n_green,
             }
-            # A fired label reads per ORF type (``Tag.label_for``), so it is shipped
-            # once per (tag, ORF type); only a row that disagrees carries its own.
-            own = {}
+            # A fired label is a function of (tag, ORF type) (``Tag.label_for``), so
+            # it is shipped once per pair. A row that disagreed would mean the tag
+            # layer changed that rule: log it rather than ship per-row overrides.
             for k, v in states.items():
                 lab = labels.get(k)
                 if v is not True or k not in tag_idx or not lab:
                     continue
                 per_orf = tags[tag_idx[k]].setdefault("labels", {})
                 if per_orf.setdefault(orf, lab) != lab:
-                    own[str(tag_idx[k])] = lab
-            if own:
-                iso["l"] = own
+                    label_drift.add((k, orf))
             key = best_isoform_key(
                 n_green - n_red,
                 n_green,
@@ -269,7 +283,6 @@ def build_landing_index(root: Path | None = None) -> LandingIndex:
         # Best over the parquet's row order (first max wins), as the cards' `max`
         # over gene.isoforms did; then the display order, as the dropdown listed.
         best_iso = max(isoforms, key=lambda i: i["_key"])
-        best_key = best_iso["_key"]
         isoforms.sort(key=lambda i: _ORF_ORDER.get(i["o"], 2))
         best = next(j for j, i in enumerate(isoforms) if i is best_iso)
         for i in isoforms:
@@ -282,9 +295,7 @@ def build_landing_index(root: Path | None = None) -> LandingIndex:
                 "n": gene_name,
                 "u": _maybe_str(head.get("generef_uniprot_id")),
                 "k": [keywords[kw] for kw in kws],
-                "b": best,
-                "ns": best_key[0],
-                "ni": best_key[1],
+                "b": best,  # the best isoform's ns / ni rank the gene
                 "i": isoforms,
             }
         )
@@ -306,6 +317,11 @@ def build_landing_index(root: Path | None = None) -> LandingIndex:
         "n_isoforms": n_isoforms,
         "genes": genes_out,
     }
+    if label_drift:
+        logger.warning(
+            "tag labels differ between rows of one ORF type (showing the first): %s",
+            sorted(label_drift)[:10],
+        )
     if registry is None and fired_ids:
         logger.warning("no %s in %s — fired-tag chips render uncategorised", REGISTRY_FILE, root)
     body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")

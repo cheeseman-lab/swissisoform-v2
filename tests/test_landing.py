@@ -85,7 +85,8 @@ def test_payload_carries_everything_the_gene_cards_showed(staged, payload):
 
         best = rec.best_isoform
         assert g["i"][g["b"]]["t"] == best.tis_id
-        assert (g["ns"], g["ni"]) == (best.net_score, best.n_interesting)
+        b = g["i"][g["b"]]
+        assert (b["ns"], b["ni"]) == (best.net_score, best.n_interesting)
 
         for iso, card in zip(g["i"], order, strict=True):
             assert iso["s"] == tis_slug(card.tis_id)  # the page URL, as the cards linked
@@ -116,7 +117,7 @@ def test_fired_tags_are_exactly_the_true_states(staged, payload):
             # The label a chip shows is the row's own stratum-worded label.
             for k in iso["g"]:
                 t = payload["tags"][k]
-                shown = (iso.get("l") or {}).get(str(k)) or t.get("labels", {}).get(iso["o"])
+                shown = t.get("labels", {}).get(iso["o"])
                 assert shown == r.isoform_tags_labels[t["id"]]
             n_checked += len(iso["g"])
     assert n_checked, "staged run fired no tags — the test exercised nothing"
@@ -292,3 +293,29 @@ def test_registry_export_warns_when_the_registry_is_not_provisioned(tmp_path):
     assert r.returncode == 0, r.stderr
     assert "not provisioned" in r.stderr
     assert not out.exists()
+
+
+@pytest.mark.parametrize(
+    "content",
+    [b"\xff\xfe not utf-8", b"[1, 2]", b'{"tags": [{"category": "C"}]}', b'{"tags": "x"}'],
+)
+def test_a_malformed_registry_degrades_instead_of_crashing(staged, tmp_path, content):
+    """The registry is optional and read at app import: bad input means no colours."""
+    (tmp_path / "tag_registry.json").write_bytes(content)
+    assert staged._load_registry(tmp_path) is None
+
+
+def test_payload_carries_no_dead_fields(payload):
+    """No per-row label overrides, and no gene-level copy of the best isoform's rank."""
+    for g in payload["genes"]:
+        assert "ns" not in g and "ni" not in g
+        assert all("l" not in i for i in g["i"])
+
+
+def test_a_non_object_synthesis_json_is_absent_not_a_crash(tmp_path):
+    from swissisoform_site.data import llm_synthesis_for_isoform, synthesis_tags_for_isoform
+
+    (tmp_path / "s1").mkdir()
+    (tmp_path / "s1" / "synthesis.json").write_text("[1, 2, 3]")
+    assert llm_synthesis_for_isoform(llm_dir=tmp_path, tis_slug="s1") is None
+    assert synthesis_tags_for_isoform(llm_dir=tmp_path, tis_slug="s1") == []
