@@ -235,10 +235,10 @@ def test_a_map_column_is_its_keys_not_a_feature_of_its_own(tmp_path):
 
 def test_catalog_reader_does_not_trust_the_first_files_schema(tmp_path):
     """A first shard without the clinical summary must not crash the type map."""
+    import export_feature_catalog as efc
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    import export_feature_catalog as efc
     from swissisoform.io.parquet import CLINICAL_SUMMARY_TYPE
 
     first, second = tmp_path / "a.parquet", tmp_path / "b.parquet"
