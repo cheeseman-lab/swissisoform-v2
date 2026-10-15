@@ -55,7 +55,8 @@ fi
 # registry build this run's tags were fired with. The site cannot import
 # swissisoform.tags (not vendored below), so it reads this JSON instead. Exported
 # here, before anything is deleted, because it fails on a mixed-version run or a
-# registry whose hash differs from the run's; moved into data/ once staged.
+# registry whose hash differs from the run's; moved into data/ once staged. A
+# registry not provisioned on this machine only warns (chips render uncoloured).
 REGISTRY_TMP="$PWD/data/.tag_registry.json.tmp"
 rm -f "$REGISTRY_TMP"
 echo "[prepare_deploy] exporting the tag registry for $SRC/all_paired.parquet"

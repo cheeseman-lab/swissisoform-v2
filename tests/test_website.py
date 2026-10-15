@@ -41,6 +41,11 @@ def client():
 
     data_mod.load_all.cache_clear()
     data_mod._structure_index.cache_clear()
+    # Importing the app builds the landing index (create_app), possibly before
+    # the data dir above was set — drop it so it is rebuilt from website/data.
+    from swissisoform_site import landing
+
+    landing.landing_index.cache_clear()
 
     from swissisoform_site.app import app
 

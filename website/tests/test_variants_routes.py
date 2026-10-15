@@ -54,11 +54,13 @@ def client(data_dir, tmp_path, monkeypatch):
     monkeypatch.delenv("SWISSISOFORM_TRUST_PROXY", raising=False)
 
     from swissisoform_site import data as site_data
+    from swissisoform_site import landing as site_landing
     from swissisoform_site.app import create_app
 
     # These loaders are lru_cached per worker; clear them so the tmp data dir is
     # actually read instead of a previous test's.
     site_data.load_all.cache_clear()
+    site_landing.landing_index.cache_clear()
     site_data.load_orf_index.cache_clear()
 
     app = create_app()
@@ -67,6 +69,7 @@ def client(data_dir, tmp_path, monkeypatch):
         yield test_client
 
     site_data.load_all.cache_clear()
+    site_landing.landing_index.cache_clear()
     site_data.load_orf_index.cache_clear()
 
 
@@ -393,9 +396,11 @@ def test_forwarded_for_splits_buckets_when_the_proxy_is_trusted(
     monkeypatch.setenv("SWISSISOFORM_TRUST_PROXY", "1")
 
     from swissisoform_site import data as site_data
+    from swissisoform_site import landing as site_landing
     from swissisoform_site.app import create_app
 
     site_data.load_all.cache_clear()
+    site_landing.landing_index.cache_clear()
     site_data.load_orf_index.cache_clear()
     app = create_app()
     app.config["TESTING"] = True
@@ -415,4 +420,5 @@ def test_forwarded_for_splits_buckets_when_the_proxy_is_trusted(
         assert post(vcf_bytes + b"\n#c\n", "8.8.8.8").status_code == 200
     finally:
         site_data.load_all.cache_clear()
+        site_landing.landing_index.cache_clear()
         site_data.load_orf_index.cache_clear()

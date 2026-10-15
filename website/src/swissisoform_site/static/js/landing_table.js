@@ -531,12 +531,14 @@
       }).join("");
       controls.hidden = self.sel.length === 0;
     }
+    // Hiding also empties it, so Enter can never pick an option nobody can see.
+    function hideDropdown() { dropdown.hidden = true; dropdown.innerHTML = ""; }
     function renderDropdown() {
       var q = input.value.trim().toLowerCase();
       var opts = cfg.options().filter(function (o) {
         return self.sel.indexOf(o.v) < 0 && (!q || o.search.indexOf(q) >= 0);
       }).slice(0, 500);
-      if (!opts.length || document.activeElement !== input) { dropdown.hidden = true; return; }
+      if (!opts.length || document.activeElement !== input) { hideDropdown(); return; }
       dropdown.innerHTML = opts.map(function (o) {
         return '<button type="button" class="kw-option" data-v="' + o.v + '">' + o.badge +
           '<span class="kw-option-name">' + esc(o.label) + '</span><span class="kw-option-count">' +
@@ -546,18 +548,18 @@
     }
     this.add = function (v) {
       if (self.sel.indexOf(v) < 0) self.sel.push(v);
-      input.value = ""; dropdown.hidden = true;
+      input.value = ""; hideDropdown();
       renderSelected(); applyFilters();
     };
     this.sync = renderSelected;
     input.addEventListener("input", renderDropdown);
     input.addEventListener("focus", renderDropdown);
-    input.addEventListener("blur", function () { setTimeout(function () { dropdown.hidden = true; }, 120); });
+    input.addEventListener("blur", function () { setTimeout(hideDropdown, 120); });
     input.addEventListener("keydown", function (e) {
       if (e.key === "Enter") {
-        var first = dropdown.querySelector(".kw-option");
+        var first = dropdown.hidden ? null : dropdown.querySelector(".kw-option");
         if (first) { e.preventDefault(); self.add(Number(first.getAttribute("data-v"))); }
-      } else if (e.key === "Escape") { dropdown.hidden = true; }
+      } else if (e.key === "Escape") { hideDropdown(); }
     });
     dropdown.addEventListener("mousedown", function (e) {
       var o = e.target.closest(".kw-option");
@@ -733,14 +735,33 @@
     }
   }
 
+  // Scroll is saved as the row at the top of the viewport plus how far into it,
+  // not as raw pixels: after a reload unmeasured rows use estimated heights, so
+  // the same pixel offset would land on a different row (far off on a phone).
+  function bodyTop() { return body.getBoundingClientRect().top + window.scrollY; }
+  function topAnchor() {
+    var y = window.scrollY - bodyTop();
+    if (!rows.length || y <= 0) return null;
+    var r = firstRowAt(y);
+    return { key: rows[r].key, dy: y - offsets[r] };
+  }
+  function anchorY(a) {
+    for (var r = 0; r < rows.length; r++) {
+      if (rows[r].key === a.key) return bodyTop() + offsets[r] + a.dy;
+    }
+    return null;
+  }
+
   function saveSession() {
     store(function () {
       sessionStorage.setItem(SESSION_KEY, JSON.stringify({
-        open: Array.from(open), all: Array.from(showAll), y: window.scrollY,
+        open: Array.from(open), all: Array.from(showAll), y: window.scrollY, anchor: topAnchor(),
       }));
     });
   }
 
+  // Only Back/Forward returns to where the reader was; a reload or a fresh visit
+  // starts collapsed at the top.
   function readSession() {
     var s = store(function () { return JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null"); });
     if (!s) return null;
@@ -760,16 +781,22 @@
     .then(function (data) {
       build(data);
       readUrl();
-      var saved = readSession();
+      var nav = store(function () { return performance.getEntriesByType("navigation")[0].type; });
+      var saved = nav === "back_forward" ? readSession() : null;
       wireControls();
       applyFilters();
       loading.remove(); // only once the table is built, so a failure above still shows
-      var nav = store(function () { return performance.getEntriesByType("navigation")[0].type; });
-      if (saved && nav === "back_forward" && saved.y) {
+      if (saved && (saved.anchor || saved.y)) {
         if ("scrollRestoration" in history) history.scrollRestoration = "manual";
-        // Two frames: the first lays the expanded rows out, the second measures them.
+        var restore = function () {
+          var y = saved.anchor ? anchorY(saved.anchor) : null;
+          window.scrollTo(0, y == null ? saved.y : y);
+        };
+        // Lay out, jump to the anchor, then correct once the rows drawn around it
+        // have been measured (their real heights move the anchor's offset).
         requestAnimationFrame(function () {
-          requestAnimationFrame(function () { window.scrollTo(0, saved.y); });
+          restore();
+          requestAnimationFrame(function () { requestAnimationFrame(restore); });
         });
       }
     })
