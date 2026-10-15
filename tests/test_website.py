@@ -814,3 +814,23 @@ def test_every_isoform_page_renders_200(client):
             if r.status_code != 200:
                 bad.append((gname, iso.tis_id, r.status_code))
     assert not bad, f"isoform pages returned non-200: {bad}"
+
+
+def test_gene_view_variants_link_to_their_source_database(client):
+    """Every annotated variant on the gene track carries its ClinVar/gnomAD/COSMIC page."""
+    from swissisoform_site.app import _make_gene_protein_view
+    from swissisoform_site.data import load_all
+
+    hosts = {
+        "ClinVar": "https://www.ncbi.nlm.nih.gov/clinvar/variation/",
+        "gnomAD": "https://gnomad.broadinstitute.org/variant/",
+        "COSMIC": "https://cancer.sanger.ac.uk/cosmic/search?q=",
+    }
+    seen = set()
+    for gene in load_all().values():
+        for v in _make_gene_protein_view(gene).variants:
+            if v.get("source") in hosts:
+                assert (v.get("url") or "").startswith(hosts[v["source"]]), v
+                seen.add(v["source"])
+    if not seen:
+        pytest.skip("staged run has no annotated variants")

@@ -250,3 +250,19 @@ def test_separate_orf_hover_counts_every_residue():
     dumped = json.dumps(fig["data"])
     assert "ORF: 50 aa" in dumped and "ORF: 49 aa" not in dumped
     assert "ORF" in [t["name"] for t in fig["data"] if t.get("showlegend")]
+
+
+def test_variant_dots_carry_their_outbound_link():
+    """Gene-level variants link out (issue #31) rather than claim an isoform."""
+    view = _gene_view()
+    url = "https://www.ncbi.nlm.nih.gov/clinvar/variation/1/"
+    view.variants = [
+        {**view.variants[0], "url": url},
+        {**view.variants[0], "variant_id": "x", "pos": 70, "url": None},
+    ]
+    fig = pplot.build_gene_protein_figure(view)
+    dots = [t for t in fig["data"] if t.get("mode") == "markers" and t.get("customdata")]
+    assert len(dots) == 1
+    assert dots[0]["customdata"] == [{"href": url}, None]
+    assert "click to open the database page" in dots[0]["hovertext"][0]
+    assert "click to open" not in dots[0]["hovertext"][1]
