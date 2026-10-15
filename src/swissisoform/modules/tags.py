@@ -53,18 +53,17 @@ import pandas as pd
 import pyarrow as pa
 
 from swissisoform.config import PipelineConfig, ScoringConfig
+from swissisoform.contract import TAG_CITATIONS_COLUMN as CITATIONS_COLUMN
+from swissisoform.contract import TAG_LABELS_COLUMN as LABELS_COLUMN
+from swissisoform.contract import TAG_SHA256_COLUMN as SHA256_COLUMN
+from swissisoform.contract import TAG_STATES_COLUMN as STATES_COLUMN
+from swissisoform.contract import TAG_VERSION_COLUMN as VERSION_COLUMN
 from swissisoform.models import TranslationInitiationSite
 from swissisoform.tags import evaluate as tag_eval
 from swissisoform.tags.registry import TagRegistry, TagRegistryError
 from swissisoform.tags.registry import load as load_registry
 
 logger = logging.getLogger(__name__)
-
-STATES_COLUMN = "isoform_tags_states"
-CITATIONS_COLUMN = "isoform_tags_citations"
-LABELS_COLUMN = "isoform_tags_labels"
-VERSION_COLUMN = "isoform_tags_registry_version"
-SHA256_COLUMN = "isoform_tags_registry_sha256"
 
 
 class TagModule:

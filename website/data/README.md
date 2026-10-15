@@ -10,6 +10,7 @@ data/
 ├── variants_long.parquet         # required — per-variant rows for the clinical panel
 ├── transcript_skeletons.parquet  # required — exon skeletons for the transcript diagram
 ├── orf_index.parquet             # required for /api/variants/scan — see below
+├── tag_registry.json             # optional — tag category/kind for the landing chips, see below
 ├── structures/*.cif              # optional — 3Dmol viewer disabled if absent
 ├── structures/colors/*.colors.json  # optional — per-residue 3Dmol colouring
 └── llm/<slug>/                   # optional — per-isoform LLM (synthesis.json + criteria.json)
@@ -39,6 +40,15 @@ resolves uploaded variants against the whole catalogue. Build it first, or
 ```bash
 python ../../scripts/export/build_orf_index.py --run full_catalog
 ln -s ../../data/output/full_catalog/orf_index.parquet             orf_index.parquet
+```
+
+`tag_registry.json` is the tag registry the run's tags were fired with, exported
+for the site (which does not vendor `swissisoform.tags`). Without it the landing
+table still shows every fired tag, just uncoloured. `prepare_deploy.sh` writes it;
+by hand:
+
+```bash
+python ../../scripts/export/export_site_tag_registry.py --parquet all_paired.parquet --out tag_registry.json
 ```
 
 For Docker / Railway, the directory is baked into the image at build time

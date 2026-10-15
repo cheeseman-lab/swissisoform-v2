@@ -148,24 +148,11 @@ class Isoform:
         read it, several times per isoform per render, and its inputs
         (category_verdicts, criteria) are fixed when the Isoform is built.
         """
-        return {
-            group["letter"]: category_flag(
-                group, self.category_verdicts.get(group["name"]), self.criteria
-            )
-            for group in CARD_GROUPS
-        }
+        return cdlmps_flags(self.criteria, self.category_verdicts)
 
     def _verdict_counts(self) -> tuple[int, int, int]:
-        """(# green, # red, # fired) over the six CDLMPS categories.
-
-        Green is a legacy ``interesting`` verdict or, without one, a category with
-        at least one criterion met; red is a legacy ``not_interesting``. Neutral,
-        unmet and unscored categories do not fire.
-        """
-        states = [f["state"] for f in self.category_flags.values()]
-        n_green = sum(s in FIRING_GREEN for s in states)
-        n_red = sum(s == "not_interesting" for s in states)
-        return n_green, n_red, n_green + n_red
+        """(# green, # red, # fired) over the six CDLMPS categories."""
+        return flag_counts(self.category_flags)
 
     @property
     def n_interesting(self) -> int:
@@ -218,21 +205,12 @@ class GeneRecord:
         if not self.isoforms:
             return None
 
-        def _key(iso: Isoform) -> tuple[int, int, int, int]:
-            return (iso.net_score, iso.n_interesting, iso.existence_score or 0, iso.aa_len or 0)
-
-        return max(self.isoforms, key=_key)
-
-    @property
-    def iso_tags(self) -> list[str]:
-        """Vocab-ordered union of the gene's isoforms' change tags.
-
-        Drives the landing-page "Isoform change" filter facet (a gene matches when
-        ANY of its isoforms carries the selected tag). Displayed per-isoform in the
-        dropdown, not on the gene card itself.
-        """
-        present = {t for iso in self.isoforms for t in iso.tags}
-        return [t for t in ISOFORM_TAG_VOCAB if t in present]
+        return max(
+            self.isoforms,
+            key=lambda iso: best_isoform_key(
+                iso.net_score, iso.n_interesting, iso.existence_score, iso.aa_len
+            ),
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -267,7 +245,8 @@ def _clean_nan(obj: Any) -> Any:
 
 
 def _none_if_nan(v: Any) -> Any:
-    if v is None:
+    # pd.NA / NaT come from nullable (string, Int64) columns; NaN from float ones.
+    if v is None or v is pd.NA or v is pd.NaT:
         return None
     if isinstance(v, float) and not math.isfinite(v):
         return None
@@ -742,12 +721,8 @@ def llm_synthesis_for_isoform(*, llm_dir: Path, tis_slug: str) -> dict | None:
     ``function_relevance``) to ``*_html``; falls back to the legacy ``narrative``
     field so pre-reframe synthesis.json files still display.
     """
-    p = Path(llm_dir) / tis_slug / "synthesis.json"
-    if not p.exists():
-        return None
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
+    data = read_llm_json(llm_dir, tis_slug, "synthesis.json")  # None unless a JSON object
+    if data is None:
         return None
     for field_name in ("divergence_hypothesis", "function_relevance"):
         if data.get(field_name):
@@ -759,16 +734,30 @@ def llm_synthesis_for_isoform(*, llm_dir: Path, tis_slug: str) -> dict | None:
     return data
 
 
+def read_llm_json(llm_dir: Path | None, tis_slug: str, name: str) -> dict | None:
+    """One isoform's ``<llm_dir>/<tis_slug>/<name>`` as a dict, or None when absent.
+
+    None also for an unreadable or non-object file, so a caller that counts
+    coverage and a caller that renders agree on what "present" means.
+    """
+    if llm_dir is None:
+        return None
+    p = Path(llm_dir) / tis_slug / name
+    try:
+        blob = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return blob if isinstance(blob, dict) else None
+
+
 def synthesis_tags_for_isoform(*, llm_dir: Path | None, tis_slug: str) -> list[str]:
     """Vocab-whitelisted isoform-change tags for one isoform (empty if none/absent)."""
-    if llm_dir is None:
-        return []
-    p = Path(llm_dir) / tis_slug / "synthesis.json"
-    if not p.exists():
-        return []
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
+    return synthesis_tags_from(read_llm_json(llm_dir, tis_slug, "synthesis.json"))
+
+
+def synthesis_tags_from(data: dict | None) -> list[str]:
+    """The vocab-whitelisted tags in a parsed ``synthesis.json`` (empty if None)."""
+    if not data:
         return []
     tags = data.get("tags")
     if not isinstance(tags, list):
@@ -2603,6 +2592,40 @@ def category_flag(
     return {"state": state, "label": label, "n_met": n_met, "n_evaluable": n_evaluable}
 
 
+def cdlmps_flags(
+    criteria: dict[str, bool | None], category_verdicts: dict[str, dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    """Category letter -> :func:`category_flag`, in CARD_GROUPS order."""
+    return {
+        group["letter"]: category_flag(group, category_verdicts.get(group["name"]), criteria)
+        for group in CARD_GROUPS
+    }
+
+
+def flag_counts(flags: dict[str, dict[str, Any]]) -> tuple[int, int, int]:
+    """(# green, # red, # fired) over a CDLMPS lineup.
+
+    Green is a legacy ``interesting`` verdict or, without one, a category with at
+    least one criterion met; red is a legacy ``not_interesting``. Neutral, unmet
+    and unscored categories do not fire.
+    """
+    states = [f["state"] for f in flags.values()]
+    n_green = sum(s in FIRING_GREEN for s in states)
+    n_red = sum(s == "not_interesting" for s in states)
+    return n_green, n_red, n_green + n_red
+
+
+def best_isoform_key(
+    net_score: int, n_interesting: int, existence_score: int | None, aa_len: int | None
+) -> tuple[int, int, int, int]:
+    """Rank for a gene's headline ("Best") isoform; the max wins.
+
+    Net CDLMPS score, then more green, then the existence score, then length, so
+    genes with no scored categories still surface a deterministic representative.
+    """
+    return (net_score, n_interesting, existence_score or 0, aa_len or 0)
+
+
 def category_verdicts_for_isoform(*, llm_dir: Path, tis_slug: str) -> dict:
     """Per-category LLM read, keyed by CARD_GROUPS category name.
 
@@ -2612,11 +2635,4 @@ def category_verdicts_for_isoform(*, llm_dir: Path, tis_slug: str) -> dict:
     files a ``verdict``. Returns ``{}`` when the file is absent or unreadable, so
     the front end falls back to a placeholder reasoning line.
     """
-    p = Path(llm_dir) / tis_slug / "categories.json"
-    if not p.exists():
-        return {}
-    try:
-        blob = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return blob if isinstance(blob, dict) else {}
+    return read_llm_json(llm_dir, tis_slug, "categories.json") or {}

@@ -20,8 +20,8 @@ import math
 import os
 import re
 import secrets
+import threading
 import types
-from pathlib import Path
 from typing import Any
 
 from flask import (
@@ -62,8 +62,6 @@ from swissisoform_site.data import (
     CRITERIA_BY_ID,
     CRITERIA_FOR_PAGE,
     CRITERION_ABOUT,
-    EXISTENCE_CRITERIA,
-    FUNCTIONAL_CRITERIA,
     Isoform,
     _isoform_view,
     _region_noun,
@@ -80,6 +78,7 @@ from swissisoform_site.data import (
     variant_url,
 )
 from swissisoform_site.genomics import interval_intersection
+from swissisoform_site.landing import landing_index
 from swissisoform_site.plots import build_gene_protein_figure
 from swissisoform_site.plots.protein import CONSEQ_COLOR, CONSEQ_SHORT
 from swissisoform_site.scanstore import ScanStoreError
@@ -99,39 +98,6 @@ PAGE_MAX_HITS = 1000
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-def _log_llm_coverage(genes: dict, llm_dir: Path) -> None:
-    """Print one summary line — easier to spot missing LLM JSONs than per-request logs."""
-    log = logging.getLogger("swissisoform_site.coverage")
-    n_iso = sum(len(g.isoforms) for g in genes.values())
-    n_syn = 0
-    n_category_files = 0
-    n_category_cells = 0
-    for gene in genes.values():
-        for iso in gene.isoforms:
-            slug = tis_slug(iso.tis_id)
-            if (llm_dir / slug / "synthesis.json").exists():
-                n_syn += 1
-            cat_path = llm_dir / slug / "categories.json"
-            if cat_path.exists():
-                n_category_files += 1
-                try:
-                    payload = json.loads(cat_path.read_text())
-                    if isinstance(payload, dict):
-                        n_category_cells += len(payload)
-                except Exception:
-                    pass
-    log.warning(
-        "%d isoforms loaded; LLM coverage: categories %d/%d (%d/%d cells), synthesis %d/%d",
-        n_iso,
-        n_category_files,
-        n_iso,
-        n_category_cells,
-        n_iso * 6,
-        n_syn,
-        n_iso,
-    )
 
 
 #: Endpoints that participate in the variant-scan breadcrumb, and so should keep
@@ -339,6 +305,24 @@ def _human_delay(seconds: int) -> str:
     return f"{hours} hour{'' if hours == 1 else 's'}"
 
 
+# One loader at a time: a request that arrives while the background warm-up is
+# still in ``load_all()`` waits for it rather than building a second copy.
+_RECORDS_LOCK = threading.Lock()
+
+
+def _full_records() -> dict[str, Any]:
+    """``load_all()``, serialised with the startup warm-up."""
+    with _RECORDS_LOCK:
+        return load_all()
+
+
+def _warm_full_records() -> None:
+    try:
+        _full_records()
+    except Exception:  # a page that needs them will raise it again, visibly
+        logger.exception("background load_all() failed")
+
+
 def create_app() -> Flask:
     """Build the Flask app. Factory pattern so tests can re-create cleanly."""
     app = Flask(__name__)
@@ -457,14 +441,47 @@ def create_app() -> Flask:
 
     @app.get("/")
     def index() -> Any:
-        genes = load_all()
+        """The gene table shell; rows come from ``/api/landing.json``.
+
+        Reads only the landing index (a column-projected payload), never
+        ``load_all()``, so the page costs the same at catalogue scale.
+        """
+        idx = landing_index()
+        token, _digest = resolve_scan()
         return render_template(
             "index.html",
-            genes=list(genes.values()),
-            n_genes=len(genes),
-            existence_criteria=EXISTENCE_CRITERIA,
-            functional_criteria=FUNCTIONAL_CRITERIA,
+            # The table builds its links in JS from bases rendered without the
+            # token, so it is carried separately (as gene.html does).
+            scan_qs=f"?vcf={token}" if token else "",
+            n_genes=idx.n_genes,
+            n_isoforms=idx.n_isoforms,
+            examples=idx.examples,
+            landing_etag=idx.etag,
         )
+
+    @app.get("/api/landing.json")
+    def api_landing() -> Any:
+        """The landing table's data: genes, isoforms, CDLMPS lineups, fired tags.
+
+        Built once per process and held as JSON + gzip bytes; served gzipped when
+        the client accepts it, with an ETag so a reload revalidates for free.
+        """
+        idx = landing_index()
+        gz = request.accept_encodings.quality("gzip") > 0
+        # One ETag per representation: the gzip and identity bodies differ.
+        etag = idx.etag + ("-gz" if gz else "")
+        # Weak comparison, as RFC 9110 requires for If-None-Match (a proxy may weaken it).
+        if request.if_none_match.contains_weak(etag):
+            resp = make_response("", 304)
+        else:
+            resp = make_response(idx.body_gz if gz else idx.body)
+            resp.headers["Content-Type"] = "application/json"
+            if gz:
+                resp.headers["Content-Encoding"] = "gzip"
+        resp.set_etag(etag)
+        resp.headers["Vary"] = "Accept-Encoding"
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
 
     @app.get("/about")
     def about() -> Any:
@@ -485,7 +502,7 @@ def create_app() -> Flask:
         below — all deduplicated across the gene's isoforms. Isoform cards below
         link to the per-isoform deep-dive page.
         """
-        genes = load_all()
+        genes = _full_records()
         gene = genes.get(gene_name) or genes.get(gene_name.upper())
         if gene is None or not gene.isoforms:
             abort(404)
@@ -525,7 +542,7 @@ def create_app() -> Flask:
         Wires data + plot figure dicts + LLM JSONs into ``isoform.html``.
         Returns 404 on unknown gene or tis_slug.
         """
-        genes = load_all()
+        genes = _full_records()
         gene = genes.get(gene_name) or genes.get(gene_name.upper())
         if gene is None:
             abort(404)
@@ -638,7 +655,7 @@ def create_app() -> Flask:
         Intended for downloads, not for high-frequency programmatic queries —
         no pagination, no caching headers.
         """
-        genes = load_all()
+        genes = _full_records()
         payload: dict[str, Any] = {}
         # Named `record`, not `g` — `g` is Flask's request-global, imported above.
         for name, record in genes.items():
@@ -867,7 +884,7 @@ def create_app() -> Flask:
         # Only genes the *displayed* catalogue knows about can be linked. The scan
         # index deliberately covers the whole catalogue, so a hit in a gene this
         # build has no page for is expected, not an error.
-        known_genes = set(load_all().keys())
+        known_genes = landing_index().gene_names  # names only: no full-record load
         return _private_scan(
             make_response(
                 render_template(
@@ -932,7 +949,7 @@ def create_app() -> Flask:
                 "catalog_genes": index.n_genes if index else 0,
                 "catalog_isoforms": index.n_isoforms if index else 0,
                 "catalog_intervals": index.n_intervals if index else 0,
-                "displayed_genes": len(load_all()),
+                "displayed_genes": landing_index().n_genes,
                 "scan_dir": str(probe_dir),
                 "scan_dir_writable": writable,
                 "scan_dir_error": write_error,
@@ -992,9 +1009,15 @@ def create_app() -> Flask:
     def not_found(e: Any) -> tuple[Any, int]:
         return render_template("404.html", message=str(e)), 404
 
-    # Startup coverage summary — one log line so missing LLM JSONs are obvious
-    # before any clicking through tiles.
-    _log_llm_coverage(load_all(), data_dir() / "llm")
+    # Build the landing table's payload now rather than on the first visitor's
+    # request: at catalogue scale it takes seconds (a cached no-op afterwards). It
+    # also logs the LLM coverage line. ``load_all()`` is not called here, so the
+    # worker starts (and passes its healthcheck) without the full records; under
+    # gunicorn (SWISSISOFORM_WARM_RECORDS, entrypoint.sh) they load in the
+    # background, so the first gene page does not pay for them against --timeout.
+    landing_index()
+    if os.environ.get("SWISSISOFORM_WARM_RECORDS") == "1":
+        threading.Thread(target=_warm_full_records, name="load_all", daemon=True).start()
 
     return app
 
