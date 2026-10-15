@@ -113,6 +113,17 @@
       with the canonical protein. Two cases, and the distinction (<code>diff_space</code>)
       governs which tools are valid:
     </p>
+    <p>
+      Isoform pages name this region after the isoform's type, the same words the
+      tags use: an <strong>extension</strong> (the extra N-terminus an extended isoform
+      adds), a <strong>lost region</strong> (the canonical N-terminus a truncation drops),
+      or the whole <strong>ORF</strong> (a uORF / alt-ORF shares no sequence with the
+      canonical). Region tables compare that region against the <strong>shared</strong>
+      core; whole-protein tables compare <strong>canonical</strong> against
+      <strong>isoform</strong>. Every table's last column is the ratio of the right column
+      to the left, and a row is highlighted only when it is the evidence that made its
+      criterion pass.
+    </p>
     <ul class="about-list">
       <li>
         <strong>Truncation</strong> (<code>diff_space = canonical</code>) — the isoform

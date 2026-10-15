@@ -1,7 +1,8 @@
 """Tests for the combined gene protein-residue figure builder.
 
-``build_gene_protein_figure`` draws one canonical length bar (anchored at x=0)
-plus one bar per isoform aligned on the shared C-terminus, with deduplicated
+``build_gene_protein_figure`` draws one plain canonical bar (anchored at x=0)
+plus one row per isoform aligned on the shared C-terminus, each carrying its own
+difference (extension / lost region / ORF), with deduplicated
 variant / domain / disorder / coiled-coil / motif tracks and per-cell-line
 initiation lanes. The coordinate invariants it relies on are computed upstream
 by ``_make_gene_protein_view`` (app.py) and are covered here too.
@@ -28,12 +29,12 @@ def _gene_view():
     return SimpleNamespace(
         canonical_len=185,
         bars=[
-            {"label": "extended · CTG", "x0": -40, "x1": 185, "orf_type": "extended",
-             "is_trunc": False, "diff_x0": -40, "diff_x1": 0, "diff_on_canonical": False,
-             "slug": "chr1-100-+-CTG-ENST1"},
-            {"label": "truncated · AAG", "x0": 44, "x1": 186, "orf_type": "truncated",
-             "is_trunc": True, "diff_x0": 1, "diff_x1": 43, "diff_on_canonical": True,
-             "slug": "chr1-200-+-AAG-ENST1"},
+            {"label": "extended · CTG · 225 aa", "x0": -40, "x1": 185, "orf_type": "extended",
+             "is_trunc": False, "region": "extension", "diff_x0": -40, "diff_x1": 0,
+             "diff_is_lost": False, "slug": "chr1-100-+-CTG-ENST1"},
+            {"label": "truncated · AAG · 142 aa", "x0": 44, "x1": 185, "orf_type": "truncated",
+             "is_trunc": True, "region": "lost region", "diff_x0": 0, "diff_x1": 43,
+             "diff_is_lost": True, "slug": "chr1-200-+-AAG-ENST1"},
         ],
         variants=[
             {"variant_id": "ClinVar:1", "pos": 60, "consequence": "missense_variant",
@@ -52,14 +53,22 @@ def _gene_view():
     )
 
 
+def _row_traces(fig, y):
+    return [t for t in fig["data"] if t.get("mode") == "lines" and set(t["y"]) == {y}]
+
+
 def test_gene_protein_figure_one_canonical_plus_isoform_bars():
     fig = pplot.build_gene_protein_figure(_gene_view())
     assert isinstance(fig, dict) and fig["data"]
     names = [t.get("name") for t in fig["data"]]
-    # Exactly one canonical bar + one bar per isoform.
     assert names.count("Canonical") == 1
-    assert "extended · CTG" in names
-    assert "truncated · AAG" in names
+    # One legend entry per kind of segment, never one per isoform.
+    legend = [t["name"] for t in fig["data"] if t.get("showlegend")]
+    assert len(legend) == len(set(legend))
+    assert {"Canonical", "Isoform", "Extension", "Lost region"} <= set(legend)
+    # Every isoform row is labelled, uniquely.
+    labels = [a["text"] for a in fig["layout"]["annotations"] if a.get("name")]
+    assert labels == ["extended · CTG · 225 aa", "truncated · AAG · 142 aa"]
     # Deduped domain band + a variant trace present.
     assert "Domain (InterPro)" in names
     # Residue-frame axis, not genomic.
@@ -92,12 +101,43 @@ def test_gene_protein_figure_collapse_domains_depth_lane():
 
 
 def test_gene_protein_figure_isoform_bars_carry_click_slug():
-    """Isoform bars carry the isoform slug as customdata; the canonical bar doesn't."""
+    """Every segment of an isoform row — and its label — carries that isoform's slug."""
+    view = _gene_view()
+    fig = pplot.build_gene_protein_figure(view)
+    canonical = next(t for t in fig["data"] if t.get("name") == "Canonical")
+    assert "customdata" not in canonical
+    for bar in view.bars:
+        segs = _row_traces(fig, bar["_y"])
+        assert len(segs) == 2  # its difference + its shared body
+        assert all(t["customdata"][0] == bar["slug"] for t in segs)
+    names = {a["name"] for a in fig["layout"]["annotations"] if a.get("captureevents")}
+    assert names == {b["slug"] for b in view.bars}
+
+
+def test_canonical_bar_is_plain_and_lost_region_sits_on_its_own_row():
+    """The canonical row is only the canonical bar; a truncation's lost region is
+    drawn on the truncation's row, not shaded onto the canonical."""
+    view = _gene_view()
+    fig = pplot.build_gene_protein_figure(view)
+    assert [t["name"] for t in _row_traces(fig, 0.0)] == ["Canonical"]
+    trunc = next(b for b in view.bars if b["diff_is_lost"])
+    lost = [t for t in _row_traces(fig, trunc["_y"]) if t["name"] == "Lost region"]
+    assert len(lost) == 1
+    assert min(lost[0]["x"]) == 0  # lines up under the canonical bar's left edge
+    assert max(lost[0]["x"]) == trunc["x0"]  # meets the shared body flush
+
+
+def test_gene_figure_has_no_deepest_truncation_guide():
     fig = pplot.build_gene_protein_figure(_gene_view())
-    by_name = {t.get("name"): t for t in fig["data"]}
-    assert "customdata" not in by_name["Canonical"]
-    assert by_name["extended · CTG"]["customdata"][0] == "chr1-100-+-CTG-ENST1"
-    assert by_name["truncated · AAG"]["customdata"][0] == "chr1-200-+-AAG-ENST1"
+    assert not [s for s in fig["layout"]["shapes"] if s.get("line", {}).get("dash") == "dot"]
+
+
+def test_gene_variants_make_no_unique_region_claim():
+    """Whether a variant is isoform-unique depends on the isoform, so the gene view's
+    hover never says "unique" or "shared"."""
+    fig = pplot.build_gene_protein_figure(_gene_view())
+    hovers = [h for t in fig["data"] if t.get("mode") == "markers" for h in t.get("hovertext") or []]
+    assert hovers and not any("unique" in h or "shared region" in h for h in hovers)
 
 
 # --------------------------------------------------------------------------- #
@@ -170,24 +210,102 @@ def test_cterminus_alignment_extension_and_truncation():
     assert ext["x1"] == trunc["x1"]  # same right edge → shared C-terminus
 
 
-def test_truncation_lost_region_on_canonical():
-    """The truncation starts right of x=0 and shades its lost N-terminus on the canonical."""
+def test_truncation_lost_region_flagged():
+    """The truncation starts right of x=0 and flags its N-terminus as lost."""
     view = _make_gene_protein_view(_synthetic_gene())
     trunc = _bar(view, "truncated")
     ext = _bar(view, "extended")
     assert trunc["x0"] > 0
-    assert trunc["diff_on_canonical"] is True
-    assert ext["diff_on_canonical"] is False
+    assert trunc["diff_is_lost"] is True
+    assert trunc["diff_x0"] == 0  # canonical residue 1, at x=0 after the shift
+    assert trunc["region"] == "lost region"
+    assert ext["diff_is_lost"] is False
+    assert ext["region"] == "extension"
 
 
 def test_truncation_lost_region_stops_before_shared_core():
     """The lost region ends at x0-1 (last lost residue), not x0 (first retained).
 
     x0 is the first RETAINED (shared-core) residue where the isoform body begins,
-    so the red lost-region overlay must not extend to x0 — otherwise it bleeds one
-    residue into the shared core on the canonical bar.
+    so the lost region must end before x0 — otherwise it claims one residue of
+    the shared core.
     """
     view = _make_gene_protein_view(_synthetic_gene())
     trunc = _bar(view, "truncated")
     assert trunc["diff_x1"] == trunc["x0"] - 1
     assert trunc["diff_x1"] < trunc["x0"]  # no overlap into the shared body
+
+
+def test_separate_orf_hover_counts_every_residue():
+    """A 50-aa uORF hovers as 50 aa, matching its row label (PR #56 review)."""
+    import json
+
+    view = _gene_view()
+    view.bars = [
+        {"label": "uORF · ATG · 50 aa", "x0": -120, "x1": -71, "orf_type": "uORF",
+         "is_trunc": False, "region": "ORF", "diff_x0": -120, "diff_x1": -71,
+         "diff_is_lost": False, "slug": "chr1-50-+-ATG-ENST2"},
+    ]
+    fig = pplot.build_gene_protein_figure(view)
+    dumped = json.dumps(fig["data"])
+    assert "ORF: 50 aa" in dumped and "ORF: 49 aa" not in dumped
+    assert "ORF" in [t["name"] for t in fig["data"] if t.get("showlegend")]
+
+
+def test_variant_dots_carry_their_outbound_link():
+    """Gene-level variants link out (issue #31) rather than claim an isoform."""
+    view = _gene_view()
+    url = "https://www.ncbi.nlm.nih.gov/clinvar/variation/1/"
+    view.variants = [
+        {**view.variants[0], "url": url},
+        {**view.variants[0], "variant_id": "x", "pos": 70, "url": None},
+    ]
+    fig = pplot.build_gene_protein_figure(view)
+    dots = [t for t in fig["data"] if t.get("mode") == "markers" and t.get("customdata")]
+    assert len(dots) == 1
+    assert dots[0]["customdata"] == [{"href": url}, None]
+    assert "click to open the database page" in dots[0]["hovertext"][0]
+    assert "click to open" not in dots[0]["hovertext"][1]
+
+
+def test_isoform_rows_hover_their_own_residue_numbers():
+    """Every isoform segment reports the isoform residue under the cursor (PR #56 review)."""
+    fig = pplot.build_gene_protein_figure(_gene_view())
+    labels = {a.get("text", "").split(" ")[0]: a["y"] for a in fig["layout"]["annotations"]}
+    ext_y = labels["extended"]
+    texts = [h for t in _row_traces(fig, ext_y) for h in t["hovertext"]]
+    # extended · 225 aa starting at x=-40: residue 1 at x=-40, 225 at x=184 (x1 185 incl.).
+    assert any("residue 1 / 226 aa" in h for h in texts)
+    trunc = [h for t in _row_traces(fig, labels["truncated"]) for h in t["hovertext"]]
+    lost = [h for h in trunc if "canonical residue" in h]
+    assert lost and "canonical residue 1" in lost[0]
+
+
+def test_fractional_bar_crossing_zero_hovers_its_full_length():
+    """A uoORF at a fractional offset across x=0 hovers 100 aa, not 99 (PR #56 review)."""
+    import json
+
+    view = _gene_view()
+    view.bars = [
+        {"label": "uoORF · ATG · 100 aa", "x0": -98.67, "x1": 0.33, "aa_len": 100,
+         "orf_type": "uoORF", "is_trunc": False, "region": "ORF", "diff_x0": -98.67,
+         "diff_x1": 0.33, "diff_is_lost": False, "slug": "chr1-60-+-ATG-ENST3"},
+    ]
+    dumped = json.dumps(pplot.build_gene_protein_figure(view)["data"])
+    assert "ORF: 100 aa" in dumped and "/ 100 aa" in dumped
+    assert "/ 99 aa" not in dumped and "residue 100 / 100 aa" in dumped
+
+
+def test_region_hover_stops_at_the_regions_last_residue():
+    """A region drawn one residue past its end never hovers a shared residue."""
+    fig = pplot.build_gene_protein_figure(_gene_view())
+    labels = {a.get("text", "").split(" ")[0]: a["y"] for a in fig["layout"]["annotations"]}
+    trunc = [h for t in _row_traces(fig, labels["truncated"]) for h in t["hovertext"]]
+    lost = [h for h in trunc if "canonical residue" in h]
+    # Lost region = canonical residues 1–44 (diff_x 0..43), drawn to x=44.
+    assert lost[-1].endswith("canonical residue 44")
+    ext = [
+        h for t in _row_traces(fig, labels["extended"]) for h in t["hovertext"] if "extension" in h
+    ]
+    # Extension = x -40..0 = isoform residues 1–41, drawn to x=1.
+    assert "residue 41 / 226 aa" in ext[-1]

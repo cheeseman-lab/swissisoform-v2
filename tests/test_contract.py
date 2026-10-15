@@ -6,6 +6,8 @@ import pytest
 
 from swissisoform.contract import (
     NEAR_COGNATE_STARTS,
+    REGION_NOUN,
+    SEPARATE_ORF_TYPES,
     START_LOST_ATG_NOTE,
     START_LOST_NEAR_COGNATE_NOTE,
     START_NOT_AN_INITIATOR_NOTE,
@@ -14,7 +16,9 @@ from swissisoform.contract import (
     ORFType,
     diff_region_rule,
     orf_type_from_ribotish,
+    region_noun,
     start_codon_effect,
+    stratum_label,
 )
 
 _BASES = "ACGT"
@@ -141,3 +145,64 @@ def test_a_reference_that_cannot_initiate_says_so_instead_of_guessing():
 
 def test_the_rule_is_case_insensitive():
     assert start_codon_effect("atg", "acg") == ("start_lost", START_LOST_ATG_NOTE)
+
+
+# --------------------------------------------------------------------------- #
+# Region nouns — one vocabulary for tag labels and the site
+# --------------------------------------------------------------------------- #
+
+
+def test_every_non_annotated_orf_type_has_a_region_noun():
+    named = {t.value for t in ORFType} - {ORFType.ANNOTATED.value}
+    assert set(REGION_NOUN) == named
+    assert all(REGION_NOUN[t] == "ORF" for t in SEPARATE_ORF_TYPES)
+
+
+def test_region_noun_per_stratum():
+    assert region_noun("extended") == "extension"
+    assert region_noun("TRUNCATED") == "lost region"
+    assert region_noun("uorf") == "ORF"
+    assert region_noun("annotated") is None
+    assert region_noun(None) is None
+
+
+@pytest.mark.parametrize(
+    ("orf_type", "expected"),
+    [
+        ("extended", "Extension more basic"),
+        ("truncated", "Lost region more basic"),
+        ("alt_orf", "ORF more basic"),
+        ("", "Unique region more basic"),
+    ],
+)
+def test_stratum_label_rewrites_the_unique_region(orf_type, expected):
+    assert stratum_label("Unique region more basic", orf_type) == expected
+
+
+def test_stratum_label_reads_gained_as_lost_on_truncations_only():
+    assert stratum_label("Constrained residues gained", "truncated") == (
+        "Constrained residues lost"
+    )
+    assert stratum_label("Constrained residues gained", "extended") == (
+        "Constrained residues gained"
+    )
+    assert stratum_label("Long unique region", "extended") == "Long extension"
+
+
+def test_ratio_and_density_ratio_guards():
+    from swissisoform.contract import density_ratio, ratio
+
+    assert ratio(1.0, 2.0) == 0.5
+    assert ratio(1.0, 0.0) is None and ratio(1.0, -2.0) is None and ratio(-1.0, 2.0) is None
+    assert ratio(None, 1.0) is None and ratio(float("nan"), 1.0) is None
+    assert density_ratio(2, 100, 10, 200) == pytest.approx(0.4)
+    assert density_ratio(2, 0, 10, 200) is None and density_ratio(2, 100, 0, 200) is None
+
+
+def test_stratum_label_leaves_hyphenated_compounds_alone():
+    assert stratum_label("isoform-unique region peptides", "extended") == (
+        "isoform-unique region peptides"
+    )
+    assert stratum_label("variants in the unique region", "truncated") == (
+        "variants in the lost region"
+    )
