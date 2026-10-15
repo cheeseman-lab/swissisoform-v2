@@ -40,7 +40,6 @@ from markupsafe import Markup, escape
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from swissisoform.clinical.significance import is_pathogenic
-from swissisoform.contract import region_noun
 from swissisoform.site.evidence import (
     CRITERIA_METRIC_LABELS,
     format_metric,
@@ -1348,8 +1347,6 @@ def _uploaded_variant_records(hits: list[dict[str, Any]] | None) -> list[dict[st
         isoform_counts.setdefault(key, set()).add(hit.get("tis_id", ""))
 
         if key in merged:
-            # A hit in the unique region of ANY isoform makes the mark prominent.
-            merged[key]["in_unique"] |= hit.get("region") == "unique"
             continue
         # HGVS protein notation, in the same three-letter style the annotated
         # variants carry, so both read alike on the same tooltip.
@@ -1373,7 +1370,6 @@ def _uploaded_variant_records(hits: list[dict[str, Any]] | None) -> list[dict[st
             "significance": None,
             "protein_change": protein_change,
             "source": "uploaded",
-            "in_unique": hit.get("region") == "unique",
             "uploaded_detail": (
                 f"{hit.get('chrom')}:{hit.get('pos'):,} {change} · line {hit.get('line_no')}"
             ),
@@ -1483,7 +1479,7 @@ def _make_gene_protein_view(
                 "x1": x1,
                 "orf_type": iso.orf_type,
                 "is_trunc": is_trunc,
-                "region": region_noun(iso.orf_type) or "differential region",
+                "region": _region_noun(iso),
                 "diff_x0": diff_x0,
                 "diff_x1": diff_x1,
                 "diff_is_lost": diff_is_lost,

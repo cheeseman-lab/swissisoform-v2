@@ -232,3 +232,54 @@ def test_p3_modal_omits_the_below_threshold_section_when_empty() -> None:
         "Secondary structure · extension vs shared",
         "Elements and coordinates",
     ]
+
+
+# ── M1 highlights follow what the scorer read (PR #56 review) ────────────
+
+
+def _m1_rows(raw):
+    from swissisoform_site.data import criterion_evidence_for
+
+    iso = _Iso(raw)
+    iso.criteria = {"M1_pathogenic_variant_enrichment": True}
+    secs = criterion_evidence_for(iso)["M1_pathogenic_variant_enrichment"]["sections"]
+    return {r["label"]: r for s in secs for r in s.get("compare_rows") or []}
+
+
+def test_m1_gnomad_row_not_hot_on_a_site_computed_depletion() -> None:
+    # No module depletion ratio: M1 fired on constraint alone, so the density the
+    # page works out from the counts (0.4×, under the cutoff) is context only.
+    rows = _m1_rows({
+        "isoform_variant_intersection_n_gnomad_in_unique_region": 2,
+        "isoform_variant_intersection_n_gnomad_in_shared_region": 10,
+        "isoform_variant_intersection_unique_region_nt": 100,
+        "isoform_variant_intersection_shared_region_nt": 200,
+        "isoform_plm_vep_status": "ok",
+        "isoform_plm_vep_constraint_delta": 0.2,
+    })
+    assert rows["gnomAD variants"]["cols"][2] == "0.4×"
+    assert rows["gnomAD variants"]["hot"] is False
+    assert rows["Constraint Δ"]["hot"] is True
+
+
+def test_m1_constraint_row_not_hot_unless_plm_vep_ok() -> None:
+    rows = _m1_rows({
+        "isoform_variant_intersection_n_gnomad_in_unique_region": 2,
+        "isoform_variant_intersection_n_gnomad_in_shared_region": 10,
+        "isoform_variant_intersection_gnomad_depletion_ratio": 0.4,
+        "isoform_plm_vep_status": "no_cache",
+        "isoform_plm_vep_constraint_delta": 0.1,
+    })
+    assert rows["gnomAD variants"]["hot"] is True
+    assert rows["Constraint Δ"]["hot"] is False
+
+
+def test_fmt_ratio_never_reads_as_scientific_notation() -> None:
+    from swissisoform_site.data import _fmt_ratio
+
+    assert _fmt_ratio(0.42) == "0.42×"
+    assert _fmt_ratio(3.14) == "3.1×"
+    assert _fmt_ratio(162.5) == "162×"
+    assert _fmt_ratio(12_000.0) == "12,000×"
+    assert _fmt_ratio(None) == "—"
+    assert _fmt_ratio(float("inf")) == "—"

@@ -73,12 +73,20 @@ REGION_NOUN: dict[str, str] = {
     ORFType.TRUNCATED.value: "lost region",
     **dict.fromkeys(SEPARATE_ORF_TYPES, "ORF"),
 }
+# What a reader calls the region when the ORF type is unknown.
+DEFAULT_REGION_NOUN = "differential region"
 _UNIQUE_REGION = re.compile(r"\b[Uu]nique region\b")
 
 
-def region_noun(orf_type: str | None) -> str | None:
-    """The unique region's name for one ORF type, or None for an unknown type."""
-    return REGION_NOUN.get((orf_type or "").lower())
+def region_noun(
+    orf_type: str | None, *, cap: bool = False, default: str | None = None
+) -> str | None:
+    """The unique region's name for one ORF type (``default`` for an unknown type).
+
+    ``cap`` capitalises the first letter, for a heading or a legend entry.
+    """
+    noun = REGION_NOUN.get((orf_type or "").lower()) or default
+    return noun[0].upper() + noun[1:] if cap and noun else noun
 
 
 def stratum_label(text: str, orf_type: str | None) -> str:
@@ -92,9 +100,8 @@ def stratum_label(text: str, orf_type: str | None) -> str:
     noun = region_noun(orf_type)
     if noun is None:
         return text
-    out = _UNIQUE_REGION.sub(
-        lambda m: noun[0].upper() + noun[1:] if m.group(0)[0] == "U" else noun, text
-    )
+    noun_cap = region_noun(orf_type, cap=True)
+    out = _UNIQUE_REGION.sub(lambda m: noun_cap if m.group(0)[0] == "U" else noun, text)
     if (orf_type or "").lower() == ORFType.TRUNCATED.value and out.endswith(" gained"):
         out = out[: -len(" gained")] + " lost"
     return out

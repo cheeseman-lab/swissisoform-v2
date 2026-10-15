@@ -234,3 +234,19 @@ def test_truncation_lost_region_stops_before_shared_core():
     trunc = _bar(view, "truncated")
     assert trunc["diff_x1"] == trunc["x0"] - 1
     assert trunc["diff_x1"] < trunc["x0"]  # no overlap into the shared body
+
+
+def test_separate_orf_hover_counts_every_residue():
+    """A 50-aa uORF hovers as 50 aa, matching its row label (PR #56 review)."""
+    import json
+
+    view = _gene_view()
+    view.bars = [
+        {"label": "uORF · ATG · 50 aa", "x0": -120, "x1": -71, "orf_type": "uORF",
+         "is_trunc": False, "region": "ORF", "diff_x0": -120, "diff_x1": -71,
+         "diff_is_lost": False, "slug": "chr1-50-+-ATG-ENST2"},
+    ]
+    fig = pplot.build_gene_protein_figure(view)
+    dumped = json.dumps(fig["data"])
+    assert "ORF: 50 aa" in dumped and "ORF: 49 aa" not in dumped
+    assert "ORF" in [t["name"] for t in fig["data"] if t.get("showlegend")]

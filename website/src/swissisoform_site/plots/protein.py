@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from swissisoform.clinical.significance import is_pathogenic
+from swissisoform.contract import DEFAULT_REGION_NOUN, region_noun
 
 _CANON_COLOR = "#64748b"  # slate
 _ISO_COLOR = "#1f77b4"  # blue
@@ -182,7 +183,8 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
         b["_y"] = by
         x0, x1 = int(b["x0"]), int(b["x1"])
         label, slug = b["label"], b.get("slug")
-        region = b.get("region") or "differential region"
+        region = b.get("region") or region_noun(b.get("orf_type"), default=DEFAULT_REGION_NOUN)
+        region_cap = region_noun(b.get("orf_type"), cap=True, default=DEFAULT_REGION_NOUN)
         open_hint = "<br><i>click to open</i>" if slug else ""
         d0, d1 = b.get("diff_x0"), b.get("diff_x1")
         has_diff = d0 is not None and d1 is not None and int(d1) >= int(d0)
@@ -205,13 +207,15 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                 slug=slug,
                 opacity=0.55,
             )
-            traces.append(_legend(seg, region[0].upper() + region[1:]))
+            traces.append(_legend(seg, region_cap))
         elif has_diff:
             # Extensions end their gained region at x=0 (the canonical start) so
             # it sits flush against the shared body; a whole-isoform separate ORF
             # is capped at its own C-terminus.
             g1 = min(int(d1) + 1, x1)
-            n_gained = g1 - int(d0)
+            # Counted off d0..d1 (inclusive), not the drawn span: a separate ORF's
+            # cap at x1 would read one residue short.
+            n_gained = int(d1) - int(d0) + 1
             seg = _segment(
                 int(d0),
                 g1,
@@ -221,7 +225,7 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                 [f"<b>{label}</b><br>{region}: {max(n_gained, 1)} aa{open_hint}"],
                 slug=slug,
             )
-            traces.append(_legend(seg, region[0].upper() + region[1:]))
+            traces.append(_legend(seg, region_cap))
 
         # Blue spans what the isoform shares with the canonical.
         shared_x0 = x0 if lost or not has_diff else int(d1) + 1
