@@ -70,6 +70,7 @@ from swissisoform_site.data import (
     biophysics_card_for_isoform,
     criterion_evidence_for,
     data_dir,
+    has_shared_region,
     llm_synthesis_for_isoform,
     load_all,
     load_orf_index,
@@ -1443,13 +1444,12 @@ def _make_gene_protein_view(
 
     for iso in gene.isoforms:
         raw = getattr(iso, "raw", None) or {}
-        diff_end = int(getattr(iso, "diff_end", 0) or 0)
         iso_len = int(getattr(iso, "isoform_len", 0) or 0) or 1
         can_len_i = int(getattr(iso, "canonical_len", 0) or 0) or can_len
         orf_type = (iso.orf_type or "").lower()
         diff_space = (getattr(iso, "diff_space", "") or "").lower()
         is_trunc = diff_space == "canonical" or orf_type == "truncated"
-        has_shared = is_trunc or 0 < diff_end < iso_len
+        has_shared = has_shared_region(iso)
 
         # Where the isoform sits in canonical-residue space. Read from the ORF
         # index, so the bar, everything anchored to it, and the uploaded variant
@@ -1477,6 +1477,7 @@ def _make_gene_protein_view(
                 "label": label,
                 "x0": x0,
                 "x1": x1,
+                "aa_len": iso_len,
                 "orf_type": iso.orf_type,
                 "is_trunc": is_trunc,
                 "region": _region_noun(iso),
@@ -1560,9 +1561,7 @@ def _make_gene_protein_view(
                 # the x above came from the isoform-frame position.
                 "protein_change": with_frame(v.get("hgvsp"), "canonical"),
                 "source": v.get("source"),
-                # The track makes no isoform claim, so it links out instead: the
-                # source database's own page for this variant (issue #31).
-                "url": variant_url(vid, v.get("source"), v.get("rs_id")),
+                "rs_id": v.get("rs_id"),
             }
             # No unique/shared flag at the gene level: one variant can sit in one
             # isoform's differential region and another's shared core, so any
@@ -1625,6 +1624,11 @@ def _make_gene_protein_view(
         for s in _depth_segments([{"start": d["x0"], "end": d["x1"]} for d in domains])
     ]
     variants = list(var_by_id.values())
+    # The track makes no isoform claim, so it links out instead: the source
+    # database's own page for this variant (issue #31). Built once per kept
+    # variant, after the dedupe.
+    for v in variants:
+        v["url"] = variant_url(v["variant_id"], v.get("source"), v.pop("rs_id", None))
     # Uploaded VCF hits are appended AFTER the dedupe, never through it: var_by_id
     # merges by variant_id with pathogenic-wins, which would absorb an uploaded hit
     # into a ClinVar record (or be absorbed by one) and lose its provenance.

@@ -354,11 +354,21 @@ def test_l1_nan_change_flag_is_not_a_change() -> None:
 
 def test_c3_ratio_is_the_modules_enrichment() -> None:
     rows = _rows_for({
+        "isoform_conservation_phylop_unique_region_mean": 1.5,
+        "isoform_conservation_phylop_shared_region_mean": 2.0,
+        "isoform_conservation_phylop_enrichment": 0.7,  # the module's, not 1.5 / 2.0
+    }, "C3_phylop_coding_selection", fired=False)
+    assert rows["phyloP mean"]["cols"][2] == "0.7×"
+
+
+def test_c3_ratio_is_blank_where_a_negative_mean_flips_it() -> None:
+    # -0.5 / -1.0 = 0.5× would read as "half as conserved" for an accelerated region.
+    rows = _rows_for({
         "isoform_conservation_phylop_unique_region_mean": -0.5,
         "isoform_conservation_phylop_shared_region_mean": -1.0,
         "isoform_conservation_phylop_enrichment": 0.5,
     }, "C3_phylop_coding_selection", fired=False)
-    assert rows["phyloP mean"]["cols"][2] == "0.5×"
+    assert rows["phyloP mean"]["cols"][2] == "—"
 
 
 def test_d1_counts_a_line_with_an_expression_record() -> None:
@@ -368,3 +378,15 @@ def test_d1_counts_a_line_with_an_expression_record() -> None:
     }, "D1_multi_cell_line")
     assert rows["HeLa"]["hot"] is True
     assert rows["K562"]["hot"] is False
+
+
+def test_separate_orf_with_a_shared_region_is_not_called_orf() -> None:
+    """A uoORF that kept a shared region (in-frame match) gets the generic noun."""
+    from types import SimpleNamespace
+
+    from swissisoform_site.data import _region_noun, has_shared_region
+
+    whole = SimpleNamespace(orf_type="uoorf", diff_space="isoform", diff_end=60, isoform_len=60)
+    partial = SimpleNamespace(orf_type="uoorf", diff_space="isoform", diff_end=20, isoform_len=60)
+    assert not has_shared_region(whole) and _region_noun(whole) == "ORF"
+    assert has_shared_region(partial) and _region_noun(partial) == "differential region"

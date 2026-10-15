@@ -279,3 +279,33 @@ def test_isoform_rows_hover_their_own_residue_numbers():
     trunc = [h for t in _row_traces(fig, labels["truncated"]) for h in t["hovertext"]]
     lost = [h for h in trunc if "canonical residue" in h]
     assert lost and "canonical residue 1" in lost[0]
+
+
+def test_fractional_bar_crossing_zero_hovers_its_full_length():
+    """A uoORF at a fractional offset across x=0 hovers 100 aa, not 99 (PR #56 review)."""
+    import json
+
+    view = _gene_view()
+    view.bars = [
+        {"label": "uoORF · ATG · 100 aa", "x0": -98.67, "x1": 0.33, "aa_len": 100,
+         "orf_type": "uoORF", "is_trunc": False, "region": "ORF", "diff_x0": -98.67,
+         "diff_x1": 0.33, "diff_is_lost": False, "slug": "chr1-60-+-ATG-ENST3"},
+    ]
+    dumped = json.dumps(pplot.build_gene_protein_figure(view)["data"])
+    assert "ORF: 100 aa" in dumped and "/ 100 aa" in dumped
+    assert "/ 99 aa" not in dumped and "residue 100 / 100 aa" in dumped
+
+
+def test_region_hover_stops_at_the_regions_last_residue():
+    """A region drawn one residue past its end never hovers a shared residue."""
+    fig = pplot.build_gene_protein_figure(_gene_view())
+    labels = {a.get("text", "").split(" ")[0]: a["y"] for a in fig["layout"]["annotations"]}
+    trunc = [h for t in _row_traces(fig, labels["truncated"]) for h in t["hovertext"]]
+    lost = [h for h in trunc if "canonical residue" in h]
+    # Lost region = canonical residues 1–44 (diff_x 0..43), drawn to x=44.
+    assert lost[-1].endswith("canonical residue 44")
+    ext = [
+        h for t in _row_traces(fig, labels["extended"]) for h in t["hovertext"] if "extension" in h
+    ]
+    # Extension = x -40..0 = isoform residues 1–41, drawn to x=1.
+    assert "residue 41 / 226 aa" in ext[-1]
