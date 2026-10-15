@@ -187,3 +187,22 @@ def test_stratum_label_reads_gained_as_lost_on_truncations_only():
         "Constrained residues gained"
     )
     assert stratum_label("Long unique region", "extended") == "Long extension"
+
+
+def test_ratio_and_density_ratio_guards():
+    from swissisoform.contract import density_ratio, ratio
+
+    assert ratio(1.0, 2.0) == 0.5
+    assert ratio(1.0, 0.0) is None and ratio(1.0, -2.0) is None and ratio(-1.0, 2.0) is None
+    assert ratio(None, 1.0) is None and ratio(float("nan"), 1.0) is None
+    assert density_ratio(2, 100, 10, 200) == pytest.approx(0.4)
+    assert density_ratio(2, 0, 10, 200) is None and density_ratio(2, 100, 0, 200) is None
+
+
+def test_stratum_label_leaves_hyphenated_compounds_alone():
+    assert stratum_label("isoform-unique region peptides", "extended") == (
+        "isoform-unique region peptides"
+    )
+    assert stratum_label("variants in the unique region", "truncated") == (
+        "variants in the lost region"
+    )

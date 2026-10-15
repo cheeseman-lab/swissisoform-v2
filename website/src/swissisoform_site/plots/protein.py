@@ -173,7 +173,8 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
         _CANON_COLOR,
         "Canonical",
         f"<b>Canonical</b> · {can_len} aa",
-        residue_hover=True,
+        residue_base=0,
+        residue_of=can_len,
     )
     canon["showlegend"] = True
     traces.append(canon)
@@ -192,9 +193,12 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
         b["_y"] = by
         x0, x1 = int(b["x0"]), int(b["x1"])
         label, slug = b["label"], b.get("slug")
-        # One rule for both spellings: the ORF type's noun, else the bar's own.
-        region = region_noun(b.get("orf_type"), default=b.get("region") or DEFAULT_REGION_NOUN)
-        region_cap = region_noun(b.get("orf_type"), cap=True, default=region)
+        # The bar carries its resolved noun (``_region_noun`` in app.py); the legend
+        # only capitalises it.
+        region = b.get("region") or region_noun(b.get("orf_type"), default=DEFAULT_REGION_NOUN)
+        region_cap = region_noun(None, cap=True, default=region)
+        # Isoform residue 1 sits at x0, so hover numbers the isoform's own residues.
+        iso_res = {"residue_base": x0, "residue_of": x1 - x0 + 1}
         open_hint = "<br><i>click to open</i>" if slug else ""
         d0, d1 = b.get("diff_x0"), b.get("diff_x1")
         has_diff = d0 is not None and d1 is not None and int(d1) >= int(d0)
@@ -214,6 +218,8 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                 f" ({n_lost} aa){open_hint}",
                 slug=slug,
                 opacity=0.55,
+                residue_base=0,  # canonical residues: the isoform has none here
+                residue_word="canonical residue",
             )
             traces.append(_legend(seg, region_cap))
         elif has_diff:
@@ -232,6 +238,7 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                 "",
                 f"<b>{label}</b><br>{region}: {max(n_gained, 1)} aa{open_hint}",
                 slug=slug,
+                **iso_res,
             )
             traces.append(_legend(seg, region_cap))
 
@@ -246,6 +253,7 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                 "",
                 f"<b>{label}</b><br>shared with canonical{open_hint}",
                 slug=slug,
+                **iso_res,
             )
             traces.append(_legend(seg, "Isoform"))
 
@@ -658,16 +666,25 @@ def _segment(
     hover: str,
     slug: str | None = None,
     opacity: float = 1.0,
-    residue_hover: bool = False,
+    residue_base: int | None = None,
+    residue_of: int | None = None,
+    residue_word: str = "residue",
 ) -> dict[str, Any]:
     """One bar segment on a row: a thick line densified so its whole length hovers.
 
-    ``hover`` is one string for the segment (``residue_hover`` appends the
-    canonical-frame residue under the cursor, x=0 → residue 1). ``slug`` rides
-    as ``customdata`` so a click opens that isoform's page (``gene.html``).
+    ``hover`` is one string for the segment. With ``residue_base`` the residue
+    under the cursor is appended, numbered from ``residue_base`` = residue 1 (and
+    "/ N aa" with ``residue_of``). ``slug`` rides as ``customdata`` so a click
+    opens that isoform's page (``gene.html``).
     """
     xs = _bar_samples(x0, x1)
-    text = hover
+    of = f" / {residue_of} aa" if residue_of else ""
+
+    def text_at(x: float) -> str:
+        if residue_base is None:
+            return hover
+        return f"{hover}<br>{residue_word} {int(x) - residue_base + 1}{of}"
+
     trace: dict[str, Any] = {
         "type": "scatter",
         "name": name,
@@ -676,7 +693,7 @@ def _segment(
         "y": [y] * len(xs),
         "line": {"color": color, "width": 12},
         "opacity": opacity,
-        "hovertext": [f"{text}<br>residue {int(x) + 1}" if residue_hover else text for x in xs],
+        "hovertext": [text_at(x) for x in xs],
         "hoverinfo": "text",
         "showlegend": False,
     }
