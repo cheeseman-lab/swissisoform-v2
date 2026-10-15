@@ -190,8 +190,7 @@ class ConservationFrameModule:
         if not site.orf_exons:
             return self._empty_result(status="no_skeleton")
 
-        from swissisoform.coords import unique_shared_intervals
-        from swissisoform.models import ORFType, is_separate_orf
+        from swissisoform.models import ORFType, region_split
 
         # ORF-type-aware unique region, from the one split every module uses.
         # Truncations lose canonical N-terminal sequence, so their unique region
@@ -199,12 +198,7 @@ class ConservationFrameModule:
         # whole ORF, including nucleotides it shares with canonical CDS in
         # another frame.
         is_truncation = site.orf_type == ORFType.TRUNCATED
-        unique, _ = unique_shared_intervals(
-            is_truncation,
-            site.orf_exons,
-            site.canonical_orf_exons,
-            separate_orf=is_separate_orf(site),
-        )
+        unique, _ = region_split(site)
         unique_space = "canonical" if is_truncation else "isoform"
         if not unique:
             return self._empty_result(status="no_unique_region")

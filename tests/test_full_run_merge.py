@@ -358,3 +358,22 @@ def test_a_registry_absent_from_disk_is_not_drift(campaign: Path, monkeypatch) -
     )
     code, _ = run(campaign)
     assert code == 0
+
+
+def test_shards_without_a_registry_hash_are_not_pinned(campaign: Path, monkeypatch) -> None:
+    """Without the sha column the build cannot be checked, so the structs are inferred.
+
+    Pinning them to a registry rebuilt since would drop and null-fill tag fields.
+    """
+    monkeypatch.setattr(merge, "registry_sha", lambda version: "b" * 64)
+    pinned: list[bool] = []
+    real = merge.write_merged
+    def spy(df, target, *, pin_tags=True):
+        pinned.append(pin_tags)
+        real(df, target, pin_tags=pin_tags)
+
+    monkeypatch.setattr(merge, "write_merged", spy)
+    write_all(campaign, statuses={merge.TAG_VERSION_COLUMN: ["v4", "v4"]})
+    code, _ = run(campaign)
+    assert code == 0
+    assert pinned == [False]

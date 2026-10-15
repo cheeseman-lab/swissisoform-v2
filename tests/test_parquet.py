@@ -417,11 +417,15 @@ class TestFlatFrame:
             ),
         })
 
-    def test_map_keys_become_dotted_columns(self):
+    def test_map_keys_become_dotted_columns(self, tmp_path):
         """A key a present count map lacks is 0; only a missing summary is null."""
-        from swissisoform.io.parquet import flat_frame
+        import pyarrow.parquet as pq
 
-        df = flat_frame(self._table()).fillna(-1)
+        from swissisoform.io.parquet import flat_files
+
+        path = tmp_path / "all_paired.parquet"
+        pq.write_table(self._table(), path)
+        df = flat_files([path])[0].fillna(-1)
         assert list(df["canonical_clinical_summary.by_source.gnomAD"]) == [2, 0, -1]
         assert list(df["canonical_clinical_summary.by_source.COSMIC"]) == [0, 1, -1]
         # An empty map is present: no missense variants is a 0, not unknown.
@@ -478,6 +482,19 @@ class TestFlatFrame:
         # A typo'd struct leaf used to pass because its first segment is a column.
         assert not metrics.resolvable("canonical_clinical_summary.total_variant", paths)
         assert not metrics.resolvable("isoform_clinical_summary.by_source.gnomAD", paths)
+
+    def test_abs_and_ratio_guard_walk_a_nested_path(self):
+        """resolvable says yes to them, so resolve must produce them (review finding 1)."""
+        from swissisoform import metrics
+
+        runtime = pd.DataFrame({"s": [{"v": -2.0, "x_ratio": 3.0, "x_shared": 0.0},
+                                      {"v": 4.0, "x_ratio": 2.0, "x_shared": 1.0}]})
+        assert metrics.resolvable("abs:s.v", {"s", "s.v"})
+        assert metrics.resolve("abs:s.v", runtime).tolist() == [2.0, 4.0]
+        # The ratio over a zero shared value is not evaluable, as on a flat frame.
+        ratio = metrics.resolve("s.x_ratio", runtime)
+        assert pd.isna(ratio.iloc[0]) and ratio.iloc[1] == 2.0
+        assert not metrics.resolvable("abs:s.nope", {"s", "s.v"})
 
     def test_a_map_key_with_a_dot_resolves_at_runtime(self):
         from swissisoform import metrics

@@ -303,10 +303,8 @@ def resolve(metric: str, df: pd.DataFrame) -> pd.Series | None:
     for its test.
     """
     if metric.startswith(ABS_PREFIX):
-        column = metric[len(ABS_PREFIX):]
-        if column not in df.columns:
-            return None
-        return pd.to_numeric(df[column], errors="coerce").abs()
+        values = _column(metric[len(ABS_PREFIX):], df)
+        return None if values is None else pd.to_numeric(values, errors="coerce").abs()
     if metric.endswith(LEN_SUFFIX) and metric not in df.columns:
         # Only the profiler materialises `<col>__len` as a column; the runtime
         # frame carries the list itself, so a tag cut on a list length has to be
@@ -323,19 +321,32 @@ def resolve(metric: str, df: pd.DataFrame) -> pd.Series | None:
     tx = BY_METRIC.get(metric)
     if tx is not None:
         return tx.fn(df) if tx.available(set(df.columns)) else None
-    if metric in df.columns:
-        values = pd.to_numeric(df[metric], errors="coerce")
-        shared = f"{metric[: -len(RATIO_SUFFIX)]}{SHARED_SUFFIX}"
-        if metric.endswith(RATIO_SUFFIX) and shared in df.columns:
+    raw = _column(metric, df)
+    if raw is None:
+        return None
+    values = pd.to_numeric(raw, errors="coerce")
+    if metric.endswith(RATIO_SUFFIX):
+        shared = _column(f"{metric[: -len(RATIO_SUFFIX)]}{SHARED_SUFFIX}", df)
+        if shared is not None:
             # Not-evaluable rather than inverted: see RATIO_SUFFIX.
-            values = values.where(pd.to_numeric(df[shared], errors="coerce") > 0)
-        return values
-    head, _, path = metric.partition(".")
+            values = values.where(pd.to_numeric(shared, errors="coerce") > 0)
+    return values
+
+
+def _column(name: str, df: pd.DataFrame) -> pd.Series | None:
+    """*name*'s values: a column of *df*, or a dotted leaf walked into a nested one.
+
+    The profiler flattens structs and maps to dotted columns
+    (``io.parquet.flat_files``); the runtime frame keeps them nested. Every
+    reference ``resolve`` makes — the metric, its ``abs:`` magnitude, a ratio's
+    ``_shared`` guard — goes through here, so each reads the same numbers in both
+    frames.
+    """
+    if name in df.columns:
+        return df[name]
+    head, _, path = name.partition(".")
     if path and head in df.columns:
-        # The profiler flattens structs and maps to dotted columns (flat_frame);
-        # the runtime frame keeps them nested, so walk the same path into it or a
-        # tag cut on a leaf resolves to None for the whole run.
-        return pd.to_numeric(df[head].map(lambda v: _leaf(v, head, path)), errors="coerce")
+        return df[head].map(lambda v: _leaf(v, head, path))
     return None
 
 
@@ -373,7 +384,8 @@ def resolvable(metric: str, columns: set[str]) -> bool:
     name that exists nowhere at firing time.
     """
     if metric.startswith(ABS_PREFIX):
-        return metric[len(ABS_PREFIX):] in columns
+        # Same lookup as resolve's abs branch: a column or a nested leaf.
+        return resolvable(metric[len(ABS_PREFIX):], columns)
     if metric in columns:
         return True
     # A dotted name resolves only to a real leaf. *columns* from

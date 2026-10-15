@@ -341,9 +341,21 @@ def test_every_split_agrees_on_a_separate_orf():
     site.diff_region = DifferentialRegion(isoform_start=0, isoform_end=3, sequence="MXX")
 
     assert is_separate_orf(site)
-    unique, shared = _genomic_unique_shared(
-        site.orf_type, site.orf_exons, site.canonical_orf_exons, separate_orf=is_separate_orf(site)
-    )
+    unique, shared = _genomic_unique_shared(site)
     assert (unique, shared) == ([(1010, 1020)], [])
     out = VariantIntersectionModule().annotate_site(site)
     assert out["unique_region_nt"] == 10 and out["shared_region_nt"] == 0
+
+
+def test_a_separate_orf_without_a_canonical_skeleton_is_still_all_unique():
+    """No canonical skeleton is no reason to give a separate ORF an empty split."""
+    from swissisoform.io.parquet import _genomic_unique_shared
+    from swissisoform.models import region_split
+
+    site = _site(orf_exons=[(1010, 1020)], canonical_orf_exons=None)
+    site.orf_type = ORFType.INTERNAL_OUT_OF_FRAME
+    site.isoform_protein = "MXX"
+    site.diff_region = DifferentialRegion(isoform_start=0, isoform_end=3, sequence="MXX")
+
+    assert _genomic_unique_shared(site) == region_split(site) == ([(1010, 1020)], [])
+    assert VariantIntersectionModule().annotate_site(site)["unique_region_nt"] == 10

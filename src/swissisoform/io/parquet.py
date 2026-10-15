@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ from swissisoform.models import (
     ORFType,
     TranslationInitiationSite,
     is_separate_orf,
+    region_split,
 )
 
 # The clinical summaries hold Counters over open key sets — variant sources and
@@ -64,14 +66,7 @@ def paired_schema(df: pd.DataFrame, overrides: dict[str, pa.DataType] | None = N
         The inferred schema with :data:`CLINICAL_SUMMARY_COLUMNS` and *overrides*
         applied.
     """
-    schema = pa.Table.from_pandas(df, preserve_index=False).schema
-    pins: dict[str, pa.DataType] = {n: CLINICAL_SUMMARY_TYPE for n in CLINICAL_SUMMARY_COLUMNS}
-    pins.update(overrides or {})
-    for name, dtype in pins.items():
-        idx = schema.get_field_index(name)
-        if idx >= 0:
-            schema = schema.set(idx, pa.field(name, dtype))
-    return schema
+    return paired_table(df, overrides).schema
 
 
 # The map-typed fields of the clinical summaries, as dotted paths. Their values are
@@ -138,22 +133,11 @@ def mapping_of(value: Any) -> dict[str, Any] | None:
     return None
 
 
-def flatten_structs(table: pa.Table) -> tuple[pd.DataFrame, list[str]]:
-    """*table* with its structs flattened to dotted columns, and the map columns left.
-
-    Maps stay one column each until :func:`expand_maps`, which needs every file's
-    rows at once: a key one file never saw is still a 0 there, not a gap.
-    """
-    while any(pa.types.is_struct(f.type) for f in table.schema):
-        table = table.flatten()
-    maps = [f.name for f in table.schema if pa.types.is_map(f.type)]
-    return table.to_pandas(), maps
-
-
 def expand_maps(df: pd.DataFrame, maps: list[str]) -> pd.DataFrame:
     """Replace each map column in *maps* with one dotted column per key seen.
 
-    The names are those the struct-typed summaries produced before
+    Applied by :func:`flat_files` over every file at once. The names are those
+    the struct-typed summaries produced before
     :data:`CLINICAL_SUMMARY_TYPE` pinned them to maps. A row whose map is null
     stays null on every key (not evaluable). A row whose map is present but lacks
     a key reads 0 under a count map (:data:`COUNT_MAP_PATHS`), null otherwise.
@@ -171,14 +155,46 @@ def expand_maps(df: pd.DataFrame, maps: list[str]) -> pd.DataFrame:
     return pd.concat([df, pd.DataFrame(blocks, index=df.index)], axis=1)
 
 
-def flat_frame(table: pa.Table) -> pd.DataFrame:
-    """*table* as a frame with every struct and map expanded into dotted columns.
+def non_list_columns(schema: pa.Schema) -> list[str]:
+    """Every top-level column of *schema* except the list columns.
 
-    One table's worth of :func:`flatten_structs` + :func:`expand_maps`. A reader
-    over several files flattens each and expands once over the concatenation.
+    The hit lists dominate a run file (``canonical_clinical_hits`` alone is
+    ~876 MB compressed) and profilers want only their lengths, which they read
+    separately, so a flattened read skips them.
     """
-    df, maps = flatten_structs(table)
-    return expand_maps(df, maps)
+    return [
+        f.name for f in schema if not (pa.types.is_list(f.type) or pa.types.is_large_list(f.type))
+    ]
+
+
+def flat_files(
+    paths: Sequence[Path], columns: Callable[[pa.Schema], list[str]] = non_list_columns
+) -> tuple[pd.DataFrame, dict[str, pa.DataType]]:
+    """Read *paths* as one frame, every struct and map expanded into dotted columns.
+
+    The one multi-file flattened read every profiler uses
+    (``setup.distributions.read_flat``, the feature catalog's ``read_flat``).
+    *columns* picks each file's columns from that file's own schema, so files
+    that differ — a column one shard lacks — read cleanly. Structs flatten per
+    file; maps expand once over the concatenation (:func:`expand_maps`), so a
+    key one file never saw is still a 0 on that file's rows.
+
+    Returns:
+        The frame, and ``{map column: its value type}`` for each map expanded —
+        every ``<map>.<key>`` column takes that type.
+    """
+    frames: list[pd.DataFrame] = []
+    map_types: dict[str, pa.DataType] = {}
+    for path in paths:
+        table = pq.read_table(path, columns=columns(pq.read_schema(path)))
+        while any(pa.types.is_struct(f.type) for f in table.schema):
+            table = table.flatten()
+        for field in table.schema:
+            if pa.types.is_map(field.type):
+                map_types.setdefault(field.name, field.type.item_type)
+        frames.append(table.to_pandas())
+    df = pd.concat(frames, ignore_index=True)
+    return expand_maps(df, sorted(map_types)), map_types
 
 
 def schema_paths(schema: pa.Schema) -> set[str]:
@@ -403,35 +419,25 @@ def _flatten_annotations(prefix: str, annotations: dict[str, dict[str, Any]]) ->
 
 
 def _genomic_unique_shared(
-    orf_type: Any,
-    orf_exons: list[tuple[int, int]] | None,
-    canonical_orf_exons: list[tuple[int, int]] | None,
-    *,
-    separate_orf: bool = False,
+    site: TranslationInitiationSite,
 ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
-    r"""Compute the genomic unique and shared interval sets per ORF type.
+    r"""The genomic unique and shared interval sets the parquet stores for *site*.
 
-    Mirrors the ORF-type-aware unique definition used by
-    :class:`VariantIntersectionModule` / conservation / conservation_frame —
-    extensions / uORFs / altORFs contribute new isoform sequence
-    (``isoform_orf \ canonical_orf``); truncations *lose* canonical
-    sequence (``canonical_orf \ isoform_orf``). The shared set is the
-    intersection in both cases. Empty lists are returned when either ORF
-    skeleton is missing.
+    The same split :class:`VariantIntersectionModule`, conservation and
+    conservation_frame use (``models.region_split``): extensions contribute new
+    isoform sequence (``isoform_orf \ canonical_orf``), truncations *lose*
+    canonical sequence (``canonical_orf \ isoform_orf``), and a separate ORF's
+    whole ORF is unique with nothing shared. Empty lists when a skeleton the
+    split needs is missing ("we cannot say") — a separate ORF needs only its own.
 
     Surfacing these in the parquet lets downstream codebases — genome
     language models, motif callers, off-target tools — pull DNA over
     arbitrary windows around the *biologically meaningful* region of each
     TIS without re-running the assembly layer.
     """
-    from swissisoform.coords import unique_shared_intervals
-    from swissisoform.models import ORFType
-
-    if not orf_exons or not canonical_orf_exons:
+    if not site.orf_exons or (not site.canonical_orf_exons and not is_separate_orf(site)):
         return [], []
-    return unique_shared_intervals(
-        orf_type == ORFType.TRUNCATED, orf_exons, canonical_orf_exons, separate_orf=separate_orf
-    )
+    return region_split(site)
 
 
 def _diff_location(diff: Any) -> tuple[int | None, int | None, str | None]:
@@ -501,12 +507,7 @@ def paired_tis_dataframe(genes: list[Gene]) -> pd.DataFrame:
             # genomic coords; strand is in the ``strand`` column.
             orf_exons = [list(t) for t in (site.orf_exons or [])]
             canonical_orf_exons = [list(t) for t in (site.canonical_orf_exons or [])]
-            unique_genomic_intervals, shared_genomic_intervals = _genomic_unique_shared(
-                site.orf_type,
-                site.orf_exons,
-                site.canonical_orf_exons,
-                separate_orf=is_separate_orf(site),
-            )
+            unique_genomic_intervals, shared_genomic_intervals = _genomic_unique_shared(site)
             row: dict[str, Any] = {
                 "gene_name": gene.gene_name,
                 "gene_id": gene.gene_id,

@@ -38,8 +38,8 @@ from typing import Any
 
 from swissisoform.clinical.significance import is_pathogenic
 from swissisoform.clinical.validate import ConsequenceValidator
-from swissisoform.coords import position_in_intervals, unique_shared_intervals
-from swissisoform.models import ORFType, TranslationInitiationSite, is_separate_orf
+from swissisoform.coords import position_in_intervals
+from swissisoform.models import ORFType, TranslationInitiationSite, is_separate_orf, region_split
 
 logger = logging.getLogger(__name__)
 
@@ -154,9 +154,7 @@ class VariantIntersectionModule:
         # No missing-skeleton guard: an ORF with no canonical counterpart is
         # entirely unique, which is the right answer for scoring. (The parquet
         # writer takes the opposite view — see ``coords.unique_shared_intervals``.)
-        unique, shared = unique_shared_intervals(
-            is_truncation, site.orf_exons, site.canonical_orf_exons, separate_orf=separate_orf
-        )
+        unique, shared = region_split(site)
 
         # Re-validate every variant in the isoform's reading frame, writing
         # isoform_* fields onto each dict in place. Caches by tis_id so calls

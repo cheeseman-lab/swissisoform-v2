@@ -156,8 +156,20 @@ class TestUniqueSharedIntervalsSeparateOrf:
         from swissisoform.coords import unique_shared_intervals
 
         orf, canonical = [(1010, 1020)], [(1000, 1030)]
-        assert unique_shared_intervals(False, orf, canonical) == ([], [(1010, 1020)])
+        assert unique_shared_intervals(False, orf, canonical, separate_orf=False) == (
+            [],
+            [(1010, 1020)],
+        )
         assert unique_shared_intervals(False, orf, canonical, separate_orf=True) == (
             [(1010, 1020)],
             [],
         )
+
+    def test_the_flag_has_no_default(self):
+        """A caller that forgets the flag must fail, not silently get the in-frame split."""
+        import pytest
+
+        from swissisoform.coords import unique_shared_intervals
+
+        with pytest.raises(TypeError):
+            unique_shared_intervals(False, [(1010, 1020)], [(1000, 1030)])

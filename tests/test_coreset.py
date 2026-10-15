@@ -231,3 +231,26 @@ def test_a_map_column_is_its_keys_not_a_feature_of_its_own(tmp_path):
     assert "canonical_clinical_summary.by_consequence" not in types
     assert pa.types.is_integer(types["canonical_clinical_summary.by_source.ClinVar"])
     assert set(types) - {"tis_id"} <= set(df.columns) | {"canonical_clinical_summary"}
+
+
+def test_catalog_reader_does_not_trust_the_first_files_schema(tmp_path):
+    """A first shard without the clinical summary must not crash the type map."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    import export_feature_catalog as efc
+    from swissisoform.io.parquet import CLINICAL_SUMMARY_TYPE
+
+    first, second = tmp_path / "a.parquet", tmp_path / "b.parquet"
+    pq.write_table(pa.table({"tis_id": ["a"]}), first)
+    summary = {"total_variants": 1, "by_source": [("ClinVar", 1)],
+               "by_consequence": [], "pathogenic_count": 0}
+    pq.write_table(pa.table({
+        "tis_id": ["b"],
+        "canonical_clinical_summary": pa.array([summary], type=CLINICAL_SUMMARY_TYPE),
+    }), second)
+
+    df, types = efc.read_flat([first, second])
+
+    assert pa.types.is_integer(types["canonical_clinical_summary.by_source.ClinVar"])
+    assert list(df["canonical_clinical_summary.by_source.ClinVar"].fillna(-1)) == [-1, 1]

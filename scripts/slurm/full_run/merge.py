@@ -92,7 +92,7 @@ def shard_status(shard_dir: Path, shard_list: Path) -> tuple[str, pd.DataFrame |
     return status, df
 
 
-def write_merged(df: pd.DataFrame, target: Path) -> None:
+def write_merged(df: pd.DataFrame, target: Path, *, pin_tags: bool = True) -> None:
     """Write the merged frame to *target*, pinned to the types the shards were written with.
 
     Not a bare ``df.to_parquet``: the shards pin the clinical summaries to map
@@ -108,12 +108,14 @@ def write_merged(df: pd.DataFrame, target: Path) -> None:
     The tag pins come from the registry build on disk, so the caller must first
     check that it is the build the shards were tagged with (:func:`tag_drift`):
     against a different build, Arrow silently drops tag fields and null-fills
-    others.
+    others. With *pin_tags* off — shards that predate the hash column, so the
+    check cannot run — the tag structs are inferred from the shards themselves,
+    which keeps exactly the fields they were tagged with.
     """
     from swissisoform.io.parquet import paired_table, write_table_atomic
     from swissisoform.modules.tags import schema_overrides
 
-    write_table_atomic(paired_table(df, schema_overrides(df)), target)
+    write_table_atomic(paired_table(df, schema_overrides(df) if pin_tags else None), target)
 
 
 def registry_sha(version: str) -> str | None:
@@ -294,6 +296,15 @@ def merge_campaign(
     # campaign still reports exactly one version. Those null rows read
     # downstream as "every tag not-evaluable", which is the same lie by a
     # different route, so an untagged shard is fatal too.
+    # Pin the tag structs to the registry on disk only when its build can be
+    # checked against the shards' (the sha column); otherwise infer them.
+    pin_tags = TAG_SHA256_COLUMN in df.columns
+    if TAG_VERSION_COLUMN in df.columns and not pin_tags:
+        print(
+            "  note: shards carry no tag-registry content hash, so the build cannot be "
+            "checked against the registry on disk; tag structs are inferred from the "
+            "shards instead of pinned to it."
+        )
     if TAG_VERSION_COLUMN in df.columns:
         present = df[TAG_VERSION_COLUMN]
         versions = sorted(set(present.dropna().astype(str)))
@@ -337,7 +348,7 @@ def merge_campaign(
     del frames  # concatenated into df; free the per-shard copies before writing
     if complete or allow_partial:
         target = out / "all_paired.parquet"
-        write_merged(df, target)
+        write_merged(df, target, pin_tags=pin_tags)
         (out / "all_paired.partial.parquet").unlink(missing_ok=True)  # superseded
         n_gene_files = 0
         for d in ok_dirs:
@@ -352,7 +363,7 @@ def merge_campaign(
         return 0, report
 
     target = out / "all_paired.partial.parquet"
-    write_merged(df, target)
+    write_merged(df, target, pin_tags=pin_tags)
     print(
         f"INCOMPLETE: wrote {target} ({len(df)} rows) and left all_paired.parquet untouched.\n"
         "Refill the shards above and re-run this merge, or pass --allow-partial to publish as-is."

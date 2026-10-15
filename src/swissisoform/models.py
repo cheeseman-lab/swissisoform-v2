@@ -230,7 +230,6 @@ class TranslationInitiationSite:
     comparison: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
-
 def is_separate_orf(site: TranslationInitiationSite) -> bool:
     """True when the ORF shares no reading frame, and so no region, with the canonical.
 
@@ -250,6 +249,25 @@ def is_separate_orf(site: TranslationInitiationSite) -> bool:
         if dr.isoform_end is not None and dr.isoform_end < iso_len:
             return False
     return True
+
+
+def region_split(site: TranslationInitiationSite) -> tuple[list, list]:
+    """Genomic ``(unique, shared)`` intervals for *site*, by the one rule every module uses.
+
+    Derives both flags from the site — truncation (the unique region is the lost
+    canonical stretch) and :func:`is_separate_orf` (the whole ORF is unique) — so
+    no caller can pass one and forget the other. Callers keep their own guard
+    for a missing skeleton; a separate ORF needs no canonical skeleton.
+    """
+    from swissisoform.coords import unique_shared_intervals
+
+    return unique_shared_intervals(
+        site.orf_type == ORFType.TRUNCATED,
+        site.orf_exons,
+        site.canonical_orf_exons,
+        separate_orf=is_separate_orf(site),
+    )
+
 
 @dataclass
 class Gene:

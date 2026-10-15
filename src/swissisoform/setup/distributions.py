@@ -56,7 +56,7 @@ from swissisoform.distributions import (
     STRATUM_SEPARATE,
     SUMMARY_FILE,
 )
-from swissisoform.io.parquet import expand_maps, flatten_structs
+from swissisoform.io.parquet import flat_files
 from swissisoform.setup._common import ROOT, rel_to_root, resolve_parquet, sha256_file
 
 DEFAULT_CATALOG = ROOT / "figures" / "clustering_dims" / "feature_space" / "feature_catalog.csv"
@@ -109,21 +109,7 @@ def read_flat(files: list[Path]) -> pd.DataFrame:
     lists dominate the file (``canonical_clinical_hits`` alone is ~876 MB
     compressed) and only their lengths are wanted.
     """
-    frames = []
-    maps: set[str] = set()
-    for path in files:
-        schema = pq.ParquetFile(path).schema_arrow
-        non_list = [
-            f.name
-            for f in schema
-            if not (pa.types.is_list(f.type) or pa.types.is_large_list(f.type))
-        ]
-        df, file_maps = flatten_structs(pq.read_table(path, columns=non_list))
-        frames.append(df)
-        maps.update(file_maps)
-    # Expanded once over every file, so a map key one file never saw still reads
-    # 0 on that file's rows rather than a concat gap.
-    return expand_maps(pd.concat(frames, ignore_index=True), sorted(maps))
+    return flat_files(files)[0]
 
 
 def _pad(n_rows: int, fill: Any, dtype: str) -> pd.Series:

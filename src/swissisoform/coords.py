@@ -220,7 +220,7 @@ def unique_shared_intervals(
     orf_exons: Sequence[tuple[int, int]] | None,
     canonical_orf_exons: Sequence[tuple[int, int]] | None,
     *,
-    separate_orf: bool = False,
+    separate_orf: bool,
 ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
     r"""Genomic ``(unique, shared)`` interval sets for one ORF pair.
 
@@ -230,8 +230,9 @@ def unique_shared_intervals(
     the intersection either way. Empty when either skeleton is missing.
 
     Takes bools rather than an ``ORFType`` so this module stays importable in the
-    website image; callers pass ``orf_type == ORFType.TRUNCATED`` and
-    ``separate_orf=models.is_separate_orf(site)``. A separate ORF reads in its own
+    website image. Pipeline code calls it through ``models.region_split(site)``,
+    which derives both flags from the site; ``separate_orf`` has no default so a
+    direct caller has to decide it. A separate ORF reads in its own
     frame, so its whole ORF is unique and nothing is shared, even where its
     nucleotides overlap canonical CDS. Every caller passes the same flag, so one
     isoform cannot get two different splits.

@@ -47,7 +47,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from swissisoform import metrics
-from swissisoform.io.parquet import expand_maps, flatten_structs
+from swissisoform.io.parquet import flat_files
 from swissisoform.site.evidence import CRITERIA, CRITERIA_METRIC_LABELS
 
 HERE = Path(__file__).resolve().parent
@@ -337,28 +337,18 @@ def read_flat(files: list[Path]) -> tuple[pd.DataFrame, dict[str, pa.DataType]]:
     List columns are handled separately (:func:`list_lengths`) so the big hit
     lists are never materialised into pandas.
     """
-    schema = pq.ParquetFile(files[0]).schema_arrow
-    types = {n: t for fld in schema for n, t in leaves(fld)}
-    non_list = [
-        fld.name
-        for fld in schema
-        if not (pa.types.is_list(fld.type) or pa.types.is_large_list(fld.type))
-    ]
-
-    frames = []
-    maps: set[str] = set()
+    # Leaf types from every file's schema, not files[0]'s alone: shards can
+    # differ (a column one lacks, a pre-map struct-typed summary).
+    types: dict[str, pa.DataType] = {}
     for path in files:
-        present = {f.name for f in pq.ParquetFile(path).schema_arrow}
-        table = pq.read_table(path, columns=[c for c in non_list if c in present])
-        df, file_maps = flatten_structs(table)
-        frames.append(df)
-        maps.update(file_maps)
-    # Expanded once over every file (a key one file never saw is still a 0 there).
-    df = expand_maps(pd.concat(frames, ignore_index=True), sorted(maps))
-    # A map leaf becomes one column per key, each typed as the map's values; the
-    # map itself is no longer a column, so it is no longer a feature either.
-    for name in maps:
-        item = types.pop(name).item_type
+        for fld in pq.read_schema(path):
+            for name, dtype in leaves(fld):
+                types.setdefault(name, dtype)
+    df, map_types = flat_files(files)
+    # A map becomes one column per key, each typed as the map's values; the map
+    # itself is no longer a column, so it is no longer a feature either.
+    for name, item in map_types.items():
+        types.pop(name, None)
         for col in df.columns:
             if col.startswith(f"{name}."):
                 types[col] = item
