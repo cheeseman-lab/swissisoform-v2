@@ -1,0 +1,50 @@
+{
+  "artifact": "cheeseman50 coreset",
+  "built_at": "2026-10-14T18:41:31+00:00",
+  "command": "build_coreset.py --parquet data/output/full_catalog_20261009/all_paired.parquet",
+  "code": {
+    "commit": "85d6107b8eb0acd488932828bac57c90ae61e61f",
+    "dirty": true
+  },
+  "source_parquet": [
+    {
+      "path": "/lab/barcheese01/ating/swissisoform-v2/data/output/full_catalog_20261009/all_paired.parquet",
+      "sha256": "d4ca114eb3143fdd26007cd5a9ace70b6a5c1f7bfb8b5b024f6ad5f0cee6d6e6"
+    }
+  ],
+  "feature_catalog": {
+    "path": "figures/clustering_dims/feature_space/feature_catalog.csv",
+    "sha256": "ddb1270363c73505e1946a825e446414043e3c458f4c7a8c0cad303de8335f52"
+  },
+  "anchors": {
+    "path": "figures/clustering_dims/principled_sampling/anchors.csv",
+    "sha256": "b574d94aeeb43f0b18cd66c5f36d4f06a625a239dff6b8c6c156da2930540850"
+  },
+  "spaces": {
+    "all-ORF": {
+      "isoforms": 6462,
+      "features": 404
+    },
+    "paired-extended": {
+      "isoforms": 1508,
+      "features": 487
+    },
+    "paired-truncated": {
+      "isoforms": 4510,
+      "features": 487
+    }
+  },
+  "composition": {
+    "anchor": 22,
+    "sampler": 16,
+    "rare_fill": 12
+  },
+  "orf_types": {
+    "extended": 20,
+    "truncated": 17,
+    "uoorf": 4,
+    "uorf": 3,
+    "internal_oof": 3,
+    "3utr_orf": 3
+  }
+}

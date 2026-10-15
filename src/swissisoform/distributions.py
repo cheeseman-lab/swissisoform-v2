@@ -37,10 +37,11 @@ REF_DIR = ROOT / "data" / "reference" / "distributions"
 # default from here (the sweep, the registry builder, build_distributions), so a
 # default run cannot cut one table against v2 and the registry against v3.
 #
-# v3 is PROVISIONAL: frozen from full_catalog (Aug 12-13), which predates the M1
-# sign flip and extension gate (2a48f89) and the #24/#29/#32 merges. Re-freeze it,
-# and the tag registry cut from it, after the next genome-wide run.
-DEFAULT_VERSION = "v3"
+# v4 is frozen from full_catalog_20261009, the genome-wide rerun after the M1
+# sign flip and gate, the variant/separate-ORF fixes and the PepQuery proteome.
+# v3 stays PROVISIONAL: it was frozen from the Aug-12 full_catalog, before all of
+# those, and is kept only as the record of what earlier runs were cut against.
+DEFAULT_VERSION = "v4"
 PROVISIONAL_VERSIONS: dict[str, str] = {
     "v3": (
         "frozen from the Aug-12 full_catalog, before 2a48f89 and PRs #24/#29/#32; "
