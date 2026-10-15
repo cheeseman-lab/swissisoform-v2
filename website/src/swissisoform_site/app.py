@@ -1560,6 +1560,9 @@ def _make_gene_protein_view(
                 # the x above came from the isoform-frame position.
                 "protein_change": with_frame(v.get("hgvsp"), "canonical"),
                 "source": v.get("source"),
+                # The track makes no isoform claim, so it links out instead: the
+                # source database's own page for this variant (issue #31).
+                "url": variant_url(vid, v.get("source"), v.get("rs_id")),
             }
             # No unique/shared flag at the gene level: one variant can sit in one
             # isoform's differential region and another's shared core, so any

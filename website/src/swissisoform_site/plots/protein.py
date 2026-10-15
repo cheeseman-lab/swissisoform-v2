@@ -278,7 +278,7 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
     uploaded_drawn = False
     for i, c in enumerate(conseqs):
         ty = mut_base + i * 0.26
-        xs, cols, sizes, opac, hover = [], [], [], [], []
+        xs, cols, sizes, opac, hover, links = [], [], [], [], [], []
         # Uploaded VCF hits share the consequence row — so a user's variant reads
         # against where the known pathogenics cluster — but get their own trace so
         # they can carry a distinct symbol and a single legend entry.
@@ -299,10 +299,15 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
             cols.append("#d62728" if is_path else CONSEQ_COLOR.get(c, "#94a3b8"))
             sizes.append(8 if is_path else 5)
             opac.append(1.0 if is_path else 0.7)
+            url = v.get("url")
             hover.append(
                 f"{v.get('variant_id', '?')}<br>{v.get('protein_change') or ''}<br>"
                 f"{c}<br>{v.get('significance') or '—'} · {v.get('source') or ''}"
+                + ("<br><i>click to open the database page ↗</i>" if url else "")
             )
+            # A dict, not a bare string, so the click handler can tell an outbound
+            # link from an isoform slug (``gene.html``).
+            links.append({"href": url} if url else None)
         if xs:
             traces.append(
                 {
@@ -313,6 +318,7 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                     "marker": {"size": sizes, "color": cols, "opacity": opac, "symbol": "circle"},
                     "hovertext": hover,
                     "hoverinfo": "text",
+                    "customdata": links,
                     "showlegend": False,
                 }
             )

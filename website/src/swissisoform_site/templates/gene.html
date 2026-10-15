@@ -103,6 +103,8 @@
     });
   }
   // Click an isoform's bar → open that isoform's page (customdata carries the slug).
+  // Click a variant dot → its ClinVar / gnomAD / COSMIC page in a new tab
+  // (customdata is {href}); the gene view makes no isoform claim for a variant.
   // GENE_PATH is rendered WITHOUT the scan token and SCAN_QS holds it separately:
   // this builds the URL by concatenation, so a base already carrying "?vcf=..."
   // would put the path after the query string and land back on the gene page.
@@ -118,7 +120,12 @@
     }
     gd.on("plotly_click", function (e) {
       const pt = e && e.points && e.points[0];
-      open(pt && pt.customdata);
+      const cd = pt && pt.customdata;
+      if (cd && typeof cd === "object") {
+        if (cd.href) window.open(cd.href, "_blank", "noopener");
+        return;
+      }
+      open(cd);
     });
     // Row labels are annotations carrying the slug as their ``name``.
     gd.on("plotly_clickannotation", function (e) {
