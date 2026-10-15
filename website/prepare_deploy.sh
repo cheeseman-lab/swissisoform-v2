@@ -134,12 +134,18 @@ done
 # gitignored build output (*.log already covered), so the log belongs here with the
 # thing it describes. The container's own /tmp default in scanstore.py is fine by
 # contrast: that path only ever exists inside one Railway container.
+# The app's startup builds only the landing index; the full records the gene and
+# isoform pages read (load_all) are built on first use. So load them here too: a
+# staged parquet load_all cannot read fails the deploy instead of 500-ing every
+# gene page after a green healthcheck.
 IMPORT_LOG="$PWD/prepare_deploy_import.log"
-echo "[prepare_deploy] verifying the staged tree imports on its own"
+echo "[prepare_deploy] verifying the staged tree imports and loads on its own"
 if ! (cd "$PWD" && env -u PYTHONPATH PYTHONPATH="$PWD/src" SWISSISOFORM_DATA_DIR="$PWD/data" \
-      python -c "import swissisoform_site.app" >/dev/null 2>"$IMPORT_LOG"); then
-  echo "[prepare_deploy] ERROR: the staged build context does not import." >&2
-  echo "  Usually a module added under src/swissisoform/ that this script does not copy." >&2
+      python -c "import swissisoform_site.app; from swissisoform_site.data import load_all; load_all()" \
+      >/dev/null 2>"$IMPORT_LOG"); then
+  echo "[prepare_deploy] ERROR: the staged build context does not import or load." >&2
+  echo "  Usually a module added under src/swissisoform/ that this script does not copy," >&2
+  echo "  or a staged parquet the site's load_all() cannot read." >&2
   tail -20 "$IMPORT_LOG" >&2
   exit 1
 fi

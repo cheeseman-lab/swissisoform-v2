@@ -29,6 +29,10 @@
   var SCAN_QS = table.dataset.scanQs || "";
 
   var CHIP_N = 6; // fired-tag chips shown before "+N"
+  var ORF_NONE = "unknown"; // URL spelling of an isoform with no ORF type ("" in the payload)
+  var ORF_RANK = { extended: 0, truncated: 1 }; // list order: extensions, truncations, the rest
+  function orfRank(o) { return ORF_RANK[o] == null ? 2 : ORF_RANK[o]; }
+  function byOrfRank(a, b) { return orfRank(a) - orfRank(b) || (a < b ? -1 : a > b ? 1 : 0); }
   var KW_N = 3; // keywords shown before "+N"
   var OVERSCAN = 600; // px rendered above/below the viewport
   var EST = { g: 48, h: 28, i: 40, m: 32, e: 14 }; // estimated heights by row type
@@ -54,7 +58,7 @@
   var W; // 32-bit words per isoform tag bitset
   var isoBits, isoCats; // Uint32Array(nIso*W), Uint8Array(nIso) fired-category mask
   var isoOrf, orfTypes = [], orfCount = []; // Uint8Array(nIso) index into orfTypes
-  var tagKeys = [], tagLabel = [], tagCat = [], tagIsAi = []; // tag universe
+  var tagKeys = [], tagLabel = [], tagCat = [], tagIsAi = [], tagSearch = []; // tag universe
   var tagCount, kwCount;
   var STATE_FIRES = { m: 1, i: 1, x: 1 }; // green (met/interesting) or red = fires
 
@@ -64,10 +68,21 @@
     ISO = [];
     var nP = data.tags.length, nA = data.llm_tags.length;
     data.tags.forEach(function (t) {
-      tagKeys.push("p:" + t.id); tagLabel.push(t.label); tagCat.push(t.category); tagIsAi.push(false);
+      // Name a tag the way its chips read: the per-ORF-type labels it fired with
+      // ("Extension under selection / Lost region under selection"), not the
+      // generic registry label nobody sees on a row.
+      var shown = [];
+      Object.keys(t.labels || {}).sort(byOrfRank).forEach(function (o) {
+        if (shown.indexOf(t.labels[o]) < 0) shown.push(t.labels[o]);
+      });
+      if (!shown.length) shown.push(t.label);
+      tagKeys.push("p:" + t.id); tagLabel.push(shown.join(" / ")); tagCat.push(t.category);
+      tagIsAi.push(false);
+      tagSearch.push((shown.join(" ") + " " + t.label + " " + t.id).toLowerCase());
     });
     data.llm_tags.forEach(function (t) {
       tagKeys.push("a:" + t); tagLabel.push(t); tagCat.push(null); tagIsAi.push(true);
+      tagSearch.push(t.toLowerCase());
     });
     var T = nP + nA;
     W = Math.max(1, Math.ceil(T / 32));
@@ -180,7 +195,8 @@
     if (F.sort === "firing") {
       out.sort(function (a, b) {
         var A = G[a.gi], B = G[b.gi];
-        return B.ns - A.ns || B.ni - A.ni || (A.n < B.n ? -1 : A.n > B.n ? 1 : 0);
+        var bestA = A.i[A.b], bestB = B.i[B.b]; // each gene ranks by its best isoform
+        return bestB.ns - bestA.ns || bestB.ni - bestA.ni || (A.n < B.n ? -1 : A.n > B.n ? 1 : 0);
       });
     }
     visible = out;
@@ -267,7 +283,7 @@
 
   function isoLabel(iso, ti) {
     var t = D.tags[ti];
-    return (iso.l && iso.l[ti]) || (t.labels && t.labels[iso.o]) || t.label;
+    return (t.labels && t.labels[iso.o]) || t.label;
   }
 
   function chipsHtml(iso, key) {
@@ -585,11 +601,8 @@
     // rows list isoforms (extension, truncation, then by frequency).
     var ORF_LABEL = { extended: "Extension", truncated: "Truncation", uorf: "uORF", uoorf: "uoORF",
                       internal_oof: "Internal OOF", "3utr_orf": "3′UTR ORF", alt_orf: "Alt ORF" };
-    var ORF_RANK = { extended: 0, truncated: 1 };
     var orfOrder = orfTypes.map(function (_, k) { return k; }).sort(function (a, b) {
-      var ra = ORF_RANK[orfTypes[a]] == null ? 2 : ORF_RANK[orfTypes[a]];
-      var rb = ORF_RANK[orfTypes[b]] == null ? 2 : ORF_RANK[orfTypes[b]];
-      return ra - rb || orfCount[b] - orfCount[a];
+      return orfRank(orfTypes[a]) - orfRank(orfTypes[b]) || orfCount[b] - orfCount[a];
     });
     orfBox.innerHTML = orfOrder.map(function (k) {
       var t = orfTypes[k];
@@ -611,6 +624,9 @@
   }
 
   var kwFacet, tagFacet;
+  // Most common first; equal counts alphabetically, as the card grid listed them.
+  function byCount(a, b) { return b.count - a.count || a.label.localeCompare(b.label); }
+
   function wireControls() {
     var kwOptions = null, tagOptions = null;
     kwFacet = new Facet({
@@ -622,7 +638,7 @@
         if (!kwOptions) {
           kwOptions = D.keywords.map(function (kw, k) {
             return { v: k, label: kw, count: kwCount[k], badge: "", search: kw.toLowerCase() };
-          }).sort(function (a, b) { return b.count - a.count; });
+          }).sort(byCount);
         }
         return kwOptions;
       },
@@ -643,9 +659,9 @@
           for (var v = 0; v < tagKeys.length; v++) {
             if (!tagCount[v]) continue;
             tagOptions.push({ v: v, label: tagLabel[v], count: tagCount[v], badge: tagBadge(v),
-                              search: (tagLabel[v] + " " + tagKeys[v]).toLowerCase() });
+                              search: tagSearch[v] });
           }
-          tagOptions.sort(function (a, b) { return b.count - a.count; });
+          tagOptions.sort(byCount);
         }
         return tagOptions;
       },
@@ -711,8 +727,9 @@
       if (k >= 0 && F.cats.indexOf(k) < 0) F.cats.push(k);
     });
     (p.get("orf") || "").split(",").forEach(function (o) {
-      var k = orfTypes.indexOf(o);
-      if (o && k >= 0 && F.orfs.indexOf(k) < 0) F.orfs.push(k);
+      if (!o) return;
+      var k = orfTypes.indexOf(o === ORF_NONE ? "" : o);
+      if (k >= 0 && F.orfs.indexOf(k) < 0) F.orfs.push(k);
     });
     F.kwAnd = p.get("km") !== "or"; F.tagAnd = p.get("tm") !== "or"; F.catAnd = p.get("cm") !== "or";
     F.sort = p.get("sort") === "firing" ? "firing" : "name";
@@ -725,7 +742,7 @@
     set("kw", F.kw.map(function (k) { return D.keywords[k]; }).join("|"));
     set("tag", F.tags.map(function (k) { return tagKeys[k]; }).join("|"));
     set("cat", F.cats.map(function (k) { return D.groups[k].letter; }).join(""));
-    set("orf", F.orfs.map(function (k) { return orfTypes[k]; }).join(","));
+    set("orf", F.orfs.map(function (k) { return orfTypes[k] || ORF_NONE; }).join(","));
     set("km", F.kwAnd ? "" : "or"); set("tm", F.tagAnd ? "" : "or"); set("cm", F.catAnd ? "" : "or");
     set("sort", F.sort === "firing" ? "firing" : "");
     var qs = p.toString();
