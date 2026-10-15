@@ -245,7 +245,8 @@ def _clean_nan(obj: Any) -> Any:
 
 
 def _none_if_nan(v: Any) -> Any:
-    if v is None:
+    # pd.NA / NaT come from nullable (string, Int64) columns; NaN from float ones.
+    if v is None or v is pd.NA or v is pd.NaT:
         return None
     if isinstance(v, float) and not math.isfinite(v):
         return None

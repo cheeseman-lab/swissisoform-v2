@@ -91,9 +91,9 @@
 .kw-option:hover { background: #eef2ff; }
 .kw-option-count { color: #94a3b8; font-size: 12px; font-variant-numeric: tabular-nums; }
 
-/* The facet controls toggle with the `hidden` attribute, but their own display
-   rules (.kw-controls / .kw-mode are flex) would otherwise override it. */
-.search-and-refine [hidden] { display: none !important; }
+/* Controls toggle with the `hidden` attribute, but a class display rule (e.g.
+   .kw-controls / .kw-mode are flex) would otherwise override it. */
+[hidden] { display: none !important; }
 .kw-controls {
   display: flex;
   align-items: center;

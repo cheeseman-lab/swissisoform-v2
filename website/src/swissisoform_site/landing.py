@@ -38,7 +38,6 @@ from swissisoform.contract import (
 from swissisoform_site.data import (
     CARD_GROUPS,
     ISOFORM_TAG_VOCAB,
-    LEGACY_VERDICT_LABELS,
     _criteria_dict,
     _maybe_int,
     _maybe_str,
@@ -72,8 +71,10 @@ COLUMNS = (
     TAG_VERSION_COLUMN,
     TAG_SHA256_COLUMN,
 )
-# Display order of isoforms within a gene — the order the card dropdown used.
-_ORF_ORDER = {"extended": 0, "truncated": 1}
+# Display order of isoforms within a gene — the order the card dropdown used:
+# these types first, then the rest. Shipped in the payload for the client.
+ORF_ORDER = ("extended", "truncated")
+_ORF_RANK = {o: i for i, o in enumerate(ORF_ORDER)}
 # One character per CDLMPS flag state, so a lineup is a short string.
 FLAG_CODES = {
     "met": "m",
@@ -167,9 +168,8 @@ def _tag_vocab(registry: dict[str, Any] | None, fired_ids: set[str]) -> list[dic
 def _encode_flags(flags: dict[str, dict[str, Any]]) -> str:
     """A CDLMPS lineup as one string: per letter, state code + n_met + n_evaluable.
 
-    The client rebuilds the same tooltip text the cards used (``category_flag``'s
-    label) from these: pending → "Not assessed", a legacy verdict → its label,
-    otherwise "{n_met}/{n_evaluable} criteria met".
+    The tooltip text (``category_flag``'s label) is a function of those three
+    characters, so it ships once per distinct cell in ``flag_labels``.
     """
     out = []
     for g in CARD_GROUPS:
@@ -179,6 +179,14 @@ def _encode_flags(flags: dict[str, dict[str, Any]]) -> str:
             f"{FLAG_CODES[f['state']]}{min(int(f['n_met']), 9)}{min(int(f['n_evaluable']), 9)}"
         )
     return "".join(out)
+
+
+def _flag_cell_labels(flags: dict[str, dict[str, Any]], into: dict[str, str]) -> str:
+    """:func:`_encode_flags`, recording each cell's label in ``into`` as it goes."""
+    code = _encode_flags(flags)
+    for k, g in enumerate(CARD_GROUPS):
+        into.setdefault(code[3 * k : 3 * k + 3], flags[g["letter"]]["label"])
+    return code
 
 
 def _struct(v: Any) -> dict[str, Any]:
@@ -229,6 +237,7 @@ def build_landing_index(root: Path | None = None) -> LandingIndex:
     genes_out: list[dict[str, Any]] = []
     n_isoforms = n_categories = n_category_cells = n_synthesis = 0
     label_drift: set[tuple[str, str]] = set()
+    flag_labels: dict[str, str] = {}
     for gene_name in sorted(by_gene):
         grp = by_gene[gene_name]
         head = grp[0]
@@ -256,7 +265,7 @@ def build_landing_index(root: Path | None = None) -> LandingIndex:
                 "s": slug,  # the page URL's slug, so the client never re-derives it
                 "o": orf,
                 "a": aa,
-                "f": _encode_flags(flags),
+                "f": _flag_cell_labels(flags, flag_labels),
                 "g": fired,
                 "y": [llm_idx[t] for t in synthesis_tags_from(synthesis)],
                 "ns": n_green - n_red,
@@ -283,7 +292,7 @@ def build_landing_index(root: Path | None = None) -> LandingIndex:
         # Best over the parquet's row order (first max wins), as the cards' `max`
         # over gene.isoforms did; then the display order, as the dropdown listed.
         best_iso = max(isoforms, key=lambda i: i["_key"])
-        isoforms.sort(key=lambda i: _ORF_ORDER.get(i["o"], 2))
+        isoforms.sort(key=lambda i: _ORF_RANK.get(i["o"], len(ORF_ORDER)))
         best = next(j for j, i in enumerate(isoforms) if i is best_iso)
         for i in isoforms:
             del i["_key"]
@@ -304,7 +313,8 @@ def build_landing_index(root: Path | None = None) -> LandingIndex:
     payload = {
         "groups": [{"letter": g["letter"], "name": g["name"]} for g in CARD_GROUPS],
         "flag_codes": {code: state for state, code in FLAG_CODES.items()},
-        "legacy_labels": LEGACY_VERDICT_LABELS,
+        "flag_labels": flag_labels,  # 3-char lineup cell -> its tooltip label
+        "orf_order": list(ORF_ORDER),  # listed first, in this order; the rest after
         "tags": tags,
         "llm_tags": list(ISOFORM_TAG_VOCAB),
         "keywords": list(keywords),

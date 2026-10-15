@@ -76,6 +76,7 @@ def test_payload_carries_everything_the_gene_cards_showed(staged, payload):
         assert len(g["i"]) == len(rec.isoforms)
 
         # The dropdown's display order: extensions, truncations, then the rest.
+        assert payload["orf_order"] == list(staged.ORF_ORDER) == ["extended", "truncated"]
         order = (
             [i for i in rec.isoforms if i.orf_type == "extended"]
             + [i for i in rec.isoforms if i.orf_type == "truncated"]
@@ -94,8 +95,10 @@ def test_payload_carries_everything_the_gene_cards_showed(staged, payload):
             assert iso["a"] == card.aa_len
             assert [payload["llm_tags"][k] for k in iso["y"]] == card.tags
             flags = _decode_flags(payload, iso["f"])
-            for letter, f in card.category_flags.items():
+            for k, (letter, f) in enumerate(card.category_flags.items()):
                 assert flags[letter] == (f["state"], f["n_met"], f["n_evaluable"])
+                # The tooltip is category_flag's own label, shipped, not re-spelled.
+                assert payload["flag_labels"][iso["f"][3 * k : 3 * k + 3]] == f["label"]
 
 
 def test_fired_tags_are_exactly_the_true_states(staged, payload):
@@ -171,7 +174,8 @@ def test_landing_route_honours_a_refused_gzip(client):
     assert json.loads(r.data)["n_genes"]
 
 
-def test_null_gene_names_are_dropped_like_load_all(staged, tmp_path):
+@pytest.mark.parametrize("dtype", [None, "string"])  # object None / nullable pd.NA
+def test_null_gene_names_are_dropped_like_load_all(staged, tmp_path, dtype):
     """A row with no gene name is skipped, not listed as a gene called "None"."""
     import pandas as pd
 
@@ -179,10 +183,13 @@ def test_null_gene_names_are_dropped_like_load_all(staged, tmp_path):
     orphan = df.iloc[[0]].copy()
     orphan["gene_name"] = None
     orphan["tis_id"] = "orphan"
-    pd.concat([df, orphan]).to_parquet(tmp_path / "all_paired.parquet")
+    frame = pd.concat([df, orphan])
+    if dtype:
+        frame["gene_name"] = frame["gene_name"].astype(dtype)
+    frame.to_parquet(tmp_path / "all_paired.parquet")
     payload = json.loads(staged.build_landing_index(tmp_path).body)
     names = {g["n"] for g in payload["genes"]}
-    assert not names & {"None", "nan", ""}
+    assert not names & {"None", "nan", "", "<NA>"}
     assert payload["n_isoforms"] == len(df)
 
 
@@ -223,10 +230,12 @@ def test_registry_export_refuses_a_different_build(tmp_path):
     df = pd.read_parquet(WEBSITE_DATA / "all_paired.parquet", columns=cols)
     script = REPO_ROOT / "scripts" / "export" / "export_site_tag_registry.py"
 
-    def export(frame):
+    def export(frame, stale: bool = False):
         frame.to_parquet(tmp_path / "run.parquet")
         out = tmp_path / "tag_registry.json"
         out.unlink(missing_ok=True)
+        if stale:  # an earlier run's export, left at --out
+            out.write_text('{"sha256": "another run"}')
         r = subprocess.run(
             [
                 sys.executable,
@@ -246,9 +255,9 @@ def test_registry_export_refuses_a_different_build(tmp_path):
         pytest.skip(f"registry not provisioned here: {ok.stderr.strip()[-200:]}")
     assert json.loads(out.read_text())["sha256"] == df[cols[1]].iloc[0]
 
-    bad, out = export(df.assign(isoform_tags_registry_sha256="0" * 64))
+    bad, out = export(df.assign(isoform_tags_registry_sha256="0" * 64), stale=True)
     assert bad.returncode != 0 and "not the build" in bad.stderr
-    assert not out.exists()
+    assert not out.exists()  # the stale export is removed, not left to colour this run
 
 
 def test_a_weakened_etag_still_revalidates(client):

@@ -102,7 +102,9 @@ def main() -> None:
     run_sha = _single(args.parquet, SHA256_COLUMN)
     if run_sha and run_sha != reg.sha256:
         # Same version name, different definitions: the categories exported here
-        # would not be the ones the rows were fired with.
+        # would not be the ones the rows were fired with. A previous export at
+        # --out is removed too, as on the other no-export paths.
+        args.out.unlink(missing_ok=True)
         raise SystemExit(
             f"registry {version} on disk (sha {reg.sha256[:12]}…) is not the build that "
             f"fired {args.parquet} (sha {run_sha[:12]}…) — rebuild or restage the registry"
