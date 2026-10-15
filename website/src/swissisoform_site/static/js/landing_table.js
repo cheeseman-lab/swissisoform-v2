@@ -30,8 +30,8 @@
 
   var CHIP_N = 6; // fired-tag chips shown before "+N"
   var ORF_NONE = "unknown"; // URL spelling of an isoform with no ORF type ("" in the payload)
-  var ORF_RANK = { extended: 0, truncated: 1 }; // list order: extensions, truncations, the rest
-  function orfRank(o) { return ORF_RANK[o] == null ? 2 : ORF_RANK[o]; }
+  var ORF_RANK = new Map(); // list order (payload orf_order): extensions, truncations, the rest
+  function orfRank(o) { return ORF_RANK.has(o) ? ORF_RANK.get(o) : ORF_RANK.size; }
   function byOrfRank(a, b) { return orfRank(a) - orfRank(b) || (a < b ? -1 : a > b ? 1 : 0); }
   var KW_N = 3; // keywords shown before "+N"
   var OVERSCAN = 600; // px rendered above/below the viewport
@@ -65,6 +65,7 @@
   function build(data) {
     D = data;
     G = data.genes;
+    (data.orf_order || []).forEach(function (o, i) { ORF_RANK.set(o, i); });
     ISO = [];
     var nP = data.tags.length, nA = data.llm_tags.length;
     data.tags.forEach(function (t) {
@@ -91,7 +92,7 @@
     isoBits = new Uint32Array(n * W);
     isoCats = new Uint8Array(n);
     isoOrf = new Uint8Array(n);
-    var orfIdx = {};
+    var orfIdx = new Map();
     tagCount = new Uint32Array(T);
     kwCount = new Uint32Array(data.keywords.length);
     var catIdx = {};
@@ -113,9 +114,9 @@
           if (STATE_FIRES[iso.f.charAt(3 * k)]) mask |= 1 << k;
         }
         isoCats[x] = mask;
-        if (!(iso.o in orfIdx)) { orfIdx[iso.o] = orfTypes.length; orfTypes.push(iso.o); orfCount.push(0); }
-        isoOrf[x] = orfIdx[iso.o];
-        orfCount[orfIdx[iso.o]]++;
+        if (!orfIdx.has(iso.o)) { orfIdx.set(iso.o, orfTypes.length); orfTypes.push(iso.o); orfCount.push(0); }
+        isoOrf[x] = orfIdx.get(iso.o);
+        orfCount[orfIdx.get(iso.o)]++;
         iso.g.forEach(function (ti) {
           isoBits[x * W + (ti >> 5)] |= 1 << (ti & 31);
           tagCount[ti]++;
@@ -193,10 +194,22 @@
       out.push({ gi: gi, matched: matched });
     }
     if (F.sort === "firing") {
+      // Each gene ranks by its best isoform; under an isoform filter, by the best
+      // of the isoforms it kept, so a gene does not rank on one it hides.
+      out.forEach(function (v) {
+        var g = G[v.gi], top = g.i[g.b];
+        if (v.matched && v.matched.indexOf(g.b) < 0) {
+          top = null;
+          v.matched.forEach(function (ii) {
+            var c = g.i[ii];
+            if (!top || c.ns > top.ns || (c.ns === top.ns && c.ni > top.ni)) top = c;
+          });
+        }
+        v.ns = top.ns; v.ni = top.ni;
+      });
       out.sort(function (a, b) {
-        var A = G[a.gi], B = G[b.gi];
-        var bestA = A.i[A.b], bestB = B.i[B.b]; // each gene ranks by its best isoform
-        return bestB.ns - bestA.ns || bestB.ni - bestA.ni || (A.n < B.n ? -1 : A.n > B.n ? 1 : 0);
+        var A = G[a.gi].n, B = G[b.gi].n;
+        return b.ns - a.ns || b.ni - a.ni || (A < B ? -1 : A > B ? 1 : 0);
       });
     }
     visible = out;
@@ -240,15 +253,18 @@
     relayout();
   }
 
-  function relayout() {
+  function computeOffsets() { // prefix sums over measured (else estimated) heights
     offsets = new Float64Array(rows.length + 1);
     for (var r = 0; r < rows.length; r++) {
-      var h = heights.get(rows[r].key);
-      offsets[r + 1] = offsets[r] + (h || EST[rows[r].t]);
+      offsets[r + 1] = offsets[r] + (heights.get(rows[r].key) || EST[rows[r].t]);
     }
     body.style.height = offsets[rows.length] + "px";
-    table.setAttribute("aria-rowcount", String(rows.length + 1));
     dirty = true;
+  }
+
+  function relayout() {
+    computeOffsets();
+    table.setAttribute("aria-rowcount", String(rows.length + 1));
     schedule();
   }
 
@@ -265,10 +281,9 @@
   function flagsHtml(f) {
     var out = '<span class="cdlmps">';
     D.groups.forEach(function (gr, k) {
-      var code = f.charAt(3 * k), nMet = f.charAt(3 * k + 1), nEv = f.charAt(3 * k + 2);
-      var state = D.flag_codes[code] || "pending";
-      var label = state === "pending" ? "Not assessed"
-        : D.legacy_labels[state] || (nMet + "/" + nEv + " criteria met");
+      var cell = f.slice(3 * k, 3 * k + 3);
+      var state = D.flag_codes[cell.charAt(0)] || "pending";
+      var label = D.flag_labels[cell] || "Not assessed"; // category_flag's own text
       out += '<span class="cdlmps-letter cdlmps-' + state + '" title="' + esc(gr.name + ": " + label) +
         '">' + gr.letter + "</span>";
     });
@@ -466,7 +481,8 @@
     drawn0 = r0; drawn1 = r1; dirty = false;
     restoreFocus(spot);
     // Measure what was drawn; if any row's real height differs from the cached
-    // one, re-layout and draw again (at most twice per frame).
+    // one, re-layout and draw again: up to twice in this frame, then next frame,
+    // so the offsets never go stale with the new heights already cached.
     var changed = false;
     var els = body.children;
     for (var e = 0; e < els.length; e++) {
@@ -474,14 +490,9 @@
       var h = els[e].offsetHeight;
       if (heights.get(key) !== h) { heights.set(key, h); changed = true; }
     }
-    if (changed && pass < 2) {
-      offsets = new Float64Array(rows.length + 1);
-      for (var k = 0; k < rows.length; k++) {
-        offsets[k + 1] = offsets[k] + (heights.get(rows[k].key) || EST[rows[k].t]);
-      }
-      body.style.height = offsets[rows.length] + "px";
-      dirty = true;
-      render(pass + 1);
+    if (changed) {
+      computeOffsets();
+      if (pass < 2) render(pass + 1); else schedule();
     }
   }
 
@@ -716,12 +727,13 @@
   function readUrl() {
     var p = new URLSearchParams(location.search);
     F.q = p.get("q") || "";
-    var kwIdx = {};
-    D.keywords.forEach(function (k, i) { kwIdx[k] = i; });
-    (p.get("kw") || "").split("|").forEach(function (k) { if (k in kwIdx) F.kw.push(kwIdx[k]); });
-    var tIdx = {};
-    tagKeys.forEach(function (k, i) { tIdx[k] = i; });
-    (p.get("tag") || "").split("|").forEach(function (k) { if (k in tIdx) F.tags.push(tIdx[k]); });
+    // Maps, not objects: "?kw=constructor" must not match Object.prototype.
+    var kwIdx = new Map();
+    D.keywords.forEach(function (k, i) { kwIdx.set(k, i); });
+    (p.get("kw") || "").split("|").forEach(function (k) { if (kwIdx.has(k)) F.kw.push(kwIdx.get(k)); });
+    var tIdx = new Map();
+    tagKeys.forEach(function (k, i) { tIdx.set(k, i); });
+    (p.get("tag") || "").split("|").forEach(function (k) { if (tIdx.has(k)) F.tags.push(tIdx.get(k)); });
     (p.get("cat") || "").split("").forEach(function (c) {
       var k = D.groups.findIndex(function (gr) { return gr.letter === c; });
       if (k >= 0 && F.cats.indexOf(k) < 0) F.cats.push(k);

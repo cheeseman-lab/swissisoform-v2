@@ -20,6 +20,7 @@ import math
 import os
 import re
 import secrets
+import threading
 import types
 from typing import Any
 
@@ -304,6 +305,24 @@ def _human_delay(seconds: int) -> str:
     return f"{hours} hour{'' if hours == 1 else 's'}"
 
 
+# One loader at a time: a request that arrives while the background warm-up is
+# still in ``load_all()`` waits for it rather than building a second copy.
+_RECORDS_LOCK = threading.Lock()
+
+
+def _full_records() -> dict[str, Any]:
+    """``load_all()``, serialised with the startup warm-up."""
+    with _RECORDS_LOCK:
+        return load_all()
+
+
+def _warm_full_records() -> None:
+    try:
+        _full_records()
+    except Exception:  # a page that needs them will raise it again, visibly
+        logger.exception("background load_all() failed")
+
+
 def create_app() -> Flask:
     """Build the Flask app. Factory pattern so tests can re-create cleanly."""
     app = Flask(__name__)
@@ -483,7 +502,7 @@ def create_app() -> Flask:
         below — all deduplicated across the gene's isoforms. Isoform cards below
         link to the per-isoform deep-dive page.
         """
-        genes = load_all()
+        genes = _full_records()
         gene = genes.get(gene_name) or genes.get(gene_name.upper())
         if gene is None or not gene.isoforms:
             abort(404)
@@ -523,7 +542,7 @@ def create_app() -> Flask:
         Wires data + plot figure dicts + LLM JSONs into ``isoform.html``.
         Returns 404 on unknown gene or tis_slug.
         """
-        genes = load_all()
+        genes = _full_records()
         gene = genes.get(gene_name) or genes.get(gene_name.upper())
         if gene is None:
             abort(404)
@@ -636,7 +655,7 @@ def create_app() -> Flask:
         Intended for downloads, not for high-frequency programmatic queries —
         no pagination, no caching headers.
         """
-        genes = load_all()
+        genes = _full_records()
         payload: dict[str, Any] = {}
         # Named `record`, not `g` — `g` is Flask's request-global, imported above.
         for name, record in genes.items():
@@ -992,9 +1011,13 @@ def create_app() -> Flask:
 
     # Build the landing table's payload now rather than on the first visitor's
     # request: at catalogue scale it takes seconds (a cached no-op afterwards). It
-    # also logs the LLM coverage line. ``load_all()`` is not called here: the full
-    # records load on the first gene or isoform page a worker serves.
+    # also logs the LLM coverage line. ``load_all()`` is not called here, so the
+    # worker starts (and passes its healthcheck) without the full records; under
+    # gunicorn (SWISSISOFORM_WARM_RECORDS, entrypoint.sh) they load in the
+    # background, so the first gene page does not pay for them against --timeout.
     landing_index()
+    if os.environ.get("SWISSISOFORM_WARM_RECORDS") == "1":
+        threading.Thread(target=_warm_full_records, name="load_all", daemon=True).start()
 
     return app
 

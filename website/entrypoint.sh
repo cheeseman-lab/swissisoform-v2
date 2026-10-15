@@ -4,6 +4,9 @@
 # parquet load becomes a bottleneck on cold restarts.
 set -e
 
+# Load the full gene records in the background at worker start (app.py).
+export SWISSISOFORM_WARM_RECORDS=1
+
 exec gunicorn \
   --bind "0.0.0.0:${PORT:-8000}" \
   --workers 2 \
