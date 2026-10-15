@@ -37,7 +37,7 @@ from markupsafe import escape
 # backend evidence module (which the LLM per-category pass also consumes) and is
 # copied into the site package by prepare_deploy.sh, so UI and LLM never drift.
 from swissisoform.clinical.significance import is_pathogenic
-from swissisoform.contract import region_noun, stratum_label
+from swissisoform.contract import DEFAULT_REGION_NOUN, region_noun, stratum_label
 from swissisoform.site.evidence import CATEGORIES as _CATEGORIES
 from swissisoform.site.evidence import active_scoring as _active_scoring
 from swissisoform.site.evidence import p3_min_sse_length as _p3_min_sse_length
@@ -1061,7 +1061,11 @@ def biophysics_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
         if num:
             headline_segments.append({"t": num, "strong": False})
         plain_bits.append(word + num)
-    headline = " · ".join(plain_bits) if plain_bits else f"{len(region_rows)} properties"
+    headline = (
+        " · ".join(plain_bits)
+        if plain_bits
+        else f"{len(lever_rows) + len(region_rows)} properties"
+    )
 
     region = _region_noun(iso)
     sections = []
@@ -1117,8 +1121,7 @@ _REGION_PHRASE = re.compile(r"\b(?:[Dd]ifferential|[Dd]iff|[Uu]nique)[ -]region\
 
 def _region_noun(iso: Any, cap: bool = False) -> str:
     """The stratum's name for the differential region (``contract.region_noun``)."""
-    noun = region_noun(getattr(iso, "orf_type", None)) or "differential region"
-    return noun[0].upper() + noun[1:] if cap else noun
+    return region_noun(getattr(iso, "orf_type", None), cap=cap, default=DEFAULT_REGION_NOUN)
 
 
 def _regionize(text: str, orf_type: str | None) -> str:
@@ -1152,7 +1155,10 @@ def _ratio(subject: Any, reference: Any) -> float | None:
 
 
 def _fmt_ratio(r: float | None) -> str:
-    return f"{r:.2g}×" if r is not None else "—"
+    """Two significant figures below 10× (``0.42×``, ``3.1×``), whole numbers above."""
+    if r is None or not math.isfinite(r):
+        return "—"
+    return f"{r:.2g}×" if r < 10 else f"{r:,.0f}×"
 
 
 def _cmp_row(
@@ -1517,8 +1523,6 @@ def criterion_evidence_for(iso) -> dict:
         subj = g(subj_key) if subj_key else None
         if _fmt_num(ref) is None and _fmt_num(subj) is None:
             return None
-        if ratio is not _AUTO and isinstance(ratio, str):
-            ratio = _maybe_float(g(ratio))
         return row(label, ref, subj, ratio, **kw)
 
     def section(title, label_header, sides, rows, **extra):
@@ -1590,8 +1594,9 @@ def criterion_evidence_for(iso) -> dict:
             REGION_SIDES,
             rows,
             subtitle=(
-                f"absolute mean phyloP over the {region} is the score basis (high = "
-                "strong purifying selection); the shared column and ratio are context"
+                f"signed mean phyloP over the {region} is the score basis (high = strong "
+                "purifying selection, negative = accelerated); the shared column and ratio "
+                "are context"
             ),
         )
 
@@ -2145,9 +2150,12 @@ def criterion_evidence_for(iso) -> dict:
         # (Disease variants live in M2.)
         n_u = _maybe_float(g("isoform_variant_intersection_n_gnomad_in_unique_region"))
         n_s = _maybe_float(g("isoform_variant_intersection_n_gnomad_in_shared_region"))
+        # M1 reads only the module's depletion ratio; a ratio worked out here from
+        # the counts is shown for context but never marks the row as M1's basis.
         depletion = _maybe_float(g("isoform_variant_intersection_gnomad_depletion_ratio"))
         if n_u is None and n_s is None and depletion is None:
             return None
+        scored = depletion is not None
         if depletion is None:
             depletion = _density_ratio(n_u, n_s, _region_lengths_nt())
         return section(
@@ -2161,7 +2169,7 @@ def criterion_evidence_for(iso) -> dict:
                     n_u,
                     depletion,
                     drives=True,
-                    passes=depletion is not None and depletion < cfg.m1_depletion_ratio_max,
+                    passes=scored and depletion < cfg.m1_depletion_ratio_max,
                 )
             ],
             subtitle=(
@@ -2176,6 +2184,8 @@ def criterion_evidence_for(iso) -> dict:
         # constrained than the shared core? The Δ is the M1 lever; LLRs are
         # negative, so their ratio is undefined and shows "—".
         delta = _maybe_float(g("isoform_plm_vep_constraint_delta"))
+        # M1 drops the Δ unless the PLM VEP run is ok, so only then can it pass.
+        plm_ok = g("isoform_plm_vep_status") == "ok"
         return section(
             f"Sequence constraint (ESM-C) · {region} vs shared",
             "Property",
@@ -2192,7 +2202,7 @@ def criterion_evidence_for(iso) -> dict:
                     delta,
                     None,
                     drives=True,
-                    passes=delta is not None and delta >= cfg.m1_constraint_delta_min,
+                    passes=plm_ok and delta >= cfg.m1_constraint_delta_min,
                 )
                 if delta is not None
                 else None,

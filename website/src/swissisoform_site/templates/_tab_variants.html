@@ -90,8 +90,9 @@
     <strong>LoF</strong> = frameshift / stop-gain / splice-disrupting — inherently loss-of-function,
     flagged by consequence (AlphaMissense and ESM-C score only missense/substitutions, so they are
     blank here by design, not by absence of impact). <strong>AlphaMissense</strong> is computed in the
-    canonical reading frame, so it scores the shared core but reads <em>N/A</em> across an isoform-unique
-    {{ region_name }} — use <strong>ESM-C ΔLLR</strong> there.
+    canonical reading frame, so it scores the shared core{% if diff_space == 'isoform' %} but reads
+    <em>N/A</em> across the {{ region_name }}, which is not canonical sequence — use
+    <strong>ESM-C ΔLLR</strong> there{% else %} and the {{ region_name }}, which is canonical sequence{% endif %}.
   </p>
 {% else %}
 <p class="empty">No clinical variants intersect this isoform's coding region.</p>
