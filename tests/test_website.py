@@ -682,9 +682,11 @@ def _all_evidence():
 def test_comparison_tables_use_one_grammar(client):
     """Every comparison table is ``Label | reference | subject | Ratio``.
 
-    The reference is Canonical (subject Isoform) or Shared (subject the stratum's
-    own region noun), the ratio column is always there, and every row fills all
-    three value cells. No per-criterion exceptions.
+    The reference is Canonical (subject Isoform), Shared (subject the stratum's
+    own region noun), or — for the C1/C2 frame scans, which score the whole
+    canonical ORF against the unique region alone — Canonical ORF (subject the
+    region noun, so a truncation's lost region is never labelled "Isoform"). The
+    ratio column is always there, and every row fills all three value cells.
     """
     from swissisoform.contract import region_noun
 
@@ -695,7 +697,10 @@ def test_comparison_tables_use_one_grammar(client):
             continue
         noun = region_noun(iso.orf_type) or "differential region"
         region = noun[0].upper() + noun[1:]
-        ok = hdr[1:] in (["Canonical", "Isoform", "Ratio"], ["Shared", region, "Ratio"])
+        forms = [["Canonical", "Isoform", "Ratio"], ["Shared", region, "Ratio"]]
+        if cid in ("C1_primate_conservation", "C2_mammalian_conservation"):
+            forms = [["Canonical ORF", region, "Ratio"]]
+        ok = hdr[1:] in forms
         ok = ok and all(len(r["cols"]) == 3 for r in s["compare_rows"])
         if not ok:
             offenders.append((cid, tuple(hdr)))

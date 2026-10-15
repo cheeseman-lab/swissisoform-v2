@@ -20,6 +20,8 @@ _CANON_COLOR = "#64748b"  # slate
 _ISO_COLOR = "#1f77b4"  # blue
 _EXT_FILL = "#2ca02c"  # green (added region)
 _TRUNC_FILL = "#d62728"  # red (lost region)
+_CHAR_EM = 0.5  # glyph width / font size, rounded up from the ~0.45 measured, for margin sizing
+_LABEL_GAP = 6  # px between a left label and the plot
 _DOMAIN_FILL = "rgba(44, 160, 44, 0.45)"
 _DISORDER_FILL = "rgba(148, 163, 184, 0.55)"  # slate — intrinsically disordered
 _COIL_COLOR = "#ea580c"  # orange — coiled-coil
@@ -135,7 +137,13 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
     # at x_left) aren't clipped, and anchor the row labels at the padded edge.
     x_left -= max(6, int(0.03 * (axis_len - x_left + 1)))
 
-    def _left_label(text: str, y: float, size: int = 10) -> None:
+    label_px = [0.0]  # widest left label, so the margin can be sized to fit it
+
+    def _left_label(
+        text: str, y: float, size: int = 10, color: str = "#475569", **extra: Any
+    ) -> None:
+        """A row label right-anchored just left of the plot (``extra``: click hooks)."""
+        label_px[0] = max(label_px[0], len(text) * size * _CHAR_EM)
         annotations.append(
             {
                 "x": x_left,
@@ -143,10 +151,11 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                 "xref": "x",
                 "yref": "y",
                 "xanchor": "right",
-                "xshift": -6,
+                "xshift": -_LABEL_GAP,
                 "text": text,
                 "showarrow": False,
-                "font": {"size": size, "color": "#475569"},
+                "font": {"size": size, "color": color},
+                **extra,
             }
         )
 
@@ -163,7 +172,7 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
         canon_y,
         _CANON_COLOR,
         "Canonical",
-        [f"<b>Canonical</b> · {can_len} aa"],
+        f"<b>Canonical</b> · {can_len} aa",
         residue_hover=True,
     )
     canon["showlegend"] = True
@@ -183,8 +192,9 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
         b["_y"] = by
         x0, x1 = int(b["x0"]), int(b["x1"])
         label, slug = b["label"], b.get("slug")
-        region = b.get("region") or region_noun(b.get("orf_type"), default=DEFAULT_REGION_NOUN)
-        region_cap = region_noun(b.get("orf_type"), cap=True, default=DEFAULT_REGION_NOUN)
+        # One rule for both spellings: the ORF type's noun, else the bar's own.
+        region = region_noun(b.get("orf_type"), default=b.get("region") or DEFAULT_REGION_NOUN)
+        region_cap = region_noun(b.get("orf_type"), cap=True, default=region)
         open_hint = "<br><i>click to open</i>" if slug else ""
         d0, d1 = b.get("diff_x0"), b.get("diff_x1")
         has_diff = d0 is not None and d1 is not None and int(d1) >= int(d0)
@@ -200,10 +210,8 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                 by,
                 _TRUNC_FILL,
                 "",
-                [
-                    f"<b>{label}</b><br>{region}: canonical residues {int(d0) + 1}–{int(d1) + 1}"
-                    f" ({n_lost} aa){open_hint}"
-                ],
+                f"<b>{label}</b><br>{region}: canonical residues {int(d0) + 1}–{int(d1) + 1}"
+                f" ({n_lost} aa){open_hint}",
                 slug=slug,
                 opacity=0.55,
             )
@@ -222,7 +230,7 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                 by,
                 _EXT_FILL,
                 "",
-                [f"<b>{label}</b><br>{region}: {max(n_gained, 1)} aa{open_hint}"],
+                f"<b>{label}</b><br>{region}: {max(n_gained, 1)} aa{open_hint}",
                 slug=slug,
             )
             traces.append(_legend(seg, region_cap))
@@ -236,30 +244,19 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                 by,
                 _ISO_COLOR,
                 "",
-                [f"<b>{label}</b><br>shared with canonical{open_hint}"],
+                f"<b>{label}</b><br>shared with canonical{open_hint}",
                 slug=slug,
             )
             traces.append(_legend(seg, "Isoform"))
 
-        annotations.append(
-            {
-                "x": x_left,
-                "y": by,
-                "xref": "x",
-                "yref": "y",
-                "xanchor": "right",
-                "xshift": -6,
-                "text": label,
-                "showarrow": False,
-                "font": {"size": 9, "color": "#1d4ed8" if slug else "#475569"},
-                # A clickable row label: gene.html listens for plotly_clickannotation
-                # and reads the slug from ``name``.
-                **(
-                    {"name": slug, "captureevents": True, "hovertext": "open isoform"}
-                    if slug
-                    else {}
-                ),
-            }
+        # A clickable row label: gene.html listens for plotly_clickannotation and
+        # reads the slug from ``name``.
+        _left_label(
+            label,
+            by,
+            size=9,
+            color="#1d4ed8" if slug else "#475569",
+            **({"name": slug, "captureevents": True, "hovertext": "open isoform"} if slug else {}),
         )
     lowest_bar = -bar_gap * len(bars)
 
@@ -591,7 +588,13 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
             },
             "yaxis": {"range": [y_lo, y_hi], "showticklabels": False, "zeroline": False},
             "height": int(90 + 118 * (y_hi - y_lo)),
-            "margin": {"l": 120, "r": 30, "t": 40, "b": 50},
+            # Wide enough for the longest left label ("internal_oof · ATG · 1234 aa").
+            "margin": {
+                "l": max(120, int(label_px[0]) + _LABEL_GAP + 10),
+                "r": 30,
+                "t": 40,
+                "b": 50,
+            },
         },
     }
 
@@ -652,7 +655,7 @@ def _segment(
     y: float,
     color: str,
     name: str,
-    hover: list[str],
+    hover: str,
     slug: str | None = None,
     opacity: float = 1.0,
     residue_hover: bool = False,
@@ -664,7 +667,7 @@ def _segment(
     as ``customdata`` so a click opens that isoform's page (``gene.html``).
     """
     xs = _bar_samples(x0, x1)
-    text = hover[0]
+    text = hover
     trace: dict[str, Any] = {
         "type": "scatter",
         "name": name,

@@ -281,5 +281,39 @@ def test_fmt_ratio_never_reads_as_scientific_notation() -> None:
     assert _fmt_ratio(3.14) == "3.1×"
     assert _fmt_ratio(162.5) == "162×"
     assert _fmt_ratio(12_000.0) == "12,000×"
+    assert _fmt_ratio(0.0) == "0×"
+    assert _fmt_ratio(1.2e-05) == "<0.01×"
     assert _fmt_ratio(None) == "—"
     assert _fmt_ratio(float("inf")) == "—"
+
+
+# ── PR #56 second review ──────────────────────────────────────────────────
+
+
+def test_s2_headline_reads_the_deltas_s2_scores() -> None:
+    """Headline and highlighted lever agree: both use |isoform − canonical| at S2's cutoff."""
+    from swissisoform_site.data import biophysics_card_for_isoform
+
+    iso = _Iso({
+        "canonical_biophysics_gravy": -0.40, "isoform_biophysics_gravy": -0.05,
+        "cmp_biophysics_gravy_delta": 0.35,  # ≥ s2_gravy_delta_min (0.3): S2 fires
+        # The region and the shared core barely differ — the old headline's basis.
+        "cmp_biophysics_gravy_unique": -0.10, "cmp_biophysics_gravy_shared": -0.05,
+    })
+    iso.criteria = {"S2_biophysics": True}
+    card = biophysics_card_for_isoform(iso)
+    assert card["headline"] == "more hydrophobic (+0.35)"
+    lever = card["evidence"]["sections"][0]["compare_rows"][0]
+    assert lever["label"] == "Hydropathy (GRAVY)" and lever["hot"] is True
+
+
+def test_c1_table_never_calls_a_lost_region_the_isoform() -> None:
+    from swissisoform_site.data import criterion_evidence_for
+
+    iso = _Iso({
+        "isoform_conservation_frame_primate_canonical_mean_pident": 0.80,
+        "isoform_conservation_frame_primate_mean_pident": 0.95,
+    }, orf_type="truncated", diff_space="canonical")
+    sec = criterion_evidence_for(iso)["C1_primate_conservation"]["sections"][0]
+    assert sec["cmp_headers"][1:3] == ["Canonical ORF", "Lost region"]
+    assert "lost region" in sec["subtitle"]

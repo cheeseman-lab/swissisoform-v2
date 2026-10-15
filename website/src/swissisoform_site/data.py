@@ -24,6 +24,7 @@ import logging
 import math
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import cached_property, lru_cache
 from itertools import zip_longest
@@ -1030,27 +1031,20 @@ def biophysics_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
     if not lever_rows and not region_rows:
         return None
 
-    # Directional headline: how the differential region compares to the shared
-    # core for the three properties S2 keys off. Number = (differential − core);
-    # the sign gives the direction word. Region-vs-core (not the whole-protein
-    # isoform−canonical delta) so small regions aren't diluted and truncations
-    # read the same way as extensions.
+    # Directional headline from the whole-protein isoform − canonical deltas S2
+    # scores, at S2's own cutoffs: "similar" exactly when that lever did not pass,
+    # so the headline never contradicts the rows highlighted below it.
     headline_segments: list[dict[str, Any]] = []
     plain_bits: list[str] = []
-    for feat, adjective, noun, eps in (
-        ("gravy", "hydrophobic", "hydropathy", 0.1),
-        ("fraction_charged", "charged", "charge", 0.03),
-        ("disorder", "disordered", "disorder", 0.03),
+    for (_label, feat, cut_field), (adjective, noun) in zip(
+        _S2_LEVERS,
+        (("hydrophobic", "hydropathy"), ("charged", "charge"), ("disordered", "disorder")),
+        strict=True,
     ):
-        try:
-            u = float(g(f"cmp_biophysics_{feat}_unique"))
-            s = float(g(f"cmp_biophysics_{feat}_shared"))
-        except (TypeError, ValueError):
+        diff = _maybe_float(g(f"cmp_biophysics_{feat}_delta"))
+        if diff is None or not math.isfinite(diff):
             continue
-        if math.isnan(u) or math.isnan(s):
-            continue
-        diff = u - s
-        if abs(diff) < eps:
+        if abs(diff) < getattr(cfg, cut_field):
             word, num = f"similar {noun}", ""
         else:
             word = f"{'more' if diff > 0 else 'less'} {adjective}"
@@ -1115,6 +1109,7 @@ def biophysics_card_for_isoform(iso: "Isoform") -> dict[str, Any] | None:
 
 _CMP_COL_CLASSES = ["dm-shared", "", "dm-ratio"]  # reference (muted) | subject | ratio
 _PROTEIN_SIDES = ("Canonical", "Isoform")
+_CANONICAL_ORF = "Canonical ORF"  # reference side of the C1/C2 frame tables
 _AUTO = object()  # sentinel: compute the ratio from the two sides
 _REGION_PHRASE = re.compile(r"\b(?:[Dd]ifferential|[Dd]iff|[Uu]nique)[ -]region\b")
 
@@ -1155,9 +1150,14 @@ def _ratio(subject: Any, reference: Any) -> float | None:
 
 
 def _fmt_ratio(r: float | None) -> str:
-    """Two significant figures below 10× (``0.42×``, ``3.1×``), whole numbers above."""
+    """Two significant figures from 0.01× to 10× (``0.42×``, ``3.1×``), whole numbers
+    above, ``<0.01×`` below — never scientific notation."""
     if r is None or not math.isfinite(r):
         return "—"
+    if r == 0:
+        return "0×"
+    if r < 0.01:
+        return "<0.01×"
     return f"{r:.2g}×" if r < 10 else f"{r:,.0f}×"
 
 
@@ -1383,7 +1383,7 @@ METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
     "Kozak mismatch — full consensus": ("m-initiation", "Mismatches to the full Kozak consensus (0 = perfect)."),
     # Frame conservation
     "Frame intact (fraction of species)": ("m-frame", "Fraction of aligned species keeping an intact reading frame."),
-    "Species aligned": ("m-frame", "Number of species with an alignment over the differential ORF."),
+    "Species aligned": ("m-frame", "Number of species with an alignment over the differential region."),
     "Species frame-intact": ("m-frame", "Number of species whose reading frame stays intact."),
     "Start codon conserved": ("m-frame", "Fraction of species conserving the start codon."),
     "Mean AA identity": ("m-frame", "Mean amino-acid identity across aligned species."),
@@ -1399,7 +1399,7 @@ METRIC_GLOSSARY: dict[str, tuple[str, str]] = {
     "pLDDT (whole protein)": ("m-structure", "Mean ESMFold2 per-residue confidence (0–1) over the whole protein."),
     "pLDDT — differential region": ("m-structure", "Mean ESMFold2 confidence over the differential region only."),
     "pLDDT std — differential region": ("m-structure", "Spread of pLDDT within the differential region."),
-    "pLDDT Δ (diff vs shared)": ("m-structure", "Differential-minus-shared mean pLDDT."),
+    "pLDDT Δ (diff vs shared)": ("m-structure", "Mean pLDDT, differential region minus shared."),
     "TM-score (iso vs canonical)": ("m-structure", "Global fold similarity (0–1) between isoform and canonical."),
     "RMSD global (Å)": ("m-structure", "Backbone RMSD between isoform and canonical folds."),
     "Extension contacts": ("m-structure", "Inter-residue contacts the differential region makes with the core."),
@@ -1513,11 +1513,16 @@ def criterion_evidence_for(iso) -> dict:
     cfg = _active_scoring()
     region = _region_noun(iso)  # "extension" / "lost region" / "ORF"
     REGION_SIDES = ("Shared", _region_noun(iso, cap=True))
+    FRAME_SIDES = (_CANONICAL_ORF, _region_noun(iso, cap=True))  # C1/C2 frame scans
 
-    def row(label, reference, subject, ratio=_AUTO, **kw):
+    def row(
+        label: str, reference: Any, subject: Any, ratio: Any = _AUTO, **kw: Any
+    ) -> dict[str, Any]:
         return _cmp_row(label, reference, subject, ratio, orf_type=orf_type, **kw)
 
-    def keyed(label, ref_key, subj_key, ratio=_AUTO, **kw):
+    def keyed(
+        label: str, ref_key: str | None, subj_key: str | None, ratio: Any = _AUTO, **kw: Any
+    ) -> dict[str, Any] | None:
         """A row read off two columns, or None when both sides are missing."""
         ref = g(ref_key) if ref_key else None
         subj = g(subj_key) if subj_key else None
@@ -1525,13 +1530,19 @@ def criterion_evidence_for(iso) -> dict:
             return None
         return row(label, ref, subj, ratio, **kw)
 
-    def section(title, label_header, sides, rows, **extra):
+    def section(
+        title: str,
+        label_header: str,
+        sides: tuple[str, str],
+        rows: list[dict[str, Any] | None],
+        **extra: Any,
+    ) -> dict[str, Any] | None:
         rows = [r for r in rows if r]
         if not rows:
             return None
         return _cmp_section(title, label_header, sides, rows, **extra)
 
-    def pct(v):
+    def pct(v: Any) -> str | None:
         return _fmt_num(v, pct=True)
 
     # ---- modality section builders (each → section dict or None) ----------
@@ -1562,15 +1573,16 @@ def criterion_evidence_for(iso) -> dict:
             )
             for label, suf, is_pct, has_ratio, drives in specs
         ]
+        # The subject is the unique region alone — on a truncation the lost
+        # N-terminus, which the isoform lacks — so it is named, never "Isoform".
         return section(
             f"Sequence conservation · {clade}",
             "Conservation metric",
-            _PROTEIN_SIDES,
+            FRAME_SIDES,
             rows,
-            subtitle=_regionize(
-                "canonical ORF vs the isoform's differential ORF — mean AA identity is "
-                "the score basis; frame intactness across the clade is context",
-                orf_type,
+            subtitle=(
+                f"the whole canonical ORF vs the {region} — mean AA identity is the score "
+                "basis; frame intactness across the clade is context"
             ),
         )
 
@@ -1837,7 +1849,9 @@ def criterion_evidence_for(iso) -> dict:
         unique = [e for e in unique if _sse_qualifies(e)]
         shared = [e for e in shared if _sse_qualifies(e)]
 
-        def sse_row(label, fn, drives=False):
+        def sse_row(
+            label: str, fn: Callable[[list[dict[str, Any]]], Any], drives: bool = False
+        ) -> dict[str, Any]:
             u, s = fn(unique), fn(shared)
             return row(label, s, u, drives=drives, passes=bool(u))
 
@@ -2116,7 +2130,7 @@ def criterion_evidence_for(iso) -> dict:
             hits=hits,
         )
 
-    def _region_lengths_nt():
+    def _region_lengths_nt() -> tuple[int, int]:
         """(unique, shared) region lengths in nt for density ratios.
 
         Emitted by the variant_intersection module; falls back to AA length × 3
@@ -2136,14 +2150,16 @@ def criterion_evidence_for(iso) -> dict:
         shared_len = shared_nt or ((shared_aa or 0) * 3)
         return unique_len, shared_len
 
-    def _density_ratio(n_unique, n_shared, lengths):
+    def _density_ratio(
+        n_unique: float | None, n_shared: float | None, lengths: tuple[int, int]
+    ) -> float | None:
         """Per-length density ratio, region ÷ shared (None when undefined)."""
         unique_len, shared_len = lengths
         if n_unique is None or n_shared is None or not unique_len or not shared_len:
             return None
         return _ratio(n_unique / unique_len, n_shared / shared_len)
 
-    def sec_germline_tolerance():
+    def sec_germline_tolerance() -> dict[str, Any] | None:
         # gnomAD = germline population variation, a *tolerance* readout. Depletion
         # in the region vs the shared core = healthy human variation avoids it =
         # the region is constrained. Ratio < 1× = constrained; > 1× = tolerated.
@@ -2292,7 +2308,7 @@ def criterion_evidence_for(iso) -> dict:
             subtitle="scored: " + " · ".join(cov) if cov else f"{pool_label} variants",
         )
 
-    def sec_clinical_burden():
+    def sec_clinical_burden() -> dict[str, Any] | None:
         disease_ratio = _maybe_float(g("isoform_variant_intersection_disease_enrichment_ratio"))
         lengths = _region_lengths_nt()
         rows = []
