@@ -1,20 +1,20 @@
 {
   "artifact": "cheeseman50 coreset",
-  "built_at": "2026-10-14T18:41:31+00:00",
-  "command": "build_coreset.py --parquet data/output/full_catalog_20261009/all_paired.parquet",
+  "built_at": "2026-10-16T16:20:09+00:00",
+  "command": "build_coreset.py --parquet data/output/full_catalog_20261015/all_paired.parquet",
   "code": {
-    "commit": "85d6107b8eb0acd488932828bac57c90ae61e61f",
+    "commit": "d5cb3e0e61187851e94473cf5d940942bb6925bd",
     "dirty": true
   },
   "source_parquet": [
     {
-      "path": "/lab/barcheese01/ating/swissisoform-v2/data/output/full_catalog_20261009/all_paired.parquet",
-      "sha256": "d4ca114eb3143fdd26007cd5a9ace70b6a5c1f7bfb8b5b024f6ad5f0cee6d6e6"
+      "path": "/lab/barcheese01/ating/swissisoform-v2/data/output/full_catalog_20261015/all_paired.parquet",
+      "sha256": "4bfb4374318e95bf401aa4c65f1a5fcc081b4d4f0d98c375d54edffe3a8f2d34"
     }
   ],
   "feature_catalog": {
     "path": "figures/clustering_dims/feature_space/feature_catalog.csv",
-    "sha256": "ddb1270363c73505e1946a825e446414043e3c458f4c7a8c0cad303de8335f52"
+    "sha256": "8c9a73462df09296a4deeb69f9bb197a7ce0f4b1da7e5de51cb4a774d51dd415"
   },
   "anchors": {
     "path": "figures/clustering_dims/principled_sampling/anchors.csv",
@@ -23,15 +23,15 @@
   "spaces": {
     "all-ORF": {
       "isoforms": 6462,
-      "features": 404
+      "features": 401
     },
     "paired-extended": {
       "isoforms": 1508,
-      "features": 487
+      "features": 484
     },
     "paired-truncated": {
       "isoforms": 4510,
-      "features": 487
+      "features": 484
     }
   },
   "composition": {

@@ -5,56 +5,56 @@ canonical_conservation_phylop_at_tis,conservation,canonical,C,module_map,,False,
 canonical_conservation_phylop_kozak_mean,conservation,canonical,C,module_map,,False,float,1.0,3474,True,,numeric,linear,,,,,1.0
 isoform_conservation_phastcons_at_tis,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,False,float,1.0,1561,True,,numeric,linear,phastCons at TIS,,,,1.0
 isoform_conservation_phastcons_kozak_mean,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,False,float,1.0,4067,True,,numeric,linear,phastCons mean over Kozak window,,,,1.0
-isoform_conservation_phastcons_shared_region_mean,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,False,float,0.9511,5811,True,,numeric,linear,phastCons mean over shared region,,,depleted_for_separate_orfs,0.2883
-isoform_conservation_phastcons_unique_region_mean,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,False,float,0.9944,6185,True,,numeric,linear,phastCons mean over unique region,,,,0.9189
+isoform_conservation_phastcons_shared_region_mean,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,False,float,0.9313,5707,True,,numeric,linear,phastCons mean over shared region,,,absent_for_separate_orfs,0.0
+isoform_conservation_phastcons_unique_region_mean,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,False,float,1.0,6225,True,,numeric,linear,phastCons mean over unique region,,,,1.0
 isoform_conservation_phylop_at_tis,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,False,float,0.9998,6203,True,,numeric,linear,PhyloP score at TIS,,,,1.0
-isoform_conservation_phylop_enrichment,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,False,float,0.9454,6109,True,,numeric,signed_log,PhyloP enrichment (unique vs shared),,,depleted_for_separate_orfs,0.2072
+isoform_conservation_phylop_enrichment,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,False,float,0.9311,6017,True,,numeric,signed_log,PhyloP enrichment (unique vs shared),,,absent_for_separate_orfs,0.0
 isoform_conservation_phylop_kozak_mean,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,False,float,0.9998,6459,True,,numeric,linear,PhyloP mean over Kozak window,,,,1.0
-isoform_conservation_phylop_shared_region_mean,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,False,float,0.9509,5819,True,,numeric,linear,PhyloP mean over shared region,,,depleted_for_separate_orfs,0.2883
-isoform_conservation_phylop_unique_region_mean,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,True,float,0.9944,6420,True,,numeric,linear,PhyloP mean over unique region,,,,0.9189
+isoform_conservation_phylop_shared_region_mean,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,False,float,0.9311,5706,True,,numeric,linear,PhyloP mean over shared region,,,absent_for_separate_orfs,0.0
+isoform_conservation_phylop_unique_region_mean,conservation,isoform,C,evidence_cols,C3_phylop_coding_selection,True,float,1.0,6459,True,,numeric,linear,PhyloP mean over unique region,,,,1.0
 isoform_conservation_summary.phastcons_bigwig,conservation,isoform,C,module_map,,False,str,1.0,1,False,status_string,-,-,,,,,
 isoform_conservation_summary.phastcons_status,conservation,isoform,C,module_map,,False,str,1.0,1,False,status_string,-,-,,,,,
 isoform_conservation_summary.phylop_bigwig,conservation,isoform,C,module_map,,False,str,1.0,1,False,status_string,-,-,,,,,
 isoform_conservation_summary.phylop_status,conservation,isoform,C,module_map,,False,str,1.0,1,False,status_string,-,-,,,,,
 isoform_conservation_summary.region_status,conservation,isoform,C,module_map,,False,str,1.0,1,False,status_string,-,-,,,,,
-isoform_conservation_summary.shared_region_nt,conservation,isoform,C,module_map,,False,int,1.0,1319,True,,numeric,log1p,,,,,1.0
-isoform_conservation_summary.unique_region_nt,conservation,isoform,C,module_map,,False,int,1.0,1083,True,,numeric,log1p,,,,,1.0
+isoform_conservation_summary.shared_region_nt,conservation,isoform,C,module_map,,False,int,1.0,1260,False,redundant,numeric,log1p,,,isoform_variant_intersection_shared_region_nt,,1.0
+isoform_conservation_summary.unique_region_nt,conservation,isoform,C,module_map,,False,int,1.0,1021,False,redundant,numeric,log1p,,,isoform_variant_intersection_unique_region_nt,,1.0
 isoform_conservation_summary.unique_space,conservation,isoform,C,module_map,,False,str,1.0,2,False,status_string,one_hot,-,,,,,
-isoform_conservation_frame_mammalian_canonical_deepest_species,conservation_frame,isoform,C,module_map,,False,str,0.9827,20,False,free_text,text_embedding,-,,,,,
-isoform_conservation_frame_mammalian_canonical_frac_intact,conservation_frame,isoform,C,module_map,,False,float,0.9944,78,True,,numeric,linear,Canonical fraction of mammals with intact ORF,,,,0.9189
-isoform_conservation_frame_mammalian_canonical_max_depth,conservation_frame,isoform,C,module_map,,False,float,0.9827,7,True,,numeric,linear,,,,,0.9144
-isoform_conservation_frame_mammalian_canonical_mean_pident,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,float,0.9944,3562,True,,numeric,linear,Canonical mean % identity to mammalian orthologs,,,,0.9189
-isoform_conservation_frame_mammalian_canonical_n_species_aligned,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,float,0.9944,13,True,,numeric,linear,Canonical mammalian species aligned,,,,0.9189
-isoform_conservation_frame_mammalian_canonical_n_species_intact_frame,conservation_frame,isoform,C,module_map,,False,float,0.9944,21,True,,numeric,linear,,,,,0.9189
-isoform_conservation_frame_mammalian_canonical_start_codon_conserved,conservation_frame,isoform,C,module_map,,False,float,0.9943,104,True,,numeric,linear,,,,,0.9189
-isoform_conservation_frame_mammalian_deepest_species,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,str,0.9834,20,False,free_text,text_embedding,-,Deepest mammal with intact frame,,,,
-isoform_conservation_frame_mammalian_frac_intact,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,float,0.9944,123,True,,numeric,linear,Fraction of mammals with intact ORF,,,,0.9189
-isoform_conservation_frame_mammalian_max_depth,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,float,0.9834,7,True,,numeric,linear,Max evolutionary depth (mammals),,,,0.8671
-isoform_conservation_frame_mammalian_mean_pident,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,True,float,0.9944,5698,True,,numeric,linear,Mean % identity to mammalian orthologs,,,,0.9189
-isoform_conservation_frame_mammalian_n_species_aligned,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,float,0.9944,19,True,,numeric,linear,Mammalian species aligned,,,,0.9189
-isoform_conservation_frame_mammalian_n_species_intact_frame,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,float,0.9944,21,True,,numeric,linear,Mammalian species with intact frame,,,,0.9189
-isoform_conservation_frame_mammalian_start_codon_conserved,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,float,0.9938,129,True,,numeric,linear,Mammals with conserved start codon,,,,0.9189
-isoform_conservation_frame_primate_canonical_deepest_species,conservation_frame,isoform,C,module_map,,False,str,0.9881,24,False,free_text,text_embedding,-,,,,,
-isoform_conservation_frame_primate_canonical_frac_intact,conservation_frame,isoform,C,module_map,,False,float,0.9944,60,True,,numeric,linear,Canonical fraction of primates with intact ORF,,,,0.9189
-isoform_conservation_frame_primate_canonical_max_depth,conservation_frame,isoform,C,module_map,,False,float,0.9881,7,True,,numeric,linear,,,,,0.9144
-isoform_conservation_frame_primate_canonical_mean_pident,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,float,0.9944,3536,True,,numeric,linear,Canonical mean % identity to primate orthologs,,,,0.9189
-isoform_conservation_frame_primate_canonical_n_species_aligned,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,float,0.9944,9,True,,numeric,linear,Canonical primate species aligned,,,,0.9189
-isoform_conservation_frame_primate_canonical_n_species_intact_frame,conservation_frame,isoform,C,module_map,,False,float,0.9944,26,True,,numeric,linear,,,,,0.9189
-isoform_conservation_frame_primate_canonical_start_codon_conserved,conservation_frame,isoform,C,module_map,,False,float,0.9943,78,True,,numeric,linear,,,,,0.9189
-isoform_conservation_frame_primate_deepest_species,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,str,0.9867,23,False,free_text,text_embedding,-,Deepest primate with intact frame,,,,
-isoform_conservation_frame_primate_frac_intact,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,float,0.9944,123,True,,numeric,linear,Fraction of primates with intact ORF,,,,0.9189
-isoform_conservation_frame_primate_max_depth,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,float,0.9867,7,True,,numeric,linear,Max evolutionary depth (primates),,,,0.8671
-isoform_conservation_frame_primate_mean_pident,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,True,float,0.9944,5045,True,,numeric,linear,Mean % identity to primate orthologs,,,,0.9189
-isoform_conservation_frame_primate_n_species_aligned,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,float,0.9944,16,True,,numeric,linear,Primate species aligned,,,,0.9189
-isoform_conservation_frame_primate_n_species_intact_frame,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,float,0.9944,26,True,,numeric,linear,Primate species with intact frame,,,,0.9189
-isoform_conservation_frame_primate_start_codon_conserved,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,float,0.9938,145,True,,numeric,linear,Primates with conserved start codon,,,,0.9189
-isoform_conservation_frame_summary.canonical_region_nt,conservation_frame,isoform,C,module_map,,False,float,0.9944,1213,True,,numeric,log1p,,,,,0.9189
-isoform_conservation_frame_summary.canonical_status,conservation_frame,isoform,C,module_map,,False,str,0.9944,1,False,status_string,-,-,,,,,
-isoform_conservation_frame_summary.hal_path,conservation_frame,isoform,C,module_map,,False,str,0.9944,1,False,status_string,-,-,,,,,
-isoform_conservation_frame_summary.status,conservation_frame,isoform,C,module_map,,False,str,1.0,2,False,status_string,one_hot,-,,,,,
-isoform_conservation_frame_summary.tree_loaded,conservation_frame,isoform,C,module_map,,False,bool,0.9944,1,False,binary,binary_0_1,-,,,,,
-isoform_conservation_frame_summary.unique_region_nt,conservation_frame,isoform,C,module_map,,False,float,0.9944,1082,True,,numeric,log1p,,,,,0.9189
-isoform_conservation_frame_summary.unique_space,conservation_frame,isoform,C,module_map,,False,str,0.9944,2,False,status_string,one_hot,-,,,,,
+isoform_conservation_frame_mammalian_canonical_deepest_species,conservation_frame,isoform,C,module_map,,False,str,0.9879,20,False,free_text,text_embedding,-,,,,,
+isoform_conservation_frame_mammalian_canonical_frac_intact,conservation_frame,isoform,C,module_map,,False,float,1.0,78,True,,numeric,linear,Canonical fraction of mammals with intact ORF,,,,1.0
+isoform_conservation_frame_mammalian_canonical_max_depth,conservation_frame,isoform,C,module_map,,False,float,0.9879,7,True,,numeric,linear,,,,,0.991
+isoform_conservation_frame_mammalian_canonical_mean_pident,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,float,1.0,3576,True,,numeric,linear,Canonical mean % identity to mammalian orthologs,,,,1.0
+isoform_conservation_frame_mammalian_canonical_n_species_aligned,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,int,1.0,13,True,,numeric,linear,Canonical mammalian species aligned,,,,1.0
+isoform_conservation_frame_mammalian_canonical_n_species_intact_frame,conservation_frame,isoform,C,module_map,,False,int,1.0,21,True,,numeric,linear,,,,,1.0
+isoform_conservation_frame_mammalian_canonical_start_codon_conserved,conservation_frame,isoform,C,module_map,,False,float,0.9998,104,True,,numeric,linear,,,,,1.0
+isoform_conservation_frame_mammalian_deepest_species,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,str,0.9918,20,False,free_text,text_embedding,-,Deepest mammal with intact frame,,,,
+isoform_conservation_frame_mammalian_frac_intact,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,float,1.0,124,True,,numeric,linear,Fraction of mammals with intact ORF,,,,1.0
+isoform_conservation_frame_mammalian_max_depth,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,float,0.9918,7,True,,numeric,linear,Max evolutionary depth (mammals),,,,0.9887
+isoform_conservation_frame_mammalian_mean_pident,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,True,float,1.0,5733,True,,numeric,linear,Mean % identity to mammalian orthologs,,,,1.0
+isoform_conservation_frame_mammalian_n_species_aligned,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,int,1.0,19,True,,numeric,linear,Mammalian species aligned,,,,1.0
+isoform_conservation_frame_mammalian_n_species_intact_frame,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,int,1.0,21,True,,numeric,linear,Mammalian species with intact frame,,,,1.0
+isoform_conservation_frame_mammalian_start_codon_conserved,conservation_frame,isoform,C,evidence_cols,C2_mammalian_conservation,False,float,0.9991,129,True,,numeric,linear,Mammals with conserved start codon,,,,0.9955
+isoform_conservation_frame_primate_canonical_deepest_species,conservation_frame,isoform,C,module_map,,False,str,0.9933,24,False,free_text,text_embedding,-,,,,,
+isoform_conservation_frame_primate_canonical_frac_intact,conservation_frame,isoform,C,module_map,,False,float,1.0,60,True,,numeric,linear,Canonical fraction of primates with intact ORF,,,,1.0
+isoform_conservation_frame_primate_canonical_max_depth,conservation_frame,isoform,C,module_map,,False,float,0.9933,7,True,,numeric,linear,,,,,0.991
+isoform_conservation_frame_primate_canonical_mean_pident,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,float,1.0,3550,True,,numeric,linear,Canonical mean % identity to primate orthologs,,,,1.0
+isoform_conservation_frame_primate_canonical_n_species_aligned,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,int,1.0,9,True,,numeric,linear,Canonical primate species aligned,,,,1.0
+isoform_conservation_frame_primate_canonical_n_species_intact_frame,conservation_frame,isoform,C,module_map,,False,int,1.0,26,True,,numeric,linear,,,,,1.0
+isoform_conservation_frame_primate_canonical_start_codon_conserved,conservation_frame,isoform,C,module_map,,False,float,0.9998,78,True,,numeric,linear,,,,,1.0
+isoform_conservation_frame_primate_deepest_species,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,str,0.9954,23,False,free_text,text_embedding,-,Deepest primate with intact frame,,,,
+isoform_conservation_frame_primate_frac_intact,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,float,1.0,123,True,,numeric,linear,Fraction of primates with intact ORF,,,,1.0
+isoform_conservation_frame_primate_max_depth,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,float,0.9954,7,True,,numeric,linear,Max evolutionary depth (primates),,,,0.9932
+isoform_conservation_frame_primate_mean_pident,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,True,float,1.0,5078,True,,numeric,linear,Mean % identity to primate orthologs,,,,1.0
+isoform_conservation_frame_primate_n_species_aligned,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,int,1.0,16,True,,numeric,linear,Primate species aligned,,,,1.0
+isoform_conservation_frame_primate_n_species_intact_frame,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,int,1.0,26,True,,numeric,linear,Primate species with intact frame,,,,1.0
+isoform_conservation_frame_primate_start_codon_conserved,conservation_frame,isoform,C,evidence_cols,C1_primate_conservation,False,float,0.9994,145,True,,numeric,linear,Primates with conserved start codon,,,,1.0
+isoform_conservation_frame_summary.canonical_region_nt,conservation_frame,isoform,C,module_map,,False,int,1.0,1215,True,,numeric,log1p,,,,,1.0
+isoform_conservation_frame_summary.canonical_status,conservation_frame,isoform,C,module_map,,False,str,1.0,1,False,status_string,-,-,,,,,
+isoform_conservation_frame_summary.hal_path,conservation_frame,isoform,C,module_map,,False,str,1.0,1,False,status_string,-,-,,,,,
+isoform_conservation_frame_summary.status,conservation_frame,isoform,C,module_map,,False,str,1.0,1,False,status_string,-,-,,,,,
+isoform_conservation_frame_summary.tree_loaded,conservation_frame,isoform,C,module_map,,False,bool,1.0,1,False,binary,binary_0_1,-,,,,,
+isoform_conservation_frame_summary.unique_region_nt,conservation_frame,isoform,C,module_map,,False,int,1.0,1021,False,redundant,numeric,log1p,,,isoform_variant_intersection_unique_region_nt,,1.0
+isoform_conservation_frame_summary.unique_space,conservation_frame,isoform,C,module_map,,False,str,1.0,2,False,status_string,one_hot,-,,,,,
 canonical_expr_HeLa_cpm,expr,canonical,D,module_map,,False,float,0.5755,326,True,,numeric,log1p,,,,,0.3829
 canonical_expr_HeLa_initiation_efficiency,expr,canonical,D,evidence_cols,D2_initiation_efficiency,False,float,0.5707,1753,True,,numeric,linear,HeLa: canonical initiation efficiency,,,,0.3784
 canonical_expr_HeLa_p_value,expr,canonical,D,module_map,,False,float,0.5755,1972,True,,numeric,neglog10,,,,,0.3829
@@ -672,9 +672,9 @@ generef_function,generef,site,-,none,,False,str,0.9971,3279,False,free_text,text
 generef_keywords,generef,site,-,none,,False,str,0.946,2895,False,free_text,text_embedding,-,,,,,
 generef_subcellular_location,generef,site,-,none,,False,str,0.8836,908,False,free_text,text_embedding,-,,,,,
 generef_uniprot_id,generef,site,-,none,,False,str,0.9971,3353,False,identifier,-,-,,,,,
-isoform_scoring_criteria.C1_primate_conservation,scoring,isoform,-,none,,False,bool,0.9944,2,False,derived_from_features,-,-,,,,,
-isoform_scoring_criteria.C2_mammalian_conservation,scoring,isoform,-,none,,False,bool,0.9944,2,False,derived_from_features,-,-,,,,,
-isoform_scoring_criteria.C3_phylop_coding_selection,scoring,isoform,-,none,,False,bool,0.9944,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_criteria.C1_primate_conservation,scoring,isoform,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_criteria.C2_mammalian_conservation,scoring,isoform,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
+isoform_scoring_criteria.C3_phylop_coding_selection,scoring,isoform,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
 isoform_scoring_criteria.D1_multi_cell_line,scoring,isoform,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
 isoform_scoring_criteria.D2_initiation_efficiency,scoring,isoform,-,none,,False,bool,0.9933,2,False,derived_from_features,-,-,,,,,
 isoform_scoring_criteria.D3_mass_spec,scoring,isoform,-,none,,False,bool,0.942,2,False,derived_from_features,-,-,,,,,
@@ -688,15 +688,15 @@ isoform_scoring_criteria.P3_secondary_structure,scoring,isoform,-,none,,False,bo
 isoform_scoring_criteria.S1_domain_change,scoring,isoform,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
 isoform_scoring_criteria.S2_biophysics,scoring,isoform,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
 isoform_scoring_criteria.S3_sae,scoring,isoform,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
-isoform_scoring_existence_evaluable,scoring,isoform,-,none,,False,int,1.0,5,False,derived_from_features,-,linear,,,,,
+isoform_scoring_existence_evaluable,scoring,isoform,-,none,,False,int,1.0,3,False,derived_from_features,-,linear,,,,,
 isoform_scoring_existence_high_confidence,scoring,isoform,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
 isoform_scoring_existence_score,scoring,isoform,-,none,,False,int,1.0,7,False,derived_from_features,-,linear,,,,,
 isoform_scoring_functional_evaluable,scoring,isoform,-,none,,False,int,1.0,6,False,derived_from_features,-,linear,,,,,
 isoform_scoring_functional_high_confidence,scoring,isoform,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
 isoform_scoring_functional_score,scoring,isoform,-,none,,False,int,1.0,11,False,derived_from_features,-,linear,,,,,
-isoform_scoring_reasons.C1_primate_conservation,scoring,isoform,-,none,,False,str,1.0,876,False,derived_from_features,-,-,,,,,
-isoform_scoring_reasons.C2_mammalian_conservation,scoring,isoform,-,none,,False,str,1.0,1878,False,derived_from_features,-,-,,,,,
-isoform_scoring_reasons.C3_phylop_coding_selection,scoring,isoform,-,none,,False,str,1.0,5690,False,derived_from_features,-,-,,,,,
+isoform_scoring_reasons.C1_primate_conservation,scoring,isoform,-,none,,False,str,1.0,879,False,derived_from_features,-,-,,,,,
+isoform_scoring_reasons.C2_mammalian_conservation,scoring,isoform,-,none,,False,str,1.0,1873,False,derived_from_features,-,-,,,,,
+isoform_scoring_reasons.C3_phylop_coding_selection,scoring,isoform,-,none,,False,str,1.0,5682,False,derived_from_features,-,-,,,,,
 isoform_scoring_reasons.D1_multi_cell_line,scoring,isoform,-,none,,False,str,1.0,6,False,derived_from_features,-,-,,,,,
 isoform_scoring_reasons.D2_initiation_efficiency,scoring,isoform,-,none,,False,str,1.0,446,False,derived_from_features,-,-,,,,,
 isoform_scoring_reasons.D3_mass_spec,scoring,isoform,-,none,,False,str,1.0,9,False,derived_from_features,-,-,,,,,
@@ -712,7 +712,7 @@ isoform_scoring_reasons.S2_biophysics,scoring,isoform,-,none,,False,str,1.0,8,Fa
 isoform_scoring_reasons.S3_sae,scoring,isoform,-,none,,False,str,1.0,6458,False,derived_from_features,-,-,,,,,
 isoform_scoring_summary.existence_axis_complete,scoring,isoform,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
 isoform_scoring_summary.functional_axis_complete,scoring,isoform,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
-isoform_scoring_summary.n_criteria_evaluable,scoring,isoform,-,none,,False,int,1.0,9,False,derived_from_features,-,log1p,,,,,
+isoform_scoring_summary.n_criteria_evaluable,scoring,isoform,-,none,,False,int,1.0,6,False,derived_from_features,-,log1p,,,,,
 isoform_scoring_summary.n_criteria_total,scoring,isoform,-,none,,False,int,1.0,1,False,derived_from_features,-,log1p,,,,,
 aa_len,site,site,-,none,,False,int,1.0,1314,False,redundant,numeric,log1p,,,isoform_biophysics_length,,1.0
 canonical_kozak_context,site,site,-,none,,False,str,1.0,3355,False,free_text,text_embedding,-,,,,,
@@ -731,9 +731,9 @@ differential_sequence,site,site,-,none,,False,str,1.0,6266,False,free_text,text_
 gene_id,site,site,-,none,,False,str,1.0,3371,False,identifier,-,-,,,,,
 gene_name,site,site,-,none,,False,str,1.0,3371,False,identifier,-,-,,,,,
 isoform_len,site,site,-,none,,False,int,1.0,1314,False,redundant,numeric,log1p,,,isoform_biophysics_length,,1.0
-isoform_tags_citations.c1_primate_conservation,site,site,-,none,,False,float,0.9944,5045,False,derived_from_features,-,linear,,,,,
-isoform_tags_citations.c2_mammalian_conservation,site,site,-,none,,False,float,0.9944,5698,False,derived_from_features,-,linear,,,,,
-isoform_tags_citations.c3_phylop_coding_selection,site,site,-,none,,False,float,0.9944,6420,False,derived_from_features,-,linear,,,,,
+isoform_tags_citations.c1_primate_conservation,site,site,-,none,,False,float,1.0,5078,False,derived_from_features,-,linear,,,,,
+isoform_tags_citations.c2_mammalian_conservation,site,site,-,none,,False,float,1.0,5733,False,derived_from_features,-,linear,,,,,
+isoform_tags_citations.c3_phylop_coding_selection,site,site,-,none,,False,float,1.0,6459,False,derived_from_features,-,linear,,,,,
 isoform_tags_citations.cmp_biophysics_aa_diversity_ratio_hi,site,site,-,none,,False,float,0.9058,114,False,derived_from_features,-,linear,,,,,
 isoform_tags_citations.cmp_biophysics_aromaticity_ratio_hi,site,site,-,none,,False,float,0.8976,4181,False,derived_from_features,-,linear,,,,,
 isoform_tags_citations.cmp_biophysics_fraction_charged_ratio_hi,site,site,-,none,,False,float,0.9058,5479,False,derived_from_features,-,linear,,,,,
@@ -817,9 +817,9 @@ isoform_tags_labels.s2_biophysics,site,site,-,none,,False,str,1.0,1,False,derive
 isoform_tags_labels.s3_sae,site,site,-,none,,False,str,1.0,1,False,derived_from_features,-,-,,,,,
 isoform_tags_registry_sha256,site,site,-,none,,False,str,1.0,1,False,derived_from_features,-,-,,,,,
 isoform_tags_registry_version,site,site,-,none,,False,str,1.0,1,False,derived_from_features,-,-,,,,,
-isoform_tags_states.c1_primate_conservation,site,site,-,none,,False,bool,0.9944,2,False,derived_from_features,-,-,,,,,
-isoform_tags_states.c2_mammalian_conservation,site,site,-,none,,False,bool,0.9944,2,False,derived_from_features,-,-,,,,,
-isoform_tags_states.c3_phylop_coding_selection,site,site,-,none,,False,bool,0.9944,2,False,derived_from_features,-,-,,,,,
+isoform_tags_states.c1_primate_conservation,site,site,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
+isoform_tags_states.c2_mammalian_conservation,site,site,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
+isoform_tags_states.c3_phylop_coding_selection,site,site,-,none,,False,bool,1.0,2,False,derived_from_features,-,-,,,,,
 isoform_tags_states.cmp_biophysics_aa_diversity_ratio_hi,site,site,-,none,,False,bool,0.9058,2,False,derived_from_features,-,-,,,,,
 isoform_tags_states.cmp_biophysics_aromaticity_ratio_hi,site,site,-,none,,False,bool,0.8976,2,False,derived_from_features,-,-,,,,,
 isoform_tags_states.cmp_biophysics_fraction_charged_ratio_hi,site,site,-,none,,False,bool,0.9058,2,False,derived_from_features,-,-,,,,,
@@ -863,7 +863,7 @@ kozak_context,site,site,-,none,,False,str,1.0,6435,False,free_text,text_embeddin
 n_canonical_orf_exons,site,site,-,none,,False,int,1.0,72,True,,numeric,log1p,,canonical_orf_exons,,,1.0
 n_orf_exons,site,site,-,none,,False,int,1.0,64,True,,numeric,log1p,,orf_exons,,,1.0
 n_shared_genomic_intervals,site,site,-,none,,False,int,1.0,64,True,,numeric,log1p,,shared_genomic_intervals,,,1.0
-n_unique_genomic_intervals,site,site,-,none,,False,int,1.0,62,True,,numeric,log1p,,unique_genomic_intervals,,,1.0
+n_unique_genomic_intervals,site,site,-,none,,False,int,1.0,61,True,,numeric,log1p,,unique_genomic_intervals,,,1.0
 orf_exons,site,site,-,none,,False,list,1.0,64,False,list,count,-,,,,,
 orf_type,site,site,-,none,,False,str,1.0,6,False,categorical,one_hot,-,,,,,
 position,site,site,-,none,,False,int,1.0,6462,False,identifier,-,linear,,,,,
@@ -872,4 +872,4 @@ start_codon,site,site,-,none,,False,str,1.0,10,False,free_text,text_embedding,-,
 strand,site,site,-,none,,False,str,1.0,2,False,identifier,-,-,,,,,
 tis_id,site,site,-,none,,False,str,1.0,6462,False,identifier,-,-,,,,,
 transcript_id,site,site,-,none,,False,str,1.0,3636,False,identifier,-,-,,,,,
-unique_genomic_intervals,site,site,-,none,,False,list,1.0,62,False,list,count,-,,,,,
+unique_genomic_intervals,site,site,-,none,,False,list,1.0,61,False,list,count,-,,,,,
