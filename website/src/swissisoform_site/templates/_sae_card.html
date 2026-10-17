@@ -120,13 +120,12 @@
       </div>
 
       <div class="sae-part">
-        <h4 class="sae-part-h">Part 2 · Differential coordinates</h4>
+        <h4 class="sae-part-h">Part 2 · {{ region_name_cap }} coordinates</h4>
         <p class="sae-part-note">
           Features firing on just the
-          {% if sae.unique_region_space == 'isoform' %}isoform-unique (extension / alt-frame){% elif sae.unique_region_space == 'canonical' %}canonical-lost (truncated){% else %}differential{% endif %}
-          residues.
+          {{ region_name }} residues{% if sae.unique_region_space == 'canonical' %} (present only in the canonical){% endif %}.
         </p>
-        <h5 class="sae-tbl-h">Unique-region features
+        <h5 class="sae-tbl-h">{{ region_name_cap }} features
           <span class="variants-subnote">— {{ sae.n_unique_region_features }} distinct (prevalence ≥ 2)</span></h5>
         {{ sae_simple_table(sae.unique_region) }}
       </div>

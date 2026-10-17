@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from swissisoform.contract import ORFType, orf_type_from_ribotish
+from swissisoform.contract import ORFType, diff_region_rule, orf_type_from_ribotish
 
 __all__ = [
     "ORFType",
@@ -239,7 +239,7 @@ def is_separate_orf(site: TranslationInitiationSite) -> bool:
     sequence-match the canonical as an in-frame extension or truncation
     (``compute_diff_region`` checks); that case keeps a shared region.
     """
-    if site.orf_type in (ORFType.ANNOTATED, ORFType.EXTENDED, ORFType.TRUNCATED):
+    if not diff_region_rule(site.orf_type).whole_isoform:
         return False
     dr = site.diff_region
     if dr is not None:

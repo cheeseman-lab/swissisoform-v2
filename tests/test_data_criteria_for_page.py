@@ -137,9 +137,10 @@ def test_p3_modal_splits_unique_and_shared() -> None:
         _el("helix", 60, 75, "shared"),
     )))
     summary, listing = ce["sections"][0], ce["sections"][1]
-    assert summary["cmp_headers"] == ["Metric", "Differential", "Shared"]
-    # helices: 1 unique / 1 shared;  strands: 0 unique / 1 shared
-    assert [r["cols"] for r in summary["compare_rows"]][:2] == [["1", "1"], ["0", "1"]]
+    # House grammar: reference (shared) left, the stratum's region right, ratio last.
+    assert summary["cmp_headers"] == ["Metric", "Shared", "Extension", "Ratio"]
+    # helices: 1 shared / 1 unique;  strands: 1 shared / 0 unique
+    assert [r["cols"] for r in summary["compare_rows"]][:2] == [["1", "1", "1×"], ["1", "0", "0×"]]
     assert [r["label"] for r in summary["compare_rows"]][:2] == ["Alpha helices", "Beta strands"]
     # One row per element, padded to the longer side.
     assert len(listing["pairs"]) == 2
@@ -150,13 +151,14 @@ def test_p3_modal_splits_unique_and_shared() -> None:
 def test_p3_modal_relabels_the_unique_column_for_truncations() -> None:
     """On a truncation the region exists only in the canonical protein, so
     calling that column "isoform-unique" would name the one protein lacking it.
+    Both tables name it the way the stratum does.
     """
     ce = _p3(_Iso(_sse_raw(_el("helix", 13, 31, "unique")),
                   orf_type="truncated", diff_space="canonical"))
-    # The compare table follows the house Differential|Shared convention; the
-    # ORF-aware wording is on the paired listing.
-    assert ce["sections"][0]["cmp_headers"][1] == "Differential"
-    assert ce["sections"][1]["pair_headers"][0] == "Removed (canonical)"
+    assert ce["sections"][0]["cmp_headers"][2] == "Lost region"
+    assert ce["sections"][1]["pair_headers"][0] == "Lost region"
+    uorf = _p3(_Iso(_sse_raw(_el("helix", 13, 31, "unique")), orf_type="uorf"))
+    assert uorf["sections"][1]["pair_headers"][0] == "ORF"
 
 
 def test_p3_modal_counts_a_boundary_spanning_element_for_the_isoform() -> None:
@@ -166,7 +168,7 @@ def test_p3_modal_counts_a_boundary_spanning_element_for_the_isoform() -> None:
     """
     ce = _p3(_Iso(_sse_raw(_el("helix", 13, 35, "spans"))))
     summary, listing = ce["sections"][0], ce["sections"][1]
-    assert [r["cols"] for r in summary["compare_rows"]][0] == ["1", "0"]  # alpha helices
+    assert [r["cols"] for r in summary["compare_rows"]][0] == ["0", "1", "—"]  # alpha helices
     cell = listing["pairs"][0]["left"]
     assert cell["span"] == "13–35"
     assert "note" not in cell
@@ -216,7 +218,7 @@ def test_p3_modal_moves_sub_threshold_elements_to_their_own_section() -> None:
     )))
     summary, good, weak = ce["sections"]
     # Summary counts the qualifying set only: 0 helices / 1 strand on the unique side.
-    assert [r["cols"] for r in summary["compare_rows"]][:2] == [["0", "0"], ["1", "0"]]
+    assert [r["cols"] for r in summary["compare_rows"]][:2] == [["0", "0", "—"], ["0", "1", "—"]]
     assert good["title"] == "Elements and coordinates"
     assert good["pairs"][0]["left"]["span"] == "7–12"
     assert weak["title"] == "Below threshold"
@@ -227,6 +229,164 @@ def test_p3_modal_moves_sub_threshold_elements_to_their_own_section() -> None:
 def test_p3_modal_omits_the_below_threshold_section_when_empty() -> None:
     ce = _p3(_Iso(_sse_raw(_el("helix", 16, 32, "unique"))))
     assert [s["title"] for s in ce["sections"]] == [
-        "Secondary structure · differential vs shared region",
+        "Secondary structure · extension vs shared",
         "Elements and coordinates",
     ]
+
+
+# ── M1 highlights follow what the scorer read (PR #56 review) ────────────
+
+
+def _m1_rows(raw):
+    from swissisoform_site.data import criterion_evidence_for
+
+    iso = _Iso(raw)
+    iso.criteria = {"M1_pathogenic_variant_enrichment": True}
+    secs = criterion_evidence_for(iso)["M1_pathogenic_variant_enrichment"]["sections"]
+    return {r["label"]: r for s in secs for r in s.get("compare_rows") or []}
+
+
+def test_m1_gnomad_row_not_hot_on_a_site_computed_depletion() -> None:
+    # No module depletion ratio: M1 fired on constraint alone, so the density the
+    # page works out from the counts (0.4×, under the cutoff) is context only.
+    rows = _m1_rows({
+        "isoform_variant_intersection_n_gnomad_in_unique_region": 2,
+        "isoform_variant_intersection_n_gnomad_in_shared_region": 10,
+        "isoform_variant_intersection_unique_region_nt": 100,
+        "isoform_variant_intersection_shared_region_nt": 200,
+        "isoform_plm_vep_status": "ok",
+        "isoform_plm_vep_constraint_delta": 0.2,
+    })
+    assert rows["gnomAD variants"]["cols"][2] == "0.4×"
+    assert rows["gnomAD variants"]["hot"] is False
+    assert rows["Constraint Δ"]["hot"] is True
+
+
+def test_m1_constraint_row_not_hot_unless_plm_vep_ok() -> None:
+    rows = _m1_rows({
+        "isoform_variant_intersection_n_gnomad_in_unique_region": 2,
+        "isoform_variant_intersection_n_gnomad_in_shared_region": 10,
+        "isoform_variant_intersection_gnomad_depletion_ratio": 0.4,
+        "isoform_plm_vep_status": "no_cache",
+        "isoform_plm_vep_constraint_delta": 0.1,
+    })
+    assert rows["gnomAD variants"]["hot"] is True
+    assert rows["Constraint Δ"]["hot"] is False
+
+
+def test_fmt_ratio_never_reads_as_scientific_notation() -> None:
+    from swissisoform_site.data import _fmt_ratio
+
+    assert _fmt_ratio(0.42) == "0.42×"
+    assert _fmt_ratio(3.14) == "3.1×"
+    assert _fmt_ratio(162.5) == "162×"
+    assert _fmt_ratio(12_000.0) == "12,000×"
+    assert _fmt_ratio(0.0) == "0×"
+    assert _fmt_ratio(1.2e-05) == "<0.01×"
+    assert _fmt_ratio(None) == "—"
+    assert _fmt_ratio(float("inf")) == "—"
+
+
+# ── PR #56 second review ──────────────────────────────────────────────────
+
+
+def test_s2_headline_reads_the_deltas_s2_scores() -> None:
+    """Headline and highlighted lever agree: both use |isoform − canonical| at S2's cutoff."""
+    from swissisoform_site.data import biophysics_card_for_isoform
+
+    iso = _Iso({
+        "canonical_biophysics_gravy": -0.40, "isoform_biophysics_gravy": -0.05,
+        "cmp_biophysics_gravy_delta": 0.35,  # ≥ s2_gravy_delta_min (0.3): S2 fires
+        # The region and the shared core barely differ — the old headline's basis.
+        "cmp_biophysics_gravy_unique": -0.10, "cmp_biophysics_gravy_shared": -0.05,
+    })
+    iso.criteria = {"S2_biophysics": True}
+    card = biophysics_card_for_isoform(iso)
+    assert card["headline"] == "more hydrophobic (+0.35)"
+    lever = card["evidence"]["sections"][0]["compare_rows"][0]
+    assert lever["label"] == "Hydropathy (GRAVY)" and lever["hot"] is True
+
+
+def test_c1_table_never_calls_a_lost_region_the_isoform() -> None:
+    from swissisoform_site.data import criterion_evidence_for
+
+    iso = _Iso({
+        "isoform_conservation_frame_primate_canonical_mean_pident": 0.80,
+        "isoform_conservation_frame_primate_mean_pident": 0.95,
+    }, orf_type="truncated", diff_space="canonical")
+    sec = criterion_evidence_for(iso)["C1_primate_conservation"]["sections"][0]
+    assert sec["cmp_headers"][1:3] == ["Canonical ORF", "Lost region"]
+    assert "lost region" in sec["subtitle"]
+
+
+# ── PR #56 third review: highlights read what each scorer reads ───────────
+
+
+def _rows_for(raw, cid, fired=True, **iso_kw):
+    from swissisoform_site.data import criterion_evidence_for
+
+    iso = _Iso(raw, **iso_kw)
+    iso.criteria = {cid: fired}
+    return {r["label"]: r for s in criterion_evidence_for(iso)[cid]["sections"]
+            for r in s.get("compare_rows") or []}
+
+
+def test_d3_counts_only_validated_is_true() -> None:
+    hits = [
+        {"peptide": "AAK", "unique_to_isoform": True, "validated": "false"},  # truthy, not True
+        {"peptide": "CCK", "unique_to_isoform": True, "validated": True},
+    ]
+    rows = _rows_for({"isoform_massspec_hits": hits}, "D3_mass_spec")
+    assert rows["Validated isoform-unique peptides"]["cols"][1] == "1"
+    assert rows["Validated isoform-unique peptides"]["hot"] is True
+
+
+def test_l1_nan_change_flag_is_not_a_change() -> None:
+    rows = _rows_for({
+        "cmp_localization_deeploc_signals_canonical": "SP", "cmp_localization_deeploc_signals_isoform": "-",
+        "cmp_localization_deeploc_signals_changed": True,
+        "cmp_localization_deeploc_membrane_canonical": "M", "cmp_localization_deeploc_membrane_isoform": "M",
+        "cmp_localization_deeploc_membrane_changed": float("nan"),  # not evaluated
+    }, "L1_localization_change")
+    assert rows["Sorting signals"]["hot"] is True
+    assert rows["Membrane"]["hot"] is False
+
+
+def test_c3_ratio_is_the_modules_enrichment() -> None:
+    rows = _rows_for({
+        "isoform_conservation_phylop_unique_region_mean": 1.5,
+        "isoform_conservation_phylop_shared_region_mean": 2.0,
+        "isoform_conservation_phylop_enrichment": 0.7,  # the module's, not 1.5 / 2.0
+    }, "C3_phylop_coding_selection", fired=False)
+    assert rows["phyloP mean"]["cols"][2] == "0.7×"
+
+
+def test_c3_ratio_is_blank_where_a_negative_mean_flips_it() -> None:
+    # -0.5 / -1.0 = 0.5× would read as "half as conserved" for an accelerated region.
+    rows = _rows_for({
+        "isoform_conservation_phylop_unique_region_mean": -0.5,
+        "isoform_conservation_phylop_shared_region_mean": -1.0,
+        "isoform_conservation_phylop_enrichment": 0.5,
+    }, "C3_phylop_coding_selection", fired=False)
+    assert rows["phyloP mean"]["cols"][2] == "—"
+
+
+def test_d1_counts_a_line_with_an_expression_record() -> None:
+    rows = _rows_for({
+        "expr_HeLa_raw_count": 12, "expr_HeLa_cpm": 3.0,  # called, no p-value stored
+        "canonical_expr_K562_cpm": 5.0,  # K562: canonical only, not called
+    }, "D1_multi_cell_line")
+    assert rows["HeLa"]["hot"] is True
+    assert rows["K562"]["hot"] is False
+
+
+def test_separate_orf_with_a_shared_region_is_not_called_orf() -> None:
+    """A uoORF that kept a shared region (in-frame match) gets the generic noun."""
+    from types import SimpleNamespace
+
+    from swissisoform_site.data import _region_noun, has_shared_region
+
+    whole = SimpleNamespace(orf_type="uoorf", diff_space="isoform", diff_end=60, isoform_len=60)
+    partial = SimpleNamespace(orf_type="uoorf", diff_space="isoform", diff_end=20, isoform_len=60)
+    assert not has_shared_region(whole) and _region_noun(whole) == "ORF"
+    assert has_shared_region(partial) and _region_noun(partial) == "differential region"

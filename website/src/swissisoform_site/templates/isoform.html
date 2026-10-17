@@ -104,7 +104,7 @@
        Characteristics), replacing the old E/F axis. Each modal hosts its own
        differential-region evidence. -->
   <section class="evidence-tiles">
-    <h2>Evidence <span class="evidence-sub">— click any tile for the differential-region detail</span></h2>
+    <h2>Evidence <span class="evidence-sub">— click any tile for the {{ region_name }} detail</span></h2>
     {% for group in card_groups %}
       {% set cat = category_llms.get(group.name) %}
       {% set flag = category_flags[group.letter] %}
