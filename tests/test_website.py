@@ -333,17 +333,21 @@ def test_isoform_page_renders_reasoning_and_tags_without_verdict(client, monkeyp
     Tiles show the reasoning, the fired tags and the criterion-derived flag.
     """
     import pandas as pd
-    from swissisoform_site import app as app_mod
-    from swissisoform_site.data import CARD_GROUPS
+    from swissisoform_site.data import CARD_GROUPS, load_all
     from swissisoform_site.data import tis_slug as make_slug
 
     reads = {
         g["name"]: {"reasoning": f"Read for {g['name']}.", "tags_fired": ["frame_intact"]}
         for g in CARD_GROUPS
     }
-    monkeypatch.setattr(app_mod, "category_verdicts_for_isoform", lambda **_: reads)
     df = pd.read_parquet(WEBSITE_DATA / "all_paired.parquet", columns=["gene_name", "tis_id"])
     row = df.iloc[0]
+    # The route reads the Isoform's own reads (one source for index and isoform
+    # pages), so the reads go on the loaded Isoform, and its cached flags are
+    # dropped so they recompute from them.
+    iso = next(i for i in load_all()[row["gene_name"]].isoforms if i.tis_id == row["tis_id"])
+    monkeypatch.setattr(iso, "category_verdicts", reads)
+    monkeypatch.delitem(iso.__dict__, "category_flags", raising=False)
     r = client.get(f"/genes/{row['gene_name']}/isoforms/{make_slug(row['tis_id'])}")
     assert r.status_code == 200
     body = r.data.decode()

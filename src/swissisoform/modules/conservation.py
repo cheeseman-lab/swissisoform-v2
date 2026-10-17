@@ -29,12 +29,10 @@ from typing import Any
 
 from swissisoform.config import PipelineConfig
 from swissisoform.coords import (
-    interval_difference,
-    interval_intersection,
     interval_length,
     normalize_chrom,
 )
-from swissisoform.models import TranslationInitiationSite
+from swissisoform.models import TranslationInitiationSite, is_separate_orf, region_split
 
 logger = logging.getLogger(__name__)
 
@@ -256,23 +254,17 @@ class ConservationModule:
         from swissisoform.models import ORFType
         region_status: str
         unique_space: str
-        if not site.orf_exons or not site.canonical_orf_exons:
+        separate_orf = is_separate_orf(site)
+        # A separate ORF's split is its whole ORF, so it needs no canonical skeleton.
+        if not site.orf_exons or (not site.canonical_orf_exons and not separate_orf):
             unique_intervals: list[tuple[int, int]] = []
             shared_intervals: list[tuple[int, int]] = []
             region_status = "no_skeleton"
             unique_space = "none"
         else:
-            if site.orf_type == ORFType.TRUNCATED:
-                unique_intervals = interval_difference(
-                    site.canonical_orf_exons, site.orf_exons
-                )
-                unique_space = "canonical"
-            else:
-                unique_intervals = interval_difference(
-                    site.orf_exons, site.canonical_orf_exons
-                )
-                unique_space = "isoform"
-            shared_intervals = interval_intersection(site.orf_exons, site.canonical_orf_exons)
+            is_truncation = site.orf_type == ORFType.TRUNCATED
+            unique_intervals, shared_intervals = region_split(site)
+            unique_space = "canonical" if is_truncation else "isoform"
             region_status = "ok"
 
         phylop_unique = self._mean_over_intervals(self._phylop_bw, chrom, unique_intervals)

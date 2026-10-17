@@ -147,3 +147,29 @@ class TestStartOffsetNt:
     def test_start_outside_the_transcript_returns_none(self):
         # A skeleton/ORF mismatch. None so callers fall back rather than guess.
         assert start_offset_nt(self.TX, "+", [(1000, 1030)], [(150, 200)]) is None
+
+
+class TestUniqueSharedIntervalsSeparateOrf:
+    """A separate ORF reads in its own frame: all of it is unique, none is shared."""
+
+    def test_overlap_with_canonical_cds_is_still_unique(self):
+        from swissisoform.coords import unique_shared_intervals
+
+        orf, canonical = [(1010, 1020)], [(1000, 1030)]
+        assert unique_shared_intervals(False, orf, canonical, separate_orf=False) == (
+            [],
+            [(1010, 1020)],
+        )
+        assert unique_shared_intervals(False, orf, canonical, separate_orf=True) == (
+            [(1010, 1020)],
+            [],
+        )
+
+    def test_the_flag_has_no_default(self):
+        """A caller that forgets the flag must fail, not silently get the in-frame split."""
+        import pytest
+
+        from swissisoform.coords import unique_shared_intervals
+
+        with pytest.raises(TypeError):
+            unique_shared_intervals(False, [(1010, 1020)], [(1000, 1030)])

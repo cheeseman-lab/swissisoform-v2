@@ -47,6 +47,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from swissisoform import metrics
+from swissisoform.io.parquet import flat_files
 from swissisoform.site.evidence import CRITERIA, CRITERIA_METRIC_LABELS
 
 HERE = Path(__file__).resolve().parent
@@ -176,9 +177,6 @@ SCORED_LEVERS: dict[str, list[str]] = {
     ],
     "M1_pathogenic_variant_enrichment": [
         "isoform_plm_vep_constraint_delta",
-        # The full_catalog run predates the rename; carry both so a re-run
-        # doesn't silently drop the dimension.
-        "isoform_plm_vep_constraint_enrichment",
         "isoform_variant_intersection_gnomad_depletion_ratio",
     ],
     "M2_clinical_variant_overlap": ["isoform_variant_intersection_disease_enrichment_ratio"],
@@ -244,9 +242,10 @@ STATUS_PATTERNS = (
     r"backend$",
 )
 
-# Scoring roll-ups are computed FROM these features; as dimensions they would
-# double-count and leak the label. Kept in the catalog as stratifiers.
-DERIVED_PATTERNS = (r"^isoform_scoring_",)
+# Scoring roll-ups and the tag layer are computed FROM these features; as
+# dimensions they would double-count and leak the label (a tag's citation is the
+# very number its test cut on). Kept in the catalog as stratifiers.
+DERIVED_PATTERNS = (r"^isoform_scoring_", r"^isoform_tags_")
 
 # ---------------------------------------------------------------------------
 # Schema flattening
@@ -333,27 +332,27 @@ def resolve_parquet(explicit: str | None) -> list[Path]:
 
 
 def read_flat(files: list[Path]) -> tuple[pd.DataFrame, dict[str, pa.DataType]]:
-    """Read the non-list columns, fully flattened, plus the leaf type map.
+    """Read the non-list columns, structs and maps flattened, plus the leaf type map.
 
     List columns are handled separately (:func:`list_lengths`) so the big hit
     lists are never materialised into pandas.
     """
-    schema = pq.ParquetFile(files[0]).schema_arrow
-    types = {n: t for fld in schema for n, t in leaves(fld)}
-    non_list = [
-        fld.name
-        for fld in schema
-        if not (pa.types.is_list(fld.type) or pa.types.is_large_list(fld.type))
-    ]
-
-    frames = []
+    # Leaf types from every file's schema, not files[0]'s alone: shards can
+    # differ (a column one lacks, a pre-map struct-typed summary).
+    types: dict[str, pa.DataType] = {}
     for path in files:
-        present = {f.name for f in pq.ParquetFile(path).schema_arrow}
-        table = pq.read_table(path, columns=[c for c in non_list if c in present])
-        while any(pa.types.is_struct(f.type) for f in table.schema):
-            table = table.flatten()
-        frames.append(table.to_pandas())
-    return pd.concat(frames, ignore_index=True), types
+        for fld in pq.read_schema(path):
+            for name, dtype in leaves(fld):
+                types.setdefault(name, dtype)
+    df, map_types = flat_files(files)
+    # A map becomes one column per key, each typed as the map's values; the map
+    # itself is no longer a column, so it is no longer a feature either.
+    for name, item in map_types.items():
+        types.pop(name, None)
+        for col in df.columns:
+            if col.startswith(f"{name}."):
+                types[col] = item
+    return df, types
 
 
 def list_lengths(files: list[Path], schema: pa.Schema) -> dict[str, pd.Series]:

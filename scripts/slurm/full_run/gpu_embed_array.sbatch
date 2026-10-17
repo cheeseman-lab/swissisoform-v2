@@ -29,7 +29,14 @@ eval "$(conda shell.bash hook)"
 # fair-esm stack from before the ESM-C migration and cannot run this workload.
 # The SAE encode below rides the same env, so require its module too unless the
 # encode is skipped. Fails with a pointer to the setup job if nothing qualifies.
-source "$(dirname "$(readlink -f "$0")")/activate_gpu_env.sh"
+# Under Slurm $0 is the spooled copy in /var/spool, not this file, so its
+# directory has no helper. Resolve the repo root from the submit directory
+# instead (every path below is repo-relative), and say so plainly when the job
+# was submitted from outside the checkout.
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+HELPER=scripts/slurm/full_run/activate_gpu_env.sh
+[[ -f "$HELPER" ]] || { echo "ERROR: $HELPER not found under $PWD — submit from inside the swissisoform-v2 checkout" >&2; exit 1; }
+source "$HELPER"
 EMBED_MODULES=(transformers.models.esmc.modeling_esmc)
 [[ "${SWISSISO_SKIP_SAE:-0}" == "1" ]] || EMBED_MODULES+=(transformers.models.esmc.modeling_esmc_sae)
 activate_gpu_env "embed" "swissisoform-v2-plm,swissisoform-v2-fold,swissisoform-v2" \

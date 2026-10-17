@@ -52,6 +52,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 from swissisoform import distributions as dist_mod
+from swissisoform.io.parquet import schema_paths
 from swissisoform.setup._common import ROOT, rel_to_root, resolve_parquet, sha256_file
 from swissisoform.tags import candidates as cand_mod
 from swissisoform.tags import derived as derived_mod
@@ -93,13 +94,15 @@ class TagBuildError(RuntimeError):
 
 
 def run_columns(run: str | None, parquet: Path | None) -> tuple[set[str], str]:
-    """Column names of a run, for the boolean stream's availability check.
+    """Names a run exposes, for the availability and metric-resolve checks.
 
-    Only the schema is read: the builder needs to know which boolean columns exist,
-    not what is in them, and the genome-wide parquet is ~2 GB.
+    Only the schema is read: the builder needs to know which columns exist, not
+    what is in them, and the genome-wide parquet is ~2 GB. Top-level columns plus
+    every struct leaf and ``<map>.*`` (``io.parquet.schema_paths``), so a dotted
+    metric is checked against a real leaf rather than just its first segment.
     """
     files, label = resolve_parquet(run, parquet)
-    return set(pq.read_schema(files[0]).names), label
+    return schema_paths(pq.read_schema(files[0])), label
 
 
 def accepted_ids(candidates_csv: Path) -> tuple[dict[str, str], dict[str, int]]:

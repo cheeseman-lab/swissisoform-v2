@@ -263,7 +263,7 @@ def main(argv: list[str] | None = None) -> int:
     import argparse
     import sys
 
-    from swissisoform.plm.cli import _read_fasta
+    from swissisoform.io.canonical import read_fasta
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("fasta", type=Path, nargs="?",
@@ -289,7 +289,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.fasta.exists():
         print(f"FASTA not found: {args.fasta}", file=sys.stderr)
         return 2
-    seqs = _read_fasta(args.fasta)
+    seqs = read_fasta(args.fasta)
     if not seqs:
         print(f"No sequences in {args.fasta}", file=sys.stderr)
         return 2

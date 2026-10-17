@@ -92,6 +92,61 @@ def shard_status(shard_dir: Path, shard_list: Path) -> tuple[str, pd.DataFrame |
     return status, df
 
 
+def write_merged(df: pd.DataFrame, target: Path, *, pin_tags: bool = True) -> None:
+    """Write the merged frame to *target*, pinned to the types the shards were written with.
+
+    Not a bare ``df.to_parquet``: the shards pin the clinical summaries to map
+    types and the tag structs to the registry's fields (``paired_schema``), and
+    pandas reads a map back as ``(key, value)`` tuples that inference cannot type
+    ("Expected bytes, got a 'int' object" on ``canonical_clinical_summary`` killed
+    the first full_catalog_20261009 merge). ``paired_table`` converts the pinned
+    columns straight to their declared types and infers the rest from the
+    concatenated frame, which reconciles the shards' per-frame types (an int
+    column that is float in a shard with a NaN, an all-null column) — in one
+    conversion, written atomically.
+
+    The tag pins come from the registry build on disk, so the caller must first
+    check that it is the build the shards were tagged with (:func:`tag_drift`):
+    against a different build, Arrow silently drops tag fields and null-fills
+    others. With *pin_tags* off — shards that predate the hash column, so the
+    check cannot run — the tag structs are inferred from the shards themselves,
+    which keeps exactly the fields they were tagged with.
+    """
+    from swissisoform.io.parquet import paired_table, write_table_atomic
+    from swissisoform.modules.tags import schema_overrides
+
+    write_table_atomic(paired_table(df, schema_overrides(df) if pin_tags else None), target)
+
+
+def registry_sha(version: str) -> str | None:
+    """Content hash of the registry *version* on disk, or None when it is absent."""
+    from swissisoform.tags.registry import TagRegistryError, load
+
+    try:
+        return load(version).sha256
+    except TagRegistryError:
+        return None
+
+
+def tag_drift(version: str, sha: str) -> str | None:
+    """Why the shards' tag build differs from the one on disk, or None if it matches.
+
+    The merged parquet's tag structs are typed from the registry on disk. If that
+    version was rebuilt in place after the shards were tagged, its fields differ
+    from the shards' and pinning to it would drop and null-fill tags. A registry
+    absent from disk is not drift: nothing is pinned, so the structs are inferred.
+    """
+    on_disk = registry_sha(version)
+    if on_disk is None or on_disk == sha:
+        return None
+    return (
+        f"shards were tagged with registry {version} build {sha[:12]}, but {version} "
+        f"on disk is build {on_disk[:12]}: it was rebuilt after the campaign was "
+        "tagged, and writing against it would drop and null-fill tag fields. Re-fire "
+        "the shards under the current build, or restore the build they were tagged with."
+    )
+
+
 def gpu_hole_fractions(df: pd.DataFrame) -> dict[str, float | str]:
     """Fraction of rows whose GPU-fed modules reported a missing precompute."""
     out: dict[str, float | str] = {}
@@ -241,6 +296,15 @@ def merge_campaign(
     # campaign still reports exactly one version. Those null rows read
     # downstream as "every tag not-evaluable", which is the same lie by a
     # different route, so an untagged shard is fatal too.
+    # Pin the tag structs to the registry on disk only when its build can be
+    # checked against the shards' (the sha column); otherwise infer them.
+    pin_tags = TAG_SHA256_COLUMN in df.columns
+    if TAG_VERSION_COLUMN in df.columns and not pin_tags:
+        print(
+            "  note: shards carry no tag-registry content hash, so the build cannot be "
+            "checked against the registry on disk; tag structs are inferred from the "
+            "shards instead of pinned to it."
+        )
     if TAG_VERSION_COLUMN in df.columns:
         present = df[TAG_VERSION_COLUMN]
         versions = sorted(set(present.dropna().astype(str)))
@@ -266,6 +330,11 @@ def merge_campaign(
                     "against one build."
                 )
                 return 1, report
+            if versions and len(hashes) == 1:
+                drift = tag_drift(versions[0], hashes[0])
+                if drift:
+                    print(f"ERROR: {drift}")
+                    return 1, report
         if n_untagged:
             print(
                 f"ERROR: {n_untagged} of {len(df)} rows carry no tag-registry version "
@@ -276,9 +345,10 @@ def merge_campaign(
             )
             return 1, report
 
+    del frames  # concatenated into df; free the per-shard copies before writing
     if complete or allow_partial:
         target = out / "all_paired.parquet"
-        df.to_parquet(target)
+        write_merged(df, target, pin_tags=pin_tags)
         (out / "all_paired.partial.parquet").unlink(missing_ok=True)  # superseded
         n_gene_files = 0
         for d in ok_dirs:
@@ -293,7 +363,7 @@ def merge_campaign(
         return 0, report
 
     target = out / "all_paired.partial.parquet"
-    df.to_parquet(target)
+    write_merged(df, target, pin_tags=pin_tags)
     print(
         f"INCOMPLETE: wrote {target} ({len(df)} rows) and left all_paired.parquet untouched.\n"
         "Refill the shards above and re-run this merge, or pass --allow-partial to publish as-is."

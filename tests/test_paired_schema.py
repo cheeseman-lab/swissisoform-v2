@@ -110,3 +110,26 @@ def test_frames_without_clinical_columns_are_untouched() -> None:
     df = pd.DataFrame({"gene_name": ["A"], "isoform_plm_vep_status": ["ok"]})
     schema = paired_schema(df)
     assert schema.names == ["gene_name", "isoform_plm_vep_status"]
+
+
+
+def test_paired_table_matches_paired_schema_in_one_conversion():
+    """The merge builds its table once; it must carry the schema the shards use."""
+    from swissisoform.io.parquet import paired_table
+
+    df = frame(GNOMAD_SUMMARY, EMPTY_SUMMARY, COSMIC_SUMMARY)
+    assert paired_table(df).schema.equals(paired_schema(df), check_metadata=False)
+    assert paired_table(df).column_names == list(df.columns)  # pinned columns stay in place
+
+
+def test_paired_table_takes_maps_read_back_as_pairs(tmp_path: Path) -> None:
+    """A merge re-reads shards through pandas, which hands maps back as tuple lists."""
+    from swissisoform.io.parquet import paired_table
+
+    path = tmp_path / "shard.parquet"
+    df = frame(GNOMAD_SUMMARY, COSMIC_SUMMARY)
+    _write_parquet_atomic(df, path, paired_schema(df))
+    back = pd.read_parquet(path)
+    table = paired_table(back)
+    by_source = table.column("canonical_clinical_summary").to_pylist()[1]["by_source"]
+    assert dict(by_source) == {"COSMIC": 1}
