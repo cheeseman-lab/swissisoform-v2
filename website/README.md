@@ -13,11 +13,12 @@ at `/healthz`, data baked into the image.
 
 | Route | Purpose |
 |-------|---------|
-| `GET /` | 13-gene grid (Existence / Functional bars per gene) |
+| `GET /` | Gene table: one row per gene, expandable to its isoforms with CDLMPS lineups and fired-tag chips; filters by name, keyword, tag, category, ORF type |
 | `GET /about` | Methodology / evidence-criteria explainer |
 | `GET /genes/<gene>/isoforms/<slug>` | Per-isoform page (dual evidence axis, metrics, variants, 3Dmol.js viewer, LLM) |
 | `GET /genes/<gene>` | Deprecated — 302-redirects to the gene's first isoform page |
 | `GET /api/data.json` | Full parquet + LLM dump as JSON |
+| `GET /api/landing.json` | The landing table's compact payload (column-projected; gzip + ETag) |
 | `GET /structures/<file>` | Static `.cif` from `data/structures/` |
 | `GET /structure-colors/<file>` | Per-residue `.colors.json` from `data/structures/colors/` |
 | `GET /healthz` | `{"ok": true}` — Railway healthcheck |
@@ -35,6 +36,7 @@ The app reads everything from a single directory whose path is set by the
 ├── variants_long.parquet         # required — per-variant rows for the clinical panel
 ├── transcript_skeletons.parquet  # required — exon skeletons for the transcript diagram
 ├── orf_index.parquet             # required for /api/variants/scan — whole-catalogue ORF coords
+├── tag_registry.json             # optional — tag categories for the landing chips (prepare_deploy.sh)
 ├── structures/*.cif              # optional — baked AlphaFold/Boltz models
 ├── structures/colors/*.colors.json  # optional — per-residue 3Dmol colouring
 └── llm/<slug>/                   # optional — per-isoform LLM interpretation
@@ -75,7 +77,7 @@ flask --app swissisoform_site.app run --port 5050
 
 Then hit:
 
-- http://127.0.0.1:5050/         → the 13-gene grid
+- http://127.0.0.1:5050/         → the gene table
 - http://127.0.0.1:5050/genes/TRNT1  → redirects to TRNT1's first isoform page
 
 ## Docker

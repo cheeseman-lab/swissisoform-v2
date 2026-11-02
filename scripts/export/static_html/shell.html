@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+:root { --bg: #f8fafc; --panel: #fff; --ink: #0f172a; --muted: #64748b; --line: #e2e8f0; --sel: #e0e7ff; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f172a; --panel: #111827; --ink: #e5e7eb; --muted: #94a3b8; --line: #1f2937; --sel: #1e293b;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f172a; --panel: #111827; --ink: #e5e7eb; --muted: #94a3b8; --line: #1f2937; --sel: #1e293b;
+}
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, sans-serif; }
+.wrap { display: flex; height: 100vh; }
+nav { width: 290px; flex: none; overflow: auto; border-right: 1px solid var(--line); background: var(--panel); padding: 12px 8px; }
+nav h1 { font-size: 15px; margin: 4px 8px; }
+nav p { color: var(--muted); margin: 0 8px 10px; font-size: 12px; }
+nav a { display: block; padding: 5px 8px; border-radius: 6px; color: inherit; text-decoration: none; }
+nav a.iso { padding-left: 20px; font-size: 13px; color: var(--muted); }
+nav a.on { background: var(--sel); color: var(--ink); }
+main { flex: 1; min-width: 0; }
+iframe { border: 0; width: 100%; height: 100%; background: #fff; }
+@media (max-width: 760px) {
+  .wrap { flex-direction: column; }
+  nav { width: auto; max-height: 38vh; border-right: 0; border-bottom: 1px solid var(--line); }
+}
+</style></head>
+<body><div class="wrap">
+<nav><h1>__TITLE__</h1><p>__NOTE__</p>
+__NAV__
+</nav>
+<main><iframe id="view" title="page"></iframe></main></div>
+__VENDOR__
+<script id="pages" type="application/json">__STORE__</script>
+<script>
+// Pages are gzip+base64; inflate one on demand and point its library
+// placeholders at blob URLs of the libraries embedded once above.
+var P = JSON.parse(document.getElementById("pages").textContent);
+var frame = document.getElementById("view");
+var V = {};
+document.querySelectorAll('script[type="text/x-vendor"]').forEach(function (t) {
+  var blob = new Blob([t.textContent], { type: "text/javascript" });
+  V["__VENDOR_" + t.dataset.name + "__"] = URL.createObjectURL(blob);
+});
+var cache = {};
+function inflate(p) {
+  if (cache[p]) return Promise.resolve(cache[p]);
+  var bytes = Uint8Array.from(atob(P[p]), function (c) { return c.charCodeAt(0); });
+  var stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return new Response(stream).text().then(function (t) {
+    return (cache[p] = t.replace(/__VENDOR_[A-Za-z0-9._-]+__/g, function (k) { return V[k] || k; }));
+  });
+}
+function go(p, hash) {
+  if (!P[p]) return;
+  inflate(p).then(function (h) {
+    frame.srcdoc = h;
+    document.querySelectorAll("nav a").forEach(function (a) {
+      a.classList.toggle("on", a.dataset.p === p);
+    });
+    if (hash) frame.onload = function () {
+      var el = frame.contentDocument.getElementById(hash);
+      if (el) el.scrollIntoView();
+    };
+    try { history.replaceState(null, "", "#" + encodeURIComponent(p)); } catch (e) {}
+  });
+}
+document.querySelectorAll("nav a").forEach(function (a) {
+  a.addEventListener("click", function (e) { e.preventDefault(); go(a.dataset.p); });
+});
+window.addEventListener("message", function (e) { if (e.data && e.data.go) go(e.data.go, e.data.hash); });
+var start = decodeURIComponent((location.hash || "").slice(1));
+go(P[start] ? start : "/");
+</script></body></html>

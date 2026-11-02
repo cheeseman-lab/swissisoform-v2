@@ -49,15 +49,18 @@ def client(data_dir, tmp_path, monkeypatch):
     monkeypatch.delenv("SWISSISOFORM_TRUST_PROXY", raising=False)
 
     from swissisoform_site import data as site_data
+    from swissisoform_site import landing as site_landing
     from swissisoform_site.app import create_app
 
     site_data.load_all.cache_clear()
+    site_landing.landing_index.cache_clear()
     site_data.load_orf_index.cache_clear()
     app = create_app()
     app.config["TESTING"] = True
     with app.test_client() as test_client:
         yield test_client
     site_data.load_all.cache_clear()
+    site_landing.landing_index.cache_clear()
     site_data.load_orf_index.cache_clear()
 
 

@@ -58,6 +58,11 @@ load predict_all.txt + GTF
 
 GPU precomputes run out-of-band and are read as static inputs: `run_plm_embed.sbatch` (ESM-C embed, then the SAE encode in the same job; skip the SAE with `--skip-modules sae`) and `run_fold.sbatch` (structures).
 
+### External start sites and offline export
+
+- **`scripts/run_external_starts.py`** runs the pipeline on start codons from outside our Ribo-TISH calls (a MAF-like position table, e.g. a screen's design library). `io/external_tis.py` derives each start's `GenomePos` / `Start` / `AASeq` on its GENCODE transcript (override → same ENST at the GTF's version → the gene's MANE when retired; kept only if the codon is exonic and matches), imputes the canonicals, and the rows enter `runner.run` as `restricted_df`. The shared combined catalog is never read or rebuilt. The rows carry no read evidence, so expression criteria are None. Writes `external_tis_rows.csv` + `external_tis_placements.csv` into the run dir; `export_structures.py --run <run>` re-assembles from the former.
+- **`scripts/export/export_static_html.py`** renders a staged site (`prepare_deploy.sh` output) into one offline HTML file: every page from the Flask test client, in its own iframe, with runtime fetches embedded and pages gzipped. For sharing a run without a Railway deploy.
+
 ### Not built
 
 - **Full end-to-end on all 6 cell lines.**
