@@ -99,6 +99,16 @@ def test_slice_extracts_headline_from_raw() -> None:
     assert sl["headline"] == "Unique region 96.0% similar across primates"
 
 
+def test_d3_headline_counts_are_integers() -> None:
+    # pandas reads an int struct field as float64 once any row holds a null, so the
+    # summary arrives as 2.0 / 6.0; the headline must still say "2/6".
+    summary = {"pepquery_run": True, "validated_peptides": 2.0, "unique_peptides": 6.0}
+    sl = ber.slice_criterion(
+        {"tis_id": "x", "_raw": {"isoform_massspec_summary": summary}}, "D3_mass_spec"
+    )
+    assert sl["headline"] == "2/6 isoform-unique peptides validated"
+
+
 def test_slice_extracts_all_evidence_cols() -> None:
     raw = {
         "isoform_conservation_frame_primate_mean_pident": 0.96,
