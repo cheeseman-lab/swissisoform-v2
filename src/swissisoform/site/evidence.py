@@ -184,6 +184,20 @@ _ISO_CANON_HEADLINES = {
 _INITIATION_EFFICIENCY_SAMPLES = CELL_LINES
 
 
+def _count(value: Any) -> int | None:
+    """An integer count read back from the parquet, or None when missing.
+
+    pandas returns an int struct field as float64 (``2.0``) once any row holds a
+    null in it, so a count can arrive as a whole float; it is displayed as an int.
+    """
+    if _is_missing(value):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _is_missing(value: Any) -> bool:
     """Return True for None, NaN, pd.NA, and empty numpy arrays."""
     if value is None:
@@ -2034,12 +2048,15 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         # ``validated_peptides`` is counted unique-scoped at the source, so v is the
         # same quantity D3 scores rather than a broader count that happens to agree.
         # Unscored (—) until PepQuery has run.
+        # The counts are int64 in the parquet, but pandas reads a struct column into
+        # one numpy array per field: a null in any row (a gene PepQuery never
+        # searched) makes that field float64 for every row, so cast back to int.
         summary = raw.get("isoform_massspec_summary")
         if isinstance(summary, dict) and summary.get("pepquery_run"):
-            v = summary.get("validated_peptides") or 0
-            u = summary.get("unique_peptides")
+            v = _count(summary.get("validated_peptides")) or 0
+            u = _count(summary.get("unique_peptides"))
             if u is None:
-                u = summary.get("total_peptides") or 0
+                u = _count(summary.get("total_peptides")) or 0
             headline = f"{v}/{u} isoform-unique peptides validated"
             headline_segments = [
                 {"t": f"{v}/{u}", "strong": True},
