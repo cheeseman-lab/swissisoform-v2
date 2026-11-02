@@ -15,6 +15,8 @@ import dataclasses
 import json
 import logging
 import math
+import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Callable
 
@@ -182,6 +184,55 @@ _ISO_CANON_HEADLINES = {
 }
 
 _INITIATION_EFFICIENCY_SAMPLES = CELL_LINES
+
+# A per-sample expression column: ``expr_<sample>_<metric>`` (the TIS) or
+# ``canonical_expr_<sample>_<metric>`` (its transcript's canonical start).
+_EXPR_COL = re.compile(
+    r"^(canonical_expr_|expr_)(.+)_(raw_count|cpm|p_value|initiation_efficiency)$"
+)
+
+
+def expression_samples(raw: Mapping[str, Any]) -> list[str]:
+    """The samples a record carries expression columns for.
+
+    Our catalog's panel is ``CELL_LINES``, but a run can carry others (external
+    Ribo-TISH evidence, e.g. Ly 2024 HeLa conditions). The panel is read from the
+    column names, not their values, so a sample that never called the TIS still
+    counts toward the denominator. ``CELL_LINES`` order first, then any others in
+    column order; ``CELL_LINES`` when the record has none.
+    """
+    found: list[str] = []
+    for key in raw:
+        m = _EXPR_COL.match(str(key))
+        if m and m.group(2) not in found:
+            found.append(m.group(2))
+    if not found:
+        return list(CELL_LINES)
+    extra = [s for s in found if s not in CELL_LINES]
+    for sample in extra:
+        _add_expression_labels(sample)
+    return [s for s in CELL_LINES if s in found] + extra
+
+
+def _panel_evidence_cols(cols: list[str], panel: list[str]) -> list[str]:
+    """``cols`` with its ``CELL_LINES`` expression columns re-expanded over ``panel``.
+
+    The D1/D2 evidence lists name the six catalog lines; a record with another
+    panel gets the same metrics for its own samples, at the position the first of
+    them held. Returned unchanged for the catalog panel.
+    """
+    if panel == list(CELL_LINES):
+        return cols
+    out: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for col in cols:
+        m = _EXPR_COL.match(col)
+        if m is None or m.group(2) not in CELL_LINES:
+            out.append(col)
+        elif (m.group(1), m.group(3)) not in seen:
+            seen.add((m.group(1), m.group(3)))
+            out.extend(f"{m.group(1)}{s}_{m.group(3)}" for s in panel)
+    return out
 
 
 def _count(value: Any) -> int | None:
@@ -1733,29 +1784,25 @@ CRITERIA_METRIC_LABELS: dict[str, dict[str, str]] = {
     },
 }
 
-# D1/D2 — per-cell-line expression columns (generated programmatically)
+
+# D1/D2 — per-sample expression columns (generated programmatically). Samples
+# outside the catalog panel are added when a record carrying them is read
+# (``expression_samples``).
+def _add_expression_labels(sample: str) -> None:
+    display = sample.replace("_", " ")
+    for col, label, fmt in (
+        (f"expr_{sample}_initiation_efficiency", "initiation efficiency", "float3"),
+        (f"expr_{sample}_p_value", "p-value", "sci"),
+        (f"expr_{sample}_cpm", "CPM", "float3"),
+        (f"expr_{sample}_raw_count", "raw count", "int"),
+        (f"canonical_expr_{sample}_initiation_efficiency", "canonical initiation efficiency",
+         "float3"),
+    ):  # fmt: skip
+        CRITERIA_METRIC_LABELS.setdefault(col, {"label": f"{display}: {label}", "format": fmt})
+
+
 for _sample in CELL_LINES:
-    _display = _sample.replace("_", " ")
-    CRITERIA_METRIC_LABELS[f"expr_{_sample}_initiation_efficiency"] = {
-        "label": f"{_display}: initiation efficiency",
-        "format": "float3",
-    }
-    CRITERIA_METRIC_LABELS[f"expr_{_sample}_p_value"] = {
-        "label": f"{_display}: p-value",
-        "format": "sci",
-    }
-    CRITERIA_METRIC_LABELS[f"expr_{_sample}_cpm"] = {
-        "label": f"{_display}: CPM",
-        "format": "float3",
-    }
-    CRITERIA_METRIC_LABELS[f"expr_{_sample}_raw_count"] = {
-        "label": f"{_display}: raw count",
-        "format": "int",
-    }
-    CRITERIA_METRIC_LABELS[f"canonical_expr_{_sample}_initiation_efficiency"] = {
-        "label": f"{_display}: canonical initiation efficiency",
-        "format": "float3",
-    }
+    _add_expression_labels(_sample)
 
 # L1 — DeepLoc per-compartment probabilities + top-class confidence (both sides)
 for _side in ("isoform", "canonical"):
@@ -1918,7 +1965,8 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
             "n_hits_shown": 0,
         }
 
-    evidence = {col: raw.get(col) for col in cfg["evidence_cols"]}
+    panel = expression_samples(raw)
+    evidence = {col: raw.get(col) for col in _panel_evidence_cols(cfg["evidence_cols"], panel)}
     headline_col = cfg.get("headline_col")
     # Styled headline: a list of {"t", "strong"} segments so composed taglines can
     # mute the label parts and bold only the important value(s). None → plain path.
@@ -1934,7 +1982,7 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
 
         max_alt = None  # overall highest alt efficiency (fallback)
         best = None  # (alt_eff, ratio) at highest alt among cells with a canonical ref
-        for s in _INITIATION_EFFICIENCY_SAMPLES:
+        for s in panel:
             a = _num(raw.get(f"expr_{s}_initiation_efficiency"))
             if a is None:
                 continue
@@ -2029,16 +2077,17 @@ def slice_criterion(isoform_record: dict[str, Any], criterion_id: str) -> dict[s
         # for this TIS (present per-sample column, mirrors the D1 scorer's
         # ``len(site.expression)``); m = the full cell-line panel.
         n = 0
-        for s in _INITIATION_EFFICIENCY_SAMPLES:
+        for s in panel:
             v = raw.get(f"expr_{s}_p_value")
             if v is not None and not (isinstance(v, float) and math.isnan(v)):
                 n += 1
-        m = len(_INITIATION_EFFICIENCY_SAMPLES)
-        headline = f"detected in {n}/{m} cell lines"
+        m = len(panel)
+        noun = "cell lines" if set(panel) <= set(CELL_LINES) else "samples"
+        headline = f"detected in {n}/{m} {noun}"
         headline_segments = [
             {"t": "detected in ", "strong": False},
             {"t": f"{n}/{m}", "strong": True},
-            {"t": " cell lines", "strong": False},
+            {"t": f" {noun}", "strong": False},
         ]
         headline_fmt = "str"
     elif headline_col == _MASSPEC_VALIDATED:
