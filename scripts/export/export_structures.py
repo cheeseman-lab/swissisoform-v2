@@ -5,8 +5,13 @@ genes (via scripts/run.py), copies each isoform/canonical's cached Boltz
 model.cif into ``data/output/<run_name>/structures/`` under human-readable
 names, then precomputes the per-residue folding colour maps.
 
+A run built from external start positions (``scripts/run_external_starts.py``) has
+no preset; ``--run`` re-assembles its genes from the rows that run wrote
+(``data/output/<run>/external_tis_rows.csv``) instead.
+
 Usage:
     python scripts/export/export_structures.py --preset cheeseman13
+    python scripts/export/export_structures.py --run BE_nc_hits
 """
 
 from __future__ import annotations
@@ -29,11 +34,24 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    p.add_argument("--preset", required=True, choices=sorted(PRESETS))
+    src = p.add_mutually_exclusive_group(required=True)
+    src.add_argument("--preset", choices=sorted(PRESETS))
+    src.add_argument("--run", help="an external-starts run (reads its external_tis_rows.csv)")
     args = p.parse_args(argv)
 
-    spec, genes = assemble_for_preset(args.preset)
-    run_name = spec.get("run_name", args.preset)
+    if args.preset:
+        spec, genes = assemble_for_preset(args.preset)
+        run_name = spec.get("run_name", args.preset)
+    else:
+        import pandas as pd
+
+        from swissisoform.assembly import assemble_genes
+
+        run_name = args.run
+        rows_csv = ROOT / "data" / "output" / run_name / "external_tis_rows.csv"
+        if not rows_csv.is_file():
+            p.error(f"{rows_csv} not found — --run is for runs made by run_external_starts.py")
+        genes = assemble_genes(pd.read_csv(rows_csv))
     outdir = ROOT / "data" / "output" / run_name / "structures"
 
     n_iso, n_can, n_missing, man_path = export_structures(genes, outdir)

@@ -505,7 +505,9 @@ def _expression_from_row(
         raw = row.get(f"{sample}_TISCounts")
         cpm = row.get(f"{sample}_NormTISCounts")
         pval = row.get(f"{sample}_FisherQvalue")
-        if pd.isna(raw) or pd.isna(cpm) or pd.isna(pval):
+        # A sample without RNA-seq totals (external Ribo-TISH evidence) still
+        # called the TIS; only its normalised count is not evaluable.
+        if pd.isna(raw) or pd.isna(pval):
             continue
         # Initiation efficiency = TIS reads / total gene RNA-seq reads.
         # Lets us compare how strongly this start site is used across
@@ -518,7 +520,7 @@ def _expression_from_row(
             init_eff = None
         expression[sample] = CellLineExpression(
             raw_count=int(raw),
-            cpm=float(cpm),
+            cpm=None if pd.isna(cpm) else float(cpm),
             p_value=float(pval),
             initiation_efficiency=init_eff,
         )

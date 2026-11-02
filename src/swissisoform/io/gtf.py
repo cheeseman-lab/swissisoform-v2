@@ -31,7 +31,7 @@ def load_transcript_annotations(
 
     Returns:
         DataFrame with columns: chromosome, source, feature_type, start, end,
-        strand, gene_id, gene_type, transcript_id, transcript_type,
+        strand, gene_id, gene_name, gene_type, transcript_id, transcript_type,
         transcript_support_level, MANE_Select.
     """
     features_list: list[dict] = []
@@ -73,6 +73,7 @@ def load_transcript_annotations(
                 "end",
                 "strand",
                 "gene_id",
+                "gene_name",
                 "gene_type",
                 "transcript_id",
                 "transcript_type",
@@ -86,6 +87,7 @@ def load_transcript_annotations(
     # Extract quoted attribute values
     extracted_columns = [
         "gene_id",
+        "gene_name",
         "gene_type",
         "transcript_id",
         "transcript_type",
