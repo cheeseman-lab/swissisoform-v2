@@ -48,6 +48,7 @@ from swissisoform.contract import (
 from swissisoform.contract import ratio as _contract_ratio
 from swissisoform.site.evidence import CATEGORIES as _CATEGORIES
 from swissisoform.site.evidence import active_scoring as _active_scoring
+from swissisoform.site.evidence import expression_samples as _expression_samples
 from swissisoform.site.evidence import p3_min_sse_length as _p3_min_sse_length
 from swissisoform.site.evidence import p3_min_sse_plddt as _p3_min_sse_plddt
 from swissisoform.site.evidence import use_scoring_config as _use_scoring_config
@@ -1669,7 +1670,9 @@ def criterion_evidence_for(iso) -> dict:
             subtitle="initiation context + per-base conservation at each start codon",
         )
 
-    CELL_LINES = ("HeLa", "K562", "U2OS", "RPE1_Async", "RPE1_Que", "RPE1_Sen")
+    # The record's own sample panel: the six catalog lines, or a run's external
+    # Ribo-TISH samples (e.g. Ly 2024 HeLa conditions).
+    CELL_LINES = _expression_samples(raw)
 
     def sec_cell_lines():
         # Canonical-start vs alternative-start usage (CPM) per cell line. A line
