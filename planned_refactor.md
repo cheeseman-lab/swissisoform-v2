@@ -4,7 +4,7 @@
 ribotish `main` @ 6269657.*
 
 This doc proposes changes, so by the CLAUDE.md convention it would normally live
-in `docs/plans/`. It is here because that is where it was asked for.
+in `docs/plans/`. It sits at the repo root while it is under review.
 
 1. **Now:** take ribotish's `starts.parquet` as the filtered input, and remove
    swissisoform's own Ribo-TISH filtering.
