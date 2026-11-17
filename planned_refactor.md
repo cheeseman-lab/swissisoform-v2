@@ -277,6 +277,10 @@ So none of these changes cut the total compute. They cut **wall time**, by runni
 - Processes are connected by `channel`s inside a `workflow`, and Nextflow builds the dependency graph from those connections.
 - The science stays in the `swissisoform` package; the `.nf` files only declare the steps, their resources, and what feeds what.
 
+**Why Nextflow over Snakemake** (review item 8):
+- **Processes, not file-name rules.** A Nextflow process declares its inputs and outputs and is wired to others by channels; a Snakemake rule is matched by output file names. A new consumer of an existing output, e.g. another module reading the ESM-C embeddings as `SAE` does, connects to the `EMBED` channel instead of hard-coding upstream file names and wildcards.
+- **Data handling beyond files.** Nextflow has built-in operators for reading and splitting file contents and metadata, including FASTA (`splitFasta`), so chunking proteins for a tool is one operator. In Snakemake every step is a file on disk, which forces temporary files or ad hoc workarounds to get stream-like behaviour.
+
 **Python changes first** (needed with or without Nextflow, and testable against the `cheeseman13` snapshot):
 1. **A sites artifact.** Connector → assembly writes the assembled sites to `sites.parquet`, plus `proteins.fa` and the peptide list. `io/parquet.tis_to_dataframe` / `dataframe_to_tis` (`parquet.py:246, 294`) already do most of this.
 2. **One CLI per module:** `swissiso annotate-module <name> --sites sites.parquet --out <name>.parquet`, keyed by `tis_id`, plus per-gene rows for canonical annotations.
