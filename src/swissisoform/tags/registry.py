@@ -68,9 +68,10 @@ REF_DIR = ROOT / "data" / "reference" / "tags"
 # reproducible — building `--version v1` against today's table yields today's
 # vocabulary under the v1 name — so the on-disk v1 is a historical artifact, not
 # a rebuildable one.
-DEFAULT_VERSION = "v3"
-# v3 is cut from the provisional v3 distributions (see
-# `distributions.PROVISIONAL_VERSIONS`); rebuild it after the re-freeze.
+DEFAULT_VERSION = "v4"
+# v4 is cut from distributions v4 (full_catalog_20261009) with per-ORF-type
+# cutoffs. v3 is cut from the provisional v3 distributions (see
+# `distributions.PROVISIONAL_VERSIONS`) and stays marked provisional.
 PROVISIONAL_VERSIONS: dict[str, str] = {
     "v3": (
         "cut from the provisional v3 distributions (Aug-12 full_catalog); "
@@ -255,7 +256,17 @@ class TagRegistry:
 
     @property
     def provisional(self) -> str:
-        """Why this version must be rebuilt, or ``""`` for a settled one."""
+        """Why this build must be rebuilt, or ``""`` for a settled one.
+
+        Read from the build's own sidecar (``_setup.json``), which
+        ``setup.tags.write_sidecar`` stamps from the distributions it was cut
+        against, so a registry rebuilt in place, or a new version cut from
+        provisional distributions, reports what it actually is. The name-keyed
+        ``PROVISIONAL_VERSIONS`` is only the fallback for builds whose sidecar
+        predates the field (v3).
+        """
+        if "provisional" in self.provenance:
+            return str(self.provenance["provisional"] or "")
         return PROVISIONAL_VERSIONS.get(self.version, "")
 
     def __len__(self) -> int:
