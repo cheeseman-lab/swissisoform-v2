@@ -7,8 +7,8 @@ Tests here check the scaffolding and the response; ``variants.js`` rendering is
 verified by hand. The figure tests run ``gene_overlay.js`` under Node on the real
 fixture's hits (see ``jsrun``).
 
-Skipped without the ``cheeseman_test`` run and ``ecf_data/test.vcf``, which live
-outside the repository.
+Skipped without the ``cheeseman_test`` run, which lives outside the repository.
+The fixture VCF is ``tests/fixtures/variantquery/test.vcf`` at the repo root.
 """
 
 from __future__ import annotations
@@ -24,12 +24,12 @@ from jsrun import apply_uploaded_hits, needs_node
 
 WEBSITE_ROOT = Path(__file__).resolve().parents[1]
 RUN_DIR = WEBSITE_ROOT.parent / "data" / "output" / "cheeseman_test"
-FIXTURE_VCF = Path("/lab/barcheese01/ating/ecf_data/test.vcf")
+FIXTURE_VCF = WEBSITE_ROOT.parent / "tests" / "fixtures" / "variantquery" / "test.vcf"
 STAGED_FILES = ("all_paired.parquet", "variants_long.parquet", "orf_index.parquet")
 
 pytestmark = pytest.mark.skipif(
     not (FIXTURE_VCF.is_file() and all((RUN_DIR / f).is_file() for f in STAGED_FILES)),
-    reason="needs the cheeseman_test run with orf_index.parquet built, plus ecf_data/test.vcf",
+    reason="needs the cheeseman_test run with orf_index.parquet built",
 )
 
 CBX1_ISOFORM = "/genes/CBX1/isoforms/chr17-48101392---GTG-ENST00000225603-9"
@@ -204,7 +204,7 @@ def test_old_token_urls_are_gone(client) -> None:
 
 def test_funnel_is_monotonic(scan) -> None:
     """``counts["hits"]`` counts (variant, isoform) pairs, so the funnel's last
-    allele step is derived by subtraction instead (16 alleles must not become 23)."""
+    allele step is derived by subtraction instead (20 alleles must not become 27)."""
     c, d = scan["counts"], scan["derived"]
     steps = [c["lines"], c["alleles"], d["passing"], d["in_orf_alleles"]]
     assert steps == sorted(steps, reverse=True), steps
