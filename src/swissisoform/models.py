@@ -82,13 +82,14 @@ class CellLineExpression:
 
     Attributes:
         raw_count: Raw read count at the TIS position.
-        cpm: Counts per million normalization.
+        cpm: Counts per million normalization; None when the sample has no RNA-seq
+            totals to normalise by (external Ribo-TISH evidence).
         p_value: Statistical significance of TIS enrichment.
         initiation_efficiency: Ratio of TIS reads to total gene reads, if available.
     """
 
     raw_count: int
-    cpm: float
+    cpm: float | None
     p_value: float
     initiation_efficiency: float | None = None
 

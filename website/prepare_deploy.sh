@@ -51,6 +51,17 @@ if [[ ! -f "$INDEX_SRC/orf_index.parquet" ]]; then
   echo "  Build it first:  python scripts/export/build_orf_index.py --run ${ORF_INDEX_RUN:-full_catalog}" >&2
   exit 1
 fi
+# Tag metadata (category / kind) for the landing table's fired-tag chips, for the
+# registry build this run's tags were fired with. The site cannot import
+# swissisoform.tags (not vendored below), so it reads this JSON instead. Exported
+# here, before anything is deleted, because it fails on a mixed-version run or a
+# registry whose hash differs from the run's; moved into data/ once staged. A
+# registry not provisioned on this machine only warns (chips render uncoloured).
+REGISTRY_TMP="$PWD/data/.tag_registry.json.tmp"
+rm -f "$REGISTRY_TMP"
+echo "[prepare_deploy] exporting the tag registry for $SRC/all_paired.parquet"
+python ../scripts/export/export_site_tag_registry.py \
+    --parquet "$SRC/all_paired.parquet" --out "$REGISTRY_TMP"
 
 echo "[prepare_deploy] dereferencing website/data/ from $SRC"
 rm -rf data/all_paired.parquet data/variants_long.parquet \
@@ -65,6 +76,13 @@ if [[ -f "$SRC/scoring_config.json" ]]; then
 else
     rm -f data/scoring_config.json
     echo "  note: no scoring_config.json in $SRC (pre-sidecar run) — site uses defaults"
+fi
+
+# A pre-tag run exports nothing, so a stale registry from another run is removed.
+if [[ -f "$REGISTRY_TMP" ]]; then
+    mv "$REGISTRY_TMP" data/tag_registry.json
+else
+    rm -f data/tag_registry.json
 fi
 
 echo "[prepare_deploy] staging ORF index from $INDEX_SRC"
@@ -116,12 +134,18 @@ done
 # gitignored build output (*.log already covered), so the log belongs here with the
 # thing it describes. The container's own /tmp default in scanstore.py is fine by
 # contrast: that path only ever exists inside one Railway container.
+# The app's startup builds only the landing index; the full records the gene and
+# isoform pages read (load_all) are built on first use. So load them here too: a
+# staged parquet load_all cannot read fails the deploy instead of 500-ing every
+# gene page after a green healthcheck.
 IMPORT_LOG="$PWD/prepare_deploy_import.log"
-echo "[prepare_deploy] verifying the staged tree imports on its own"
+echo "[prepare_deploy] verifying the staged tree imports and loads on its own"
 if ! (cd "$PWD" && env -u PYTHONPATH PYTHONPATH="$PWD/src" SWISSISOFORM_DATA_DIR="$PWD/data" \
-      python -c "import swissisoform_site.app" >/dev/null 2>"$IMPORT_LOG"); then
-  echo "[prepare_deploy] ERROR: the staged build context does not import." >&2
-  echo "  Usually a module added under src/swissisoform/ that this script does not copy." >&2
+      python -c "import swissisoform_site.app; from swissisoform_site.data import load_all; load_all()" \
+      >/dev/null 2>"$IMPORT_LOG"); then
+  echo "[prepare_deploy] ERROR: the staged build context does not import or load." >&2
+  echo "  Usually a module added under src/swissisoform/ that this script does not copy," >&2
+  echo "  or a staged parquet the site's load_all() cannot read." >&2
   tail -20 "$IMPORT_LOG" >&2
   exit 1
 fi
