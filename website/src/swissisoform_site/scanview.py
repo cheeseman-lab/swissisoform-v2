@@ -18,15 +18,18 @@ here once, at scan time, because the browser has no ORF index:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import tempfile
+import zlib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
 
+from swissisoform.variantclass import PROTEIN_LETTERS_1TO3
 from swissisoform.variantquery.consequence import (
     MISSENSE,
     START_LOST,
@@ -35,6 +38,9 @@ from swissisoform.variantquery.consequence import (
     SYNONYMOUS,
 )
 from swissisoform.variantquery.frame import plotly_x
+from swissisoform.variantquery.portable import from_portable
+from swissisoform.variantquery.scan import scan
+from swissisoform.variantquery.vcf import VcfLimitExceeded, check_size
 
 #: Shape of the response body, which the browser stores as-is. ``scanstate.js``
 #: refuses a stored scan whose schema it does not know, so a deploy that changes
@@ -50,6 +56,29 @@ SCAN_SCHEMA = "c2"
 _DROPPED_HIT_FIELDS = frozenset({"vclass", "transcript_id"})
 
 _CHUNK = 1 << 20
+
+#: Reader caps → (error code, status). Both are 4xx and both are the uploader's
+#: file to fix; the codes stay distinct from the compressed-body ``too_large`` so
+#: a caller can tell which limit it hit. Shared by the server route and the
+#: browser scan, so both report a bad file the same way.
+LIMIT_RESPONSES = {
+    "decompressed_bytes": ("expands_too_large", 413),
+    "line_bytes": ("line_too_long", 422),
+}
+
+#: What reading a file that cannot be read as a VCF raises: a truncated or corrupt
+#: gzip (``BadGzipFile`` is an ``OSError``, a cut-off stream an ``EOFError``, a bad
+#: block ``zlib.error``). Reported to the user as ``unreadable`` (422) on both
+#: paths, never as a traceback or a bare 500. Malformed *lines* are not here: the
+#: scanner counts those as rejections, so a ``ValueError`` out of it is a bug and
+#: stays one.
+UNREADABLE = (OSError, EOFError, zlib.error)
+
+
+def unreadable_message(exc: BaseException) -> str:
+    """The one sentence an unreadable file gets, on the server and in the browser."""
+    return f"Could not read this file as a VCF: {exc}"
+
 
 _SLUG_SEPARATORS = re.compile(r"[:.]+")
 
@@ -160,10 +189,9 @@ def hgvsp_from_hit(aa_ref: str, aa_alt: str, residue: int, consequence: str) -> 
     Returns:
         The notation, or ``""`` when there are no amino acids to name.
     """
-    from Bio.Data.IUPACData import protein_letters_1to3
 
     def three(one: str) -> str:
-        return "Ter" if one == "*" else protein_letters_1to3.get(one.upper(), one)
+        return "Ter" if one == "*" else PROTEIN_LETTERS_1TO3.get(one.upper(), one)
 
     if not aa_ref or len(aa_ref) != len(aa_alt):
         return ""
@@ -312,7 +340,7 @@ def derived_counts(counts: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_response(result: Any, *, index: Any, vcf_sha256: str) -> dict[str, Any]:
+def build_response(result: Any, *, index: Any, vcf_sha256: str | None) -> dict[str, Any]:
     """``ScanResult`` → the response body the browser stores.
 
     The filename is deliberately absent: the browser already has it from the
@@ -333,3 +361,64 @@ def build_response(result: Any, *, index: Any, vcf_sha256: str) -> dict[str, Any
         "derived": derived_counts(counts),
         "hits": enrich_hits(digest["hits"], index),
     }
+
+
+def load_portable_index(path: str | Path) -> Any:
+    """The browser's index: :mod:`variantquery.portable` bytes read from ``path``."""
+    return from_portable(Path(path).read_bytes())
+
+
+def scan_file(path: str | Path, index: Any, *, max_seconds: float = 0) -> dict[str, Any]:
+    """Scan a VCF already on disk, returning the response body.
+
+    The browser scan's entry point (Pyodide, ``static/js/scan_worker.js``): the
+    worker writes the dropped file into Pyodide's in-memory filesystem and calls
+    this, so the result is the very dict the server route returns. The wall-clock
+    cap is off by default — it exists for gunicorn's request timeout, and a Web
+    Worker has none. The record and byte caps in ``scan`` / ``vcf`` still apply.
+
+    ``provenance.vcf_sha256`` is ``None``: hashing would read the whole file a
+    second time in WebAssembly for a value only the server's log reads. The
+    server route hashes while it stages the upload, for free.
+
+    Raises:
+        VcfLimitExceeded: As ``scan`` does; see :func:`scan_file_json`.
+    """
+    result = scan(path, index, max_seconds=max_seconds)
+    return build_response(result, index=index, vcf_sha256=None)
+
+
+def _refusal(error: str, message: str) -> str:
+    """The server route's ``{error, message}`` shape, as JSON."""
+    return json.dumps({"error": error, "message": message}, separators=(",", ":"))
+
+
+def scan_file_json(path: str | Path, index: Any) -> str:
+    """:func:`scan_file` as JSON, with a refused file as ``{error, message}``.
+
+    One string across the Pyodide boundary, rather than a proxied dict, so the
+    worker posts exactly what ``JSON.parse`` gives the page. The error shapes are
+    the server route's, so ``vcf_drop.js`` reports both paths the same way: a cap
+    as its ``LIMIT_RESPONSES`` code, a file that cannot be read as ``unreadable``.
+    """
+    try:
+        body = scan_file(path, index)
+    except VcfLimitExceeded as exc:
+        return _refusal(LIMIT_RESPONSES[exc.kind][0], str(exc))
+    except UNREADABLE as exc:
+        return _refusal("unreadable", unreadable_message(exc))
+    return json.dumps(body, separators=(",", ":"))
+
+
+def size_refusal(n_bytes: int) -> str:
+    """The refusal for a file too large to scan, as JSON — or ``""`` when it may be.
+
+    Called by the browser worker *before* it copies the file into memory, so a
+    multi-gigabyte VCF is refused at once instead of filling the tab first. The
+    same error :func:`scan_file_json` would give after the copy.
+    """
+    try:
+        check_size(n_bytes)
+    except VcfLimitExceeded as exc:
+        return _refusal(LIMIT_RESPONSES[exc.kind][0], str(exc))
+    return ""

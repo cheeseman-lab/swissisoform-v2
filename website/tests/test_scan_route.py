@@ -68,6 +68,8 @@ def client(data_dir, tmp_path, monkeypatch, stage_dir):
 
     site_data.load_all.cache_clear()
     site_data.load_orf_index.cache_clear()
+    site_data.portable_orf_index.cache_clear()
+    site_data.orf_index_fingerprint.cache_clear()
     site_data.orf_index_version.cache_clear()
     app = create_app()
     app.config["TESTING"] = True
@@ -75,6 +77,8 @@ def client(data_dir, tmp_path, monkeypatch, stage_dir):
         yield test_client
     site_data.load_all.cache_clear()
     site_data.load_orf_index.cache_clear()
+    site_data.portable_orf_index.cache_clear()
+    site_data.orf_index_fingerprint.cache_clear()
     site_data.orf_index_version.cache_clear()
 
 
@@ -151,6 +155,45 @@ def test_an_unusable_temp_dir_is_a_507_not_a_500(client, stage_dir, monkeypatch)
     assert response.get_json()["error"] == "storage_failed"
 
 
+def test_a_corrupt_gzip_is_a_422_that_says_so(client) -> None:
+    truncated = gzip.compress(VCF * 50)[:-40]
+    response = _post(client, truncated, name="mine.vcf.gz")
+    assert response.status_code == 422
+    body = response.get_json()
+    assert body["error"] == "unreadable"
+    assert body["message"].startswith("Could not read this file as a VCF:")
+    assert "Traceback" not in body["message"]
+
+
+def test_the_browser_entry_point_reports_a_corrupt_gzip_in_one_line(client, tmp_path) -> None:
+    import json
+
+    from swissisoform_site.data import load_orf_index
+    from swissisoform_site.scanview import scan_file_json
+
+    path = tmp_path / "mine.vcf.gz"
+    path.write_bytes(gzip.compress(VCF * 50)[:-40])
+    body = json.loads(scan_file_json(path, load_orf_index()))
+    assert body["error"] == "unreadable"
+    assert "\n" not in body["message"]
+
+
+def test_the_browser_result_skips_the_hash_the_server_result_keeps(client, tmp_path) -> None:
+    """Hashing would re-read the whole file in WebAssembly for a value nothing there reads."""
+    import json
+
+    from swissisoform_site.data import load_orf_index
+    from swissisoform_site.scanview import scan_file_json
+
+    path = tmp_path / "mine.vcf"
+    path.write_bytes(VCF)
+    browser = json.loads(scan_file_json(path, load_orf_index()))
+    server = _post(client, VCF).get_json()
+    assert browser["provenance"]["vcf_sha256"] is None
+    assert len(server["provenance"]["vcf_sha256"]) == 64
+    assert browser["hits"] == server["hits"] and browser["counts"] == server["counts"]
+
+
 def test_gzipped_upload_resolves_identically(client) -> None:
     plain = _post(client, VCF).get_json()
     packed = _post(client, gzip.compress(VCF)).get_json()
@@ -205,3 +248,83 @@ def test_every_page_states_the_index_version(client) -> None:
     version = load_orf_index().version
     html = client.get("/genes/CBX1").get_data(as_text=True)
     assert f'data-index-version="{version}"' in html
+
+
+def test_the_browser_index_is_served_by_fingerprint_and_rebuilds_the_same_index(client) -> None:
+    from swissisoform.variantquery.portable import from_portable
+
+    from swissisoform_site.data import load_orf_index, orf_index_fingerprint
+
+    index = load_orf_index()
+    response = client.get(f"/api/variants/index/{orf_index_fingerprint()}.json.gz")
+    assert response.status_code == 200
+    assert response.headers["Content-Type"] == "application/gzip"
+    assert "immutable" in response.headers["Cache-Control"]
+    rebuilt = from_portable(response.data)
+    assert rebuilt.version == index.version
+    assert list(rebuilt.records) == list(index.records)
+
+
+def test_another_fingerprint_is_not_served(client) -> None:
+    """A stale page must not silently scan against data it did not ask for."""
+    assert client.get("/api/variants/index/0000000000000000.json.gz").status_code == 404
+
+
+def _restage(client, data_dir: Path, target: Path, monkeypatch, rewrite) -> None:
+    """Point the running app at a copy of the data with ``orf_index.parquet`` rewritten."""
+    import pyarrow.parquet as pq
+
+    from swissisoform_site import data as site_data
+
+    shutil.copytree(data_dir, target)
+    table = pq.read_table(target / "orf_index.parquet")
+    pq.write_table(rewrite(table), target / "orf_index.parquet")
+    monkeypatch.setenv("SWISSISOFORM_DATA_DIR", str(target))
+    for cached in (
+        site_data.load_orf_index,
+        site_data.orf_index_version,
+        site_data.orf_index_fingerprint,
+        site_data.portable_orf_index,
+    ):
+        cached.cache_clear()
+
+
+def test_a_rebuild_with_the_same_coordinates_gets_a_new_index_url(
+    client, data_dir, tmp_path, monkeypatch
+) -> None:
+    """The version keys coordinates only; the download URL must follow the bytes."""
+    import pyarrow as pa
+
+    from swissisoform_site.data import orf_index_fingerprint, orf_index_version
+
+    old_url = f"/api/variants/index/{orf_index_fingerprint()}.json.gz"
+    old_version = orf_index_version()
+
+    def new_cds(table):
+        cds = pa.array(["ATG" * 5] * table.num_rows, type=table.schema.field("orf_cds").type)
+        return table.set_column(table.schema.get_field_index("orf_cds"), "orf_cds", cds)
+
+    _restage(client, data_dir, tmp_path / "rebuilt", monkeypatch, new_cds)
+    assert orf_index_version() == old_version
+    assert client.get(old_url).status_code == 404
+    page = client.get("/").get_data(as_text=True)
+    assert f'data-index="/api/variants/index/{orf_index_fingerprint()}.json.gz"' in page
+    assert orf_index_fingerprint() not in old_url
+
+
+def test_an_unversioned_index_still_gets_a_working_index_url(
+    client, data_dir, tmp_path, monkeypatch
+) -> None:
+    from swissisoform_site.data import orf_index_fingerprint, orf_index_version
+
+    _restage(
+        client,
+        data_dir,
+        tmp_path / "unversioned",
+        monkeypatch,
+        lambda table: table.replace_schema_metadata({}),
+    )
+    assert orf_index_version() == ""
+    url = f"/api/variants/index/{orf_index_fingerprint()}.json.gz"
+    assert f'data-index="{url}"' in client.get("/").get_data(as_text=True)
+    assert client.get(url).status_code == 200

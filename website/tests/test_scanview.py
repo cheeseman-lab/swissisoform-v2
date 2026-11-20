@@ -18,6 +18,8 @@ from swissisoform_site.scanview import (
     derived_counts,
     enrich_hits,
     hgvsp_from_hit,
+    scan_file_json,
+    size_refusal,
     staged_upload,
     tis_slug,
     with_frame,
@@ -58,6 +60,24 @@ def test_an_unusable_temp_dir_is_a_staging_error(tmp_path: Path) -> None:
     with pytest.raises(StagingError):
         with staged_upload(io.BytesIO(VCF), directory=tmp_path / "missing"):
             pytest.fail("the block must not run")
+
+
+def test_a_file_too_large_is_refused_before_it_is_copied(tmp_path: Path, monkeypatch) -> None:
+    """Same error the scan gives after reading past the cap, decided from the size alone."""
+    import json
+
+    from swissisoform.variantquery.vcf import VcfLimitExceeded, iter_lines
+
+    monkeypatch.setenv("SWISSISOFORM_VCF_MAX_BYTES", "2000000")
+    assert size_refusal(2_000_000) == ""
+    refusal = json.loads(size_refusal(2_000_001))
+    assert refusal["error"] == "expands_too_large"
+
+    big = tmp_path / "big.vcf"
+    big.write_bytes(b"x\n" * 1_000_001)
+    with pytest.raises(VcfLimitExceeded) as raised:
+        list(iter_lines(big))
+    assert refusal["message"] == str(raised.value)
 
 
 class _Index:
@@ -175,3 +195,17 @@ def test_derived_funnel_is_monotonic_and_clamped() -> None:
     assert derived["in_orf_alleles"] == 4
     assert derived["assembly"]["suspect"] is True
     assert derived_counts({})["in_orf_alleles"] == 0
+
+
+def test_a_refused_file_comes_back_in_the_server_routes_error_shape(tmp_path, monkeypatch) -> None:
+    """The browser path reports a bad file exactly as POST /api/variants/scan does."""
+    import json
+
+    from swissisoform.variantquery.index import OrfIndex
+
+    monkeypatch.setenv("SWISSISOFORM_VCF_MAX_LINE_BYTES", "64")
+    vcf = tmp_path / "oneline.vcf"
+    vcf.write_bytes(b"A" * 4096)
+    body = json.loads(scan_file_json(vcf, OrfIndex.from_records([])))
+    assert body["error"] == "line_too_long"
+    assert body["message"]

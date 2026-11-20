@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from swissisoform.clinical.validate import ConsequenceValidator
+from swissisoform.variantclass import OrfClassifier
 from swissisoform.variantquery.consequence import OTHER, classify_without_sequence
 from swissisoform.variantquery.frame import region_for, resolve_residue
 from swissisoform.variantquery.index import OrfIndex
@@ -82,7 +82,7 @@ class VariantHit:
     containing it, so the two fields have to travel together.
 
     Everything below ``region`` comes from the pipeline's own classifier
-    (:meth:`~swissisoform.clinical.validate.ConsequenceValidator.classify_against_orf`),
+    (:mod:`swissisoform.variantclass`, which ``ConsequenceValidator`` also delegates to),
     so an uploaded variant is described exactly the way an annotated one is: the
     consequence term, the reference and alternate amino acids, and nothing else. No
     HGVS notation is produced here — the pipeline never derives one either, it copies
@@ -241,10 +241,10 @@ def scan(
     counts = ScanCounts()
     hits: list[VariantHit] = []
     genes: dict[str, GeneSummary] = {}
-    # One validator for the whole scan, so its position-map cache is reused across
-    # every variant that lands in the same ORF. Constructed with no ``cds_df`` and no
-    # genome: the coding sequence comes from the index, so nothing here opens a FASTA.
-    validator = ConsequenceValidator()
+    # One classifier for the whole scan, so its position-map cache is reused across
+    # every variant that lands in the same ORF. The coding sequence comes from the
+    # index, so nothing here opens a FASTA.
+    validator = OrfClassifier()
     deadline = time.monotonic() + max_seconds if max_seconds else None
 
     for line_no, line in iter_data_lines(path):

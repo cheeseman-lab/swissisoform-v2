@@ -1,8 +1,8 @@
 """The consequence vocabulary the gene figure draws, and the sequence-free fallback.
 
 Classification itself is **not** here. A variant is classified by the pipeline's own
-:meth:`~swissisoform.clinical.validate.ConsequenceValidator.classify_against_orf`,
-called with the coding sequence the ORF index carries — the same code path, the same
+classifier, :mod:`swissisoform.variantclass` (which ``ConsequenceValidator``
+delegates to), called with the coding sequence the ORF index carries — the same code path, the same
 codon walk and the same terms an annotated variant goes through, so an uploaded VCF
 and a ClinVar record cannot disagree about what a substitution does.
 
