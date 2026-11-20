@@ -134,6 +134,16 @@ class TestRegistry:
         assert "re-freeze" in _registry(_row(), version="v3").provisional
         assert _registry(_row(), version="vtest").provisional == ""
 
+    def test_the_builds_sidecar_decides_provisional(self):
+        """Read from _setup.json, so the flag follows the build, not the name."""
+        frame = pd.DataFrame([_row()], columns=list(reg_mod.REGISTRY_COLUMNS))
+        cut_from_provisional = reg_mod.from_frame("v9", frame, {"provisional": "cut from v3"})
+        assert cut_from_provisional.provisional == "cut from v3"
+        # A v3 rebuilt against settled distributions is settled, whatever its name.
+        assert reg_mod.from_frame("v3", frame, {"provisional": ""}).provisional == ""
+        # A sidecar that predates the field falls back to the name.
+        assert "re-freeze" in reg_mod.from_frame("v3", frame, {}).provisional
+
     def test_one_distributions_version_default_everywhere(self):
         """The sweep, the builder and the reader must default to the same version."""
         from swissisoform import distributions as dist_mod
@@ -142,7 +152,9 @@ class TestRegistry:
 
         assert build_mod.DEFAULT_DIST_VERSION == dist_mod.DEFAULT_VERSION
         assert grounding.DEFAULT_DIST_VERSION == dist_mod.DEFAULT_VERSION
-        assert dist_mod.DEFAULT_VERSION in dist_mod.PROVISIONAL_VERSIONS
+        # The default is the re-frozen version, not a provisional one.
+        assert dist_mod.DEFAULT_VERSION not in dist_mod.PROVISIONAL_VERSIONS
+        assert reg_mod.DEFAULT_VERSION not in reg_mod.PROVISIONAL_VERSIONS
 
 
 # ---------------------------------------------------------------------------

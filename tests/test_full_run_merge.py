@@ -263,7 +263,8 @@ def test_tag_registry_rebuilt_between_shards_is_fatal(campaign: Path) -> None:
     assert not (campaign / CAMPAIGN / "all_paired.parquet").exists()
 
 
-def test_one_tag_registry_build_merges(campaign: Path) -> None:
+def test_one_tag_registry_build_merges(campaign: Path, monkeypatch) -> None:
+    monkeypatch.setattr(merge, "registry_sha", lambda version: "a" * 64)
     write_all(
         campaign,
         statuses={
@@ -280,3 +281,99 @@ def test_manifest_from_another_campaign_is_refused(campaign: Path) -> None:
     manifest.write_text(manifest.read_text().replace(f"campaign\t{CAMPAIGN}", "campaign\tother"))
     code, _ = run(campaign)
     assert code == 2
+
+
+def test_map_typed_clinical_summary_survives_the_merge(campaign: Path) -> None:
+    """Shards pin the clinical summaries to maps (``paired_schema``); a pandas
+    round-trip turns those into tuple lists that ``to_parquet`` cannot write, which
+    is how the first ``full_catalog_20261009`` merge died after 117 good shards. The
+    second died concatenating the shards' own tables, whose per-frame types differ.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from swissisoform.io.parquet import paired_schema
+
+    write_all(campaign)
+    for k, genes in SHARDS.items():
+        summary = [
+            {
+                "total_variants": 3,
+                "by_source": {"clinvar": 2, "gnomad": 1},
+                "by_consequence": {} if k == 0 else {"missense_variant": 3},
+                "pathogenic_count": 1,
+            }
+            for _ in genes
+        ]
+        df = pd.DataFrame({"gene_name": genes, "canonical_clinical_summary": summary})
+        # The per-frame drift the real shards showed: an int column that is float
+        # in a shard holding a NaN, and a bool column that is all-null in another.
+        df["n_species"] = [None] * len(genes) if k == 1 else list(range(len(genes)))
+        df["gravy_enriched"] = [None] * len(genes) if k == 2 else [True, False]
+        path = campaign / f"{CAMPAIGN}_shard_{k}" / "all_paired.parquet"
+        table = pa.Table.from_pandas(df, schema=paired_schema(df), preserve_index=False)
+        pq.write_table(table, path)
+
+    code, _ = merge.merge_campaign(CAMPAIGN, campaign)
+
+    assert code == 0
+    merged = pq.read_table(campaign / CAMPAIGN / "all_paired.parquet")
+    assert merged.num_rows == 6
+    field = merged.schema.field("canonical_clinical_summary").type
+    assert pa.types.is_map(field.field("by_source").type)
+    rows = merged.to_pylist()
+    assert dict(rows[0]["canonical_clinical_summary"]["by_source"]) == {"clinvar": 2, "gnomad": 1}
+    assert merged.schema.field("gravy_enriched").type == pa.bool_()
+    assert not list((campaign / CAMPAIGN).glob(".*.tmp"))
+
+
+def test_registry_rebuilt_after_tagging_is_fatal(campaign: Path, monkeypatch) -> None:
+    """One build across the shards, but not the build on disk the pins come from.
+
+    Writing against it would drop the shards' tag fields and null-fill the new
+    ones, which reads downstream as not-evaluable.
+    """
+    monkeypatch.setattr(merge, "registry_sha", lambda version: "b" * 64)
+    write_all(
+        campaign,
+        statuses={
+            merge.TAG_VERSION_COLUMN: ["v4", "v4"],
+            merge.TAG_SHA256_COLUMN: ["a" * 64] * 2,
+        },
+    )
+    code, _ = run(campaign)
+    assert code == 1
+    assert not (campaign / CAMPAIGN / "all_paired.parquet").exists()
+
+
+def test_a_registry_absent_from_disk_is_not_drift(campaign: Path, monkeypatch) -> None:
+    """Nothing is pinned then, so the tag structs are inferred as the shards wrote them."""
+    monkeypatch.setattr(merge, "registry_sha", lambda version: None)
+    write_all(
+        campaign,
+        statuses={
+            merge.TAG_VERSION_COLUMN: ["vgone", "vgone"],
+            merge.TAG_SHA256_COLUMN: ["a" * 64] * 2,
+        },
+    )
+    code, _ = run(campaign)
+    assert code == 0
+
+
+def test_shards_without_a_registry_hash_are_not_pinned(campaign: Path, monkeypatch) -> None:
+    """Without the sha column the build cannot be checked, so the structs are inferred.
+
+    Pinning them to a registry rebuilt since would drop and null-fill tag fields.
+    """
+    monkeypatch.setattr(merge, "registry_sha", lambda version: "b" * 64)
+    pinned: list[bool] = []
+    real = merge.write_merged
+    def spy(df, target, *, pin_tags=True):
+        pinned.append(pin_tags)
+        real(df, target, pin_tags=pin_tags)
+
+    monkeypatch.setattr(merge, "write_merged", spy)
+    write_all(campaign, statuses={merge.TAG_VERSION_COLUMN: ["v4", "v4"]})
+    code, _ = run(campaign)
+    assert code == 0
+    assert pinned == [False]

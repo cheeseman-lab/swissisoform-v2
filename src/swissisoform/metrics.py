@@ -20,12 +20,13 @@ column that exists in the parquet.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
 
 from swissisoform.config import CELL_LINES
+from swissisoform.io.parquet import COUNT_MAP_PATHS, mapping_of
 
 PREFIX = "tx:"
 
@@ -302,10 +303,8 @@ def resolve(metric: str, df: pd.DataFrame) -> pd.Series | None:
     for its test.
     """
     if metric.startswith(ABS_PREFIX):
-        column = metric[len(ABS_PREFIX):]
-        if column not in df.columns:
-            return None
-        return pd.to_numeric(df[column], errors="coerce").abs()
+        values = _column(metric[len(ABS_PREFIX):], df)
+        return None if values is None else pd.to_numeric(values, errors="coerce").abs()
     if metric.endswith(LEN_SUFFIX) and metric not in df.columns:
         # Only the profiler materialises `<col>__len` as a column; the runtime
         # frame carries the list itself, so a tag cut on a list length has to be
@@ -322,14 +321,57 @@ def resolve(metric: str, df: pd.DataFrame) -> pd.Series | None:
     tx = BY_METRIC.get(metric)
     if tx is not None:
         return tx.fn(df) if tx.available(set(df.columns)) else None
-    if metric in df.columns:
-        values = pd.to_numeric(df[metric], errors="coerce")
-        shared = f"{metric[: -len(RATIO_SUFFIX)]}{SHARED_SUFFIX}"
-        if metric.endswith(RATIO_SUFFIX) and shared in df.columns:
+    raw = _column(metric, df)
+    if raw is None:
+        return None
+    values = pd.to_numeric(raw, errors="coerce")
+    if metric.endswith(RATIO_SUFFIX):
+        shared = _column(f"{metric[: -len(RATIO_SUFFIX)]}{SHARED_SUFFIX}", df)
+        if shared is not None:
             # Not-evaluable rather than inverted: see RATIO_SUFFIX.
-            values = values.where(pd.to_numeric(df[shared], errors="coerce") > 0)
-        return values
+            values = values.where(pd.to_numeric(shared, errors="coerce") > 0)
+    return values
+
+
+def _column(name: str, df: pd.DataFrame) -> pd.Series | None:
+    """*name*'s values: a column of *df*, or a dotted leaf walked into a nested one.
+
+    The profiler flattens structs and maps to dotted columns
+    (``io.parquet.flat_files``); the runtime frame keeps them nested. Every
+    reference ``resolve`` makes — the metric, its ``abs:`` magnitude, a ratio's
+    ``_shared`` guard — goes through here, so each reads the same numbers in both
+    frames.
+    """
+    if name in df.columns:
+        return df[name]
+    head, _, path = name.partition(".")
+    if path and head in df.columns:
+        return df[head].map(lambda v: _leaf(v, head, path))
     return None
+
+
+def _leaf(value: Any, head: str, path: str) -> Any:
+    """Follow dotted *path* from column *head* through nested structs and maps.
+
+    Matches the names :func:`~swissisoform.io.parquet.expand_maps` produces: a
+    map key may itself contain dots, so each step takes the longest key the node
+    holds. A key a present count map lacks is 0 (``COUNT_MAP_PATHS``); anything
+    else missing — the summary itself, a struct field — is None.
+    """
+    parts = path.split(".")
+    where, i = head, 0
+    while i < len(parts):
+        node = mapping_of(value)
+        if node is None:
+            return None
+        for j in range(len(parts), i, -1):
+            key = ".".join(parts[i:j])
+            if key in node:
+                value, where, i = node[key], f"{where}.{key}", j
+                break
+        else:
+            return 0 if where in COUNT_MAP_PATHS else None
+    return value
 
 
 def resolvable(metric: str, columns: set[str]) -> bool:
@@ -342,8 +384,14 @@ def resolvable(metric: str, columns: set[str]) -> bool:
     name that exists nowhere at firing time.
     """
     if metric.startswith(ABS_PREFIX):
-        return metric[len(ABS_PREFIX):] in columns
+        # Same lookup as resolve's abs branch: a column or a nested leaf.
+        return resolvable(metric[len(ABS_PREFIX):], columns)
     if metric in columns:
+        return True
+    # A dotted name resolves only to a real leaf. *columns* from
+    # io.parquet.schema_paths lists every struct leaf by name, but a map's keys
+    # are data, so under a map path it can only say "<map path>.*".
+    if any(metric.startswith(p[:-1]) for p in columns if p.endswith(".*")):
         return True
     if metric.endswith(LEN_SUFFIX):
         return metric[: -len(LEN_SUFFIX)] in columns

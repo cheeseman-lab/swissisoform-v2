@@ -6,11 +6,16 @@ Parquet storage, enabling efficient columnar I/O for large TIS datasets.
 
 from __future__ import annotations
 
+import os
 import re
+from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pyarrow as pa
+import pyarrow.parquet as pq
 
 from swissisoform.models import (
     CellLineExpression,
@@ -18,6 +23,8 @@ from swissisoform.models import (
     Gene,
     ORFType,
     TranslationInitiationSite,
+    is_separate_orf,
+    region_split,
 )
 
 # The clinical summaries hold Counters over open key sets — variant sources and
@@ -59,14 +66,156 @@ def paired_schema(df: pd.DataFrame, overrides: dict[str, pa.DataType] | None = N
         The inferred schema with :data:`CLINICAL_SUMMARY_COLUMNS` and *overrides*
         applied.
     """
-    schema = pa.Table.from_pandas(df, preserve_index=False).schema
+    return paired_table(df, overrides).schema
+
+
+# The map-typed fields of the clinical summaries, as dotted paths. Their values are
+# counts over an open key set, so a key a PRESENT map lacks is a count of 0 — only
+# a missing summary is not-evaluable.
+COUNT_MAP_PATHS: frozenset[str] = frozenset(
+    f"{col}.{CLINICAL_SUMMARY_TYPE.field(i).name}"
+    for col in CLINICAL_SUMMARY_COLUMNS
+    for i in range(CLINICAL_SUMMARY_TYPE.num_fields)
+    if pa.types.is_map(CLINICAL_SUMMARY_TYPE.field(i).type)
+)
+
+
+def paired_table(df: pd.DataFrame, overrides: dict[str, pa.DataType] | None = None) -> pa.Table:
+    """*df* as an Arrow table, inferred except for the pinned columns.
+
+    The table :func:`paired_schema` describes, built in ONE conversion: the
+    unpinned columns are inferred, and the pinned ones (the clinical summaries
+    plus *overrides*) are converted straight to their declared types. Converting
+    to infer a schema and again to apply it holds two Arrow copies of a
+    genome-wide frame at once; and a pinned map read back from Parquet arrives as
+    ``(key, value)`` pairs that inference cannot type, but its declared map type
+    accepts as they are.
+    """
     pins: dict[str, pa.DataType] = {n: CLINICAL_SUMMARY_TYPE for n in CLINICAL_SUMMARY_COLUMNS}
     pins.update(overrides or {})
-    for name, dtype in pins.items():
-        idx = schema.get_field_index(name)
-        if idx >= 0:
-            schema = schema.set(idx, pa.field(name, dtype))
-    return schema
+    pinned = [c for c in df.columns if c in pins]
+    table = pa.Table.from_pandas(df.drop(columns=pinned), preserve_index=False)
+    for col in pinned:  # df order, so each insert lands at its original position
+        array = pa.array(df[col], type=pins[col], from_pandas=True)
+        table = table.add_column(df.columns.get_loc(col), pa.field(col, pins[col]), array)
+    return table
+
+
+def write_table_atomic(table: pa.Table, path: Path) -> None:
+    """Write *table* to *path* so that it is never observable half-finished.
+
+    A same-directory temp file plus ``os.replace`` means a reader sees either no
+    file or the complete one — a plain write into the final path leaves a
+    truncated file behind when the job is killed mid-write (Slurm timeout, OOM).
+    """
+    tmp = path.with_name(f".{path.name}.tmp")
+    try:
+        pq.write_table(table, tmp)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def mapping_of(value: Any) -> dict[str, Any] | None:
+    """A struct or map value as a dict, or None when it is neither.
+
+    A map read back from Parquet through pandas is a list (or object ndarray) of
+    ``(key, value)`` tuples, while the in-memory frame holds a dict; a struct is a
+    dict either way. Only tuples count as pairs: a list of 2-element lists is a
+    list, not a map, and a scalar (numpy included) is never a mapping.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, (list, tuple, np.ndarray)):
+        pairs = list(value)
+        if all(isinstance(p, tuple) and len(p) == 2 for p in pairs):
+            return {str(k): v for k, v in pairs}
+    return None
+
+
+def expand_maps(df: pd.DataFrame, maps: list[str]) -> pd.DataFrame:
+    """Replace each map column in *maps* with one dotted column per key seen.
+
+    Applied by :func:`flat_files` over every file at once. The names are those
+    the struct-typed summaries produced before
+    :data:`CLINICAL_SUMMARY_TYPE` pinned them to maps. A row whose map is null
+    stays null on every key (not evaluable). A row whose map is present but lacks
+    a key reads 0 under a count map (:data:`COUNT_MAP_PATHS`), null otherwise.
+    """
+    blocks: dict[str, list[Any]] = {}
+    for name in maps:
+        if name not in df.columns:
+            continue
+        rows = [mapping_of(v) for v in df.pop(name)]
+        absent = 0 if name in COUNT_MAP_PATHS else None
+        for key in sorted({k for r in rows if r for k in r}):
+            blocks[f"{name}.{key}"] = [None if r is None else r.get(key, absent) for r in rows]
+    if not blocks:
+        return df
+    return pd.concat([df, pd.DataFrame(blocks, index=df.index)], axis=1)
+
+
+def non_list_columns(schema: pa.Schema) -> list[str]:
+    """Every top-level column of *schema* except the list columns.
+
+    The hit lists dominate a run file (``canonical_clinical_hits`` alone is
+    ~876 MB compressed) and profilers want only their lengths, which they read
+    separately, so a flattened read skips them.
+    """
+    return [
+        f.name for f in schema if not (pa.types.is_list(f.type) or pa.types.is_large_list(f.type))
+    ]
+
+
+def flat_files(
+    paths: Sequence[Path], columns: Callable[[pa.Schema], list[str]] = non_list_columns
+) -> tuple[pd.DataFrame, dict[str, pa.DataType]]:
+    """Read *paths* as one frame, every struct and map expanded into dotted columns.
+
+    The one multi-file flattened read every profiler uses
+    (``setup.distributions.read_flat``, the feature catalog's ``read_flat``).
+    *columns* picks each file's columns from that file's own schema, so files
+    that differ — a column one shard lacks — read cleanly. Structs flatten per
+    file; maps expand once over the concatenation (:func:`expand_maps`), so a
+    key one file never saw is still a 0 on that file's rows.
+
+    Returns:
+        The frame, and ``{map column: its value type}`` for each map expanded —
+        every ``<map>.<key>`` column takes that type.
+    """
+    frames: list[pd.DataFrame] = []
+    map_types: dict[str, pa.DataType] = {}
+    for path in paths:
+        table = pq.read_table(path, columns=columns(pq.read_schema(path)))
+        while any(pa.types.is_struct(f.type) for f in table.schema):
+            table = table.flatten()
+        for field in table.schema:
+            if pa.types.is_map(field.type):
+                map_types.setdefault(field.name, field.type.item_type)
+        frames.append(table.to_pandas())
+    df = pd.concat(frames, ignore_index=True)
+    return expand_maps(df, sorted(map_types)), map_types
+
+
+def schema_paths(schema: pa.Schema) -> set[str]:
+    """Every name a flattened read of *schema* can produce, for name-level checks.
+
+    Top-level columns, every dotted struct leaf, and ``<map path>.*`` for each
+    map — whose keys are data, so the schema can only say "a key under here".
+    """
+    out: set[str] = set()
+
+    def walk(name: str, t: pa.DataType) -> None:
+        out.add(name)
+        if pa.types.is_struct(t):
+            for i in range(t.num_fields):
+                walk(f"{name}.{t.field(i).name}", t.field(i).type)
+        elif pa.types.is_map(t):
+            out.add(f"{name}.*")
+
+    for field in schema:
+        walk(field.name, field.type)
+    return out
 
 
 # Columns that map directly to TIS identity/protein fields
@@ -270,31 +419,25 @@ def _flatten_annotations(prefix: str, annotations: dict[str, dict[str, Any]]) ->
 
 
 def _genomic_unique_shared(
-    orf_type: Any,
-    orf_exons: list[tuple[int, int]] | None,
-    canonical_orf_exons: list[tuple[int, int]] | None,
+    site: TranslationInitiationSite,
 ) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
-    r"""Compute the genomic unique and shared interval sets per ORF type.
+    r"""The genomic unique and shared interval sets the parquet stores for *site*.
 
-    Mirrors the ORF-type-aware unique definition used by
-    :class:`VariantIntersectionModule` / conservation / conservation_frame —
-    extensions / uORFs / altORFs contribute new isoform sequence
-    (``isoform_orf \ canonical_orf``); truncations *lose* canonical
-    sequence (``canonical_orf \ isoform_orf``). The shared set is the
-    intersection in both cases. Empty lists are returned when either ORF
-    skeleton is missing.
+    The same split :class:`VariantIntersectionModule`, conservation and
+    conservation_frame use (``models.region_split``): extensions contribute new
+    isoform sequence (``isoform_orf \ canonical_orf``), truncations *lose*
+    canonical sequence (``canonical_orf \ isoform_orf``), and a separate ORF's
+    whole ORF is unique with nothing shared. Empty lists when a skeleton the
+    split needs is missing ("we cannot say") — a separate ORF needs only its own.
 
     Surfacing these in the parquet lets downstream codebases — genome
     language models, motif callers, off-target tools — pull DNA over
     arbitrary windows around the *biologically meaningful* region of each
     TIS without re-running the assembly layer.
     """
-    from swissisoform.coords import unique_shared_intervals
-    from swissisoform.models import ORFType
-
-    if not orf_exons or not canonical_orf_exons:
+    if not site.orf_exons or (not site.canonical_orf_exons and not is_separate_orf(site)):
         return [], []
-    return unique_shared_intervals(orf_type == ORFType.TRUNCATED, orf_exons, canonical_orf_exons)
+    return region_split(site)
 
 
 def _diff_location(diff: Any) -> tuple[int | None, int | None, str | None]:
@@ -364,9 +507,7 @@ def paired_tis_dataframe(genes: list[Gene]) -> pd.DataFrame:
             # genomic coords; strand is in the ``strand`` column.
             orf_exons = [list(t) for t in (site.orf_exons or [])]
             canonical_orf_exons = [list(t) for t in (site.canonical_orf_exons or [])]
-            unique_genomic_intervals, shared_genomic_intervals = _genomic_unique_shared(
-                site.orf_type, site.orf_exons, site.canonical_orf_exons
-            )
+            unique_genomic_intervals, shared_genomic_intervals = _genomic_unique_shared(site)
             row: dict[str, Any] = {
                 "gene_name": gene.gene_name,
                 "gene_id": gene.gene_id,

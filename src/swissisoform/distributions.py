@@ -31,16 +31,19 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from swissisoform.contract import SEPARATE_ORF_TYPES as _SEPARATE_ORF_TYPES
+
 ROOT = Path(__file__).resolve().parents[2]
 REF_DIR = ROOT / "data" / "reference" / "distributions"
 # The one current distributions version. Every reader and builder takes its
 # default from here (the sweep, the registry builder, build_distributions), so a
 # default run cannot cut one table against v2 and the registry against v3.
 #
-# v3 is PROVISIONAL: frozen from full_catalog (Aug 12-13), which predates the M1
-# sign flip and extension gate (2a48f89) and the #24/#29/#32 merges. Re-freeze it,
-# and the tag registry cut from it, after the next genome-wide run.
-DEFAULT_VERSION = "v3"
+# v4 is frozen from full_catalog_20261009, the genome-wide rerun after the M1
+# sign flip and gate, the variant/separate-ORF fixes and the PepQuery proteome.
+# v3 stays PROVISIONAL: it was frozen from the Aug-12 full_catalog, before all of
+# those, and is kept only as the record of what earlier runs were cut against.
+DEFAULT_VERSION = "v4"
 PROVISIONAL_VERSIONS: dict[str, str] = {
     "v3": (
         "frozen from the Aug-12 full_catalog, before 2a48f89 and PRs #24/#29/#32; "
@@ -62,7 +65,8 @@ STRATUM_SEPARATE = "separate"
 
 # Separate-ORF types have no shared region at all, so every unique-vs-shared
 # feature is null for them by construction (see comparator `_shared_annotations`).
-SEPARATE_ORF_TYPES: tuple[str, ...] = ("uorf", "uoorf", "internal_oof", "3utr_orf", "alt_orf")
+# Defined once in contract; re-exported here for existing importers.
+SEPARATE_ORF_TYPES = _SEPARATE_ORF_TYPES
 
 # Below this a stratum cannot support a percentile-derived cutoff. On the
 # full_catalog population only `uoorf` (n=21) falls short; the `separate` roll-up
