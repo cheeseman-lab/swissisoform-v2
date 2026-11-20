@@ -26,7 +26,6 @@
   var noResults = document.getElementById("no-results");
   var resultCount = document.getElementById("result-count");
   var GENE_BASE = table.dataset.geneBase; // ".../genes/__GENE__"
-  var SCAN_QS = table.dataset.scanQs || "";
 
   var CHIP_N = 6; // fired-tag chips shown before "+N"
   var ORF_NONE = "unknown"; // URL spelling of an isoform with no ORF type ("" in the payload)
@@ -45,11 +44,11 @@
     });
   }
   function geneHref(name) {
-    return GENE_BASE.replace("__GENE__", encodeURIComponent(name)) + SCAN_QS;
+    return GENE_BASE.replace("__GENE__", encodeURIComponent(name));
   }
   function isoHref(name, slug) { // slug from the payload (data.tis_slug), never re-derived
     return GENE_BASE.replace("__GENE__", encodeURIComponent(name)) + "/isoforms/" +
-      encodeURIComponent(slug) + SCAN_QS;
+      encodeURIComponent(slug);
   }
   function store(fn) { try { return fn(); } catch (e) { return null; } }
 

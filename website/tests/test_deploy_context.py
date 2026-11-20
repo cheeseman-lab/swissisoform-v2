@@ -147,8 +147,8 @@ def test_the_deploy_script_writes_no_fixed_path_under_tmp() -> None:
     is a user-specific subdirectory; better still here is the gitignored build context
     the log describes.
 
-    Not a blanket ban on ``/tmp``: ``scanstore.DEFAULT_SCAN_DIR`` is ``/tmp`` and is
-    correct, because that path only ever exists inside one Railway container.
+    Not a blanket ban on ``/tmp``: ``throttle.DEFAULT_THROTTLE_DIR`` is under ``/tmp``
+    and is correct, because that path only ever exists inside one Railway container.
     """
     script = PREPARE_DEPLOY.read_text()
     offenders = [

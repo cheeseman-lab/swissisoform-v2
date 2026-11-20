@@ -12,21 +12,13 @@
 <div class="iso-shell">
   {# Full trail. The gene level was previously plain text inside crumb-current, so
      there was no way back to the gene page from here at all. The scan level appears
-     only when ?vcf names a scan that still exists — url_for carries the token onward
-     automatically (see app.py's url_defaults hook). #}
+     only when scanstate.js finds a scan in this tab's sessionStorage. #}
   <nav class="crumbs">
     <a href="{{ url_for('index') }}">Index</a> /
-    {% if scan_token %}
-    <a href="{{ url_for('variants_page', token=scan_token) }}">Variant scan</a> /
-    {% endif %}
+    <span class="js-scan-crumb" hidden><a href="{{ url_for('variants_page') }}">Variant scan</a> /</span>
     <a href="{{ url_for('gene_page', gene_name=isoform.gene_name) }}">{{ isoform.gene_name }}</a> /
     <span class="crumb-current">{{ isoform.tis_id }}</span>
-    {% if scan_token and scan_isoform_hits is not none %}
-    <span class="vq-gene-meta">
-      &middot; {{ scan_isoform_hits }} variant{{ "" if scan_isoform_hits == 1 else "s" }}
-      from the uploaded VCF hit this isoform
-    </span>
-    {% endif %}
+    <span class="vq-gene-meta js-scan-hits" data-tis="{{ isoform.tis_id }}" hidden></span>
   </nav>
 
   <header class="iso-head">

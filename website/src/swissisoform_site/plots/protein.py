@@ -79,6 +79,32 @@ CONSEQ_SHORT = {
     "synonymous_variant": "synonymous",
 }
 
+# Variant-row geometry. Shared with gene_overlay.js through ``layout.meta`` (see
+# _variant_rows_meta): the browser inserts rows for consequences only an uploaded
+# VCF has, and must space them exactly as the server would have.
+_ROW_STEP = 0.26
+_ROW_BASE_ABOVE_CANON = 0.3
+_ROW_TOP_PAD = 0.22
+_Y_HI_PAD = 0.3
+# Least headroom above the canonical bar when there are no variant rows above it.
+_MIN_ABOVE_CANON = 0.2
+_HEIGHT_BASE = 90
+_HEIGHT_PER_Y = 118
+_ROW_LABEL_MAX = 14
+_ROW_LABEL_SIZE = 9
+_LABEL_COLOR = "#475569"
+
+#: Marker for a variant from the user's own VCF. Defined here, not in the JS that
+#: draws it, so the server stays the single source for how the figure looks.
+UPLOADED_MARKER = {
+    "size": 11,
+    "opacity": 1.0,
+    "symbol": "diamond",
+    # A dark outline is what separates these from the circles at a glance, since the
+    # fill still encodes the consequence.
+    "line": {"width": 1.6, "color": "#0f172a"},
+}
+
 
 def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict[str, Any]:
     """Combined gene view: one canonical bar + one bar per isoform, residue axis.
@@ -141,9 +167,9 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
     label_px = [0.0]  # widest left label, so the margin can be sized to fit it
 
     def _left_label(
-        text: str, y: float, size: int = 10, color: str = "#475569", **extra: Any
+        text: str, y: float, size: int = 10, color: str = _LABEL_COLOR, **extra: Any
     ) -> None:
-        """A row label right-anchored just left of the plot (``extra``: click hooks)."""
+        """A row label right-anchored just left of the plot (``extra``: click hooks, a name)."""
         label_px[0] = max(label_px[0], len(text) * size * _CHAR_EM)
         annotations.append(
             {
@@ -270,13 +296,16 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
             label,
             by,
             size=9,
-            color="#1d4ed8" if slug else "#475569",
+            color="#1d4ed8" if slug else _LABEL_COLOR,
             **({"name": slug, "captureevents": True, "hovertext": "open isoform"} if slug else {}),
         )
     lowest_bar = -bar_gap * len(bars)
 
     # ── Variant rows ABOVE the canonical bar, one row per consequence ──
-    mut_base = canon_y + 0.3
+    # Every row trace and row label is tagged with its consequence (trace ``meta``,
+    # annotation ``name``) so gene_overlay.js can re-space them when an uploaded VCF
+    # brings a consequence this gene has no row for.
+    mut_base = canon_y + _ROW_BASE_ABOVE_CANON
     mut_top = canon_y
     variants = list(getattr(view, "variants", []) or [])
     by_conseq: dict[str, list] = {}
@@ -284,25 +313,11 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
         if v.get("pos") is None:
             continue
         by_conseq.setdefault(v.get("consequence") or "other", []).append(v)
-    conseqs = sorted(
-        by_conseq, key=lambda c: (_CONSEQ_ORDER.index(c) if c in _CONSEQ_ORDER else 99, c)
-    )
-    uploaded_drawn = False
+    conseqs = sorted(by_conseq, key=_conseq_rank)
     for i, c in enumerate(conseqs):
-        ty = mut_base + i * 0.26
+        ty = mut_base + i * _ROW_STEP
         xs, cols, sizes, opac, hover, links = [], [], [], [], [], []
-        # Uploaded VCF hits share the consequence row — so a user's variant reads
-        # against where the known pathogenics cluster — but get their own trace so
-        # they can carry a distinct symbol and a single legend entry.
-        up_xs, up_hover = [], []
         for v in by_conseq[c]:
-            if (v.get("source") or "") == "uploaded":
-                up_xs.append(v["pos"])
-                up_hover.append(
-                    f"<b>From your VCF</b><br>{v.get('uploaded_detail') or ''}<br>"
-                    f"{v.get('protein_change') or ''}<br>{c}"
-                )
-                continue
             # Styled by significance only. Whether a variant is in an isoform's
             # differential region depends on the isoform, so the gene view makes
             # no such claim (the isoform pages do).
@@ -320,49 +335,23 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
             # A dict, not a bare string, so the click handler can tell an outbound
             # link from an isoform slug (``gene.html``).
             links.append({"href": url} if url else None)
-        if xs:
-            traces.append(
-                {
-                    "type": "scatter",
-                    "mode": "markers",
-                    "x": xs,
-                    "y": [ty] * len(xs),
-                    "marker": {"size": sizes, "color": cols, "opacity": opac, "symbol": "circle"},
-                    "hovertext": hover,
-                    "hoverinfo": "text",
-                    "customdata": links,
-                    "showlegend": False,
-                }
-            )
-        if up_xs:
-            traces.append(
-                {
-                    "type": "scatter",
-                    "mode": "markers",
-                    "x": up_xs,
-                    "y": [ty] * len(up_xs),
-                    "marker": {
-                        "size": 11,
-                        "color": CONSEQ_COLOR.get(c, "#94a3b8"),
-                        "opacity": 1.0,
-                        "symbol": "diamond",
-                        # A dark outline is what separates these from the circles at
-                        # a glance, since the fill still encodes the consequence.
-                        "line": {"width": 1.6, "color": "#0f172a"},
-                    },
-                    "hovertext": up_hover,
-                    "hoverinfo": "text",
-                    # Exactly one legend entry across all rows: a novel symbol with
-                    # no key leaves the reader guessing.
-                    "name": "uploaded VCF",
-                    "showlegend": not uploaded_drawn,
-                    "legendgroup": "uploaded",
-                }
-            )
-            uploaded_drawn = True
-        _left_label(CONSEQ_SHORT.get(c, c)[:14], ty, size=9)
+        traces.append(
+            {
+                "type": "scatter",
+                "mode": "markers",
+                "x": xs,
+                "y": [ty] * len(xs),
+                "marker": {"size": sizes, "color": cols, "opacity": opac, "symbol": "circle"},
+                "hovertext": hover,
+                "hoverinfo": "text",
+                "customdata": links,
+                "showlegend": False,
+                "meta": {"row": c},
+            }
+        )
+        _left_label(_row_label(c), ty, size=_ROW_LABEL_SIZE, name=f"variant-row:{c}")
     if conseqs:
-        mut_top = mut_base + (len(conseqs) - 1) * 0.26 + 0.22
+        mut_top = mut_base + (len(conseqs) - 1) * _ROW_STEP + _ROW_TOP_PAD
 
     # ── Feature tracks BELOW the bars: domains, disorder, coil, motifs ──
     row_h, row_gap = 0.28, 0.05
@@ -574,11 +563,12 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
             _left_label(t["sample"].replace("_", " "), ly)
         y_bottom = lane_base - (len(cell_lines) - 1) * lane_gap - 0.3
 
-    y_hi = max(mut_top, canon_y + 0.2) + 0.3
+    y_hi = max(mut_top, canon_y + _MIN_ABOVE_CANON) + _Y_HI_PAD
     y_lo = y_bottom - 0.2
     return {
         "data": traces,
         "layout": {
+            "meta": {"variant_rows": _variant_rows_meta(conseqs, mut_base, canon_y, x_left)},
             "font": {"family": _FONT_FAMILY, "size": 13, "color": "#1f2937"},
             "hoverlabel": {"font": {"family": _HOVER_FONT_FAMILY, "size": 12}},
             "showlegend": True,
@@ -602,7 +592,7 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                 "zeroline": True,  # solid line at x=0 marks the canonical start
             },
             "yaxis": {"range": [y_lo, y_hi], "showticklabels": False, "zeroline": False},
-            "height": int(90 + 118 * (y_hi - y_lo)),
+            "height": int(_HEIGHT_BASE + _HEIGHT_PER_Y * (y_hi - y_lo)),
             # Wide enough for the longest left label ("internal_oof · ATG · 1234 aa").
             "margin": {
                 "l": max(120, int(label_px[0]) + _LABEL_GAP + 10),
@@ -611,6 +601,49 @@ def build_gene_protein_figure(view: Any, collapse_domains: bool = False) -> dict
                 "b": 50,
             },
         },
+    }
+
+
+def _conseq_rank(term: str) -> tuple[int, str]:
+    """Row order: most→least severe, unknown terms last and alphabetical."""
+    return (_CONSEQ_ORDER.index(term) if term in _CONSEQ_ORDER else 99, term)
+
+
+def _row_label(term: str) -> str:
+    return CONSEQ_SHORT.get(term, term)[:_ROW_LABEL_MAX]
+
+
+def _variant_rows_meta(
+    present: list[str], base: float, canon_y: float, label_x: float
+) -> dict[str, Any]:
+    """Everything gene_overlay.js needs to add rows the way this module lays them out.
+
+    ``present`` is the rows the server drew, in order. Unknown terms sort after
+    ``order`` alphabetically, as :func:`_conseq_rank` does. The y-range top is
+    ``max(top_of_rows, canon_y + min_above_canon) + y_hi_pad`` and the height
+    ``height_base + height_per_y * (y_hi - y_lo)``; ``y_lo`` does not change. A new
+    row's label is an annotation like the others: ``x = label_x``, right-anchored,
+    ``label_size`` / ``label_color``, text ``labels[term]`` cut to ``label_max``.
+    """
+    return {
+        "order": list(_CONSEQ_ORDER),
+        "present": list(present),
+        "base": base,
+        "step": _ROW_STEP,
+        "top_pad": _ROW_TOP_PAD,
+        "canon_y": canon_y,
+        "min_above_canon": _MIN_ABOVE_CANON,
+        "y_hi_pad": _Y_HI_PAD,
+        "height_base": _HEIGHT_BASE,
+        "height_per_y": _HEIGHT_PER_Y,
+        "label_max": _ROW_LABEL_MAX,
+        "label_x": label_x,
+        "label_size": _ROW_LABEL_SIZE,
+        "label_color": _LABEL_COLOR,
+        "labels": dict(CONSEQ_SHORT),
+        "colors": dict(CONSEQ_COLOR),
+        "fallback_color": "#94a3b8",
+        "uploaded_marker": UPLOADED_MARKER,
     }
 
 
