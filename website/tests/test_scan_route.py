@@ -1,9 +1,9 @@
 """``POST /api/variants/scan`` end to end, with a VCF written by the test.
 
-The older route tests need ``ecf_data/test.vcf``, which lives outside the repo. This
-file needs only the ``cheeseman_test`` run, and builds its VCF from coordinates that
-run's ORF index is known to cover, so the stateless contract — the whole result in
-the response, nothing left on disk — is checked wherever that run is staged.
+The older route tests read the committed fixture VCF; this file builds its own
+from coordinates the ``cheeseman_test`` ORF index is known to cover, so the
+stateless contract — the whole result in the response, nothing left on disk — is
+checked without depending on that fixture's contents.
 """
 
 from __future__ import annotations

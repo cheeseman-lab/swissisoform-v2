@@ -1,0 +1,21 @@
+category	chrom	pos	ref	alt	filter	expect_gene	expect_frame	expect_residue	expect_region	expect_x
+boundary_first_orf_base	chr19	531767	C	T	PASS	CDC34	isoform	0	unique	-55
+inframe_deletion	chr19	531771	AGCG	A	PASS	CDC34	isoform	1	unique	-54
+missense_extension	chr19	531848	G	A	PASS	CDC34	isoform	27	unique	-28
+multi_allelic	chr19	531848	G	A,T	PASS	CDC34	isoform	27	unique	-28
+frameshift_leaves_orf	chr19	541548	CCT	C	PASS	CDC34	isoform	290	shared	235
+boundary_last_orf_base	chr19	541549	C	T	PASS	CDC34	isoform	290	shared	235
+stop_gained_extension	chr17	48101323	G	A	PASS	CBX1	isoform	23	unique	-31
+synonymous_shared_core	chr17	48075041	T	C	PASS	CBX1	isoform	179	shared	125
+truncation_lost_region	chr4	120066697	A	G	PASS	MAD2L1	canonical	12	unique	12
+start_lost	chr19	531769	G	A	PASS	CDC34	isoform	0	unique	-55
+synonymous_lost_region	chr12	123633552	G	A	PASS	EIF2B1	canonical	1	unique	1
+synonymous_extension	chr17	76737212	T	C	PASS	SRSF2	isoform	17	unique	-18
+frameshift_deletion	chr3	3137300	AG	A	PASS	TRNT1	isoform	34	shared	63
+inframe_insertion	chr5	139600400	C	CGGC	PASS	UBE2D2	isoform	48	shared	17
+mnv_two_codons	chr19	58556160	CAA	TGG	PASS	UBE2M	isoform	224	shared	159
+non_pass	chr5	894800	G	A	LowQual	TRIP13	isoform	59	shared	35
+intronic	chr19	534000	C	T	PASS					
+exonic_untranslated	chr19	541600	G	A	PASS					
+intergenic	chr1	1000000	G	A	PASS					
+sv_breakend	chr19	535000	A	A]chr5:900000]	PASS					

@@ -1,14 +1,14 @@
-"""Acceptance test: ``ecf_data/test.vcf`` against the ``cheeseman_test`` run.
+"""Acceptance test: ``tests/fixtures/variantquery/test.vcf`` against ``cheeseman_test``.
 
-The fixture is 17 hand-placed records with genuine GRCh38 reference bases,
+The fixture is 20 hand-placed records with genuine GRCh38 reference bases,
 covering both strands, both ORF types, both coordinate frames, all four variant
 classes, interval boundaries, three kinds of negative, and three malformed
 inputs. ``test_expectations.tsv`` carries the expected gene / frame / residue / x
 per row, so these assertions come from the file rather than from numbers retyped
 into Python.
 
-Skipped when the fixture or the run is unavailable (a fresh clone, or CI without
-`/lab`), because both live outside the repository.
+Skipped when the ``cheeseman_test`` run is unavailable (a fresh clone, or CI
+without ``/lab``): the fixture is in the repository, the run is not.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from swissisoform.variantquery.load import load_index
 from swissisoform.variantquery.scan import scan
 from swissisoform.variantquery.spec import SV_BREAKEND
 
-FIXTURE_DIR = Path("/lab/barcheese01/ating/ecf_data")
+FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "variantquery"
 VCF = FIXTURE_DIR / "test.vcf"
 EXPECTATIONS = FIXTURE_DIR / "test_expectations.tsv"
 RUN_DIR = Path(__file__).resolve().parents[1] / "data" / "output" / "cheeseman_test"
@@ -33,7 +33,7 @@ ORF_INDEX = RUN_DIR / "orf_index.parquet"
 
 pytestmark = pytest.mark.skipif(
     not (VCF.is_file() and EXPECTATIONS.is_file() and PAIRED.is_file()),
-    reason="needs ecf_data/test.vcf + the cheeseman_test run (both outside the repo)",
+    reason="needs the cheeseman_test run (outside the repo)",
 )
 
 
@@ -426,22 +426,21 @@ def test_inframe_deletion_is_classified_and_placed(result) -> None:
     assert hit.residue == 1, hit
 
 
-def test_a_span_leaving_the_exon_still_gets_its_class(result) -> None:
+def test_a_span_leaving_the_orf_still_gets_its_class(result) -> None:
     """The length delta needs no sequence, so the row is still right.
 
     Here the amino acids are absent *for a reason specific to this variant* — the
-    span crosses an intron, so splicing the ALT in would translate intronic bases —
-    and the note says so. Before the span walk covered indels this case was
-    invisible: the anchor mapped, the rest of the span was never looked at, and the
-    row read as a fully resolved frameshift.
+    span runs past CDC34's last coding base into the stop codon, so there is nothing
+    to splice the ALT into — and the note says so. (A span that leaves through an
+    exon edge inside the ORF is a splice variant instead, ``_span_edge_effect``.)
     """
-    hits = [h for h in result.hits if h.pos == 532107]
+    hits = [h for h in result.hits if h.pos == 541548]
     assert hits
     hit = hits[0]
     assert hit.consequence == "frameshift_variant", hit
     assert (hit.aa_ref, hit.aa_alt) == ("", "")
     assert "leaves the ORF" in hit.consequence_note, hit.consequence_note
-    assert hit.residue is not None, "still placeable — pos itself is in the exon"
+    assert hit.residue is not None, "still placeable — pos itself is in the ORF"
 
 
 def test_the_vocabulary_the_figure_draws_is_actually_exercised(result) -> None:
