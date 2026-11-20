@@ -256,7 +256,11 @@ def test_the_browser_index_is_served_by_fingerprint_and_rebuilds_the_same_index(
     from swissisoform_site.data import load_orf_index, orf_index_fingerprint
 
     index = load_orf_index()
-    response = client.get(f"/api/variants/index/{orf_index_fingerprint()}.json.gz")
+    from swissisoform.variantquery.portable import PORTABLE_FORMAT
+
+    response = client.get(
+        f"/api/variants/index/{orf_index_fingerprint()}/f{PORTABLE_FORMAT}.bin.gz"
+    )
     assert response.status_code == 200
     assert response.headers["Content-Type"] == "application/gzip"
     assert "immutable" in response.headers["Cache-Control"]
@@ -267,7 +271,26 @@ def test_the_browser_index_is_served_by_fingerprint_and_rebuilds_the_same_index(
 
 def test_another_fingerprint_is_not_served(client) -> None:
     """A stale page must not silently scan against data it did not ask for."""
-    assert client.get("/api/variants/index/0000000000000000.json.gz").status_code == 404
+    from swissisoform.variantquery.portable import PORTABLE_FORMAT
+
+    from swissisoform_site.data import orf_index_fingerprint
+
+    assert (
+        client.get(f"/api/variants/index/0000000000000000/f{PORTABLE_FORMAT}.bin.gz").status_code
+        == 404
+    )
+    # The right index in a format this code does not write is refused too.
+    fingerprint = orf_index_fingerprint()
+    assert (
+        client.get(f"/api/variants/index/{fingerprint}/f{PORTABLE_FORMAT - 1}.bin.gz").status_code
+        == 404
+    )
+
+
+def _index_url(fingerprint: str) -> str:
+    from swissisoform.variantquery.portable import PORTABLE_FORMAT
+
+    return f"/api/variants/index/{fingerprint}/f{PORTABLE_FORMAT}.bin.gz"
 
 
 def _restage(client, data_dir: Path, target: Path, monkeypatch, rewrite) -> None:
@@ -297,7 +320,7 @@ def test_a_rebuild_with_the_same_coordinates_gets_a_new_index_url(
 
     from swissisoform_site.data import orf_index_fingerprint, orf_index_version
 
-    old_url = f"/api/variants/index/{orf_index_fingerprint()}.json.gz"
+    old_url = _index_url(orf_index_fingerprint())
     old_version = orf_index_version()
 
     def new_cds(table):
@@ -308,7 +331,7 @@ def test_a_rebuild_with_the_same_coordinates_gets_a_new_index_url(
     assert orf_index_version() == old_version
     assert client.get(old_url).status_code == 404
     page = client.get("/").get_data(as_text=True)
-    assert f'data-index="/api/variants/index/{orf_index_fingerprint()}.json.gz"' in page
+    assert f'data-index="{_index_url(orf_index_fingerprint())}"' in page
     assert orf_index_fingerprint() not in old_url
 
 
@@ -325,6 +348,6 @@ def test_an_unversioned_index_still_gets_a_working_index_url(
         lambda table: table.replace_schema_metadata({}),
     )
     assert orf_index_version() == ""
-    url = f"/api/variants/index/{orf_index_fingerprint()}.json.gz"
+    url = _index_url(orf_index_fingerprint())
     assert f'data-index="{url}"' in client.get("/").get_data(as_text=True)
     assert client.get(url).status_code == 200

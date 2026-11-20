@@ -7,7 +7,7 @@ user's machine. Two downloads, both version-keyed and cached as immutable:
 * the scan package, a zip of exactly :data:`SCANNER_MODULES`, built here from the
   modules this process imports (so it is whatever the image ships, never a copy
   that can drift); its version is a hash of its bytes;
-* the ORF index, as ``variantquery.portable`` gzipped JSON (``data.py``).
+* the ORF index, as the packed binary ``variantquery.portable`` file (``data.py``).
 
 Pyodide itself comes from jsDelivr at a pinned version, as an ES module: Pyodide
 314 refuses to boot in a classic worker, so ``scan_worker.js`` is a module worker

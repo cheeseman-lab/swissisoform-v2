@@ -321,3 +321,86 @@ def test_frame_accessors_never_mix_a_cds_with_the_wrong_exons() -> None:
     assert record.cds_for("canonical") == "ATG"
     assert record.exons_for("canonical") == ((100, 103),)
     assert record.start_codon_for("canonical") == "ATG"
+
+
+# ----------------------------------------------------------------------
+# Packed storage: the record cache and the column loader
+# ----------------------------------------------------------------------
+
+
+def _many(n: int) -> OrfIndex:
+    return OrfIndex.from_records(
+        replace(PLUS, tis_id=f"chr1:{i}:+:ATG:T{i}", transcript_id=f"T{i}") for i in range(n)
+    )
+
+
+def test_the_record_cache_drops_the_least_recently_used_not_everything(monkeypatch) -> None:
+    index = _many(5)
+    monkeypatch.setattr(OrfIndex, "CACHE_SIZE", 3)
+    hot = index.record(0)
+    index.record(1)
+    index.record(2)
+    assert index.record(0) is hot  # 0 is now the most recently used
+    index.record(3)  # evicts 1, the least recently used
+    assert index.record(0) is hot
+    assert list(index._cache) == [2, 3, 0]
+
+
+def test_walking_every_record_leaves_the_query_cache_alone() -> None:
+    index = _many(10)
+    hot = index.record(4)
+    assert [r.tis_id for r in index.records][4] == hot.tis_id
+    assert index.records[-1].tis_id == "chr1:9:+:ATG:T9"
+    assert list(index._cache) == [4]
+
+
+def _row(**overrides) -> dict:
+    row = {
+        "gene_name": "G",
+        "tis_id": "chr1:101:+:ATG:T1",
+        "transcript_id": "T1",
+        "chrom": "chr1",
+        "strand": "+",
+        "orf_exons": [[100, 130], [200, 230]],
+        "canonical_orf_exons": [[100, 130]],
+        "unique_genomic_intervals": [[100, 130]],
+        "shared_genomic_intervals": [[200, 230]],
+        "canonical_len": 20,
+        "isoform_len": 20,
+        "diff_space": "isoform",
+        "orf_type": "extended",
+        "start_codon": "ATG",
+        "canonical_start_codon": "ATG",
+    }
+    row.update(overrides)
+    return row
+
+
+def test_a_null_inside_an_interval_pair_is_left_to_the_row_path() -> None:
+    """The fast path must not turn a null coordinate into a -2**63 bound."""
+    import pytest
+
+    pa = pytest.importorskip("pyarrow")
+    from swissisoform.variantquery.load import columns_from_table
+
+    table = pa.Table.from_pylist([_row(orf_exons=[[5, None], [10, 20]])])
+    assert columns_from_table(table) is None
+    with pytest.raises(TypeError):  # what the row path has always done with it
+        OrfIndex.from_records(table.to_pylist())
+
+
+def test_integer_columns_not_stored_as_integers_coerce_like_the_row_path() -> None:
+    import pytest
+
+    pa = pytest.importorskip("pyarrow")
+    from swissisoform.variantquery.load import columns_from_table
+
+    rows = [
+        _row(canonical_len=3.5, isoform_len="7"),
+        _row(tis_id="chr1:101:+:ATG:T2", canonical_len=float("nan"), isoform_len="x"),
+    ]
+    table = pa.Table.from_pylist(rows)
+    fast = OrfIndex(columns_from_table(table))
+    slow = OrfIndex.from_records(rows)
+    assert list(fast.records) == list(slow.records)
+    assert [(r.canonical_len, r.isoform_len) for r in fast.records] == [(3, 7), (None, None)]
