@@ -31,6 +31,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from swissisoform.contract import SEPARATE_ORF_TYPES as _SEPARATE_ORF_TYPES
+
 ROOT = Path(__file__).resolve().parents[2]
 REF_DIR = ROOT / "data" / "reference" / "distributions"
 # The one current distributions version. Every reader and builder takes its
@@ -63,7 +65,8 @@ STRATUM_SEPARATE = "separate"
 
 # Separate-ORF types have no shared region at all, so every unique-vs-shared
 # feature is null for them by construction (see comparator `_shared_annotations`).
-SEPARATE_ORF_TYPES: tuple[str, ...] = ("uorf", "uoorf", "internal_oof", "3utr_orf", "alt_orf")
+# Defined once in contract; re-exported here for existing importers.
+SEPARATE_ORF_TYPES = _SEPARATE_ORF_TYPES
 
 # Below this a stratum cannot support a percentile-derived cutoff. On the
 # full_catalog population only `uoorf` (n=21) falls short; the `separate` roll-up

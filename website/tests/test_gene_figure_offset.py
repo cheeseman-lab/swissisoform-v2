@@ -109,7 +109,7 @@ def test_uorf_bar_sits_upstream_of_the_canonical_start(index) -> None:
     bar = _bar(_make_gene_protein_view(_uorf_gene()), "uorf")
     assert bar["x0"] == UORF_OFFSET_NT / 3
     assert bar["x1"] < 0
-    assert bar["diff_on_canonical"] is False  # none of it lies on the canonical bar
+    assert bar["diff_is_lost"] is False  # a separate ORF loses nothing; it is all gained
 
 
 def test_uorf_x_is_fractional_when_it_reads_out_of_frame(index) -> None:

@@ -20,6 +20,8 @@ Differential-region spaces by ORF type:
 
 from __future__ import annotations
 
+import math
+import re
 from dataclasses import dataclass
 from enum import Enum
 
@@ -53,6 +55,82 @@ NO_CANONICAL_BASELINE_ORFS = frozenset(
         ORFType.ALT_ORF,
     }
 )
+
+
+@dataclass(frozen=True)
+class DiffRegionRule:
+    """Where an ORF type's isoform-unique region lives.
+
+    Attributes:
+        space: Coordinate space of the differential region —
+            ``"isoform"``, ``"canonical"``, or ``"none"``.
+        whole_isoform: ``True`` when the entire isoform is unique (no shared
+            region with the canonical protein).
+    """
+
+    space: str  # "isoform" | "canonical" | "none"
+    whole_isoform: bool
+
+
+_DIFF_REGION_RULES: dict[ORFType, DiffRegionRule] = {
+    ORFType.ANNOTATED: DiffRegionRule(space="none", whole_isoform=False),
+    ORFType.EXTENDED: DiffRegionRule(space="isoform", whole_isoform=False),
+    ORFType.TRUNCATED: DiffRegionRule(space="canonical", whole_isoform=False),
+    ORFType.UORF: DiffRegionRule(space="isoform", whole_isoform=True),
+    ORFType.UOORF: DiffRegionRule(space="isoform", whole_isoform=True),
+    ORFType.INTERNAL_OUT_OF_FRAME: DiffRegionRule(space="isoform", whole_isoform=True),
+    ORFType.THREE_UTR_ORF: DiffRegionRule(space="isoform", whole_isoform=True),
+    ORFType.ALT_ORF: DiffRegionRule(space="isoform", whole_isoform=True),
+}
+
+
+# ORF types read as a separate protein: they share no reading frame with the CDS,
+# so the whole isoform is unique and there is no shared region.
+SEPARATE_ORF_TYPES: tuple[str, ...] = tuple(
+    t.value for t, rule in _DIFF_REGION_RULES.items() if rule.whole_isoform
+)
+
+# What the unique region is called per ORF type — the nouns the category prompts
+# use, the tag labels carry (``Tag.label_for``) and the site renders. An extension
+# adds it, a truncation lost it (canonical-space), a separate ORF is wholly unique.
+REGION_NOUN: dict[str, str] = {
+    ORFType.EXTENDED.value: "extension",
+    ORFType.TRUNCATED.value: "lost region",
+    **dict.fromkeys(SEPARATE_ORF_TYPES, "ORF"),
+}
+# What a reader calls the region when the ORF type is unknown.
+DEFAULT_REGION_NOUN = "differential region"
+# Not after a hyphen: "isoform-unique region" is a compound, not the region's name.
+_UNIQUE_REGION = re.compile(r"(?<![\w-])[Uu]nique region\b")
+
+
+def region_noun(
+    orf_type: str | None, *, cap: bool = False, default: str | None = None
+) -> str | None:
+    """The unique region's name for one ORF type (``default`` for an unknown type).
+
+    ``cap`` capitalises the first letter, for a heading or a legend entry.
+    """
+    noun = REGION_NOUN.get((orf_type or "").lower()) or default
+    return noun[0].upper() + noun[1:] if cap and noun else noun
+
+
+def stratum_label(text: str, orf_type: str | None) -> str:
+    """Rewrite a generic "unique region" phrase the way it reads for one ORF type.
+
+    "Unique region more basic" → "Extension more basic" / "Lost region more
+    basic" / "ORF more basic", keeping the capital when the phrase had one. On a
+    truncation a trailing " gained" reads " lost" ("Constrained residues gained"
+    → "Constrained residues lost"). An unknown ORF type returns ``text`` as is.
+    """
+    noun = region_noun(orf_type)
+    if noun is None:
+        return text
+    noun_cap = region_noun(orf_type, cap=True)
+    out = _UNIQUE_REGION.sub(lambda m: noun_cap if m.group(0)[0] == "U" else noun, text)
+    if (orf_type or "").lower() == ORFType.TRUNCATED.value and out.endswith(" gained"):
+        out = out[: -len(" gained")] + " lost"
+    return out
 
 
 # Codons that can initiate translation: ATG plus the near-cognate starts — its
@@ -169,33 +247,6 @@ def orf_type_from_ribotish(tis_type: str) -> ORFType:
     return ORFType.ALT_ORF
 
 
-@dataclass(frozen=True)
-class DiffRegionRule:
-    """Where an ORF type's isoform-unique region lives.
-
-    Attributes:
-        space: Coordinate space of the differential region —
-            ``"isoform"``, ``"canonical"``, or ``"none"``.
-        whole_isoform: ``True`` when the entire isoform is unique (no shared
-            region with the canonical protein).
-    """
-
-    space: str  # "isoform" | "canonical" | "none"
-    whole_isoform: bool
-
-
-_DIFF_REGION_RULES: dict[ORFType, DiffRegionRule] = {
-    ORFType.ANNOTATED: DiffRegionRule(space="none", whole_isoform=False),
-    ORFType.EXTENDED: DiffRegionRule(space="isoform", whole_isoform=False),
-    ORFType.TRUNCATED: DiffRegionRule(space="canonical", whole_isoform=False),
-    ORFType.UORF: DiffRegionRule(space="isoform", whole_isoform=True),
-    ORFType.UOORF: DiffRegionRule(space="isoform", whole_isoform=True),
-    ORFType.INTERNAL_OUT_OF_FRAME: DiffRegionRule(space="isoform", whole_isoform=True),
-    ORFType.THREE_UTR_ORF: DiffRegionRule(space="isoform", whole_isoform=True),
-    ORFType.ALT_ORF: DiffRegionRule(space="isoform", whole_isoform=True),
-}
-
-
 def diff_region_rule(orf_type: ORFType) -> DiffRegionRule:
     """Return the differential-region rule for an ORF type.
 
@@ -207,3 +258,31 @@ def diff_region_rule(orf_type: ORFType) -> DiffRegionRule:
         the entire isoform is unique.
     """
     return _DIFF_REGION_RULES[orf_type]
+
+
+def ratio(subject: float | None, reference: float | None) -> float | None:
+    """``subject / reference``, or None where that does not read as a ratio.
+
+    Undefined for a missing or non-finite side, a reference ≤ 0 (a negative
+    denominator inverts it) or a negative subject. The pipeline's region ratios
+    and the site's comparison tables both use this, so they cannot disagree.
+    """
+    if subject is None or reference is None:
+        return None
+    if not (math.isfinite(subject) and math.isfinite(reference)):
+        return None
+    if reference <= 0 or subject < 0:
+        return None
+    return subject / reference
+
+
+def density_ratio(
+    n_unique: float, unique_len: float, n_shared: float, shared_len: float
+) -> float | None:
+    """Per-length density ratio ``(n_unique / unique_len) / (n_shared / shared_len)``.
+
+    None when either length is ≤ 0 or the shared density is 0 (see :func:`ratio`).
+    """
+    if unique_len <= 0 or shared_len <= 0:
+        return None
+    return ratio(n_unique / unique_len, n_shared / shared_len)

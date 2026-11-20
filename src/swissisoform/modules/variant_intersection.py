@@ -38,6 +38,7 @@ from typing import Any
 
 from swissisoform.clinical.significance import is_pathogenic
 from swissisoform.clinical.validate import ConsequenceValidator
+from swissisoform.contract import density_ratio
 from swissisoform.coords import position_in_intervals
 from swissisoform.models import ORFType, TranslationInitiationSite, is_separate_orf, region_split
 
@@ -47,22 +48,6 @@ logger = logging.getLogger(__name__)
 def _is_pathogenic(hit: dict[str, Any]) -> bool:
     """Return True for a Pathogenic / Likely pathogenic call (not Conflicting)."""
     return is_pathogenic(hit.get("clinical_significance"))
-
-
-def _density_ratio(
-    n_unique: int, unique_nt: int, n_shared: int, shared_nt: int
-) -> float | None:
-    """Return per-nt density ratio ``(n_unique/unique_nt) / (n_shared/shared_nt)``.
-
-    None when any denominator is zero (no region length or no shared density),
-    since a per-nt ratio is undefined there.
-    """
-    if unique_nt <= 0 or shared_nt <= 0:
-        return None
-    shared_density = n_shared / shared_nt
-    if shared_density <= 0:
-        return None
-    return (n_unique / unique_nt) / shared_density
 
 
 class VariantIntersectionModule:
@@ -273,10 +258,10 @@ class VariantIntersectionModule:
         # variation avoids the unique region (constraint); >1 disease enrichment =
         # disease variants concentrate in the unique region. None when any density
         # denominator is zero/missing (no meaningful ratio).
-        gnomad_depletion_ratio = _density_ratio(
+        gnomad_depletion_ratio = density_ratio(
             n_gnomad_unique, unique_nt, n_gnomad_shared, shared_nt
         )
-        disease_enrichment_ratio = _density_ratio(
+        disease_enrichment_ratio = density_ratio(
             n_disease_unique, unique_nt, n_disease_shared, shared_nt
         )
 
