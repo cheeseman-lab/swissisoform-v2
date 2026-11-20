@@ -116,7 +116,7 @@
         Choose a file
       </label>
       <p class="vq-drop-status" id="vq-status" role="status" aria-live="polite"></p>
-      <p class="vq-drop-note">Deleted after 24&nbsp;h. Don't upload data you aren't permitted to.</p>
+      <p class="vq-drop-note">Scanned on the server and not kept; results stay in this browser tab. Don't upload data you aren't permitted to.</p>
     </div>
   </div>
 
@@ -138,13 +138,11 @@
 
 {# The gene table. Rows are built client-side from /api/landing.json and only the
    ones on screen are in the DOM (landing_table.js), so the page costs the same at
-   catalogue scale. Link bases are rendered WITHOUT the scan token and the token
-   is carried separately, as gene.html does, so the script can append paths. #}
+   catalogue scale. #}
 <div id="gene-table" class="gt" role="table" aria-label="Genes and their isoforms"
      aria-rowcount="-1"
-     data-src="{{ url_for('api_landing', v=landing_etag, vcf=None) }}"
-     data-gene-base="{{ url_for('gene_page', gene_name='__GENE__', vcf=None) }}"
-     data-scan-qs="{{ scan_qs }}">
+     data-src="{{ url_for('api_landing', v=landing_etag) }}"
+     data-gene-base="{{ url_for('gene_page', gene_name='__GENE__') }}">
   <div class="gt-head" role="row">
     <span class="gt-c gt-c-toggle" role="columnheader"><span class="sr-only">Expand</span></span>
     <span class="gt-c gt-c-gene" role="columnheader">Gene</span>

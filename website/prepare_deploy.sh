@@ -132,8 +132,9 @@ done
 # person's 2> redirect fails on permissions before python even starts, and the
 # failure reads as "the staged tree does not import", which is a lie. website/ is
 # gitignored build output (*.log already covered), so the log belongs here with the
-# thing it describes. The container's own /tmp default in scanstore.py is fine by
-# contrast: that path only ever exists inside one Railway container.
+# thing it describes. The container's own /tmp defaults (the throttle dir, the
+# per-request upload staging) are fine by contrast: those paths only ever exist
+# inside one Railway container.
 # The app's startup builds only the landing index; the full records the gene and
 # isoform pages read (load_all) are built on first use. So load them here too: a
 # staged parquet load_all cannot read fails the deploy instead of 500-ing every

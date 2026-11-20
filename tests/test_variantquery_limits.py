@@ -1,8 +1,8 @@
 """Resource caps on the VCF reader and the scan loop.
 
-Deliberately free of the external fixture data the other variantquery suites are
-gated on: every input here is built in ``tmp_path``, so the caps stay covered in
-an environment that has no ``ecf_data`` and no built run.
+Deliberately free of the built run the other variantquery suites are gated on:
+every input here is built in ``tmp_path``, so the caps stay covered in an
+environment that has no ``cheeseman_test`` run.
 """
 
 from __future__ import annotations

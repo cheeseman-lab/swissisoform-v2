@@ -3,10 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  {# Belt-and-braces with the Referrer-Policy header in app.py: an active scan
-     puts ?vcf=<token> — a 24 h read capability — on every internal URL, and
-     this stops the browser offering that URL to doi.org / UniProt / PubMed or
-     the CDN subresources below. #}
+  {# Belt-and-braces with the Referrer-Policy header in app.py: never offer an
+     internal URL to doi.org / UniProt / PubMed or the CDN subresources below. #}
   <meta name="referrer" content="same-origin">
   <title>{% block title %}SwissIsoform v2{% endblock %}</title>
   <meta name="description" content="{% block description %}SwissIsoform v2 — alternative protein isoforms from translation initiation sequencing, with evidence-axis scoring and per-isoform interpretation.{% endblock %}">
@@ -19,9 +17,15 @@
 
   <link rel="stylesheet" href="{{ url_for('static', filename='css/site.css') }}">
 
+  <!-- The tab's VCF scan (sessionStorage). Not deferred: page scripts call it inline. -->
+  <script src="{{ url_for('static', filename='js/scanstate.js') }}"></script>
+
   {% block head_extra %}{% endblock %}
 </head>
-<body class="bg-slate-50 text-slate-900 antialiased">
+{# scanstate.js checks a stored scan against both: an unknown data-scan-schema is
+   discarded, and a scan from another data-index-version is flagged stale. #}
+<body class="bg-slate-50 text-slate-900 antialiased"
+      data-index-version="{{ index_version }}" data-scan-schema="{{ scan_schema }}">
 
   <header class="border-b border-slate-200 bg-white">
     <div class="max-w-6xl mx-auto px-4 py-3 flex items-center gap-6">
