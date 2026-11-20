@@ -148,7 +148,7 @@ def test_drop_zone_is_wired_to_its_script(client) -> None:
 def test_drop_zone_states_the_retention_policy(client) -> None:
     """Users uploading variant data should be told what happens to it, on the widget."""
     page = client.get("/").data.decode()
-    assert "not kept" in page
+    assert "not uploaded" in page
     assert "this browser tab" in page
 
 
