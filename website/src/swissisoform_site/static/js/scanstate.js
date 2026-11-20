@@ -58,14 +58,25 @@
     cached = null;
   }
 
-  /* hits → {format, columns, tables, rows}. Lossless: unpack(pack(h)) equals h.
+  /* hits → {format, columns, tables, rows}. Lossless: unpack(pack(h)) equals h
+     when every hit has the same fields, as the scanner emits them.
 
-     Columns come from the first hit (every hit has the same fields). A column
-     whose every value is a string is dictionary-encoded: its table lists the
-     distinct values in first-seen order and the rows hold their indexes. Other
-     columns (numbers, and null-able ones like residue and x) are stored as is. */
+     Columns are the union of every hit's fields, so a field on only some hits
+     survives; on the hits without it, it reads back as null. A column whose every
+     value is a string is dictionary-encoded: its table lists the distinct values
+     in first-seen order and the rows hold their indexes. Other columns (numbers,
+     and null-able ones like residue and x) are stored as is. */
   function pack(hits) {
-    var columns = hits.length ? Object.keys(hits[0]) : [];
+    var columns = [];
+    var seen = new Set();
+    hits.forEach(function (h) {
+      Object.keys(h).forEach(function (c) {
+        if (!seen.has(c)) {
+          seen.add(c);
+          columns.push(c);
+        }
+      });
+    });
     var tables = {};
     var lookups = {};
     columns.forEach(function (c) {
@@ -77,7 +88,7 @@
     var rows = hits.map(function (h) {
       return columns.map(function (c) {
         var lookup = lookups[c];
-        if (!lookup) return h[c];
+        if (!lookup) return c in h ? h[c] : null;
         var i = lookup.get(h[c]);
         if (i === undefined) {
           i = tables[c].length;

@@ -128,9 +128,7 @@ def test_fixture_variants_classify_against_real_orfs(genome_validator, records) 
     # the length delta without reading sequence.
     no_amino_acids = {"frameshift_variant", "inframe_insertion", "inframe_deletion"}
 
-    expectations = Path("/lab/barcheese01/ating/ecf_data/test_expectations.tsv")
-    if not expectations.is_file():
-        pytest.skip("needs ecf_data/test_expectations.tsv")
+    expectations = Path(__file__).resolve().parent / "fixtures/variantquery/test_expectations.tsv"
 
     index = OrfIndex.from_records(records)
     with expectations.open() as handle:
@@ -164,9 +162,9 @@ def test_fixture_variants_classify_against_real_orfs(genome_validator, records) 
                 term = out["consequence"]
                 assert term, f"{chrom}:{pos} {ref}>{alt} on {record.tis_id}"
                 if out["aa_ref"] is None:
-                    assert term in no_amino_acids or not out["validated"] or term == (
-                        "intronic"
-                    ), f"unexplained missing amino acids on {record.tis_id}: {out}"
+                    assert term in no_amino_acids or not out["validated"] or term == ("intronic"), (
+                        f"unexplained missing amino acids on {record.tis_id}: {out}"
+                    )
                 classified += 1
     assert classified >= 20, f"only {classified} (variant, ORF) pairs classified"
 

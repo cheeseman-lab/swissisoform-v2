@@ -100,6 +100,15 @@ checks.pack_round_trips_exactly = () => {
   same(packed.tables.gene, ["B", "A"]);
   assert.ok(!("residue" in packed.tables) && !("x" in packed.tables) && !("pos" in packed.tables));
 };
+checks.pack_keeps_a_field_only_some_hits_have = () => {
+  const api = page(makeStore(5e6), attrs);
+  const mixed = [{ gene: "A", pos: 1 }, { gene: "B", pos: 2, note: "late" }];
+  const back = api.unpack(JSON.parse(JSON.stringify(api.pack(mixed))));
+  assert.strictEqual(JSON.stringify(back), JSON.stringify([
+    { gene: "A", pos: 1, note: null },
+    { gene: "B", pos: 2, note: "late" },
+  ]));
+};
 checks.packing_shrinks_what_is_stored = () => {
   const api = page(makeStore(5e6), attrs);
   const plain = JSON.stringify(hits).length;
@@ -201,6 +210,10 @@ def test_an_unknown_schema_is_discarded() -> None:
 
 def test_packing_round_trips_exactly() -> None:
     _check("pack_round_trips_exactly")
+
+
+def test_a_field_on_only_some_hits_is_kept() -> None:
+    _check("pack_keeps_a_field_only_some_hits_have")
 
 
 def test_packing_shrinks_what_is_stored() -> None:

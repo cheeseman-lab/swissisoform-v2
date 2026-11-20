@@ -3,7 +3,7 @@
 Exercises the contract the front end depends on: a VCF in, the whole result out
 (the browser keeps it; the server keeps nothing), and the failure modes mapped onto
 distinct status codes rather than a generic 500. ``test_scan_route.py`` covers the
-same contract with a VCF it writes itself, for when this fixture is absent.
+same contract with a VCF it writes itself.
 
 Skipped without the ``cheeseman_test`` run, which lives outside the repository.
 """
@@ -19,7 +19,7 @@ import pytest
 
 WEBSITE_ROOT = Path(__file__).resolve().parents[1]
 RUN_DIR = WEBSITE_ROOT.parent / "data" / "output" / "cheeseman_test"
-FIXTURE_VCF = Path("/lab/barcheese01/ating/ecf_data/test.vcf")
+FIXTURE_VCF = WEBSITE_ROOT.parent / "tests" / "fixtures" / "variantquery" / "test.vcf"
 
 STAGED_FILES = ("all_paired.parquet", "variants_long.parquet", "orf_index.parquet")
 
@@ -27,7 +27,7 @@ pytestmark = pytest.mark.skipif(
     not (FIXTURE_VCF.is_file() and all((RUN_DIR / f).is_file() for f in STAGED_FILES)),
     reason=(
         "needs the cheeseman_test run with orf_index.parquet built "
-        "(python scripts/export/build_orf_index.py --run cheeseman_test) plus ecf_data/test.vcf"
+        "(python scripts/export/build_orf_index.py --run cheeseman_test)"
     ),
 )
 
