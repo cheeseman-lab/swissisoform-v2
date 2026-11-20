@@ -29,7 +29,7 @@ def _view(variants, *, truncation=False):
         "is_trunc": truncation,
         "diff_x0": 0 if truncation else -20,
         "diff_x1": 19 if truncation else -1,
-        "diff_on_canonical": truncation,
+        "diff_is_lost": truncation,
         "orf_type": "truncated" if truncation else "extended",
         "slug": "s",
     }
@@ -55,7 +55,6 @@ def _clinvar(consequence, pos=10):
         "significance": None,
         "protein_change": "",
         "source": "clinvar",
-        "in_unique": False,
     }
 
 
@@ -135,11 +134,12 @@ def test_one_variant_in_several_isoforms_is_one_mark() -> None:
     assert "in 3 isoforms" not in trace["hovertext"][1]
 
 
-def test_a_hit_in_any_unique_region_marks_the_merge_unique() -> None:
+def test_the_gene_view_makes_no_unique_or_shared_claim() -> None:
+    """Membership depends on the isoform, so only the isoform pages state it."""
     fig = build_gene_protein_figure(_view([]))
     hits = [_hit(tis_id="a"), _hit(tis_id="b", region="unique")]
     (trace,) = _uploaded(apply_uploaded_hits(fig, hits))
-    assert trace["hovertext"][0].endswith("unique region")
+    assert "region" not in trace["hovertext"][0]
 
 
 def test_hover_names_the_source_the_change_and_the_frame() -> None:
@@ -168,7 +168,7 @@ def test_a_new_row_lands_where_the_server_would_have_put_it() -> None:
     """start_lost sorts between stop_gained and missense, so existing rows must move.
 
     The reference is the server's own figure for the same gene with a start_lost row
-    already present: rows, labels, range, height and the truncation guide must match.
+    already present: rows, labels, range and height must match.
     """
     known = [_clinvar("stop_gained"), _clinvar("missense_variant")]
     fig = build_gene_protein_figure(_view(known, truncation=True))
@@ -185,15 +185,9 @@ def test_a_new_row_lands_where_the_server_would_have_put_it() -> None:
     assert out["layout"]["yaxis"]["range"] == reference["layout"]["yaxis"]["range"]
     assert out["layout"]["height"] == reference["layout"]["height"]
 
-    def guide(f):
-        (shape,) = [s for s in f["layout"]["shapes"] if s.get("name") == "truncation-guide"]
-        return shape["y1"]
-
-    assert guide(out) == guide(reference)
-
 
 def test_the_first_row_on_a_gene_with_none_lands_where_the_server_would_put_it() -> None:
-    """No rows yet and no truncation guide: the headroom floor, not the rows, set y_hi."""
+    """No rows yet: the headroom floor, not the rows, sets y_hi."""
     fig = build_gene_protein_figure(_view([]))
     out = apply_uploaded_hits(fig, [_hit("missense_variant", x=0)])
     reference = build_gene_protein_figure(_view([_clinvar("missense_variant", pos=1)]))

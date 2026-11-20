@@ -99,6 +99,16 @@ def test_slice_extracts_headline_from_raw() -> None:
     assert sl["headline"] == "Unique region 96.0% similar across primates"
 
 
+def test_d3_headline_counts_are_integers() -> None:
+    # pandas reads an int struct field as float64 once any row holds a null, so the
+    # summary arrives as 2.0 / 6.0; the headline must still say "2/6".
+    summary = {"pepquery_run": True, "validated_peptides": 2.0, "unique_peptides": 6.0}
+    sl = ber.slice_criterion(
+        {"tis_id": "x", "_raw": {"isoform_massspec_summary": summary}}, "D3_mass_spec"
+    )
+    assert sl["headline"] == "2/6 isoform-unique peptides validated"
+
+
 def test_slice_extracts_all_evidence_cols() -> None:
     raw = {
         "isoform_conservation_frame_primate_mean_pident": 0.96,
@@ -150,3 +160,39 @@ def test_f5_extracts_variants_as_hits() -> None:
     sl = ber.slice_criterion(iso, "M1_pathogenic_variant_enrichment")
     assert len(sl["hits"]) == 2
     assert sl["headline"] == "gnomAD variants 2.00× less in unique region — constrained"
+
+
+def test_expression_samples_catalog_and_external_panels() -> None:
+    catalog = {f"expr_{s}_p_value": None for s in ber.CELL_LINES}
+    assert ber.expression_samples(catalog) == list(ber.CELL_LINES)
+    assert ber.expression_samples({}) == list(ber.CELL_LINES)  # no columns: default panel
+    external = {
+        "expr_HeLa_Async_p_value": 1e-6,
+        "expr_HeLa_Shake_raw_count": None,
+        "canonical_expr_RPE1_Async_initiation_efficiency": None,
+        "gene_name": "X",
+    }
+    assert ber.expression_samples(external) == ["RPE1_Async", "HeLa_Async", "HeLa_Shake"]
+    assert ber.CRITERIA_METRIC_LABELS["expr_HeLa_Shake_p_value"]["label"] == "HeLa Shake: p-value"
+
+
+def test_d1_slice_follows_the_record_panel() -> None:
+    # Two external samples; the TIS was called in one. The evidence lists those
+    # samples' columns (not the six catalog lines) and the headline counts over them.
+    raw = {
+        "expr_HeLa_Async_p_value": 1e-6,
+        "expr_HeLa_Async_raw_count": 16,
+        "expr_HeLa_Shake_p_value": None,
+        "expr_HeLa_Shake_raw_count": None,
+    }
+    sl = ber.slice_criterion({"tis_id": "x", "_raw": raw}, "D1_multi_cell_line")
+    assert sl["headline"] == "detected in 1/2 samples"
+    assert "expr_HeLa_Async_p_value" in sl["evidence"]
+    assert not any(k.startswith("expr_K562") for k in sl["evidence"])
+
+
+def test_d1_slice_unchanged_for_catalog_panel() -> None:
+    raw = {f"expr_{s}_p_value": (1e-6 if s == "HeLa" else None) for s in ber.CELL_LINES}
+    sl = ber.slice_criterion({"tis_id": "x", "_raw": raw}, "D1_multi_cell_line")
+    assert sl["headline"] == "detected in 1/6 cell lines"
+    assert list(sl["evidence"]) == ber.CRITERIA["D1_multi_cell_line"]["evidence_cols"]

@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from swissisoform.contract import ORFType, orf_type_from_ribotish
+from swissisoform.contract import ORFType, diff_region_rule, orf_type_from_ribotish
 
 __all__ = [
     "ORFType",
@@ -82,13 +82,14 @@ class CellLineExpression:
 
     Attributes:
         raw_count: Raw read count at the TIS position.
-        cpm: Counts per million normalization.
+        cpm: Counts per million normalization; None when the sample has no RNA-seq
+            totals to normalise by (external Ribo-TISH evidence).
         p_value: Statistical significance of TIS enrichment.
         initiation_efficiency: Ratio of TIS reads to total gene reads, if available.
     """
 
     raw_count: int
-    cpm: float
+    cpm: float | None
     p_value: float
     initiation_efficiency: float | None = None
 
@@ -228,6 +229,45 @@ class TranslationInitiationSite:
     # scalar deltas, enrichment ratios, and positional hits restricted to
     # the differential region.
     comparison: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+
+def is_separate_orf(site: TranslationInitiationSite) -> bool:
+    """True when the ORF shares no reading frame, and so no region, with the canonical.
+
+    The one rule every unique/shared split uses (``coords.unique_shared_intervals``
+    callers): a separate ORF's whole ORF is its unique region, even where its
+    nucleotides overlap canonical CDS in another frame. A uoORF can still
+    sequence-match the canonical as an in-frame extension or truncation
+    (``compute_diff_region`` checks); that case keeps a shared region.
+    """
+    if not diff_region_rule(site.orf_type).whole_isoform:
+        return False
+    dr = site.diff_region
+    if dr is not None:
+        if dr.canonical_end is not None:
+            return False
+        iso_len = len((site.isoform_protein or "").rstrip("*"))
+        if dr.isoform_end is not None and dr.isoform_end < iso_len:
+            return False
+    return True
+
+
+def region_split(site: TranslationInitiationSite) -> tuple[list, list]:
+    """Genomic ``(unique, shared)`` intervals for *site*, by the one rule every module uses.
+
+    Derives both flags from the site — truncation (the unique region is the lost
+    canonical stretch) and :func:`is_separate_orf` (the whole ORF is unique) — so
+    no caller can pass one and forget the other. Callers keep their own guard
+    for a missing skeleton; a separate ORF needs no canonical skeleton.
+    """
+    from swissisoform.coords import unique_shared_intervals
+
+    return unique_shared_intervals(
+        site.orf_type == ORFType.TRUNCATED,
+        site.orf_exons,
+        site.canonical_orf_exons,
+        separate_orf=is_separate_orf(site),
+    )
 
 
 @dataclass

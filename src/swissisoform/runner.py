@@ -18,7 +18,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
-import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -53,7 +52,7 @@ from swissisoform.evidence.l2_targeting import (
     precompute_targetp,
 )
 from swissisoform.evidence.s1_domains import InterProScanModule, precompute_interproscan
-from swissisoform.io.parquet import paired_schema, paired_tis_dataframe
+from swissisoform.io.parquet import paired_table, paired_tis_dataframe, write_table_atomic
 from swissisoform.io.rnaseq import load_sample_manifest
 from swissisoform.modules.biophysics import BiophysicsModule
 from swissisoform.modules.conservation import ConservationModule
@@ -849,12 +848,7 @@ def _write_parquet_atomic(df: pd.DataFrame, path: Path, schema: pa.Schema) -> No
     file or the complete one — a plain ``to_parquet`` into the final path leaves
     a truncated file behind when the job is killed mid-write (Slurm timeout, OOM).
     """
-    tmp = path.with_name(f".{path.name}.tmp")
-    try:
-        pq.write_table(pa.Table.from_pandas(df, schema=schema, preserve_index=False), tmp)
-        os.replace(tmp, path)
-    finally:
-        tmp.unlink(missing_ok=True)
+    write_table_atomic(pa.Table.from_pandas(df, schema=schema, preserve_index=False), path)
 
 
 def _write_population_sidecar(
@@ -973,11 +967,13 @@ def run(spec: RunSpec) -> int:
     # per-gene slice. Per-frame inference breaks on a frame whose rows all hold
     # an empty struct (no clinical hits => by_source == {}, which Parquet cannot
     # represent), and that hazard is not specific to the small slices: a run with
-    # no clinical hits anywhere hits it on all_paired too. paired_schema also
+    # no clinical hits anywhere hits it on all_paired too. paired_table also
     # pins the clinical summaries to map types, so the schema no longer depends
     # on which variant sources and consequence terms this frame happened to see
     # — without that, two shards of one campaign disagree on the same column.
-    schema = paired_schema(paired, tag_schema_overrides(paired))
+    # Built once (paired_table); every per-gene slice is written against its schema.
+    table = paired_table(paired, tag_schema_overrides(paired))
+    schema = table.schema
     for gene_name, sub in paired.groupby("gene_name"):
         gpath = out_dir / f"{gene_name}_paired.parquet"
         pq.write_table(pa.Table.from_pandas(sub, schema=schema, preserve_index=False), gpath)
@@ -991,7 +987,7 @@ def run(spec: RunSpec) -> int:
     # treats its existence as "this shard finished", so writing it first (or in
     # place) let a job killed mid-run leave a done-marker over a partial
     # directory or a truncated file — skipped forever on every later resume.
-    _write_parquet_atomic(paired, all_path, schema)
+    write_table_atomic(table, all_path)
     print(f"\nwrote {all_path} ({len(paired)} rows, {len(paired.columns)} cols)")
 
     elapsed = time.perf_counter() - t_start

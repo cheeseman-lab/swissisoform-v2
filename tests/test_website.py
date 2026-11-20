@@ -41,6 +41,11 @@ def client():
 
     data_mod.load_all.cache_clear()
     data_mod._structure_index.cache_clear()
+    # Importing the app builds the landing index (create_app), possibly before
+    # the data dir above was set — drop it so it is rebuilt from website/data.
+    from swissisoform_site import landing
+
+    landing.landing_index.cache_clear()
 
     from swissisoform_site.app import app
 
@@ -57,8 +62,10 @@ def test_healthz(client):
 def test_index_lists_a_known_gene(client):
     r = client.get("/")
     assert r.status_code == 200
-    body = r.data.decode()
-    assert "TRNT1" in body
+    # The table's rows come from the landing JSON; the page itself links examples.
+    assert "/genes/" in r.data.decode()
+    names = {g["n"] for g in json.loads(client.get("/api/landing.json").data)["genes"]}
+    assert "TRNT1" in names
 
 
 def test_gene_page_renders_combined_protein_figure_and_isoform_cards(client):
@@ -101,13 +108,12 @@ def test_pmid_links_filter_escapes_and_links():
     assert multi.startswith("established [") and multi.rstrip().endswith("]")
 
 
-def test_gene_view_variant_unique_in_any_isoform():
-    """A variant in the unique region of ANY isoform stays flagged unique.
+def test_gene_view_variant_dedup_keeps_most_severe_and_no_region_flag():
+    """A variant seen by several isoforms dedups to one mark, most severe call kept.
 
-    Regression: the pathogenic-upgrade path in the cross-isoform variant dedup
-    used to clobber the OR-merged ``in_unique`` with the current isoform's flag.
-    Here V:1 is unique+benign in isoform A but shared+pathogenic in B; the deduped
-    lollipop must keep ``in_unique=True`` (unique in A) AND the pathogenic call.
+    V:1 is unique+benign in isoform A but shared+pathogenic in B. The gene view
+    keeps one mark with the pathogenic call and carries NO unique/shared flag:
+    membership depends on the isoform, so the gene level must not assert one.
     """
     if str(WEBSITE_SRC) not in sys.path:
         sys.path.insert(0, str(WEBSITE_SRC))
@@ -137,7 +143,7 @@ def test_gene_view_variant_unique_in_any_isoform():
     view = _make_gene_protein_view(gene)
     v1 = [v for v in view.variants if v["variant_id"] == "V:1"]
     assert len(v1) == 1                     # deduped across the two isoforms
-    assert v1[0]["in_unique"] is True       # unique in isoform A → stays unique
+    assert "in_unique" not in v1[0]         # no gene-level membership claim
     assert "pathogenic" in (v1[0]["significance"] or "").lower()  # most-severe kept
 
 
@@ -176,7 +182,6 @@ def test_gene_view_truncation_lost_region_variants_appear():
     by_id = {v["variant_id"]: v for v in view.variants}
     x0 = view.bars[0]["x0"]  # retained bar's left edge = end of the lost region
     assert "LOST:1" in by_id                        # previously dropped
-    assert by_id["LOST:1"]["in_unique"] is True
     assert by_id["LOST:1"]["pos"] < x0              # in the lost region (left of the retained bar)
     assert by_id["KEPT:1"]["pos"] >= x0             # retained region
 
@@ -186,15 +191,17 @@ def test_gene_page_404(client):
     assert r.status_code == 404
 
 
-def test_index_page_shows_isoform_dropdown(client):
-    """Landing page must render the per-gene isoform dropdown."""
-    r = client.get("/")
+def test_index_table_lists_isoforms_with_their_links(client):
+    """The landing table's data names every gene and the isoforms it expands to.
+
+    Rows are built client-side from /api/landing.json (tests/test_landing.py holds
+    it to the cards' contents); the isoform links are /genes/<gene>/isoforms/<slug>.
+    """
+    r = client.get("/api/landing.json")
     assert r.status_code == 200
-    body = r.data
-    assert b"TRNT1" in body
-    # Dropdown markup and a link into the V2 isoform route.
-    assert b"iso-dropdown" in body
-    assert b"/isoforms/chr" in body
+    payload = json.loads(r.data)
+    trnt1 = next(g for g in payload["genes"] if g["n"] == "TRNT1")
+    assert trnt1["i"] and all(i["t"].startswith("chr") for i in trnt1["i"])
 
 
 def test_api_data_json(client):
@@ -333,17 +340,21 @@ def test_isoform_page_renders_reasoning_and_tags_without_verdict(client, monkeyp
     Tiles show the reasoning, the fired tags and the criterion-derived flag.
     """
     import pandas as pd
-    from swissisoform_site import app as app_mod
-    from swissisoform_site.data import CARD_GROUPS
+    from swissisoform_site.data import CARD_GROUPS, load_all
     from swissisoform_site.data import tis_slug as make_slug
 
     reads = {
         g["name"]: {"reasoning": f"Read for {g['name']}.", "tags_fired": ["frame_intact"]}
         for g in CARD_GROUPS
     }
-    monkeypatch.setattr(app_mod, "category_verdicts_for_isoform", lambda **_: reads)
     df = pd.read_parquet(WEBSITE_DATA / "all_paired.parquet", columns=["gene_name", "tis_id"])
     row = df.iloc[0]
+    # The route reads the Isoform's own reads (one source for index and isoform
+    # pages), so the reads go on the loaded Isoform, and its cached flags are
+    # dropped so they recompute from them.
+    iso = next(i for i in load_all()[row["gene_name"]].isoforms if i.tis_id == row["tis_id"])
+    monkeypatch.setattr(iso, "category_verdicts", reads)
+    monkeypatch.delitem(iso.__dict__, "category_flags", raising=False)
     r = client.get(f"/genes/{row['gene_name']}/isoforms/{make_slug(row['tis_id'])}")
     assert r.status_code == 200
     body = r.data.decode()
@@ -545,7 +556,7 @@ def test_isoform_page_has_evidence_modal_element(client):
 
 
 def test_isoform_page_truncation_marks_differential_region(client):
-    """For a truncation, the folding legend names the differential region."""
+    """For a truncation, the folding legend names the region by its stratum noun."""
     from swissisoform_site.data import load_all
     from swissisoform_site.data import tis_slug as make_slug
 
@@ -560,9 +571,10 @@ def test_isoform_page_truncation_marks_differential_region(client):
     r = client.get(f"/genes/{gene}/isoforms/" + make_slug(tis_id))
     assert r.status_code == 200
     body = r.data
-    # The single viewer's legend flags the lost (differential) region by residue range.
+    # The single viewer's legend flags the lost region by residue range.
     assert b"folding-legend" in body
-    assert b"Differential region" in body
+    assert b"Lost region" in body
+    assert b"Differential region" not in body
 
 
 def test_criterion_evidence_folds_into_score_popups(client):
@@ -575,18 +587,18 @@ def test_criterion_evidence_folds_into_score_popups(client):
     from swissisoform_site.data import tis_slug as make_slug
 
     # Pick an isoform from the staged run that actually exercises this path: a
-    # flagged localization change plus a biophysics card. (Pinning MSRA broke
-    # whenever the staged run changed.)
+    # localization change that made L1 fire plus a biophysics card. (Pinning MSRA
+    # broke whenever the staged run changed.)
+    def _l1_hot(iso):
+        secs = criterion_evidence_for(iso).get("L1_localization_change", {}).get("sections")
+        return bool(secs) and any(r["hot"] for r in secs[0].get("compare_rows", []))
+
     picked = next(
         (
             (gn, iso)
             for gn, g in load_all().items()
             for iso in g.isoforms
-            if (criterion_evidence_for(iso).get("L1_localization_change", {}).get("sections"))
-            and criterion_evidence_for(iso)["L1_localization_change"]["sections"][0].get(
-                "highlight"
-            )
-            and biophysics_card_for_isoform(iso)
+            if _l1_hot(iso) and biophysics_card_for_isoform(iso)
         ),
         None,
     )
@@ -609,16 +621,22 @@ def test_criterion_evidence_folds_into_score_popups(client):
     ), "P1 should be folding-only; biophysics belongs to the standalone S2 card"
     bio = biophysics_card_for_isoform(iso)
     assert bio is not None, "standalone biophysics card missing"
-    sec = bio["evidence"]["sections"][0]
-    assert sec["cmp_headers"] == ["Property", "Differential", "Shared", "Enrichment"]
-    pi = next(r for r in sec["compare_rows"] if "pI" in r["label"])
-    assert pi["cols"][0] != pi["cols"][1]  # differential vs shared core
-    # Localization renders a canonical-vs-isoform table (not flat rows), flagged
-    # because this isoform's predicted compartment/signals changed.
+    levers, region = bio["evidence"]["sections"]
+    # S2's basis first: the whole-protein levers, canonical vs isoform.
+    assert levers["cmp_headers"] == ["Property", "Canonical", "Isoform", "Ratio"]
+    assert {r["label"] for r in levers["compare_rows"]} <= {
+        "Hydropathy (GRAVY)", "Fraction charged", "Disorder fraction"
+    }
+    # Then the per-region profile, its column named for the stratum.
+    noun = {"extended": "Extension", "truncated": "Lost region"}.get(iso.orf_type, "ORF")
+    assert region["cmp_headers"] == ["Property", "Shared", noun, "Ratio"]
+    pi = next(r for r in region["compare_rows"] if "pI" in r["label"])
+    assert pi["cols"][0] != pi["cols"][1]  # shared core vs the region
+    # Localization renders a canonical-vs-isoform table, its changed row highlighted
+    # because that change is what made L1 fire.
     loc = ce["L1_localization_change"]["sections"][0]
-    assert loc["highlight"] is True
-    assert loc["cmp_headers"] == ["Property", "Canonical", "Isoform"]
-    assert loc["compare_rows"] and len(loc["compare_rows"][0]["cols"]) == 2
+    assert loc["cmp_headers"] == ["Property", "Canonical", "Isoform", "Ratio"]
+    assert all(len(r["cols"]) == 3 for r in loc["compare_rows"])
 
     r = client.get(f"/genes/{gene_name}/isoforms/" + make_slug(iso.tis_id))
     assert r.status_code == 200
@@ -635,43 +653,95 @@ def test_domains_massspec_are_canonical_vs_isoform(client):
     ce = criterion_evidence_for(iso)
 
     f3 = ce["S1_domain_change"]["sections"][0]
-    assert f3["cmp_headers"] == ["Feature", "Canonical", "Isoform"]
+    assert f3["cmp_headers"] == ["Feature", "Canonical", "Isoform", "Ratio"]
     dom = next(r for r in f3["compare_rows"] if r["label"] == "InterPro domains")
-    assert len(dom["cols"]) == 2  # canonical | isoform counts
+    assert len(dom["cols"]) == 3  # canonical | isoform counts | ratio
+    # The S1 basis has its own row, named for the stratum.
+    assert any(r["label"].startswith("Domains changed in ") for r in f3["compare_rows"])
     # gained/lost features surface in the Details box
     assert any(h["kind"] in ("gained", "lost") for h in f3.get("hits", []))
 
     e6 = ce["D3_mass_spec"]["sections"][0]
-    assert e6["cmp_headers"] == ["Feature", "Canonical", "Isoform"]
+    assert e6["cmp_headers"] == ["Feature", "Canonical", "Isoform", "Ratio"]
     uniq = next(r for r in e6["compare_rows"] if r["label"] == "Isoform-unique peptides")
     assert uniq["cols"][0] == "—"  # uniqueness is an isoform-only property
+    labels = [r["label"] for r in e6["compare_rows"]]
+    assert "Validated isoform-unique peptides" in labels  # the D3 basis
 
 
-def test_comparison_tables_use_two_standard_flavors(client):
-    """Every comparison table is one of two flavors — Canonical|Isoform or
-    Differential|Shared — so the modals read consistently. C1/C2 frame is the
-    one documented exception (its differential side flips with diff_space).
-    """
-    from swissisoform_site.data import criterion_evidence_for, load_all
+def _all_evidence():
+    """(isoform, criterion id, section) for every popup table in the staged run."""
+    from swissisoform_site.data import (
+        biophysics_card_for_isoform,
+        criterion_evidence_for,
+        load_all,
+    )
 
-    genes = load_all()
-    offenders = []
-    for g in genes.values():
+    for g in load_all().values():
         for iso in g.isoforms:
-            for cid, ce in criterion_evidence_for(iso).items():
-                for s in ce["sections"]:
-                    hdr = s.get("cmp_headers")
-                    if not hdr:
-                        continue
-                    pair = hdr[1:3]
-                    ok = pair in (["Canonical", "Isoform"], ["Differential", "Shared"])
-                    frame_exception = cid in (
-                        "C1_primate_conservation",
-                        "C2_mammalian_conservation",
-                    )
-                    if not ok and not frame_exception:
-                        offenders.append((cid, tuple(hdr)))
-    assert not offenders, f"non-standard comparison headers: {set(offenders)}"
+            ce = criterion_evidence_for(iso)
+            bio = biophysics_card_for_isoform(iso)
+            if bio:
+                ce["S2_biophysics"] = bio["evidence"]
+            for cid, e in ce.items():
+                for s in e["sections"]:
+                    yield iso, cid, s
+
+
+def test_comparison_tables_use_one_grammar(client):
+    """Every comparison table is ``Label | reference | subject | Ratio``.
+
+    The reference is Canonical (subject Isoform), Shared (subject the stratum's
+    own region noun), or — for the C1/C2 frame scans, which score the whole
+    canonical ORF against the unique region alone — Canonical ORF (subject the
+    region noun, so a truncation's lost region is never labelled "Isoform"). The
+    ratio column is always there, and every row fills all three value cells.
+    """
+    from swissisoform.contract import region_noun
+
+    offenders = []
+    for iso, cid, s in _all_evidence():
+        hdr = s.get("cmp_headers")
+        if not hdr:
+            continue
+        noun = region_noun(iso.orf_type) or "differential region"
+        region = noun[0].upper() + noun[1:]
+        forms = [["Canonical", "Isoform", "Ratio"], ["Shared", region, "Ratio"]]
+        if cid in ("C1_primate_conservation", "C2_mammalian_conservation"):
+            forms = [["Canonical ORF", region, "Ratio"]]
+        ok = hdr[1:] in forms
+        ok = ok and all(len(r["cols"]) == 3 for r in s["compare_rows"])
+        if not ok:
+            offenders.append((cid, tuple(hdr)))
+    assert not offenders, f"non-standard comparison tables: {set(offenders)}"
+
+
+def test_highlight_only_on_rows_that_made_the_criterion_fire(client):
+    """One highlight rule: a hot row appears only when its criterion is True, and
+    every criterion that fired shows at least one hot row (its basis).
+
+    The only section-level emphasis left is none at all — no ``highlight`` key.
+    """
+    hot_by = {}
+    for iso, cid, s in _all_evidence():
+        assert "highlight" not in s
+        n_hot = sum(r["hot"] for r in s.get("compare_rows") or [])
+        hot_by[(iso.tis_id, cid)] = hot_by.get((iso.tis_id, cid), 0) + n_hot
+    from swissisoform_site.data import load_all
+
+    fired_seen = 0
+    for g in load_all().values():
+        for iso in g.isoforms:
+            for cid, verdict in iso.criteria.items():
+                n_hot = hot_by.get((iso.tis_id, cid))
+                if n_hot is None:
+                    continue  # no popup tables (S3's SAE card)
+                if verdict is True:
+                    fired_seen += 1
+                    assert n_hot > 0, f"{cid} fired on {iso.tis_id} but no row shows why"
+                else:
+                    assert n_hot == 0, f"{cid} is {verdict} on {iso.tis_id} yet a row is hot"
+    assert fired_seen, "staged run fired no criteria — the test exercised nothing"
 
 
 def test_details_boxes_are_qualitative_lists_only(client):
@@ -698,9 +768,9 @@ def test_f6_clinical_burden_is_length_normalized(client):
 
     iso = load_all()["CBX1"].isoforms[0]
     sec = criterion_evidence_for(iso)["M2_clinical_variant_overlap"]["sections"][0]
-    # Standardized Flavor-2 columns: Differential | Shared | Enrichment (the
-    # enrichment is the length-normalized per-residue ratio).
-    assert sec["cmp_headers"][1:] == ["Differential", "Shared", "Enrichment"]
+    # House grammar: Shared | <region> | Ratio (the ratio is the length-normalized
+    # per-nucleotide density, region ÷ shared).
+    assert sec["cmp_headers"][1] == "Shared" and sec["cmp_headers"][3] == "Ratio"
     allv = next(r for r in sec["compare_rows"] if r["label"] == "Disease variants")
     assert len(allv["cols"]) == 3 and allv["cols"][2].endswith("×")
 
@@ -758,3 +828,23 @@ def test_every_isoform_page_renders_200(client):
             if r.status_code != 200:
                 bad.append((gname, iso.tis_id, r.status_code))
     assert not bad, f"isoform pages returned non-200: {bad}"
+
+
+def test_gene_view_variants_link_to_their_source_database(client):
+    """Every annotated variant on the gene track carries its ClinVar/gnomAD/COSMIC page."""
+    from swissisoform_site.app import _make_gene_protein_view
+    from swissisoform_site.data import load_all
+
+    hosts = {
+        "ClinVar": "https://www.ncbi.nlm.nih.gov/clinvar/variation/",
+        "gnomAD": "https://gnomad.broadinstitute.org/variant/",
+        "COSMIC": "https://cancer.sanger.ac.uk/cosmic/search?q=",
+    }
+    seen = set()
+    for gene in load_all().values():
+        for v in _make_gene_protein_view(gene).variants:
+            if v.get("source") in hosts:
+                assert (v.get("url") or "").startswith(hosts[v["source"]]), v
+                seen.add(v["source"])
+    if not seen:
+        pytest.skip("staged run has no annotated variants")

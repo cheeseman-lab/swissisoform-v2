@@ -24,7 +24,7 @@ def _view(variants):
                 "is_trunc": False,
                 "diff_x0": -20,
                 "diff_x1": -1,
-                "diff_on_canonical": False,
+                "diff_is_lost": False,
                 "orf_type": "extended",
                 "slug": "s",
             }
@@ -48,7 +48,6 @@ def _variant(consequence, pos=10):
         "significance": None,
         "protein_change": "",
         "source": "clinvar",
-        "in_unique": False,
     }
 
 

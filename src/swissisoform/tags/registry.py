@@ -40,7 +40,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from dataclasses import asdict, dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -48,7 +47,7 @@ from typing import Any
 
 import pandas as pd
 
-from swissisoform.distributions import SEPARATE_ORF_TYPES
+from swissisoform.contract import stratum_label
 
 ROOT = Path(__file__).resolve().parents[3]
 REF_DIR = ROOT / "data" / "reference" / "tags"
@@ -68,23 +67,15 @@ REF_DIR = ROOT / "data" / "reference" / "tags"
 # reproducible — building `--version v1` against today's table yields today's
 # vocabulary under the v1 name — so the on-disk v1 is a historical artifact, not
 # a rebuildable one.
-DEFAULT_VERSION = "v3"
-# v3 is cut from the provisional v3 distributions (see
-# `distributions.PROVISIONAL_VERSIONS`); rebuild it after the re-freeze.
+DEFAULT_VERSION = "v4"
+# v4 is cut from distributions v4 (full_catalog_20261009) with per-ORF-type
+# cutoffs. v3 is cut from the provisional v3 distributions (see
+# `distributions.PROVISIONAL_VERSIONS`) and stays marked provisional.
 PROVISIONAL_VERSIONS: dict[str, str] = {
     "v3": (
         "cut from the provisional v3 distributions (Aug-12 full_catalog); "
         "rebuild after the next genome-wide run and distributions re-freeze"
     ),
-}
-
-# How a label names the unique region, and what it reads as per ORF type
-# (``Tag.label_for``) — the nouns the category prompts tell the model to use.
-_UNIQUE_REGION = re.compile(r"\b[Uu]nique region\b")
-_REGION_NOUN: dict[str, str] = {
-    "extended": "extension",
-    "truncated": "lost region",
-    **dict.fromkeys(SEPARATE_ORF_TYPES, "ORF"),
 }
 
 REGISTRY_FILE = "registry.parquet"
@@ -210,15 +201,9 @@ class Tag:
         proteins, not something about the region. An unknown ORF type keeps the
         label as written.
         """
-        noun = _REGION_NOUN.get(orf_type or "")
-        if noun is None or "_sae_" in self.metric:
+        if "_sae_" in self.metric:
             return self.label
-        label = _UNIQUE_REGION.sub(
-            lambda m: noun[0].upper() + noun[1:] if m.group(0)[0] == "U" else noun, self.label
-        )
-        if orf_type == "truncated" and label.endswith(" gained"):
-            label = label[: -len(" gained")] + " lost"
-        return label
+        return stratum_label(self.label, orf_type)
 
     @property
     def test(self) -> str:
@@ -255,7 +240,17 @@ class TagRegistry:
 
     @property
     def provisional(self) -> str:
-        """Why this version must be rebuilt, or ``""`` for a settled one."""
+        """Why this build must be rebuilt, or ``""`` for a settled one.
+
+        Read from the build's own sidecar (``_setup.json``), which
+        ``setup.tags.write_sidecar`` stamps from the distributions it was cut
+        against, so a registry rebuilt in place, or a new version cut from
+        provisional distributions, reports what it actually is. The name-keyed
+        ``PROVISIONAL_VERSIONS`` is only the fallback for builds whose sidecar
+        predates the field (v3).
+        """
+        if "provisional" in self.provenance:
+            return str(self.provenance["provisional"] or "")
         return PROVISIONAL_VERSIONS.get(self.version, "")
 
     def __len__(self) -> int:
