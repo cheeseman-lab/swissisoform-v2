@@ -190,18 +190,16 @@ class ConservationFrameModule:
         if not site.orf_exons:
             return self._empty_result(status="no_skeleton")
 
-        from swissisoform.coords import interval_difference
-        from swissisoform.models import ORFType
+        from swissisoform.models import ORFType, region_split
 
-        # ORF-type-aware unique region. Truncations lose canonical N-terminal
-        # sequence, so their unique region is ``canonical \ isoform`` (the
-        # lost intervals), not the empty ``isoform \ canonical`` direction.
-        if site.orf_type == ORFType.TRUNCATED:
-            unique = interval_difference(site.canonical_orf_exons, site.orf_exons)
-            unique_space = "canonical"
-        else:
-            unique = interval_difference(site.orf_exons, site.canonical_orf_exons)
-            unique_space = "isoform"
+        # ORF-type-aware unique region, from the one split every module uses.
+        # Truncations lose canonical N-terminal sequence, so their unique region
+        # is ``canonical \ isoform`` (the lost intervals); a separate ORF's is its
+        # whole ORF, including nucleotides it shares with canonical CDS in
+        # another frame.
+        is_truncation = site.orf_type == ORFType.TRUNCATED
+        unique, _ = region_split(site)
+        unique_space = "canonical" if is_truncation else "isoform"
         if not unique:
             return self._empty_result(status="no_unique_region")
 

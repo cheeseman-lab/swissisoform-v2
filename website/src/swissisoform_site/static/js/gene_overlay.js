@@ -43,7 +43,6 @@
         mark = merged[key] = {
           x: hit.x,
           consequence: consequence,
-          inUnique: false,
           proteinChange: hit.protein_change || "",
           detail:
             hit.chrom + ":" + Number(hit.pos).toLocaleString("en-US") + " " + change +
@@ -52,8 +51,6 @@
         };
         order.push(key);
       }
-      // A hit in the unique region of ANY isoform makes the mark prominent.
-      mark.inUnique = mark.inUnique || hit.region === "unique";
       mark.isoforms[hit.tis_id] = true;
     });
     return order.map(function (key) {
@@ -140,8 +137,7 @@
         hovertext: own.map(function (m) {
           return (
             "<b>From your VCF</b><br>" + escapeHtml(m.detail) + "<br>" +
-            escapeHtml(m.proteinChange) + "<br>" + escapeHtml(term) + " · " +
-            (m.inUnique ? "unique" : "shared") + " region"
+            escapeHtml(m.proteinChange) + "<br>" + escapeHtml(term)
           );
         }),
         hoverinfo: "text",
@@ -154,14 +150,11 @@
 
     // Grow the y-range and height exactly as plots/protein.py would have.
     var top = rows.base + (terms.length - 1) * rows.step + rows.top_pad;
-    var guideTop = Math.max(top, rows.canon_y + rows.min_above_canon);
+    var rowsTop = Math.max(top, rows.canon_y + rows.min_above_canon);
     var yLo = layout.yaxis.range[0];
-    var yHi = guideTop + rows.y_hi_pad;
+    var yHi = rowsTop + rows.y_hi_pad;
     layout.yaxis.range = [yLo, yHi];
     layout.height = Math.floor(rows.height_base + rows.height_per_y * (yHi - yLo));
-    (layout.shapes || []).forEach(function (shape) {
-      if (shape.name === "truncation-guide") shape.y1 = guideTop;
-    });
     return out;
   }
 

@@ -21,6 +21,7 @@ import os
 import re
 import secrets
 import tempfile
+import threading
 import types
 from pathlib import Path
 from typing import Any
@@ -55,13 +56,13 @@ from swissisoform_site.data import (
     CRITERIA_BY_ID,
     CRITERIA_FOR_PAGE,
     CRITERION_ABOUT,
-    EXISTENCE_CRITERIA,
-    FUNCTIONAL_CRITERIA,
     Isoform,
     _isoform_view,
+    _region_noun,
     biophysics_card_for_isoform,
     criterion_evidence_for,
     data_dir,
+    has_shared_region,
     llm_synthesis_for_isoform,
     load_all,
     load_orf_index,
@@ -74,6 +75,7 @@ from swissisoform_site.data import (
     variant_url,
 )
 from swissisoform_site.genomics import interval_intersection
+from swissisoform_site.landing import landing_index
 from swissisoform_site.plots import build_gene_protein_figure
 from swissisoform_site.plots.protein import CONSEQ_COLOR, CONSEQ_SHORT
 from swissisoform_site.scanview import (
@@ -97,39 +99,6 @@ MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-def _log_llm_coverage(genes: dict, llm_dir: Path) -> None:
-    """Print one summary line — easier to spot missing LLM JSONs than per-request logs."""
-    log = logging.getLogger("swissisoform_site.coverage")
-    n_iso = sum(len(g.isoforms) for g in genes.values())
-    n_syn = 0
-    n_category_files = 0
-    n_category_cells = 0
-    for gene in genes.values():
-        for iso in gene.isoforms:
-            slug = tis_slug(iso.tis_id)
-            if (llm_dir / slug / "synthesis.json").exists():
-                n_syn += 1
-            cat_path = llm_dir / slug / "categories.json"
-            if cat_path.exists():
-                n_category_files += 1
-                try:
-                    payload = json.loads(cat_path.read_text())
-                    if isinstance(payload, dict):
-                        n_category_cells += len(payload)
-                except Exception:
-                    pass
-    log.warning(
-        "%d isoforms loaded; LLM coverage: categories %d/%d (%d/%d cells), synthesis %d/%d",
-        n_iso,
-        n_category_files,
-        n_iso,
-        n_category_cells,
-        n_iso * 6,
-        n_syn,
-        n_iso,
-    )
 
 
 def _scan_debug_enabled() -> bool:
@@ -210,6 +179,24 @@ def _human_delay(seconds: int) -> str:
         return f"{minutes} minute{'' if minutes == 1 else 's'}"
     hours = round(seconds / 3600)
     return f"{hours} hour{'' if hours == 1 else 's'}"
+
+
+# One loader at a time: a request that arrives while the background warm-up is
+# still in ``load_all()`` waits for it rather than building a second copy.
+_RECORDS_LOCK = threading.Lock()
+
+
+def _full_records() -> dict[str, Any]:
+    """``load_all()``, serialised with the startup warm-up."""
+    with _RECORDS_LOCK:
+        return load_all()
+
+
+def _warm_full_records() -> None:
+    try:
+        _full_records()
+    except Exception:  # a page that needs them will raise it again, visibly
+        logger.exception("background load_all() failed")
 
 
 def create_app() -> Flask:
@@ -305,7 +292,12 @@ def create_app() -> Flask:
 
     @app.get("/")
     def index() -> Any:
-        genes = load_all()
+        """The gene table shell; rows come from ``/api/landing.json``.
+
+        Reads only the landing index (a column-projected payload), never
+        ``load_all()``, so the page costs the same at catalogue scale.
+        """
+        idx = landing_index()
         # A hash of the file, not the loaded index: the home page must not load the
         # whole index just to name its URL.
         fingerprint = orf_index_fingerprint()
@@ -318,12 +310,36 @@ def create_app() -> Flask:
         }
         return render_template(
             "index.html",
-            genes=list(genes.values()),
-            n_genes=len(genes),
-            existence_criteria=EXISTENCE_CRITERIA,
-            functional_criteria=FUNCTIONAL_CRITERIA,
+            n_genes=idx.n_genes,
+            n_isoforms=idx.n_isoforms,
+            examples=idx.examples,
+            landing_etag=idx.etag,
             browser_scan=browser_scan,
         )
+
+    @app.get("/api/landing.json")
+    def api_landing() -> Any:
+        """The landing table's data: genes, isoforms, CDLMPS lineups, fired tags.
+
+        Built once per process and held as JSON + gzip bytes; served gzipped when
+        the client accepts it, with an ETag so a reload revalidates for free.
+        """
+        idx = landing_index()
+        gz = request.accept_encodings.quality("gzip") > 0
+        # One ETag per representation: the gzip and identity bodies differ.
+        etag = idx.etag + ("-gz" if gz else "")
+        # Weak comparison, as RFC 9110 requires for If-None-Match (a proxy may weaken it).
+        if request.if_none_match.contains_weak(etag):
+            resp = make_response("", 304)
+        else:
+            resp = make_response(idx.body_gz if gz else idx.body)
+            resp.headers["Content-Type"] = "application/json"
+            if gz:
+                resp.headers["Content-Encoding"] = "gzip"
+        resp.set_etag(etag)
+        resp.headers["Vary"] = "Accept-Encoding"
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
 
     @app.get("/about")
     def about() -> Any:
@@ -344,7 +360,7 @@ def create_app() -> Flask:
         below — all deduplicated across the gene's isoforms. Isoform cards below
         link to the per-isoform deep-dive page.
         """
-        genes = load_all()
+        genes = _full_records()
         gene = genes.get(gene_name) or genes.get(gene_name.upper())
         if gene is None or not gene.isoforms:
             abort(404)
@@ -379,7 +395,7 @@ def create_app() -> Flask:
         Wires data + plot figure dicts + LLM JSONs into ``isoform.html``.
         Returns 404 on unknown gene or tis_slug.
         """
-        genes = load_all()
+        genes = _full_records()
         gene = genes.get(gene_name) or genes.get(gene_name.upper())
         if gene is None:
             abort(404)
@@ -473,6 +489,8 @@ def create_app() -> Flask:
             diff_start=iso.diff_start,
             diff_end=iso.diff_end,
             diff_space=iso.diff_space,
+            region_name=_region_noun(iso),
+            region_name_cap=_region_noun(iso, cap=True),
             canonical_length_aa=iso.canonical_len,
             isoform_length_aa=iso.isoform_len,
         )
@@ -484,7 +502,7 @@ def create_app() -> Flask:
         Intended for downloads, not for high-frequency programmatic queries —
         no pagination, no caching headers.
         """
-        genes = load_all()
+        genes = _full_records()
         payload: dict[str, Any] = {}
         # Named `record`, not `g` — `g` is Flask's request-global, imported above.
         for name, record in genes.items():
@@ -635,7 +653,7 @@ def create_app() -> Flask:
         response = make_response(
             render_template(
                 "variants.html",
-                known_genes=sorted(load_all().keys()),
+                known_genes=sorted(landing_index().gene_names),
                 conseq_color=CONSEQ_COLOR,
                 conseq_short=CONSEQ_SHORT,
             )
@@ -698,7 +716,7 @@ def create_app() -> Flask:
                 "catalog_genes": index.n_genes if index else 0,
                 "catalog_isoforms": index.n_isoforms if index else 0,
                 "catalog_intervals": index.n_intervals if index else 0,
-                "displayed_genes": len(load_all()),
+                "displayed_genes": landing_index().n_genes,
                 "tmp_dir": str(tmp_dir),
                 "tmp_dir_writable": tmp_writable,
                 "tmp_dir_error": tmp_error,
@@ -738,9 +756,15 @@ def create_app() -> Flask:
     def not_found(e: Any) -> tuple[Any, int]:
         return render_template("404.html", message=str(e)), 404
 
-    # Startup coverage summary — one log line so missing LLM JSONs are obvious
-    # before any clicking through tiles.
-    _log_llm_coverage(load_all(), data_dir() / "llm")
+    # Build the landing table's payload now rather than on the first visitor's
+    # request: at catalogue scale it takes seconds (a cached no-op afterwards). It
+    # also logs the LLM coverage line. ``load_all()`` is not called here, so the
+    # worker starts (and passes its healthcheck) without the full records; under
+    # gunicorn (SWISSISOFORM_WARM_RECORDS, entrypoint.sh) they load in the
+    # background, so the first gene page does not pay for them against --timeout.
+    landing_index()
+    if os.environ.get("SWISSISOFORM_WARM_RECORDS") == "1":
+        threading.Thread(target=_warm_full_records, name="load_all", daemon=True).start()
 
     return app
 
@@ -1009,8 +1033,9 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
     (Using ``diff_end`` instead would misplace truncation variants by a residue,
     because the initiator-Met boundary makes ``iso_len + diff_end`` one past
     ``canonical_len``.) Extensions then reach left of residue 1; a truncation's
-    lost N-terminus shades the canonical bar. uORF / altORF isoforms have no
-    shared region (``offset = 0``, whole isoform shaded).
+    lost N-terminus (``diff_is_lost``) is drawn on the truncation's own row, so
+    the canonical bar reads the same on every gene. uORF / altORF isoforms have
+    no shared region (``offset = 0``, whole isoform shaded).
 
     Variants / domains / disorder / coil / motifs / cell-line starts are mapped
     into that frame and deduplicated across isoforms.
@@ -1032,13 +1057,12 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
 
     for iso in gene.isoforms:
         raw = getattr(iso, "raw", None) or {}
-        diff_end = int(getattr(iso, "diff_end", 0) or 0)
         iso_len = int(getattr(iso, "isoform_len", 0) or 0) or 1
         can_len_i = int(getattr(iso, "canonical_len", 0) or 0) or can_len
         orf_type = (iso.orf_type or "").lower()
         diff_space = (getattr(iso, "diff_space", "") or "").lower()
         is_trunc = diff_space == "canonical" or orf_type == "truncated"
-        has_shared = is_trunc or 0 < diff_end < iso_len
+        has_shared = has_shared_region(iso)
 
         # Where the isoform sits in canonical-residue space. Read from the ORF
         # index, so the bar, everything anchored to it, and the uploaded variant
@@ -1050,25 +1074,29 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
         if has_shared and is_trunc:
             # Lost N-terminus = canonical residues [1, x0-1]; residue x0 is the
             # FIRST retained (shared-core) residue where the isoform body begins,
-            # so the lost-region overlay ends at x0-1 and does not bleed one
-            # residue into the shared core on the canonical bar.
-            diff_x0, diff_x1, diff_on_canon = 1, x0 - 1, True
+            # so the lost region ends at x0-1 and does not bleed one residue into
+            # the shared core. (The -1 shift below puts residue 1 at x=0.)
+            diff_x0, diff_x1, diff_is_lost = 1, x0 - 1, True
         elif has_shared:
-            diff_x0, diff_x1, diff_on_canon = x0, 0, False  # extension left of residue 1
+            diff_x0, diff_x1, diff_is_lost = x0, 0, False  # extension left of residue 1
         else:  # uORF / altORF — no shared region, so the whole isoform is differential
-            diff_x0, diff_x1, diff_on_canon = x0, x1, False
+            diff_x0, diff_x1, diff_is_lost = x0, x1, False
 
-        label = f"{iso.orf_type} · {iso.start_codon}"
+        # Length disambiguates two isoforms of one type and codon (CBX1 has two
+        # extended · CTG); it is also the first thing a reader compares.
+        label = f"{iso.orf_type} · {iso.start_codon} · {iso_len} aa"
         bars.append(
             {
                 "label": label,
                 "x0": x0,
                 "x1": x1,
+                "aa_len": iso_len,
                 "orf_type": iso.orf_type,
                 "is_trunc": is_trunc,
+                "region": _region_noun(iso),
                 "diff_x0": diff_x0,
                 "diff_x1": diff_x1,
-                "diff_on_canonical": diff_on_canon,
+                "diff_is_lost": diff_is_lost,
                 "slug": tis_slug(iso.tis_id),
             }
         )
@@ -1146,20 +1174,17 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
                 # the x above came from the isoform-frame position.
                 "protein_change": with_frame(v.get("hgvsp"), "canonical"),
                 "source": v.get("source"),
-                "in_unique": bool(v.get("in_isoform_unique")),
+                "rs_id": v.get("rs_id"),
             }
+            # No unique/shared flag at the gene level: one variant can sit in one
+            # isoform's differential region and another's shared core, so any
+            # single flag here would assert a membership the gene view can't
+            # make. The isoform pages carry that call.
             prev = var_by_id.get(vid)
             if prev is None:
                 var_by_id[vid] = rec
-            else:
-                # A variant shows up as "unique" if it lies in ANY isoform's
-                # differential region. Preserve that across the pathogenic
-                # upgrade below — ``prev.update(rec)`` would otherwise clobber it
-                # with the current isoform's (possibly shared) flag.
-                merged_unique = prev["in_unique"] or rec["in_unique"]
-                if _pathogenic(rec["significance"]) and not _pathogenic(prev["significance"]):
-                    prev.update(rec)
-                prev["in_unique"] = merged_unique
+            elif _pathogenic(rec["significance"]) and not _pathogenic(prev["significance"]):
+                prev.update(rec)
 
         # Cell-line initiation: each isoform's start sits at its bar's left edge.
         for sample in _CELL_LINE_SAMPLES:
@@ -1212,6 +1237,11 @@ def _make_gene_protein_view(gene: Any) -> types.SimpleNamespace:
         for s in _depth_segments([{"start": d["x0"], "end": d["x1"]} for d in domains])
     ]
     variants = list(var_by_id.values())
+    # The track makes no isoform claim, so it links out instead: the source
+    # database's own page for this variant (issue #31). Built once per kept
+    # variant, after the dedupe.
+    for v in variants:
+        v["url"] = variant_url(v["variant_id"], v.get("source"), v.pop("rs_id", None))
     motif_list = list(motifs.values())
 
     # Anchor the canonical start at x=0 (residue 1 → 0) so extensions read as

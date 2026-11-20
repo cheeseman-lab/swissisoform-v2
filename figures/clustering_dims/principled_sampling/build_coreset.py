@@ -64,7 +64,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "feature_space")
 
 import featurespace as fs  # noqa: E402
 from export_feature_catalog import ROOT, resolve_parquet  # noqa: E402
-from principled_sampler import principled_sample, ranked_candidates  # noqa: E402
+from principled_sampler import ranked_candidates  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 ANCHORS_CSV = fs.ANCHORS_CSV
@@ -111,7 +111,9 @@ ORF_COLORS = {
 # ---------------------------------------------------------------------------
 
 
-def rare_type_fill(scores: np.ndarray, rows: np.ndarray) -> list[dict]:
+def rare_type_fill(
+    scores: np.ndarray, rows: np.ndarray, genes: np.ndarray, claimed: set[str]
+) -> list[dict]:
     """Algorithm 1 at n=1 within one ORF type — its max, min and most typical.
 
     At n=1 the sampler returns exactly three picks, which is exactly the quota:
@@ -127,20 +129,34 @@ def rare_type_fill(scores: np.ndarray, rows: np.ndarray) -> list[dict]:
 
     Restricted to *rows*, so the picks are extreme among their own type rather
     than against a pool the type could never win against.
+
+    A gene is taken once, and a rare type can hold two isoforms of one gene at
+    the same end of PC1 (two uoorfs of RPS6KA5 on full_catalog_20261009). So,
+    as in :func:`sampler_fill`, each pick walks its own ordering past genes
+    already in *claimed* — which it extends — and ``rank_used`` records how far.
     """
     sub = scores[rows]
-    picks = principled_sample(sub, 1)
+    ranked = ranked_candidates(sub, 1)
     out = []
-    for name in ("Y", "Z", "W"):
-        local = int(picks[name][0])
-        out.append(
-            {
-                "row_index": int(rows[local]),
-                "set": name,
-                "component": 1,
-                "value": float(sub[local, 0]),
-            }
-        )
+    for name, order in (("Y", ranked["Y"][0]), ("Z", ranked["Z"][0]), ("W", ranked["W"][0])):
+        for rank, local in enumerate(order):
+            gene = genes[rows[local]]
+            if gene in claimed:
+                continue
+            claimed.add(gene)
+            out.append(
+                {
+                    "row_index": int(rows[local]),
+                    "set": name,
+                    "component": 1,
+                    "rank": None,
+                    "rank_used": rank,
+                    "value": float(sub[local, 0]),
+                }
+            )
+            break
+        else:
+            raise SystemExit(f"rare fill exhausted: no unclaimed gene left for {name}")
     return out
 
 
@@ -253,8 +269,8 @@ def build_coreset(
     fit.
 
     Raises:
-        SystemExit: An anchor ``tis_id`` is absent from the pool, or a rare-type
-            pick lands on a gene already claimed.
+        SystemExit: An anchor ``tis_id`` is absent from the pool, or a stage runs
+            out of unclaimed genes.
     """
     all_orf = results["all-ORF"]
     meta = all_orf.matrix.meta
@@ -275,18 +291,11 @@ def build_coreset(
     is_anchor = np.isin(tis, list(anchor_ids))
     rare: list[dict] = []
     for orf_type in RARE_TYPES:
-        # Anchors are pinned by tis_id, but a gene is still taken once: drop every
-        # isoform of a claimed gene (the anchor genes, then each rare pick's), or
-        # rare_type_fill — which does not consult `claimed` — can pick one and
-        # abort the build below.
-        taken = np.isin(genes, list(claimed))
-        stratum = np.flatnonzero((orf == orf_type) & ~is_anchor & ~taken & ~off_pool(tis))
-        for p in rare_type_fill(all_orf.scores, stratum):
-            gene = genes[p["row_index"]]
-            if gene in claimed:
-                raise SystemExit(f"{orf_type}: {gene} already claimed — needs a fallback")
-            claimed.add(gene)
-            rare.append({**p, "rank": None, "rank_used": 0})
+        # Anchors are pinned by tis_id, but a gene is still taken once: the
+        # anchor genes and every earlier pick's gene are in `claimed`, which
+        # rare_type_fill skips past and extends.
+        stratum = np.flatnonzero((orf == orf_type) & ~is_anchor & ~off_pool(tis))
+        rare.extend(rare_type_fill(all_orf.scores, stratum, genes, claimed))
     frames.append(_pick_rows(all_orf, rare, "rare_fill", n_coord))
 
     for orf_type, k in stratum_sizes(need - len(rare)).items():
